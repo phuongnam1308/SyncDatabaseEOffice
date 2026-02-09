@@ -5,8 +5,8 @@ class TaskAuditTestModel extends BaseModel {
   async getTaskIds() {
     const sql = `
       SELECT DISTINCT t.id
-      FROM camunda.dbo.task t
-      INNER JOIN camunda.dbo.task_users tu ON tu.task_id = t.id
+      FROM DiOffice.dbo.task t
+      INNER JOIN DiOffice.dbo.task_users tu ON tu.task_id = t.id
       ORDER BY t.id
     `;
     return this.queryNewDb(sql);
@@ -15,7 +15,7 @@ class TaskAuditTestModel extends BaseModel {
   async existsAudit(taskId) {
     const sql = `
       SELECT 1
-      FROM camunda.dbo.audit
+      FROM DiOffice.dbo.audit
       WHERE document_id = @taskId
         AND table_backups = 'test_task'
     `;
@@ -25,7 +25,7 @@ class TaskAuditTestModel extends BaseModel {
 
   async insertAudit(data) {
     const sql = `
-      INSERT INTO camunda.dbo.audit (
+      INSERT INTO DiOffice.dbo.audit (
         document_id,[time],user_id,display_name,[role],
         action_code,from_node_id,to_node_id,details,
         origin_id,created_by,receiver,receiver_unit,

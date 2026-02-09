@@ -97,7 +97,7 @@
 
 //       return {
 //         source: { database: 'DataEOfficeSNP', schema: 'dbo', table: 'VanBanBanHanhDelete', count: oldCount },
-//         destination: { database: 'camunda', table: 'outgoing_documents', count: newCount },
+//         destination: { database: 'DiOffice', table: 'outgoing_documents', count: newCount },
 //         migrated: newCount,
 //         remaining: oldCount - newCount,
 //         percentage: calculatePercentage(newCount, oldCount)
@@ -310,7 +310,7 @@ class MigrationOutgoingDocumentService {
           count: oldCount
         },
         destination: {
-          database: 'camunda',
+          database: 'DiOffice',
           table: 'outgoing_documents2',
           count: newCount
         },

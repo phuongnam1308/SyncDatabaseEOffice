@@ -7,7 +7,7 @@ const tableMappings = {
 
     newTable: 'user_group_users_bak',
     newSchema: 'dbo',
-    newDatabase: 'camunda',
+    newDatabase: 'DiOffice',
 
     fieldMapping: {
       'UserId': 'id_user_bak',    // UserId cũ → id_user_bak

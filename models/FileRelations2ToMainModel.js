@@ -4,7 +4,7 @@ const logger = require('../utils/logger');
 class FileRelations2ToMainModel {
   async migrateAll() {
     const sql = `
-      INSERT INTO camunda.dbo.file_relations (
+      INSERT INTO DiOffice.dbo.file_relations (
         object_type,
         object_id,
         file_id,
@@ -27,7 +27,7 @@ class FileRelations2ToMainModel {
         LEFT(file_id_bak2, 50),
         LEFT(table_bak, 50),
         LEFT(type_doc, 50)
-      FROM camunda.dbo.file_relations2
+      FROM DiOffice.dbo.file_relations2
     `;
 
     logger.info('[FileRelations2ToMainModel] migrateAll');
@@ -37,14 +37,14 @@ class FileRelations2ToMainModel {
 
   async countSource() {
     const rs = await db.query(
-      'SELECT COUNT(*) AS total FROM camunda.dbo.file_relations2'
+      'SELECT COUNT(*) AS total FROM DiOffice.dbo.file_relations2'
     );
     return rs.recordset[0].total;
   }
 
   async countTarget() {
     const rs = await db.query(
-      'SELECT COUNT(*) AS total FROM camunda.dbo.file_relations'
+      'SELECT COUNT(*) AS total FROM DiOffice.dbo.file_relations'
     );
     return rs.recordset[0].total;
   }
