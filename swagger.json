@@ -1,0 +1,1498 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Migration API",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3021/api"
+    }
+  ],
+  "paths": {
+    "/mapping/audit2-user": {
+      "get": {
+        "summary": "Đồng bộ tên người dùng luân chuyển chuyển văn bản",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/audit2/sync-role-process": {
+      "get": {
+        "summary": "Đồng bộ quyền xử lý văn bản ( role & roleProcess ) cho luân chuyển văn bản",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/sync/audit2-type-document": {
+      "get": {
+        "summary": "Đồng bộ loại văn bản ( type_document ) cho luân chuyển văn bản",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/sync/audit-action-code": {
+      "get": {
+        "summary": "Đồng bộ mã hành động (action_code ) cho audit2",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/sync/document-comments-reply": {
+      "get": {
+        "summary": "Cập nhật trang thái có phải trả lời bình luận hay ý kiến về bảng trung gian",
+        "tags": [
+          "Dong bo binh luan y kien"
+        ]
+      }
+    },
+    "/migrate/drafter": {
+      "get": {
+        "summary": "Đồng bộ văn bản đi người soạn văn bản của văn bản đi của bảng trung gian",
+        "tags": [
+          "Dong bo van ban di"
+        ]
+      }
+    },
+    "/migrate/files-vanbanbanhanh": {
+      "get": {
+        "summary": "Đông bộ file văn bản ban hành về bảng trung gian",
+        "tags": [
+          "Dong bo file"
+        ]
+      }
+    },
+    "/migrate/file-relations/object-type": {
+      "post": {
+        "summary": "Mapping type_doc sang object_type",
+        "tags": [
+          "File Relations Mapping"
+        ]
+      }
+    },
+    "/format/outgoing2": {
+      "get": {
+        "summary": "Format/clean dữ liệu văn bản đi ở bảng trung gian",
+        "tags": [
+          "Dong bo van ban di"
+        ]
+      }
+    },
+    "/migrate/files-vbden": {
+      "get": {
+        "summary": "Đông bộ file văn bản đến về bảng trung gian",
+        "tags": [
+          "Dong bo file"
+        ]
+      }
+    },
+    "/mapping/bookdoc-outgoing": {
+      "get": {
+        "summary": "từ tên sổ văn bản đưa ra được mã số văn bản phù hợp với phần mềm mới",
+        "tags": [
+          "Dong bo van ban di"
+        ]
+      }
+    },
+    "/migrate/audit": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-atpc": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động atpc",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-cbql": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động cbql",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-cll": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động cll",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-cntt": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động cntt",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-ct": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động ct",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-cvtc": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động cvtc",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-donvi": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động donvi",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-dvhh": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động dvhh",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-dvkt": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động dvkt",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-gnvt": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động gnvt",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-hc": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động hc",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-ht": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động ht",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-icdlb": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động icdlb",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-icdst": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động icdst",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-khdt": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động khdt",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-khkd": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động khkd",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-ktvt": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động ktvt",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-kvtc": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động kvtc",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-mkt": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động mkt",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-npl": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động npl",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-qlct": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động qlct",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-qsbv": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động qsbv",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-snpl": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động snpl",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-tc189": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động tc189",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-tc": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động tc",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-tcct": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động tcct",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-tchp": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động tchp",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-tcidi": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động tcidi",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-tcld": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động tcld",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-tcmt": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động tcmt",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-tco": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động tco",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-tcot": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động tcot",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-tcpc": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động tcpc",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-tcph": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động tcph",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-tctt": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động tctt",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-TTDTC": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động TTDTC",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-ttdtc": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động ttdtc",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-vp": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động vp",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-vpmb": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động vpmb",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-vptnb": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động vptnb",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-vtb": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động vtb",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-vtt": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động vtt",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-xdct": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động xdct",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-xdsm": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động xdsm",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-XNCG": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động XNCG",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/audit3-luanchuyen-yte": {
+      "get": {
+        "summary": "Đồng bộ sô ban hành đang hoạt động yte",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/migrate/bookbanhanh": {
+      "get": {
+        "summary": "đồng bộ sô ban hành đang hoạt động",
+        "tags": [
+          "Dong bo so van ban"
+        ]
+      }
+    },
+    "/migrate/bookbanhanhdelete": {
+      "get": {
+        "summary": "Lưu sổ dữ liệu văn bản đã ban hành đã ở trạng thái xóa",
+        "tags": [
+          "Dong bo so van ban"
+        ]
+      }
+    },
+    "/statistics/bookbanhanh": {
+      "get": {
+        "summary": "Thống kê sổ văn bản đến",
+        "tags": [
+          "Dong bo so van ban"
+        ]
+      }
+    },
+    "/migrate/bookdocuments": {
+      "get": {
+        "summary": "Đồng bộ sổ văn bản đến",
+        "tags": [
+          "Dong bo so van ban"
+        ]
+      }
+    },
+    "/migrate/bookdocumentsdelete": {
+      "get": {
+        "summary": "Đồng bộ số văn bản bản ban hành đã xóa",
+        "tags": [
+          "Dong bo so van ban"
+        ]
+      }
+    },
+    "/statistics/book-total": {
+      "get": {
+        "summary": "Thống kê tổng hợp 4 nguồn văn bản",
+        "tags": [
+          "Dong bo lien ket"
+        ],
+        "responses": {
+          "200": {
+            "description": "Thành công"
+          }
+        }
+      }
+    },
+    "/migration/document-comments": {
+      "get": {
+        "summary": "Đông bộ bình luận ý kiến đến về bảng trung gian",
+        "tags": [
+          "Dong bo binh luan y kien"
+        ]
+      }
+    },
+    "/migration/document-commentsATPC": {
+      "get": {
+        "summary": "Đông bộ bình luận ý kiến đến về bảng trung gian",
+        "tags": [
+          "Dong bo binh luan y kien"
+        ]
+      }
+    },
+    "/migration/document-commentsCNTT": {
+      "get": {
+        "summary": "Đông bộ bình luận ý kiến đến về bảng trung gian",
+        "tags": [
+          "Dong bo binh luan y kien"
+        ]
+      }
+    },
+    "/migration/document-commentsCT": {
+      "get": {
+        "summary": "Đông bộ bình luận ý kiến đến về bảng trung gian",
+        "tags": [
+          "Dong bo binh luan y kien"
+        ]
+      }
+    },
+    "/migration/document-commentsCVTC": {
+      "get": {
+        "summary": "Đông bộ bình luận ý kiến đến về bảng trung gian",
+        "tags": [
+          "Dong bo binh luan y kien"
+        ]
+      }
+    },
+    "/migration/document-commentsDonVi": {
+      "get": {
+        "summary": "Đông bộ bình luận ý kiến đến về bảng trung gian",
+        "tags": [
+          "Dong bo binh luan y kien"
+        ]
+      }
+    },
+    "/migration/document-commentsDVHH": {
+      "get": {
+        "summary": "Đông bộ bình luận ý kiến đến về bảng trung gian",
+        "tags": [
+          "Dong bo binh luan y kien"
+        ]
+      }
+    },
+    "/migration/document-commentsDVKT": {
+      "get": {
+        "summary": "Đông bộ bình luận ý kiến đến về bảng trung gian",
+        "tags": [
+          "Dong bo binh luan y kien"
+        ]
+      }
+    },
+    "/migration/document-commentsGNVT": {
+      "get": {
+        "summary": "Đông bộ bình luận ý kiến đến về bảng trung gian",
+        "tags": [
+          "Dong bo binh luan y kien"
+        ]
+      }
+    },
+    "/migration/document-commentsHC": {
+      "get": {
+        "summary": "Đông bộ bình luận ý kiến đến về bảng trung gian",
+        "tags": [
+          "Dong bo binh luan y kien"
+        ]
+      }
+    },
+    "/migration/document-commentsHT": {
+      "get": {
+        "summary": "Đông bộ bình luận ý kiến đến về bảng trung gian",
+        "tags": [
+          "Dong bo binh luan y kien"
+        ]
+      }
+    },
+    "/migration/document-commentsICDLB": {
+      "get": {
+        "summary": "Đông bộ bình luận ý kiến đến về bảng trung gian",
+        "tags": [
+          "Dong bo binh luan y kien"
+        ]
+      }
+    },
+    "/migration/document-commentsICDST": {
+      "get": {
+        "summary": "Đông bộ bình luận ý kiến đến về bảng trung gian",
+        "tags": [
+          "Dong bo binh luan y kien"
+        ]
+      }
+    },
+    "/migration/document-commentsKHDT": {
+      "get": {
+        "summary": "Đông bộ bình luận ý kiến đến về bảng trung gian",
+        "tags": [
+          "Dong bo binh luan y kien"
+        ]
+      }
+    },
+    "/migration/document-commentsKHKD": {
+      "get": {
+        "summary": "Đông bộ bình luận ý kiến đến về bảng trung gian",
+        "tags": [
+          "Dong bo binh luan y kien"
+        ]
+      }
+    },
+    "/migration/document-commentsKTVT": {
+      "get": {
+        "summary": "Đông bộ bình luận ý kiến đến về bảng trung gian",
+        "tags": [
+          "Dong bo binh luan y kien"
+        ]
+      }
+    },
+    "/migration/document-commentsKVTC": {
+      "get": {
+        "summary": "Đông bộ bình luận ý kiến đến về bảng trung gian",
+        "tags": [
+          "Dong bo binh luan y kien"
+        ]
+      }
+    },
+    "/migration/document-commentsMKT": {
+      "get": {
+        "summary": "Đông bộ bình luận ý kiến đến về bảng trung gian",
+        "tags": [
+          "Dong bo binh luan y kien"
+        ]
+      }
+    },
+    "/migration/document-commentsNPL": {
+      "get": {
+        "summary": "Đông bộ bình luận ý kiến đến về bảng trung gian",
+        "tags": [
+          "Dong bo binh luan y kien"
+        ]
+      }
+    },
+    "/migration/document-commentsQLCT": {
+      "get": {
+        "summary": "Đông bộ bình luận ý kiến đến về bảng trung gian",
+        "tags": [
+          "Dong bo binh luan y kien"
+        ]
+      }
+    },
+    "/migration/document-commentsQSBV": {
+      "get": {
+        "summary": "Đông bộ bình luận ý kiến đến về bảng trung gian",
+        "tags": [
+          "Dong bo binh luan y kien"
+        ]
+      }
+    },
+    "/migration/document-commentsSNPL": {
+      "get": {
+        "summary": "Đông bộ bình luận ý kiến đến về bảng trung gian",
+        "tags": [
+          "Dong bo binh luan y kien"
+        ]
+      }
+    },
+    "/migration/document-commentsTC189": {
+      "get": {
+        "summary": "Đông bộ bình luận ý kiến đến về bảng trung gian",
+        "tags": [
+          "Dong bo binh luan y kien"
+        ]
+      }
+    },
+    "/migration/document-commentsTCCT": {
+      "get": {
+        "summary": "Đông bộ bình luận ý kiến đến về bảng trung gian",
+        "tags": [
+          "Dong bo binh luan y kien"
+        ]
+      }
+    },
+    "/statistics/donvi": {
+      "get": {
+        "summary": "Thống kê Đơn vị",
+        "tags": [
+          "Dong bo don vi"
+        ]
+      }
+    },
+    "/migrate/donvi": {
+      "get": {
+        "summary": "Đồng bộ dữ liệu đơn vị",
+        "tags": [
+          "Dong bo don vi"
+        ]
+      }
+    },
+    "/migrate/file-relations": {
+      "get": {
+        "summary": "Di chuyển dữ liệu từ files2 sang file_relations2",
+        "tags": [
+          "Migration File Relations"
+        ]
+      }
+    },
+    "/migrate/group": {
+      "get": {
+        "summary": "Đồng bộ nhóm người dùng",
+        "tags": [
+          "Dong bo nhom"
+        ]
+      }
+    },
+    "/migrate/incomingdocumentsdelete": {
+      "get": {
+        "summary": "đồng bộ văn bản đến với trạng thái đã xóa về bảng trung gian",
+        "tags": [
+          "Dong bo van ban den"
+        ]
+      }
+    },
+    "/sync/incoming-document": {
+      "get": {
+        "summary": "Đồng bộ văn bản đến",
+        "tags": [
+          "IncomingDocumentSync"
+        ]
+      }
+    },
+    "/migrate/outgoingdocuments2": {
+      "get": {
+        "summary": "Đồng bộ hóa văn bản đi về bảng dữ liệu trung gian",
+        "tags": [
+          "Dong bo van ban di"
+        ]
+      }
+    },
+    "/migrate/task2toTask/stats": {
+      "get": {
+        "summary": "Thống kê migration task2 → task",
+        "tags": [
+          "Dong bo cong viec"
+        ],
+        "responses": {
+          "200": {
+            "description": "Thống kê số lượng bản ghi",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "source": {
+                      "type": "object",
+                      "properties": {
+                        "table": {
+                          "type": "string",
+                          "example": "task2"
+                        },
+                        "count": {
+                          "type": "number",
+                          "example": 1200
+                        }
+                      }
+                    },
+                    "destination": {
+                      "type": "object",
+                      "properties": {
+                        "table": {
+                          "type": "string",
+                          "example": "task"
+                        },
+                        "count": {
+                          "type": "number",
+                          "example": 1180
+                        }
+                      }
+                    },
+                    "migrated": {
+                      "type": "number",
+                      "example": 1180
+                    },
+                    "remaining": {
+                      "type": "number",
+                      "example": 20
+                    },
+                    "percentage": {
+                      "type": "string",
+                      "example": "98.33%"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/migrate/task2toTask": {
+      "get": {
+        "summary": "Migration dữ liệu từ task2 sang task",
+        "tags": [
+          "Dong bo cong viec"
+        ],
+        "description": "- Copy toàn bộ dữ liệu từ bảng **task2** sang **task**\n- Không insert trùng (dựa vào id_taskBackups + tb_bak)\n- Gán tb_bak = 'task2'\n- Không insert cột identity `id`\n",
+        "responses": {
+          "200": {
+            "description": "Migration thành công",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "total": {
+                      "type": "number",
+                      "example": 1200
+                    },
+                    "inserted": {
+                      "type": "number",
+                      "example": 1180
+                    },
+                    "skipped": {
+                      "type": "number",
+                      "example": 20
+                    },
+                    "errors": {
+                      "type": "number",
+                      "example": 0
+                    },
+                    "duration": {
+                      "type": "string",
+                      "example": "12.45"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/migrate/task3toTask": {
+      "get": {
+        "summary": "Đồng bộ từ task3 sang task",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/statistics/task": {
+      "get": {
+        "summary": "Thông kê đồng bộ công việc văn bản đến",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/migrate/task-vbden": {
+      "get": {
+        "summary": "Đông bộ công việc văn bản đến về bảng trung gian",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/statistics/task-delete": {
+      "get": {
+        "summary": "Thông kê đồng bộ công việc văn bản đến trạng thái đã xóa",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/migrate/task-vbdendelete": {
+      "get": {
+        "summary": "Đông bộ công việc văn bản đến trạng thái đã xóa về bảng trung gian",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/statistics/task-users2": {
+      "get": {
+        "summary": "Thông kê đồng bộ công việc của người của công việc của văn bản đến nào về bảng trung gian",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/migrate/task-users2": {
+      "get": {
+        "summary": "Đông bộ công việc của người nào của văn bản đến về bảng trung gian",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/mapping/task-users2-process": {
+      "get": {
+        "summary": "Đồng bộ người xử lý công việc ở bảng trung gian",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/mapping/task-users2-process-group": {
+      "get": {
+        "summary": "Đồng bộ nhóm xử lý công việc ở bảng trung gian",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/mapping/task-users2-process-org": {
+      "get": {
+        "summary": "Đồng bộ đơn vị số lý công việc ở bảng trung gian",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/migrate/task-users2-to-task-users": {
+      "get": {
+        "summary": "Migration task_users2 sang task_users (FIX FK)",
+        "tags": [
+          "Migration task_users2 → task_users"
+        ]
+      }
+    },
+    "/migrate/task-users2-to-task-users/stats": {
+      "get": {
+        "summary": "Thống kê migration task_users2 → task_users",
+        "tags": [
+          "Migration task_users2 → task_users"
+        ]
+      }
+    },
+    "/statistics/task-users-vbdi": {
+      "get": {
+        "summary": "Thông kê đồng bộ công việc của người của công việc của văn bản đi nào về bảng trung gian",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/migrate/task-users-vbdi": {
+      "get": {
+        "summary": "Đông bộ công việc của người nào của văn bản đi về bảng trung gian",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/statistics/task-vbdi": {
+      "get": {
+        "summary": "Thông kê đồng bộ công việc văn bản đi",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/migrate/task-vbdi": {
+      "get": {
+        "summary": "Đông bộ công việc văn bản đi về bảng trung gian",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/statistics/user": {
+      "get": {
+        "summary": "Lấy thống kê User",
+        "description": "Lấy số lượng user đã migrate, chưa migrate và lỗi",
+        "tags": [
+          "Dong bo nguoi dung"
+        ],
+        "responses": {
+          "200": {
+            "description": "Lấy thống kê User thành công",
+            "content": {
+              "application/json": {
+                "example": {
+                  "success": true,
+                  "message": "Lấy thống kê User thành công",
+                  "data": {
+                    "tongUser": 1000,
+                    "daMigrate": 980,
+                    "loi": 20
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Lỗi hệ thống"
+          }
+        }
+      }
+    },
+    "/migrate/user": {
+      "get": {
+        "summary": "Thực hiện đồng bộ dữ liệu người dùng",
+        "description": "Chạy migrate toàn bộ dữ liệu user từ hệ thống cũ sang hệ thống mới",
+        "tags": [
+          "Dong bo nguoi dung"
+        ],
+        "responses": {
+          "200": {
+            "description": "Migration User hoàn thành",
+            "content": {
+              "application/json": {
+                "example": {
+                  "success": true,
+                  "message": "Migration User hoàn thành",
+                  "data": {
+                    "thanhCong": 980,
+                    "thatBai": 20
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Lỗi trong quá trình migration User"
+          }
+        }
+      }
+    },
+    "/statistics/usergroup": {
+      "get": {
+        "summary": "Thống kê nhóm người dùng",
+        "tags": [
+          "Dong bo nhom"
+        ]
+      }
+    },
+    "/migrate/usergroup": {
+      "get": {
+        "summary": "Đồng bộ nhóm người dùng",
+        "tags": [
+          "Dong bo nhom"
+        ]
+      }
+    },
+    "/migrate/useringroup": {
+      "get": {
+        "summary": "Đồng bộ liên kết người dùng trong nhóm",
+        "tags": [
+          "Dong bo lien ket"
+        ]
+      }
+    },
+    "/migrate/sender-unit": {
+      "get": {
+        "summary": "Đồng bộ đơn vị gửi từ tên sang mã đơn vị",
+        "tags": [
+          "Dong bo van ban di"
+        ]
+      }
+    },
+    "/migrate/sender-unit/batch/:limit": {
+      "get": {
+        "summary": "Đồng bộ văn bản đi có chia nhiều luồng chạy từ tên đơn vị sang mã đơn vị",
+        "tags": [
+          "Dong bo van ban di"
+        ]
+      }
+    },
+    "/sync/audit-outgoing": {
+      "get": {
+        "summary": "Đồng bộ đặc trưng của văn bản đi cho luân chuyển văn bản",
+        "tags": [
+          "Dong bo luan chuyen van ban"
+        ]
+      }
+    },
+    "/sync/outgoing": {
+      "get": {
+        "summary": "Đồng bộ văn bản đi từ bảng trung gian về với bảng chính",
+        "tags": [
+          "Dong bo van ban di"
+        ]
+      }
+    },
+    "/sync/task-users2-type": {
+      "get": {
+        "summary": "Đồng bộ trạng thái xử lý công việc ở bảng trung gian",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/statistics/task-users-taskid": {
+      "get": {
+        "summary": "thông kê các cập nhật chưa khớp mã công việc cũ so với mã mới",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/update/task-users-taskid": {
+      "get": {
+        "summary": "đồng bộ về mã mới công việc về phần mềm mới",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/test/incomming/create-audit": {
+      "post": {
+        "summary": "Tạo audit từ từng văn bản đến (incomming_documents2)",
+        "tags": [
+          "Dong bo van ban den"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "example": {
+                "display_name": "Văn thư TCT",
+                "role": "VAN_THU",
+                "action_code": "CREATE",
+                "roleProcess": "VAN_THU",
+                "stage_status": "CHUA_XU_LY",
+                "curStatusCode": 1
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Tạo audit thành công"
+          }
+        }
+      }
+    },
+    "/test/incomming/backup-before-test": {
+      "get": {
+        "summary": "Backup status_code, sender_unit, receiver_unit trước khi test",
+        "tags": [
+          "Dong bo van ban den"
+        ],
+        "responses": {
+          "200": {
+            "description": "Backup thành công"
+          }
+        }
+      }
+    },
+    "/test/incomming/update-bpmn-version": {
+      "post": {
+        "summary": "Update bpmn_version cho incomming_documents2",
+        "tags": [
+          "Dong bo van ban den"
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "example": {
+                "bpmn_version": "PHUC_DAP_DV_CON"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Update thành công"
+          }
+        }
+      }
+    },
+    "/test/incomming/bulk-update": {
+      "post": {
+        "summary": "Update hàng loạt status_code, sender_unit, receiver_unit cho incomming_documents2",
+        "tags": [
+          "Dong bo van ban den"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "example": {
+                "status_code": 7,
+                "sender_unit": "DON_VI_GUI_MOI",
+                "receiver_unit": "DON_VI_NHAN_MOI"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Update thành công"
+          }
+        }
+      }
+    },
+    "/test/backup-outgoing-before-status-test": {
+      "get": {
+        "summary": "Backup outgoing_documents trước khi test",
+        "tags": [
+          "Dong bo van ban di"
+        ]
+      }
+    },
+    "/test/fake-outgoing-data": {
+      "post": {
+        "summary": "Fake toàn bộ outgoing_documents (1 query, chạy lâu)",
+        "tags": [
+          "Dong bo van ban di"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "example": {
+                "senderUnit": "FAKE_SENDER_UNIT",
+                "drafter": "FAKE_DRAFTER"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Fake dữ liệu thành công"
+          }
+        }
+      }
+    },
+    "/test/outgoing-to-audit": {
+      "post": {
+        "summary": "Sinh dữ liệu audit test từ outgoing_documents2",
+        "tags": [
+          "Dong bo van ban di"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "example": {
+                "user_id": "USER_TEST_01",
+                "role": "VAN_THU",
+                "action_code": "CREATE",
+                "receiver": "USER_TEST_01",
+                "receiver_unit": "DON_VI_TEST",
+                "roleProcess": "PROCESS_TEST",
+                "action": "CREATE",
+                "stage_status": "DRAFT"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Tạo audit test thành công"
+          }
+        }
+      }
+    },
+    "/test/create-task-audit": {
+      "post": {
+        "summary": "Tạo audit từ task + task_users",
+        "tags": [
+          "Audit Test"
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "user_id": {
+                    "type": "string",
+                    "default": "6915f2387e39c2ba33cef79a"
+                  },
+                  "role": {
+                    "type": "string",
+                    "default": "NGUOI_CHU_CHI"
+                  },
+                  "action_code": {
+                    "type": "string",
+                    "default": "PHE_DUYET"
+                  },
+                  "to_node_id": {
+                    "type": "string",
+                    "default": "Event_0uchici"
+                  },
+                  "details": {
+                    "type": "string",
+                    "default": "{\"note\":\"he duyet cho toi\"}"
+                  },
+                  "action": {
+                    "type": "string",
+                    "default": "Đồng ý phê duyệt"
+                  },
+                  "stage_status": {
+                    "type": "string",
+                    "default": "PHE_DUYET"
+                  },
+                  "type_document": {
+                    "type": "string",
+                    "default": "Task"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/update/files2-name-from-path": {
+      "get": {
+        "summary": "Cập nhật file_name từ file_path trong bảng files2",
+        "tags": [
+          "Update File Names in files2"
+        ]
+      }
+    },
+    "/update/incoming-sender-unit": {
+      "get": {
+        "summary": "Cập nhật tên đơn vị thành mã đơn vị cho văn bản đến ở bảng trung gian",
+        "tags": [
+          "Dong bo van ban den"
+        ],
+        "responses": {
+          "200": {
+            "description": "Lấy thống kê thành công"
+          },
+          "500": {
+            "description": "Lỗi hệ thống"
+          }
+        }
+      }
+    },
+    "/migrate/incoming-documents": {
+      "get": {
+        "summary": "Đồng bộ từ bảng trung gian văn bản đến về với bảng văn bản đến chính thức",
+        "tags": [
+          "Dong bo van ban den"
+        ]
+      }
+    },
+    "/sync/outgoing-bpmn-version": {
+      "get": {
+        "summary": "Cập nhật bpmn_version văn bản đi cho dữ liệu cũ",
+        "tags": [
+          "Dong bo van ban di"
+        ]
+      }
+    },
+    "/sync/outgoing-sender-unit": {
+      "get": {
+        "summary": "Chuẩn hóa lại sender_unit văn bản đi cho dữ liệu cũ",
+        "tags": [
+          "Dong bo van ban di"
+        ]
+      }
+    },
+    "/update/incoming-book-document-id": {
+      "get": {
+        "summary": "Cập nhật từ tên sổ văn bản ra được mã sổ văn bản cho văn bản đến ở bảng trung gian",
+        "tags": [
+          "Dong bo van ban den"
+        ],
+        "responses": {
+          "200": {
+            "description": "Lấy thống kê thành công"
+          },
+          "500": {
+            "description": "Lỗi hệ thống"
+          }
+        }
+      }
+    },
+    "/update/incoming-status-code": {
+      "get": {
+        "summary": "Cập nhật trạng thái văn bản đến ở bảng trung gian",
+        "tags": [
+          "Dong bo van ban den"
+        ],
+        "responses": {
+          "200": {
+            "description": "Lấy thống kê thành công"
+          },
+          "500": {
+            "description": "Lỗi hệ thống"
+          }
+        }
+      }
+    }
+  },
+  "components": {},
+  "tags": [
+    {
+      "name": "Dong bo file",
+      "description": "Đồng bộ file từ phần mềm cũ sang phần mềm mới"
+    },
+    {
+      "name": "File Relations Mapping",
+      "description": "Mapping type_doc -> object_type"
+    },
+    {
+      "name": "Dong bo luan chuyen van ban",
+      "description": "Đồng bộ luân chuyển văn bản từ phần mềm cũ sang phần mềm mới"
+    },
+    {
+      "name": "Dong bo so van ban",
+      "description": "Đồng bộ số văn bản ban hành số văn bản đến , số văn bản đi"
+    },
+    {
+      "name": "Dong bo binh luan y kien",
+      "description": "Đồng bộ bình luận ý kiến từ phần mềm cũ sang phần mềm mới"
+    },
+    {
+      "name": "Dong bo don vi",
+      "description": "Đồng bộ đơn vị , đươn vị xử lý đến vào phần mềm cũ"
+    },
+    {
+      "name": "Migration File Relations",
+      "description": "Đồng bộ quan hệ file từ file2 sang file_relations2"
+    },
+    {
+      "name": "Dong bo nhom",
+      "description": "Đồng bộ nhóm người tổ chức , đơn vị , nhóm từ phần mềm cũ sang phần mềm mới"
+    },
+    {
+      "name": "Dong bo van ban di",
+      "description": "Đồng bộ văn bản đi về phần mềm trung gian"
+    },
+    {
+      "name": "Dong bo cong viec",
+      "description": "Đồng bộ công việc từ phần mềm cũ sang phần mềm mới"
+    },
+    {
+      "name": "Migration task_users2 → task_users",
+      "description": "Đồng bộ user xử lý công việc (map task_id mới)"
+    },
+    {
+      "name": "Dong bo nguoi dung",
+      "description": "Các API phục vụ migrate dữ liệu người dùng"
+    },
+    {
+      "name": "Dong bo lien ket",
+      "description": "Đồng bộ liên kết của đơn vị , tổ chức"
+    },
+    {
+      "name": "Audit Test"
+    },
+    {
+      "name": "Update File Names in files2",
+      "description": "Cập nhật file_name từ file_path trong bảng files2"
+    }
+  ]
+}
