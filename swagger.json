@@ -82,6 +82,14 @@
         ]
       }
     },
+    "/migrate/full-outgoing-process": {
+      "get": {
+        "summary": "Chạy toàn bộ quy trình đồng bộ văn bản đi (6 bước)",
+        "tags": [
+          "Dong bo van ban di"
+        ]
+      }
+    },
     "/migrate/files-vbden": {
       "get": {
         "summary": "Đông bộ file văn bản đến về bảng trung gian",
@@ -748,6 +756,22 @@
         "summary": "Đồng bộ nhóm người dùng",
         "tags": [
           "Dong bo nhom"
+        ]
+      }
+    },
+    "/statistics/incomingdocuments": {
+      "get": {
+        "summary": "Thống kê văn bản đến",
+        "tags": [
+          "Dong bo van ban den"
+        ]
+      }
+    },
+    "/migrate/incomingdocuments": {
+      "get": {
+        "summary": "Đồng bộ hóa văn bản đến về với bảng trung gian",
+        "tags": [
+          "Dong bo van ban den"
         ]
       }
     },
@@ -1466,6 +1490,10 @@
     {
       "name": "Dong bo nhom",
       "description": "Đồng bộ nhóm người tổ chức , đơn vị , nhóm từ phần mềm cũ sang phần mềm mới"
+    },
+    {
+      "name": "Dong bo van ban den",
+      "description": "Đồng bộ văn bản đến từ phần mềm cũ sang phần mềm mới"
     },
     {
       "name": "Dong bo van ban di",
