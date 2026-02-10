@@ -22,7 +22,9 @@ class OutgoingSyncModel extends BaseModel {
         WHERE o.document_id = o2.document_id
       )
     `;
-    const { recordset } = await this.newPool.request().query(query);
+    const request = this.newPool.request();
+    request.timeout = 300000; // 5 minutes
+    const { recordset } = await request.query(query);
     return recordset[0];
   }
 
@@ -269,7 +271,9 @@ class OutgoingSyncModel extends BaseModel {
     SELECT @@ROWCOUNT AS inserted;
   `;
 
-  const { recordset } = await this.newPool.request().query(query);
+  const request = this.newPool.request();
+  request.timeout = 300000; // 5 minutes
+  const { recordset } = await request.query(query);
   return recordset?.[0]?.inserted || 0;
 }
 
@@ -290,7 +294,7 @@ class OutgoingSyncModel extends BaseModel {
       )
     `;
     const request = this.newPool.request();
-    request.setTimeout(600000); // 10 minutes
+    request.timeout = 600000; // 10 minutes
     const { recordset } = await request.query(query);
     return recordset;
   }

@@ -188,8 +188,73 @@ class SyncManagerController extends BaseController {
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Migration Sync Dashboard</title>
         <meta http-equiv="refresh" content="1">
-        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
         <style>
+          /* === CSS NỘI BỘ (Thay thế Bootstrap CDN) === */
+          body { font-family: system-ui, -apple-system, sans-serif; background: #f8f9fa; margin: 0; padding: 20px; }
+          .card { background: white; border: 1px solid #dee2e6; border-radius: 0.375rem; box-shadow: 0 0.5rem 1rem rgba(0,0,0,0.15); overflow: hidden; margin-bottom: 20px; }
+          .card-header { background: #0d6efd; color: white; padding: 1rem; display: flex; justify-content: space-between; align-items: center; }
+          .card-body { padding: 1rem; }
+          .card-footer { padding: 0.5rem 1rem; background: #f8f9fa; border-top: 1px solid #dee2e6; color: #6c757d; font-size: 0.875em; }
+          
+          /* Tables */
+          .table-responsive { overflow-x: auto; }
+          .table { width: 100%; margin-bottom: 1rem; border-collapse: collapse; }
+          .table th, .table td { padding: 0.5rem; border-bottom: 1px solid #dee2e6; vertical-align: middle; }
+          .table-dark th { background: #212529; color: white; text-align: left; }
+          .table-striped tbody tr:nth-of-type(odd) { background-color: rgba(0,0,0,.05); }
+          .table-hover tbody tr:hover { background-color: rgba(0,0,0,.075); }
+          
+          /* Buttons */
+          .btn { display: inline-block; padding: 0.375rem 0.75rem; border: 1px solid transparent; border-radius: 0.25rem; cursor: pointer; text-decoration: none; font-size: 1rem; line-height: 1.5; transition: opacity 0.2s; }
+          .btn:hover { opacity: 0.9; }
+          .btn:disabled { opacity: 0.65; cursor: not-allowed; }
+          .btn-primary { background: #0d6efd; color: white; }
+          .btn-success { background: #198754; color: white; }
+          .btn-danger { background: #dc3545; color: white; }
+          .btn-info { background: #0dcaf0; color: black; }
+          .btn-warning { background: #ffc107; color: black; }
+          .btn-outline-secondary { border-color: #6c757d; color: #6c757d; background: transparent; }
+          .btn-sm { padding: 0.25rem 0.5rem; font-size: 0.875rem; }
+          .btn-close { background: transparent; border: 0; font-size: 1.5rem; cursor: pointer; float: right; line-height: 1; color: #000; opacity: 0.5; }
+          .btn-group { display: inline-flex; }
+          .btn-group .btn { margin-right: 2px; }
+
+          /* Badges & Progress */
+          .badge { display: inline-block; padding: 0.35em 0.65em; font-size: 0.75em; font-weight: 700; line-height: 1; color: white; text-align: center; white-space: nowrap; vertical-align: baseline; border-radius: 0.25rem; }
+          .bg-primary { background-color: #0d6efd; }
+          .bg-success { background-color: #198754; }
+          .bg-info { background-color: #0dcaf0; color: black; }
+          .bg-warning { background-color: #ffc107; color: black; }
+          .bg-danger { background-color: #dc3545; }
+          .bg-light { background-color: #f8f9fa; color: #212529; }
+          .progress { display: flex; height: 1rem; overflow: hidden; font-size: 0.75rem; background-color: #e9ecef; border-radius: 0.25rem; margin-bottom: 0.5rem; }
+          .progress-bar { display: flex; flex-direction: column; justify-content: center; color: #fff; text-align: center; white-space: nowrap; background-color: #0d6efd; transition: width .6s ease; }
+          
+          /* Modal (Custom implementation) */
+          .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1050; overflow-x: hidden; overflow-y: auto; }
+          .modal.show { display: block; }
+          .modal-dialog { position: relative; width: auto; margin: 1.75rem auto; max-width: 800px; pointer-events: none; }
+          .modal-content { position: relative; display: flex; flex-direction: column; width: 100%; pointer-events: auto; background-color: #fff; border: 1px solid rgba(0,0,0,.2); border-radius: 0.3rem; outline: 0; box-shadow: 0 0.5rem 1rem rgba(0,0,0,0.5); }
+          .modal-header { display: flex; align-items: center; justify-content: space-between; padding: 1rem; border-bottom: 1px solid #dee2e6; }
+          .modal-title { margin: 0; font-size: 1.25rem; }
+          .modal-body { position: relative; flex: 1 1 auto; padding: 1rem; }
+          
+          /* Utilities */
+          .d-flex { display: flex; }
+          .justify-content-between { justify-content: space-between; }
+          .align-items-center { align-items: center; }
+          .text-center { text-align: center; }
+          .text-muted { color: #6c757d; }
+          .mb-0 { margin-bottom: 0; }
+          .mb-4 { margin-bottom: 1.5rem; }
+          .me-2 { margin-right: 0.5rem; }
+          .mt-2 { margin-top: 0.5rem; }
+          .alert { padding: 1rem; margin-bottom: 1rem; border: 1px solid transparent; border-radius: 0.25rem; }
+          .alert-warning { color: #664d03; background-color: #fff3cd; border-color: #ffecb5; }
+          .alert-info { color: #055160; background-color: #cff4fc; border-color: #b6effb; }
+          .spinner-border { display: inline-block; width: 1rem; height: 1rem; vertical-align: text-bottom; border: .2em solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spinner-border .75s linear infinite; }
+          @keyframes spinner-border { 100% { transform: rotate(360deg); } }
+
           .status-idle { color: #6c757d; }
           .status-running { color: #0d6efd; font-weight: bold; animation: pulse 1s infinite; }
           .status-completed { color: #198754; font-weight: bold; }
@@ -205,7 +270,7 @@ class SyncManagerController extends BaseController {
           <div class="card shadow-lg">
             <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
               <div>
-                <h2 class="mb-0">🚀 Trung Tâm Điều Khiển Đồng Bộ Dữ Liệu</h2>
+                <h2 class="mb-0">Trung Tâm Điều Khiển Đồng Bộ Dữ Liệu</h2>
                 <small>Batch Size: ${data.batchSize} | Cập nhật lần cuối: ${new Date(data.timestamp).toLocaleString('vi-VN')}</small>
               </div>
               <span class="badge bg-light text-dark fs-5">
@@ -228,21 +293,35 @@ class SyncManagerController extends BaseController {
                   <thead class="table-dark sticky-top">
                     <tr>
                       <th style="width: 20%;">Model</th>
-                      <th style="width: 35%;">Progress</th>
+                      <th style="width: 10%;">Tổng số</th>
+                      <th style="width: 10%;">Đã xử lý</th>
+                      <th style="width: 20%;">Trạng thái</th>
                       <th style="width: 15%;">Thống kê</th>
-                      <th style="width: 15%;">Trạng thái</th>
+                      <th style="width: 10%;">Trạng thái</th>
                       <th style="width: 15%;">Hành động</th>
                     </tr>
                   </thead>
                   <tbody>
                     ${Object.entries(data.entities).map(([name, info]) => {
-                      const pct = info.progressPercent || 0;
+                      let total = (info.synced || 0) + (info.skipped || 0) + (info.errors || 0) + (info.remaining || 0);
+                      if (name === 'Đồng bộ văn bản đi') total = 35909;
+                      if (name === 'Đồng bộ văn bản đến') total = 290001;
+                      if (name === 'Đồng bộ văn bản đi về bảng trung gian') total = 32048;
+
+                      const processed = (info.synced || 0) + (info.skipped || 0) + (info.errors || 0);
+                      let pct = info.progressPercent || 0;
+                      if (name === 'Đồng bộ văn bản đi' || name === 'Đồng bộ văn bản đến' || name === 'Đồng bộ văn bản đi về bảng trung gian') {
+                        pct = total > 0 ? Math.floor((processed / total) * 100) : 0;
+                      }
+
                       const statusClass = info.status === 'running' ? 'status-running' : 
                                          info.status === 'completed' ? 'status-completed' :
                                          info.status === 'error' ? 'status-error' : 'status-idle';
                       return `
                         <tr>
                           <td><strong>${name}</strong></td>
+                          <td><strong>${total.toLocaleString('vi-VN')}</strong></td>
+                          <td><strong>${processed.toLocaleString('vi-VN')}</strong></td>
                           <td>
                             <div class="progress">
                               <div class="progress-bar ${pct >= 75 ? 'bg-success' : pct >= 50 ? 'bg-info' : pct >= 25 ? 'bg-warning' : 'bg-secondary'}" 
@@ -310,7 +389,7 @@ class SyncManagerController extends BaseController {
             <div class="modal-content">
               <div class="modal-header">
                 <h5 class="modal-title">Chi tiết Model: <span id="detailModelName"></span></h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                <button type="button" class="btn-close" onclick="closeModal('detailsModal')">×</button>
               </div>
               <div class="modal-body" id="detailsBody">
                 <p class="text-center"><span class="spinner-border spinner-border-sm"></span></p>
@@ -325,7 +404,7 @@ class SyncManagerController extends BaseController {
             <div class="modal-content">
               <div class="modal-header">
                 <h5 class="modal-title">Danh sách Lỗi</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                <button type="button" class="btn-close" onclick="closeModal('errorsModal')">×</button>
               </div>
               <div class="modal-body" id="errorsBody">
                 <p class="text-center"><span class="spinner-border spinner-border-sm"></span></p>
@@ -334,8 +413,28 @@ class SyncManagerController extends BaseController {
           </div>
         </div>
 
-        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
         <script>
+          // === JS NỘI BỘ (Thay thế Bootstrap JS) ===
+          function openModal(id) {
+            const el = document.getElementById(id);
+            el.style.display = 'block';
+            setTimeout(() => el.classList.add('show'), 10); // Add class for potential transition
+          }
+
+          function closeModal(id) {
+            const el = document.getElementById(id);
+            el.classList.remove('show');
+            el.style.display = 'none';
+          }
+
+          // Close modal when clicking outside
+          window.onclick = function(event) {
+            if (event.target.classList.contains('modal')) {
+              event.target.style.display = 'none';
+              event.target.classList.remove('show');
+            }
+          }
+
           async function triggerSyncAll() {
             if (!confirm('Đồng bộ tất cả models? Quá trình này có thể mất một lúc.')) return;
             try {
@@ -370,7 +469,7 @@ class SyncManagerController extends BaseController {
           }
 
           async function showDetails(modelName) {
-            const modal = new bootstrap.Modal(document.getElementById('detailsModal'));
+            openModal('detailsModal');
             document.getElementById('detailModelName').textContent = modelName;
             
             try {
@@ -402,12 +501,10 @@ class SyncManagerController extends BaseController {
             } catch (e) {
               document.getElementById('detailsBody').innerHTML = '<p class="text-danger">Lỗi tải chi tiết: ' + e.message + '</p>';
             }
-
-            modal.show();
           }
 
           async function showErrors(modelName) {
-            const modal = new bootstrap.Modal(document.getElementById('errorsModal'));
+            openModal('errorsModal');
             const modalTitle = document.querySelector('#errorsModal .modal-title');
             const errorsBody = document.getElementById('errorsBody');
             
@@ -420,7 +517,6 @@ class SyncManagerController extends BaseController {
               
               if (!json.success || json.data.errors.length === 0) {
                 errorsBody.innerHTML = '<p class="alert alert-info">Không có lỗi</p>';
-                modal.show();
                 return;
               }
 
@@ -440,8 +536,6 @@ class SyncManagerController extends BaseController {
             } catch (e) {
               errorsBody.innerHTML = '<p class="text-danger">Lỗi tải danh sách lỗi: ' + e.message + '</p>';
             }
-
-            modal.show();
           }
         </script>
       </body>

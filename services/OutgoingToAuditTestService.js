@@ -1,6 +1,6 @@
 const OutgoingToAuditTestModel =
   require('../models/OutgoingToAuditTestModel');
-const logger = require('../utils/logger'); // dùng logger hệ thống
+const logger = require('../utils/logger');
 
 class OutgoingToAuditTestService {
   constructor() {
@@ -11,23 +11,19 @@ class OutgoingToAuditTestService {
     await this.model.initialize();
   }
 
-  async createAudit(payload) {
-    const {
-      user_id,
-      role,
-      action_code,
-      receiver,
-      receiver_unit,
-      roleProcess,
-      action,
-      stage_status
-    } = payload;
+  async createAudit() {
+    // ===== FIX CỨNG DATA =====
+    const user_id = '6915f2387e39c2ba33cef79a';
+    const role = 'VAN_THU';
+    const action_code = 'CREATE';
+    const receiver = '6915f2387e39c2ba33cef79a';
+    const receiver_unit = '68afb3a1cb36081f0bba5dd6';
+    const roleProcess = 'VAN_THU';
+    const action = 'Tạo văn bản';
+    const stage_status = 'DA_XU_LY';
+    // ========================
 
-    if (!user_id || !role || !action_code) {
-      throw new Error('user_id, role và action_code là bắt buộc');
-    }
-
-    logger.info('=== START CREATE AUDIT TEST ===');
+    logger.info('=== START CREATE AUDIT TEST (FIXED DATA MODE) ===');
     logger.info(`User: ${user_id} | Role: ${role} | ActionCode: ${action_code}`);
 
     const outgoingList = await this.model.getOutgoingTestData();
