@@ -8,7 +8,7 @@ const tableMappings = {
 
     newTable: 'task_users2',
     newSchema: 'dbo',
-    newDatabase: 'DiOffice',
+    newDatabase: 'camunda',
 
     fieldMapping: {
       // cột từ query → cột trong task_users2

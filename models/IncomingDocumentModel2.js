@@ -16,7 +16,7 @@ class IncomingDocumentModel2 extends BaseModel {
         document_id,
         to_book,
         to_book_code
-      FROM DiOffice.dbo.incomming_documents2
+      FROM camunda.dbo.incomming_documents2
       WHERE book_document_id IS NULL
         AND (to_book IS NOT NULL OR to_book_code IS NOT NULL)
       ORDER BY created_at
@@ -51,7 +51,7 @@ class IncomingDocumentModel2 extends BaseModel {
   async findBookDocumentIdByIncomingToBook(toBook) {
     const query = `
       SELECT TOP 1 book_document_id
-      FROM DiOffice.dbo.book_documents
+      FROM camunda.dbo.book_documents
       WHERE type_document = 'IncommingDocument'
         AND ${this.buildNormalizeSql('to_book_code')}
             COLLATE Vietnamese_CI_AI
@@ -75,7 +75,7 @@ class IncomingDocumentModel2 extends BaseModel {
   async findBookDocumentIdByIncomingToBookCode(toBookCode) {
     const query = `
       SELECT TOP 1 book_document_id
-      FROM DiOffice.dbo.book_documents
+      FROM camunda.dbo.book_documents
       WHERE type_document = 'IncommingDocument'
         AND ${this.buildNormalizeSql('to_book_code')}
             COLLATE Vietnamese_CI_AI
@@ -98,7 +98,7 @@ class IncomingDocumentModel2 extends BaseModel {
    */
   async updateBookDocumentId(documentId, bookDocumentId) {
     const query = `
-      UPDATE DiOffice.dbo.incomming_documents2
+      UPDATE camunda.dbo.incomming_documents2
       SET book_document_id = @bookDocumentId,
           updated_at = GETDATE()
       WHERE document_id = @documentId

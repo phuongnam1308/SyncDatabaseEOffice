@@ -6,7 +6,7 @@ const tableMappings = {
     
     newTable: 'group_users',
     newSchema: 'dbo',
-    newDatabase: 'DiOffice',
+    newDatabase: 'camunda',
     
     fieldMapping: {
       'ID': 'id_group_bk',       // ID cũ lưu vào backup

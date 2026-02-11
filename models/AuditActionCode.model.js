@@ -4,7 +4,7 @@ class AuditActionCodeModel extends BaseModel {
   async getAudit2NeedUpdate() {
     const sql = `
       SELECT id, HanhDong
-      FROM DiOffice.dbo.audit2
+      FROM camunda.dbo.audit2
       WHERE action_code IS NULL
     `;
     return this.queryNewDb(sql);
@@ -28,7 +28,7 @@ class AuditActionCodeModel extends BaseModel {
 
   async updateActionCode(id, actionCode) {
     const sql = `
-      UPDATE DiOffice.dbo.audit2
+      UPDATE camunda.dbo.audit2
       SET action_code = @action_code
       WHERE id = @id
     `;

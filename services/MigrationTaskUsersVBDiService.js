@@ -91,7 +91,7 @@ class MigrationTaskUsersVBDiService {
 
     return {
       source: { database: 'DataEOfficeSNP', table: 'TaskVBDiPermission + UserField', count: oldCount },
-      destination: { database: 'DiOffice', table: 'task_users2 (tổng)', count: newCount },
+      destination: { database: 'camunda', table: 'task_users2 (tổng)', count: newCount },
       migrated_estimate: oldCount,  // vì cùng đích, chỉ để tham khảo
       percentage: calculatePercentage(oldCount, oldCount) // dummy
     };

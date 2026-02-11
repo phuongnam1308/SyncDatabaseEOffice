@@ -112,7 +112,7 @@
 
 //       return {
 //         source: { database: 'DataEOfficeSNP', schema: 'SNP', table: 'User', count: oldCount },
-//         destination: { database: 'DiOffice', table: 'users', count: newCount },
+//         destination: { database: 'camunda', table: 'users', count: newCount },
 //         migrated: newCount,
 //         remaining: oldCount - newCount,
 //         percentage: calculatePercentage(newCount, oldCount)
@@ -486,7 +486,7 @@ class MigrationUserService {
           count: oldCount 
         },
         destination: { 
-          database: 'DiOffice', 
+          database: 'camunda', 
           schema: 'dbo',
           table: 'users', 
           count: newCount 

@@ -66,10 +66,10 @@
 //       const query = `
 //         UPDATE bd
 //         SET bd.count = g.doc_count
-//         FROM DiOffice.dbo.book_documents bd
+//         FROM camunda.dbo.book_documents bd
 //         INNER JOIN (
 //           SELECT name, COUNT(*) as doc_count
-//           FROM DiOffice.dbo.book_documents
+//           FROM camunda.dbo.book_documents
 //           GROUP BY name
 //         ) g ON bd.name = g.name
 //       `;
@@ -167,10 +167,10 @@ class BookDocumentModel extends BaseModel {
       const query = `
         UPDATE bd
         SET bd.count = g.doc_count
-        FROM DiOffice.dbo.book_documents bd
+        FROM camunda.dbo.book_documents bd
         INNER JOIN (
           SELECT name, COUNT(*) as doc_count
-          FROM DiOffice.dbo.book_documents
+          FROM camunda.dbo.book_documents
           GROUP BY name
         ) g ON bd.name = g.name
       `;
