@@ -28,12 +28,25 @@ class DocumentCommentsMigrationModel extends BaseModel {
     const { target } = this.cfg;
 
     const query = `
-      SELECT id
+      SELECT id, document_id, id_comments_bak
       FROM ${target.database}.${target.schema}.${target.table}
       WHERE id_comments_bak = @idBak
     `;
     const res = await this.queryNewDb(query, { idBak });
-    return res.length > 0;
+    return res.length > 0 ? res[0] : null;
+  }
+
+  async updateDocumentId(idBak, documentId) {
+    const { target } = this.cfg;
+
+    const query = `
+      UPDATE ${target.database}.${target.schema}.${target.table}
+      SET document_id = @documentId,
+          updated_at = GETDATE()
+      WHERE id_comments_bak = @idBak
+    `;
+    
+    await this.queryNewDb(query, { idBak, documentId });
   }
 
   async insert(record) {

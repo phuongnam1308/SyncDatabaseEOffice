@@ -1,5 +1,6 @@
 const BaseModel = require('./BaseModel');
 const logger = require('../utils/logger');
+const { v4: uuidv4 } = require('uuid');
 
 class DocumentCommentsSyncModel extends BaseModel {
   constructor() {
@@ -7,39 +8,84 @@ class DocumentCommentsSyncModel extends BaseModel {
   }
 
   /**
-   * Đồng bộ dữ liệu từ document_comments2 → document_comments
-   * Thêm document_id từ document_comments2 vào record
+   * Check xem bản ghi có tồn tại trong document_comments và có document_id không
    */
-  async migrate(limit = 100) {
-    const query = `
-      INSERT INTO camunda.dbo.document_comments (
-        document_id, id_comments_bak, ItemTitle, ItemUrl, ItemImage,
-        DocumentID_bak, Category, Type_bak, Email, Author,
-        content, user_id_bak, parent_id_bak, EmailReplyTo, ReplyTo,
-        Files, LikeNumber, [type], is_edited, is_leader_suggestion,
-        created_at, updated_at, table_bak
-      )
-      SELECT TOP (@limit)
-        s.document_id, s.id_comments_bak, s.ItemTitle, s.ItemUrl, s.ItemImage,
-        s.DocumentID_bak, s.Category, s.Type_bak, s.Email, s.Author,
-        s.content, s.user_id_bak, s.parent_id_bak, s.EmailReplyTo, s.ReplyTo,
-        s.Files, s.LikeNumber, s.[type], s.is_edited, s.is_leader_suggestion,
-        s.created_at, s.updated_at, s.table_bak
-      FROM camunda.dbo.document_comments2 s
-      WHERE NOT EXISTS (
-        SELECT 1
-        FROM camunda.dbo.document_comments d
-        WHERE d.id_comments_bak = s.id_comments_bak
-      )
-      ORDER BY s.created_at;
-    `;
+  async getExistingComment(idCommentsBak) {
+    try {
+      const query = `
+        SELECT id, document_id, id_comments_bak
+        FROM camunda.dbo.document_comments
+        WHERE id_comments_bak = @idCommentsBak
+      `;
+      
+      const result = await this.queryNewDb(query, { idCommentsBak });
+      return result.length > 0 ? result[0] : null;
+    } catch (error) {
+      return null;
+    }
+  }
 
-    const result = await this.newPool
-      .request()
-      .input('limit', limit)
-      .query(query);
+  /**
+   * Update document_id cho bản ghi hiện có
+   */
+  async updateDocumentId(idCommentsBak, documentId) {
+    try {
+      const query = `
+        UPDATE camunda.dbo.document_comments
+        SET document_id = @documentId,
+            updated_at = GETDATE()
+        WHERE id_comments_bak = @idCommentsBak
+      `;
+      
+      await this.queryNewDb(query, { idCommentsBak, documentId });
+    } catch (error) {
+      throw error;
+    }
+  }
 
-    return result.rowsAffected[0] || 0;
+  /**
+   * Insert bản ghi mới từ document_comments2 → document_comments
+   */
+  async insertFromIntermediate(record) {
+    try {
+      if (!record.id) {
+        record.id = uuidv4();
+      }
+
+      const fields = Object.keys(record);
+      const params = fields.map((_, i) => `@p${i}`).join(', ');
+
+      const query = `
+        INSERT INTO camunda.dbo.document_comments
+        (${fields.join(', ')})
+        VALUES (${params})
+      `;
+
+      const request = this.newPool.request();
+      fields.forEach((f, i) => request.input(`p${i}`, record[f]));
+      await request.query(query);
+    } catch (error) {
+      logger.error('insertFromIntermediate error:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Lấy tất cả bản ghi từ document_comments2 chưa sync
+   */
+  async getUnsynced(limit = 100) {
+    try {
+      const query = `
+        SELECT TOP (@limit) *
+        FROM camunda.dbo.document_comments2
+        ORDER BY created_at ASC
+      `;
+
+      const result = await this.queryNewDb(query, { limit });
+      return result;
+    } catch (error) {
+      throw error;
+    }
   }
 }
 
