@@ -99,6 +99,8 @@ const MigrationDocumentCommentsController =
   require('../controllers/MigrationDocumentCommentsController');
 const DocumentCommentsReplySyncController =
   require('../controllers/DocumentCommentsReplySyncController');
+const DocumentCommentsSyncController =
+  require('../controllers/DocumentCommentsSyncController');
 const FileMigrationController =
   require('../controllers/FileMigrationController');
  const IncomingFileMigrationController =
@@ -628,7 +630,11 @@ router.get(
 );
 
 router.get(
-  '/migrate/files-vanbanbanhanh',
+  '/sync/document-comments',
+  DocumentCommentsSyncController.sync
+);
+
+router.get('/migrate/files-vanbanbanhanh',
   FileMigrationController.migrate
 );
 router.get('/migrate/files-vbden', IncomingFileMigrationController.migrate);

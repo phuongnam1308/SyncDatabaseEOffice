@@ -50,6 +50,14 @@
         ]
       }
     },
+    "/sync/document-comments": {
+      "get": {
+        "summary": "Đồng bộ bình luận từ document_comments2 → document_comments",
+        "tags": [
+          "Sync Binh luan sang bang final"
+        ]
+      }
+    },
     "/migrate/drafter": {
       "get": {
         "summary": "Đồng bộ văn bản đi người soạn văn bản của văn bản đi của bảng trung gian",
@@ -1459,6 +1467,10 @@
   },
   "components": {},
   "tags": [
+    {
+      "name": "Sync Binh luan sang bang final",
+      "description": "Đồng bộ bình luận từ bảng trung gian sang bảng final"
+    },
     {
       "name": "Dong bo file",
       "description": "Đồng bộ file từ phần mềm cũ sang phần mềm mới"

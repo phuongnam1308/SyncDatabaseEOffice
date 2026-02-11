@@ -33,6 +33,9 @@ module.exports = {
       LikeNumber: 'LikeNumber'
     },
 
+    // Lookup field - sẽ được xử lý riêng trong service
+    documentIdLookup: 'DocumentID',
+
     defaultFields: {
       is_edited: 0,
       is_leader_suggestion: 0

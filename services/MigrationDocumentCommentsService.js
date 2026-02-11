@@ -16,6 +16,43 @@ class MigrationDocumentCommentsService {
     await this.model.initialize();
   }
 
+  // Helper: Lấy document_id từ incoming_documents hoặc outgoing_documents bằng DocumentID_bak
+  async getDocumentId(documentIdBak) {
+    try {
+      if (!documentIdBak) return null;
+
+      // Thử tìm trong incoming_documents trước
+      const incomingQuery = `
+        SELECT TOP 1 document_id
+        FROM camunda.dbo.incomming_documents2
+        WHERE id_incoming_bak = @documentIdBak
+      `;
+      
+      const incoming = await this.model.queryNewDb(incomingQuery, { documentIdBak });
+      if (incoming.length > 0) {
+        return incoming[0].document_id;
+      }
+
+      // Nếu không tìm thấy, thử tìm trong outgoing_documents
+      const outgoingQuery = `
+        SELECT TOP 1 document_id
+        FROM camunda.dbo.outgoing_documents2
+        WHERE id_outgoing_bak = @documentIdBak
+      `;
+      
+      const outgoing = await this.model.queryNewDb(outgoingQuery, { documentIdBak });
+      if (outgoing.length > 0) {
+        return outgoing[0].document_id;
+      }
+
+      logger.warn(`[getDocumentId] Không tìm thấy document_id cho DocumentID_bak=${documentIdBak}`);
+      return null;
+    } catch (err) {
+      logger.error(`[getDocumentId] Lỗi tra cứu document_id:`, err);
+      return null;
+    }
+  }
+
   async migrate() {
     logger.info('=== MIGRATE COMMENTS THEO CONFIG (FIX CONTENT NULL) ===');
 
@@ -59,7 +96,12 @@ class MigrationDocumentCommentsService {
           record[targetField] = value;
         }
 
-        // 4️⃣ Insert
+        // 4️⃣ Lấy document_id từ incoming hoặc outgoing documents
+        const documentIdBak = row[this.cfg.documentIdLookup];
+        const documentId = await this.getDocumentId(documentIdBak);
+        record.document_id = documentId;
+
+        // 5️⃣ Insert
         await this.model.insert(record);
         inserted++;
 
