@@ -179,7 +179,6 @@ class SyncManagerController extends BaseController {
   getDashboard = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
     const data = SyncManagerService.getDashboardData();
-
     const html = `
       <!DOCTYPE html>
       <html lang="vi">
@@ -541,7 +540,6 @@ class SyncManagerController extends BaseController {
       </body>
       </html>
     `;
-
     res.send(html);
   });
 }

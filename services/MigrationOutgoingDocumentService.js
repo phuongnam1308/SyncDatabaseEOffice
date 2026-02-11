@@ -97,7 +97,7 @@
 
 //       return {
 //         source: { database: 'DataEOfficeSNP', schema: 'dbo', table: 'VanBanBanHanh', count: oldCount },
-//         destination: { database: 'DiOffice', table: 'outgoing_documents', count: newCount },
+//         destination: { database: 'camunda', table: 'outgoing_documents', count: newCount },
 //         migrated: newCount,
 //         remaining: oldCount - newCount,
 //         percentage: calculatePercentage(newCount, oldCount)
@@ -212,107 +212,353 @@ class MigrationOutgoingDocumentService {
     logger.info('MigrationOutgoingDocumentService đã được khởi tạo');
   }
 
-  async migrateOutgoingDocuments() {
-    const startTime = Date.now();
-    logger.info('=== BẮT ĐẦU MIGRATION VĂN BẢN BAN HÀNH ===');
 
-    try {
-      const config = tableMappings.outgoingdocument2;
-      if (!config) {
-        throw new Error('Config outgoingdocument2 không tồn tại');
-      }
+  async migrateOutgoingDocuments(stateJson) {
+  const startTime = Date.now();
+  logger.info("=== START MIGRATE OUTGOING DOCUMENTS ===");
 
-      const totalRecords = await this.model.countOldDb();
-      logger.info(`Tổng số văn bản cần migrate: ${formatNumber(totalRecords)}`);
+  const moduleKey = "outgoingdocument2";
+  const state = stateJson[moduleKey] || {};
+  const lastSyncDate = state.lastSyncDate
+    ? new Date(state.lastSyncDate)
+    : null;
 
-      const oldRecords = await this.model.getAllFromOldDb();
-      const batches = chunkArray(oldRecords, this.batchSize);
+  const batchSize = state.batchSize || this.batchSize || 200;
 
-      let totalInserted = 0;
-      let totalSkipped = 0;
-      let totalErrors = 0;
+  let inserted = 0;
+  let updated = 0;
+  let skipped = 0;
+  let errors = 0;
 
-      for (let i = 0; i < batches.length; i++) {
-        logger.info(`Xử lý batch ${i + 1}/${batches.length}`);
-        const batch = batches[i];
+  try {
+    const total = await this.model.countOldDb();
+    logger.info(`[${moduleKey}] total old records: ${total}`);
 
-        for (const oldRecord of batch) {
-          try {
-            const existed = await this.model.findByBackupId(oldRecord.ID);
-            if (existed) {
-              totalSkipped++;
-              continue;
-            }
+    let offset = 0;
 
-            let newRecord = mapFieldValues(
-              oldRecord,
-              config.fieldMapping,
-              config.defaultValues
-            );
+    while (true) {
+      const rows = await this.model.getBatchFromOldDb({
+        offset,
+        limit: batchSize,
+        lastSyncDate
+      });
 
-            /* ===== CLEAN KIỂU SỐ ===== */
-            newRecord.SoBan = safeParseInt(oldRecord.SoBan);
-            newRecord.SoTrang = safeParseInt(oldRecord.SoTrang);
-            newRecord.ModuleId = safeParseInt(oldRecord.ModuleId);
-            newRecord.ItemId = safeParseInt(oldRecord.ItemId);
-            newRecord.MigrateFlg = safeParseInt(oldRecord.MigrateFlg);
-            newRecord.MigrateErrFlg = safeParseInt(oldRecord.MigrateErrFlg);
-            newRecord.DGPId = safeParseInt(oldRecord.DGPId);
-            newRecord.CodeItemId = safeParseInt(oldRecord.CodeItemId);
-            newRecord.DocSignType = safeParseInt(oldRecord.DocSignType);
+      if (!rows || rows.length === 0) break;
 
-            /* ===== CLEAN BIT ===== */
-            newRecord.ChenSo = safeParseBit(oldRecord.ChenSo);
-            newRecord.PhanCong = safeParseBit(oldRecord.PhanCong);
-            newRecord.IsLibrary = safeParseBit(oldRecord.IsLibrary);
-            newRecord.IsKyQuyChe = safeParseBit(oldRecord.IsKyQuyChe);
-            newRecord.IsConverting = safeParseBit(oldRecord.IsConverting);
+      for (const oldRecord of rows) {
+        try {
+          const decision = await this.model.checkSyncAction(oldRecord);
 
-            /* ===== CLEAN DATE ===== */
-            newRecord.NgayBanHanh = safeParseDate(oldRecord.NgayBanHanh);
-            newRecord.NgayHieuLuc = safeParseDate(oldRecord.NgayHieuLuc);
-            newRecord.NgayHoanTat = safeParseDate(oldRecord.NgayHoanTat);
-
-            /* ===== BOOK DOCUMENT ===== */
-            newRecord.book_document_id =
-              await this.model.findBookDocumentIdBySoVanBan(
-                oldRecord.SoVanBan
-              );
-
-            // 🔥 CLEAN CUỐI – BẮT BUỘC
-            newRecord = normalizeRecord(newRecord);
-
-            await this.model.insertToNewDb(newRecord);
-            totalInserted++;
-
-          } catch (error) {
-            totalErrors++;
-            logger.error(
-              `Lỗi migrate ID ${oldRecord.ID}: ${error.message}`
-            );
+          if (decision.action === "skip") {
+            skipped++;
+            continue;
           }
+
+          const newRecord = mapFieldValues(
+            oldRecord,
+            tableMappings.outgoingdocument2.fieldMapping,
+            tableMappings.outgoingdocument2.defaultValues
+          );
+
+          // ===== CLEAN DATA (giữ logic cũ) =====
+          newRecord.SoBan = safeParseInt(oldRecord.SoBan);
+          newRecord.SoTrang = safeParseInt(oldRecord.SoTrang);
+          newRecord.ModuleId = safeParseInt(oldRecord.ModuleId);
+          newRecord.ItemId = safeParseInt(oldRecord.ItemId);
+          newRecord.DocSignType = safeParseInt(oldRecord.DocSignType);
+
+          newRecord.ChenSo = safeParseBit(oldRecord.ChenSo);
+          newRecord.IsLibrary = safeParseBit(oldRecord.IsLibrary);
+          newRecord.IsKyQuyChe = safeParseBit(oldRecord.IsKyQuyChe);
+
+          newRecord.NgayBanHanh = safeParseDate(oldRecord.NgayBanHanh);
+          newRecord.NgayHieuLuc = safeParseDate(oldRecord.NgayHieuLuc);
+
+          // map backup id
+          newRecord.id_outgoing_bak = oldRecord.ID;
+          newRecord.Modified = oldRecord.Modified;
+
+          if (decision.action === "insert") {
+            await this.model.insertToNewDb(newRecord);
+            inserted++;
+          }
+
+          if (decision.action === "update") {
+            await this.model.updateInNewDb(newRecord);
+            updated++;
+          }
+
+        } catch (err) {
+          errors++;
+          logger.error(
+            `[${moduleKey}] ERROR record ID ${oldRecord.ID}: ${err.message}`
+          );
         }
       }
 
-      const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+      offset += batchSize;
 
-      logger.info(
-        `HOÀN THÀNH | ${duration}s | Inserted: ${totalInserted} | Skipped: ${totalSkipped} | Errors: ${totalErrors}`
-      );
-
-      return {
-        success: true,
-        inserted: totalInserted,
-        skipped: totalSkipped,
-        errors: totalErrors,
-        duration
+      // 👉 update state sau mỗi batch
+      stateJson[moduleKey] = {
+        ...stateJson[moduleKey],
+        lastSyncDate: new Date().toISOString(),
+        processed: offset
       };
-
-    } catch (error) {
-      logger.error('Lỗi migration:', error);
-      throw error;
     }
+
+    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+
+    logger.info(
+      `[${moduleKey}] DONE | insert=${inserted}, update=${updated}, skip=${skipped}, error=${errors}`
+    );
+
+    return {
+      success: true,
+      inserted,
+      updated,
+      skipped,
+      errors,
+      duration
+    };
+
+  } catch (err) {
+    logger.error(`[${moduleKey}] FATAL ERROR: ${err.message}`);
+    throw err;
   }
+}
+
+  // async migrateOutgoingDocuments() {
+  //   const startTime = Date.now();
+  //   logger.info('=== BẮT ĐẦU MIGRATION VĂN BẢN BAN HÀNH ===');
+
+  //   try {
+  //     const config = tableMappings.outgoingdocument2;
+  //     if (!config) {
+  //       throw new Error('Config outgoingdocument2 không tồn tại');
+  //     }
+
+  //     const totalRecords = await this.model.countOldDb();
+  //     logger.info(`Tổng số văn bản cần migrate: ${formatNumber(totalRecords)}`);
+
+  //     const oldRecords = await this.model.getAllFromOldDb();
+  //     const batches = chunkArray(oldRecords, this.batchSize);
+
+  //     let totalInserted = 0;
+  //     let totalSkipped = 0;
+  //     let totalErrors = 0;
+
+  //     for (let i = 0; i < batches.length; i++) {
+  //       logger.info(`Xử lý batch ${i + 1}/${batches.length}`);
+  //       const batch = batches[i];
+
+  //       for (const oldRecord of batch) {
+  //         try {
+  //           const existed = await this.model.findByBackupId(oldRecord.ID);
+  //           if (existed) {
+  //             totalSkipped++;
+  //             continue;
+  //           }
+
+  //           let newRecord = mapFieldValues(
+  //             oldRecord,
+  //             config.fieldMapping,
+  //             config.defaultValues
+  //           );
+
+  //           /* ===== CLEAN KIỂU SỐ ===== */
+  //           newRecord.SoBan = safeParseInt(oldRecord.SoBan);
+  //           newRecord.SoTrang = safeParseInt(oldRecord.SoTrang);
+  //           newRecord.ModuleId = safeParseInt(oldRecord.ModuleId);
+  //           newRecord.ItemId = safeParseInt(oldRecord.ItemId);
+  //           newRecord.MigrateFlg = safeParseInt(oldRecord.MigrateFlg);
+  //           newRecord.MigrateErrFlg = safeParseInt(oldRecord.MigrateErrFlg);
+  //           newRecord.DGPId = safeParseInt(oldRecord.DGPId);
+  //           newRecord.CodeItemId = safeParseInt(oldRecord.CodeItemId);
+  //           newRecord.DocSignType = safeParseInt(oldRecord.DocSignType);
+
+  //           /* ===== CLEAN BIT ===== */
+  //           newRecord.ChenSo = safeParseBit(oldRecord.ChenSo);
+  //           newRecord.PhanCong = safeParseBit(oldRecord.PhanCong);
+  //           newRecord.IsLibrary = safeParseBit(oldRecord.IsLibrary);
+  //           newRecord.IsKyQuyChe = safeParseBit(oldRecord.IsKyQuyChe);
+  //           newRecord.IsConverting = safeParseBit(oldRecord.IsConverting);
+
+  //           /* ===== CLEAN DATE ===== */
+  //           newRecord.NgayBanHanh = safeParseDate(oldRecord.NgayBanHanh);
+  //           newRecord.NgayHieuLuc = safeParseDate(oldRecord.NgayHieuLuc);
+  //           newRecord.NgayHoanTat = safeParseDate(oldRecord.NgayHoanTat);
+
+  //           /* ===== BOOK DOCUMENT ===== */
+  //           newRecord.book_document_id =
+  //             await this.model.findBookDocumentIdBySoVanBan(
+  //               oldRecord.SoVanBan
+  //             );
+
+  //           // 🔥 CLEAN CUỐI – BẮT BUỘC
+  //           newRecord = normalizeRecord(newRecord);
+
+  //           await this.model.insertToNewDb(newRecord);
+  //           totalInserted++;
+
+  //         } catch (error) {
+  //           totalErrors++;
+  //           logger.error(
+  //             `Lỗi migrate ID ${oldRecord.ID}: ${error.message}`
+  //           );
+  //         }
+  //       }
+  //     }
+
+  //     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+
+  //     logger.info(
+  //       `HOÀN THÀNH | ${duration}s | Inserted: ${totalInserted} | Skipped: ${totalSkipped} | Errors: ${totalErrors}`
+  //     );
+
+  //     return {
+  //       success: true,
+  //       inserted: totalInserted,
+  //       skipped: totalSkipped,
+  //       errors: totalErrors,
+  //       duration
+  //     };
+
+  //   } catch (error) {
+  //     logger.error('Lỗi migration:', error);
+  //     throw error;
+  //   }
+  // }
+  async migrateOutgoingDocuments() {
+  const startTime = Date.now();
+  logger.info('=== BẮT ĐẦU MIGRATION VĂN BẢN BAN HÀNH (BATCH MODE) ===');
+
+  try {
+    const config = tableMappings.outgoingdocument2;
+    if (!config) {
+      throw new Error('Config outgoingdocument2 không tồn tại');
+    }
+
+    // 1️⃣ Đếm tổng số bản ghi DB cũ
+    const totalRecords = await this.model.countOldDb();
+    logger.info(`Tổng số văn bản ban hành cần sync: ${totalRecords}`);
+
+    if (totalRecords === 0) {
+      return { success: true, total: 0, inserted: 0, updated: 0, skipped: 0, errors: 0 };
+    }
+
+    let offset = 0;
+    let inserted = 0;
+    let updated = 0;
+    let skipped = 0;
+    let errors = 0;
+
+    // 2️⃣ Chạy theo batch
+    while (offset < totalRecords) {
+      logger.info(`👉 Lấy batch: offset=${offset}, limit=${this.batchSize}`);
+
+      const rows = await this.model.getBatchFromOldDb({
+        offset,
+        limit: this.batchSize
+      });
+
+      if (!rows || rows.length === 0) {
+        break;
+      }
+
+      // 3️⃣ Xử lý từng record
+      for (const oldRecord of rows) {
+        try {
+          const { action, reason } =
+            await this.model.checkSyncAction(oldRecord);
+
+          if (action === 'skip') {
+            skipped++;
+            continue;
+          }
+
+          // MAP DATA
+          const newRecord = mapFieldValues(
+            oldRecord,
+            config.fieldMapping,
+            config.defaultValues
+          );
+
+          /* ===== CLEAN INT ===== */
+          newRecord.SoBan = safeParseInt(oldRecord.SoBan);
+          newRecord.SoTrang = safeParseInt(oldRecord.SoTrang);
+          newRecord.ModuleId = safeParseInt(oldRecord.ModuleId);
+          newRecord.ItemId = safeParseInt(oldRecord.ItemId);
+          newRecord.MigrateFlg = safeParseInt(oldRecord.MigrateFlg);
+          newRecord.MigrateErrFlg = safeParseInt(oldRecord.MigrateErrFlg);
+          newRecord.DGPId = safeParseInt(oldRecord.DGPId);
+          newRecord.CodeItemId = safeParseInt(oldRecord.CodeItemId);
+          newRecord.DocSignType = safeParseInt(oldRecord.DocSignType);
+
+          /* ===== CLEAN BIT ===== */
+          newRecord.ChenSo = safeParseBit(oldRecord.ChenSo);
+          newRecord.PhanCong = safeParseBit(oldRecord.PhanCong);
+          newRecord.IsLibrary = safeParseBit(oldRecord.IsLibrary);
+          newRecord.IsKyQuyChe = safeParseBit(oldRecord.IsKyQuyChe);
+          newRecord.IsConverting = safeParseBit(oldRecord.IsConverting);
+
+          /* ===== CLEAN DATE ===== */
+          newRecord.NgayBanHanh = safeParseDate(oldRecord.NgayBanHanh);
+          newRecord.NgayHieuLuc = safeParseDate(oldRecord.NgayHieuLuc);
+          newRecord.NgayHoanTat = safeParseDate(oldRecord.NgayHoanTat);
+
+          /* ===== SYNC META ===== */
+          newRecord.id_outgoing_bak = oldRecord.ID;
+          newRecord.Modified = oldRecord.Modified;
+
+          /* ===== BOOK DOCUMENT ===== */
+          newRecord.book_document_id =
+            await this.model.findBookDocumentIdBySoVanBan(oldRecord.SoVanBan);
+
+          // 4️⃣ Thực thi theo action
+          if (action === 'insert') {
+            await this.model.insertToNewDb(newRecord);
+            inserted++;
+          }
+
+          if (action === 'update') {
+            await this.model.updateInNewDb(newRecord);
+            updated++;
+          }
+
+        } catch (err) {
+          errors++;
+          logger.error(
+            `❌ Lỗi sync ID=${oldRecord.ID}: ${err.message}`
+          );
+        }
+      }
+
+      offset += this.batchSize;
+    }
+
+    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+
+    logger.info('=== HOÀN THÀNH SYNC VĂN BẢN BAN HÀNH ===');
+    logger.info(
+      `⏱ ${duration}s | Insert=${inserted} | Update=${updated} | Skip=${skipped} | Error=${errors}`
+    );
+
+    return {
+      success: true,
+      total: totalRecords,
+      inserted,
+      updated,
+      skipped,
+      errors,
+      duration
+    };
+
+  } catch (error) {
+    logger.error('❌ Lỗi migrateOutgoingDocuments:', error);
+    throw error;
+  }
+}
+
 
   async getStatistics() {
     const oldCount = await this.model.countOldDb();
