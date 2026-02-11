@@ -11,100 +11,121 @@ class DocumentCommentsSyncService {
     await this.model.initialize();
   }
 
-
-
   /**
    * Đồng bộ từ document_comments2 → document_comments
+   * Batch processing: xử lý 100 bản ghi mỗi lần
+   * 
    * Logic:
-   * 1. Nếu bản ghi tồn tại → UPDATE document_id với DocumentID_bak
-   * 2. Nếu không tồn tại → INSERT với DocumentID_bak làm document_id
+   * 1. Lấy bản ghi từ document_comments2 chưa sync (chỉ những bản ghi mà id_comments_bak chưa tồn tại)
+   * 2. Với mỗi bản ghi:
+   *    - Nếu id_comments_bak tồn tại → UPDATE tất cả trường (bao gồm document_id lấy từ outgoing_documents)
+   *    - Nếu chưa tồn tại → INSERT bản ghi mới với id và document_id lấy từ outgoing_documents
+   * 3. document_id: lấy từ outgoing_documents.document_id (JOIN với id_outgoing_bak = DocumentID_bak)
+   * 
+   * @param {number} batchSize - Số bản ghi xử lý mỗi batch (default 100)
+   * @returns {object} Kết quả sync
    */
-  async sync(limit = 100) {
+  async sync(batchSize = 100) {
+    logger.info('=== START SYNC document_comments2 → document_comments (BATCH MODE) ===');
+    
     try {
-      const records = await this.model.getUnsynced(limit);
+      const totalUnsynced = await this.model.countUnsynced();
+      logger.info(`Total unsynced records: ${totalUnsynced}`);
 
+      if (totalUnsynced === 0) {
+        logger.info('No unsynced records found.');
+        return {
+          totalUnsynced: 0,
+          totalProcessed: 0,
+          inserted: 0,
+          updated: 0,
+          errors: 0,
+          success: true,
+          message: 'No unsynced records found'
+        };
+      }
+
+      let totalProcessed = 0;
       let inserted = 0;
       let updated = 0;
       let errors = 0;
-      const insertedIds = [];
+      let offset = 0;
 
-      for (const record of records) {
+      // Batch processing loop
+      while (offset < totalUnsynced) {
         try {
-          const idCommentsBak = record.id_comments_bak;
-          const documentId = record.DocumentID_bak; // Sử dụng DocumentID_bak trực tiếp
-
-          logger.info(`Processing: id=${idCommentsBak}, DocumentID_bak=${documentId}`);
-
-          // Check xem bản ghi có tồn tại chưa
-          const existing = await this.model.getExistingComment(idCommentsBak);
-
-          if (existing) {
-            // Luôn update với DocumentID_bak (không skip)
-            if (documentId) {
-              await this.model.updateDocumentId(idCommentsBak, documentId);
-              updated++;
-            }
-          } else {
-            // Bản ghi không tồn tại → INSERT
-            const insertRecord = {
-              id: uuidv4(),
-              document_id: documentId || null, // Sử dụng DocumentID_bak làm document_id
-              id_comments_bak: record.id_comments_bak,
-              ItemTitle: record.ItemTitle || null,
-              ItemUrl: record.ItemUrl || null,
-              ItemImage: record.ItemImage || null,
-              DocumentID_bak: record.DocumentID_bak || null,
-              Category: record.Category || null,
-              Type_bak: record.Type_bak || null,
-              Email: record.Email || null,
-              Author: record.Author || null,
-              content: record.content || '',
-              user_id_bak: record.user_id_bak || null,
-              parent_id_bak: record.parent_id_bak || null,
-              EmailReplyTo: record.EmailReplyTo || null,
-              ReplyTo: record.ReplyTo || null,
-              Files: record.Files || null,
-              LikeNumber: record.LikeNumber || null,
-              type: record.type || null,
-              is_edited: record.is_edited || 0,
-              is_leader_suggestion: record.is_leader_suggestion || 0,
-              created_at: record.created_at || new Date(),
-              updated_at: record.updated_at || new Date(),
-              table_bak: record.table_bak || null
-            };
-
-            await this.model.insertFromIntermediate(insertRecord);
-            inserted++;
-            insertedIds.push(insertRecord.id);
-            logger.info(`Inserted: id=${idCommentsBak}, newId=${insertRecord.id}`);
+          logger.info(`\nProcessing batch: offset=${offset}, limit=${batchSize}`);
+          
+          const batch = await this.model.getBatchWithDocumentId(offset, batchSize);
+          
+          if (!batch || batch.length === 0) {
+            logger.info('No more records in batch. Stopping.');
+            break;
           }
-        } catch (err) {
-          errors++;
-          logger.error(`Error processing comment ${record.id_comments_bak}:`, err.message);
+
+          logger.info(`Batch size: ${batch.length}`);
+
+          // Process each record in the batch
+          for (const record of batch) {
+            try {
+              const result = await this.model.upsertComment(record);
+              totalProcessed++;
+
+              if (result.action === 'INSERT') {
+                inserted++;
+                logger.info(
+                  `[INSERT] id_comments_bak=${record.id_comments_bak}, ` +
+                  `document_id=${record.computed_document_id || 'NULL'}, ` +
+                  `newId=${result.insertedId}`
+                );
+              } else if (result.action === 'UPDATE') {
+                updated++;
+                logger.info(
+                  `[UPDATE] id_comments_bak=${record.id_comments_bak}, ` +
+                  `document_id=${record.computed_document_id || 'NULL'}`
+                );
+              }
+            } catch (error) {
+              errors++;
+              logger.error(
+                `Error processing record id_comments_bak=${record.id_comments_bak}:`,
+                error.message
+              );
+            }
+          }
+
+          offset += batchSize;
+          logger.info(`Completed batch. Processed so far: ${totalProcessed}/${totalUnsynced}`);
+        } catch (error) {
+          logger.error(`Error processing batch at offset ${offset}:`, error.message);
+          errors += (totalUnsynced - totalProcessed);
+          break;
         }
       }
 
       const result = {
-        total: records.length,
+        totalUnsynced,
+        totalProcessed,
         inserted,
         updated,
         errors,
-        insertedIds,
-        success: true,
-        message: `Complete: ${inserted} inserted, ${updated} updated, ${errors} errors`
+        success: errors === 0,
+        message: `Complete: ${inserted} inserted, ${updated} updated, ${errors} errors out of ${totalProcessed} processed`
       };
 
-      logger.info('SYNC completed:', result);
+      logger.info('\n=== SYNC COMPLETED ===');
+      logger.info(result);
       return result;
     } catch (error) {
-      logger.error('[DocumentCommentsSyncService.sync]', error);
+      logger.error('[DocumentCommentsSyncService.sync] Fatal error:', error);
       return {
-        total: 0,
+        totalUnsynced: 0,
+        totalProcessed: 0,
         inserted: 0,
         updated: 0,
         errors: 1,
         success: false,
-        message: `Error: ${error.message}`
+        message: `Fatal error: ${error.message}`
       };
     }
   }

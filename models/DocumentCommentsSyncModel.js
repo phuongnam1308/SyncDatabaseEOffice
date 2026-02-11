@@ -8,51 +8,150 @@ class DocumentCommentsSyncModel extends BaseModel {
   }
 
   /**
-   * Check xem bản ghi có tồn tại trong document_comments và có document_id không
+   * Đếm tổng số bản ghi chưa sync (kiểm tra bằng id)
    */
-  async getExistingComment(idCommentsBak) {
+  async countUnsynced() {
     try {
       const query = `
-        SELECT id, document_id, id_comments_bak
-        FROM camunda.dbo.document_comments
-        WHERE id_comments_bak = @idCommentsBak
+        SELECT COUNT(*) as total
+        FROM camunda.dbo.document_comments2 dc2
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM camunda.dbo.document_comments dc
+          WHERE dc.id = dc2.id
+        )
       `;
       
-      const result = await this.queryNewDb(query, { idCommentsBak });
-      return result.length > 0 ? result[0] : null;
+      const result = await this.queryNewDb(query, {});
+      return result[0]?.total || 0;
     } catch (error) {
-      return null;
+      logger.error('countUnsynced error:', error.message);
+      return 0;
     }
   }
 
   /**
-   * Update document_id cho bản ghi hiện có
+   * Lấy batch dữ liệu từ document_comments2 với document_id từ outgoing_documents
+   * Chỉ lấy những bản ghi chưa tồn tại trong document_comments (kiểm tra bằng id)
    */
-  async updateDocumentId(idCommentsBak, documentId) {
+  async getBatchWithDocumentId(offset = 0, limit = 100) {
     try {
       const query = `
-        UPDATE camunda.dbo.document_comments
-        SET document_id = @documentId,
-            updated_at = GETDATE()
-        WHERE id_comments_bak = @idCommentsBak
+        SELECT
+          dc2.*,
+          ISNULL(od.document_id, NULL) as computed_document_id
+        FROM camunda.dbo.document_comments2 dc2
+        LEFT JOIN camunda.dbo.outgoing_documents od 
+          ON od.id_outgoing_bak = dc2.DocumentID_bak
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM camunda.dbo.document_comments dc
+          WHERE dc.id = dc2.id
+        )
+        ORDER BY dc2.created_at ASC
+        OFFSET @offset ROWS
+        FETCH NEXT @limit ROWS ONLY
       `;
-      
-      await this.queryNewDb(query, { idCommentsBak, documentId });
+
+      const result = await this.queryNewDb(query, { offset, limit });
+      return result;
     } catch (error) {
+      logger.error('getBatchWithDocumentId error:', error.message);
       throw error;
     }
   }
 
   /**
-   * Insert bản ghi mới từ document_comments2 → document_comments
+   * Check xem bản ghi có tồn tại trong document_comments không (kiểm tra bằng id)
    */
-  async insertFromIntermediate(record) {
+  async getExistingComment(id) {
     try {
-      if (!record.id) {
-        record.id = uuidv4();
+      const query = `
+        SELECT id, document_id, id_comments_bak
+        FROM camunda.dbo.document_comments
+        WHERE id = @id
+      `;
+      
+      const result = await this.queryNewDb(query, { id });
+      return result.length > 0 ? result[0] : null;
+    } catch (error) {
+      logger.error('getExistingComment error:', error.message);
+      return null;
+    }
+  }
+
+  /**
+   * Upsert: Insert hoặc Update bản ghi
+   * - Nếu id tồn tại → UPDATE
+   * - Nếu không → INSERT
+   */
+  async upsertComment(record) {
+    try {
+      const id = record.id;
+      const existing = await this.getExistingComment(id);
+
+      if (existing) {
+        // UPDATE bản ghi hiện có
+        return await this.updateComment(record);
+      } else {
+        // INSERT bản ghi mới
+        if (!record.id) {
+          record.id = uuidv4();
+        }
+        return await this.insertComment(record);
+      }
+    } catch (error) {
+      logger.error('upsertComment error:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Update bản ghi comment (kiểm tra bằng id)
+   */
+  async updateComment(record) {
+    try {
+      const fields = Object.keys(record).filter(
+        f => f !== 'id_comments_bak' && f !== 'id' && f !== 'computed_document_id'
+      );
+      
+      const setClause = fields.map(f => `${f} = @${f}`).join(', ');
+      const query = `
+        UPDATE camunda.dbo.document_comments
+        SET ${setClause}, updated_at = GETDATE()
+        WHERE id = @id
+      `;
+
+      const request = this.newPool.request();
+      request.input('id', record.id);
+      fields.forEach(f => request.input(f, record[f]));
+      
+      const result = await request.query(query);
+      return { action: 'UPDATE', rowsAffected: result.rowsAffected[0] || 0 };
+    } catch (error) {
+      logger.error('updateComment error:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Insert bản ghi comment mới
+   */
+  async insertComment(record) {
+    try {
+      // Loại bỏ trường computed_document_id (dùng để xác định document_id)
+      const { computed_document_id, ...insertRecord } = record;
+      
+      if (!insertRecord.id) {
+        insertRecord.id = uuidv4();
       }
 
-      const fields = Object.keys(record);
+      // Sử dụng computed_document_id nếu có, nếu không dùng document_id hiện có
+      if (computed_document_id) {
+        insertRecord.document_id = computed_document_id;
+      }
+
+      const fields = Object.keys(insertRecord);
       const params = fields.map((_, i) => `@p${i}`).join(', ');
 
       const query = `
@@ -62,28 +161,12 @@ class DocumentCommentsSyncModel extends BaseModel {
       `;
 
       const request = this.newPool.request();
-      fields.forEach((f, i) => request.input(`p${i}`, record[f]));
-      await request.query(query);
+      fields.forEach((f, i) => request.input(`p${i}`, insertRecord[f]));
+      const result = await request.query(query);
+      
+      return { action: 'INSERT', rowsAffected: result.rowsAffected[0] || 0, insertedId: insertRecord.id };
     } catch (error) {
-      logger.error('insertFromIntermediate error:', error.message);
-      throw error;
-    }
-  }
-
-  /**
-   * Lấy tất cả bản ghi từ document_comments2 chưa sync
-   */
-  async getUnsynced(limit = 100) {
-    try {
-      const query = `
-        SELECT TOP (@limit) *
-        FROM camunda.dbo.document_comments2
-        ORDER BY created_at ASC
-      `;
-
-      const result = await this.queryNewDb(query, { limit });
-      return result;
-    } catch (error) {
+      logger.error('insertComment error:', error.message);
       throw error;
     }
   }
