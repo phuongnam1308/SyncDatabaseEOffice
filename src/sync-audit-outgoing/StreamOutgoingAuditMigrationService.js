@@ -19,10 +19,16 @@ class StreamOutgoingAuditSyncService {
       const model = new Model(table);
       await model.initialize();
 
+      logger.info(`==============================`);
+      logger.info(`[AUDIT SYNC] START TABLE: ${table}`);
+      logger.info(`Batch size: ${batch} | Limit: ${limit || "ALL"}`);
+      logger.info(`==============================`);
+
       let lastId = null;
       let totalInserted = 0;
       let totalUpdated = 0;
       let totalProcessed = 0;
+      let batchCount = 0;
 
       while (true) {
         const records = await model.fetchBatch({
@@ -32,11 +38,18 @@ class StreamOutgoingAuditSyncService {
 
         if (!records?.length) break;
 
+        logger.info(
+          `[${table}] >>> BATCH ${batchCount} START | Records: ${records.length} | ID: ${records.ID}`
+        );
         const result = await model.upsertBatch(records);
 
         totalInserted += result.inserted;
         totalUpdated += result.updated;
         totalProcessed += records.length;
+        batchCount++;
+        logger.info(
+          `[${table}] <<< BATCH ${batchCount} END | Inserted: ${result.inserted} | Updated: ${result.updated} | Total processed: ${totalProcessed}`
+        );
 
         lastId = records[records.length - 1]?.ID;
 
