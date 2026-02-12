@@ -9,6 +9,7 @@ const DrafterMigrationService = require('../services/DrafterMigrationService');
 const MappingBookDocOutgoingService = require('../services/MappingBookDocOutgoingService');
 const OutgoingSenderUnitSyncService = require('../services/OutgoingSenderUnitSyncService');
 const OutgoingBpmnVersionSyncService = require('../services/OutgoingBpmnVersionSyncService');
+const OutgoingTextNormalizeSyncService = require('../services/OutgoingTextNormalizeSyncService');
 
 class FullOutgoingMigrationController extends BaseController {
   
@@ -16,7 +17,7 @@ class FullOutgoingMigrationController extends BaseController {
    * @swagger
    * /migrate/full-outgoing-process:
    *   get:
-   *     summary: Chạy toàn bộ quy trình đồng bộ văn bản đi (6 bước)
+   *     summary: Chạy toàn bộ quy trình đồng bộ văn bản đi (7 bước)
    *     tags: [Dong bo van ban di]
    */
   runFullProcess = this.asyncHandler(async (req, res) => {
@@ -61,6 +62,11 @@ class FullOutgoingMigrationController extends BaseController {
       const bpmnService = new OutgoingBpmnVersionSyncService();
       await bpmnService.initialize();
       results.step6_bpmn = await bpmnService.sync();
+
+      // BƯỚC 7: Full Mapping với CRM Source & Chuẩn hóa dữ liệu
+      const textNormalizeService = new OutgoingTextNormalizeSyncService();
+      await textNormalizeService.initialize();
+      results.step7_fullMapping = await textNormalizeService.sync();
 
       const totalDuration = ((Date.now() - startTime) / 1000).toFixed(2);
       results.totalDuration = `${totalDuration}s`;

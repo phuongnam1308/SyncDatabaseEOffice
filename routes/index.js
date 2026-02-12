@@ -801,5 +801,4 @@ router.get('/sync-manager/errors/:modelName/export', SyncManagerController.expor
 const FullOutgoingMigrationController = require('../controllers/FullOutgoingMigrationController');
 router.get('/migrate/full-outgoing-process', FullOutgoingMigrationController.runFullProcess);
 
-
 module.exports = router;
