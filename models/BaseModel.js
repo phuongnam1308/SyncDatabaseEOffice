@@ -1,5 +1,6 @@
 const dbConnection = require('../db/connection');
 const logger = require('../utils/logger');
+const sql = require('mssql');
 
 class BaseModel {
   constructor() {
@@ -55,6 +56,24 @@ class BaseModel {
       throw error;
     }
   }
+
+  async queryNewDbTx(query, params = {}, transaction = null) {
+  try {
+    const request = transaction
+      ? new sql.Request(transaction)
+      : this.newPool.request();
+
+    Object.keys(params || {}).forEach(key => {
+      request.input(key, params[key]);
+    });
+
+    const result = await request.query(query);
+    return result.recordset;
+  } catch (error) {
+    logger.error(`Lỗi query database mới: ${error.message}`);
+    throw error;
+  }
+}
 
   // Execute query trên database mới
   async executeNewDb(query, params = {}) {

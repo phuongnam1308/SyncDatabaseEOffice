@@ -1,5 +1,5 @@
-const BaseController = require('../controllers/BaseController');
-const logger = require('../utils/logger');
+const BaseController = require('../../controllers/BaseController');
+const logger = require('../../utils/logger');
 const StreamOutgoingMigrationService = require('./StreamOutgoingMigrationService');
 
 /**
