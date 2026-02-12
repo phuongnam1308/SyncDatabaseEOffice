@@ -1,8 +1,11 @@
 const BaseModel = require("../models/BaseModel");
 const logger = require("../utils/logger");
 const sql = require('mssql');
-
 const { v4: uuidv4 } = require("uuid");
+const bcrypt = require('bcrypt');
+
+const DEFAULT_PASSWORD = process.env.MIGRATION_DEFAULT_PASSWORD || '12345678';
+const SALT_ROUNDS = parseInt(process.env.BCRYPT_SALT_ROUNDS || '10', 10);
 
 /**
  * StreamOutgoingMigrationModel
@@ -218,7 +221,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
         id_outgoing_bak: String(oldRecord.ID),
 
         code: this._cleanText(oldRecord.SoKyHieu || oldRecord.SoVanBanText),
-        abstract: this._cleanText(oldRecord.TrichYeu),
+        abstract_note: this._cleanText(oldRecord.TrichYeu),
 
         promulgation_date: promulgationDate,
         effective_date: effectiveDate,
@@ -347,7 +350,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
     if (!record?.document_id || record.document_id.trim() === "") {
       throw new Error("document_id is required");
     }
-    console.log(`Inserting record document_id=${record.id_outgoing_bak}...`);
+    console.log(`Inserting record id_outgoing_bak=${record.id_outgoing_bak}...`);
 
     const now = new Date();
 
@@ -356,6 +359,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
         document_id,
         status_code,
         sender_unit,
+        abstract_note,
         drafter,
         document_type,
         urgency_level,
@@ -382,6 +386,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
         @documentId,
         @statusCode,
         @senderUnit,
+        @abstractNote,
         @drafter,
         @documentType,
         @urgencyLevel,
@@ -427,6 +432,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
       typeOfProcess: record.type_of_process ?? null,
       idOutgoingBak: record.id_outgoing_bak ?? null,
       createdAt: record.created_at ?? now,
+      abstractNote: record.abstract_note ?? null,
       updatedAt: now,
       replaced: record.replaced ?? 0,
       tableBackup: record.table_backup ?? "stream_migration",
@@ -446,7 +452,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
     if (!record?.id_outgoing_bak) {
       throw new Error("document_id is required for update");
     }
-    console.log(`Updating record document_id=${record.document_id}...`);
+    console.log(`Updating record id_outgoing_bak=${record.id_outgoing_bak}...`);
 
     const query = `
       UPDATE ${this.newDbSchema}.${this.newDbTable}
@@ -469,6 +475,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
         bpmn_version = @bpmnVersion,
         type_of_process = @typeOfProcess,
         replaced = @replaced,
+        abstract_note = @abstractNote,
         updated_at = GETDATE()
       WHERE id_outgoing_bak  = @idOutgoingBak
         AND table_backup = 'stream_migration'
@@ -493,6 +500,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
       bpmnVersion: record.bpmn_version ?? null,
       typeOfProcess: record.type_of_process ?? null,
       idOutgoingBak: record.id_outgoing_bak ?? null,
+      abstractNote: record.abstract_note ?? null,
       replaced: record.replaced ?? 0,
     };
 
@@ -930,10 +938,6 @@ class StreamOutgoingMigrationModel extends BaseModel {
         return existing[0].id;
       }
 
-      // ======================
-      // KHÔNG CÓ → TẠO MỚI
-      // ======================
-
       const id = uuidv4();
       const username = `${usernameBase}${Math.floor(
         1000 + Math.random() * 9000,
@@ -1045,6 +1049,25 @@ class StreamOutgoingMigrationModel extends BaseModel {
     return base;
   }
 
+  async _hashDefaultPassword() {
+    try {
+      if (!DEFAULT_PASSWORD) {
+        throw new Error('DEFAULT_PASSWORD is empty');
+      }
+
+      if (isNaN(SALT_ROUNDS) || SALT_ROUNDS < 8 || SALT_ROUNDS > 15) {
+        throw new Error('Invalid BCRYPT_SALT_ROUNDS');
+      }
+
+      const salt = await bcrypt.genSalt(SALT_ROUNDS);
+      const hash = await bcrypt.hash(DEFAULT_PASSWORD, salt);
+
+      return hash;
+    } catch (error) {
+      logger.error('[hashDefaultPassword] Failed:', error.message);
+      throw error; // không nuốt lỗi để tránh tạo user password null
+    }
+  }
 
   /**
    * Map Book Document
