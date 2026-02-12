@@ -23,7 +23,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
     this.oldDbSchema = "dbo";
     this.oldDbTable = "VanBanBanHanh";
     this.newDbSchema = "dbo";
-    this.newDbTable = "outgoing_documents2";
+    this.newDbTable = "outgoing_documents_sync";
   }
 
   /**

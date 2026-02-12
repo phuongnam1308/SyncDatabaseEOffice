@@ -203,7 +203,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
   /* ================= INSERT ================= */
 
   async _insert(data, transaction) {
-    if (!data?.document_id) {
+    if (!data?.document_id?.document_id) {
       logger.warn(
         `[audit_sync] Skip insert vì document_id null | id_van_ban=${data?.id_van_ban}`
       );
@@ -242,14 +242,14 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
     await this.queryNewDbTx(
       query,
       {
-        documentId: data.document_id,
+        documentId: data.document_id.document_id,
         time: data.time,
         displayName: data.display_name,
         userId: data.user_id,
         createdBy: data.user_id,
-        actionCode: data.action_code,
+        actionCode: data.display_name,
         idVanBan: data.id_van_ban,
-        typeDocument: data.type_document,
+        typeDocument: data.document_id.type_document,
         sourceTable: this.oldDbTable,
       },
       transaction
