@@ -703,6 +703,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
           name,
           username,
           password,
+          parent,
           status,
           created_at,
           updated_at
@@ -712,6 +713,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
           @name,
           @username,
           @password,
+          @parent,
           1,
           GETDATE(),
           GETDATE()
@@ -726,6 +728,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
             name: displayName,
             username,
             password,
+            parent: '68afb3a1cb36081f0bba5dd6',
           },
           transaction,
         );

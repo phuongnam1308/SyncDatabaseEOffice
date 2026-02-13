@@ -951,8 +951,8 @@ class StreamOutgoingMigrationModel extends BaseModel {
           name,
           username,
           password,
+          parent,
           status,
-          table_backups,
           created_at,
           updated_at
         )
@@ -961,8 +961,8 @@ class StreamOutgoingMigrationModel extends BaseModel {
           @name,
           @username,
           @password,
+          @parent,
           1,
-          'stream_migration',
           GETDATE(),
           GETDATE()
         )
@@ -976,6 +976,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
             name: displayName,
             username,
             password,
+            parent: '68afb3a1cb36081f0bba5dd6',
           },
           transaction,
         );
