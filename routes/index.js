@@ -810,4 +810,7 @@ router.post(
 const StreamOutgoingAuditRoutes = require('../src/sync-audit-outgoing/StreamOutgoingAuditMigrationRoute');
 router.use('/migrate', StreamOutgoingAuditRoutes);
 
+const syncOutgoingController = require('../src/sync-outgoing-document/SyncOutgoingController');
+router.post('/outgoing-documents', syncOutgoingController.syncToMain);
+
 module.exports = router;

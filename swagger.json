@@ -1141,6 +1141,245 @@
         ]
       }
     },
+    "/migrate/stream-outgoing": {
+      "post": {
+        "summary": "Migration văn bản đi theo batch stream (insert trực tiếp vào DB mới)",
+        "tags": ["Migration Stream"],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "limit": {
+                    "type": "integer",
+                    "description": "Tổng số bản ghi cần migrate (0 = tất cả)",
+                    "default": 0
+                  },
+                  "batch": {
+                    "type": "integer",
+                    "description": "Số lượng bản ghi mỗi batch",
+                    "default": 100
+                  },
+                  "lastProcessedId": {
+                    "type": "integer",
+                    "description": "ID bắt đầu migrate từ (>= ID này)",
+                    "default": 0
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Migration thành công"
+          },
+          "500": {
+            "description": "Lỗi server"
+          }
+        }
+      }
+    },
+
+    "/migrate/sync/audit-outgoing-stream": {
+      "post": {
+        "summary": "Sync audit_sync theo nhiều bảng",
+        "tags": ["Migration Stream"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "tables": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Danh sách bảng cần sync"
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "default": 0
+                  },
+                  "batch": {
+                    "type": "integer",
+                    "default": 100
+                  }
+                },
+                "required": ["tables"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sync thành công"
+          },
+          "400": {
+            "description": "Thiếu tham số"
+          },
+          "500": {
+            "description": "Lỗi server"
+          }
+        }
+      }
+    },
+    "/outgoing-documents": {
+      "post": {
+        "summary": "Sync văn bản đi từ bảng sync sang bảng chính theo batch",
+        "tags": ["Sync Outgoing"],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "limit": {
+                    "type": "integer",
+                    "description": "Tổng số bản ghi cần sync (0 = tất cả)",
+                    "default": 0
+                  },
+                  "batch": {
+                    "type": "integer",
+                    "description": "Số lượng bản ghi mỗi batch",
+                    "default": 100
+                  },
+                  "lastProcessedId": {
+                    "type": "integer",
+                    "description": "ID bắt đầu sync từ (>= ID này)",
+                    "default": 0
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sync thành công",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "inserted": {
+                          "type": "integer"
+                        },
+                        "updated": {
+                          "type": "integer"
+                        },
+                        "duration": {
+                          "type": "string"
+                        },
+                        "totalProcessed": {
+                          "type": "integer"
+                        },
+                        "batches": {
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Lỗi server"
+          }
+        }
+      }
+    },
+    "/migrate/audit/main": {
+      "post": {
+        "summary": "Sync audit từ bảng sync sang bảng chính theo batch",
+        "tags": ["Sync Audit"],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "limit": {
+                    "type": "integer",
+                    "description": "Tổng số bản ghi cần sync (0 = tất cả)",
+                    "default": 0
+                  },
+                  "batch": {
+                    "type": "integer",
+                    "description": "Số lượng bản ghi mỗi batch",
+                    "default": 100
+                  },
+                  "lastProcessedId": {
+                    "type": "integer",
+                    "description": "ID bắt đầu sync từ (>= ID này)",
+                    "default": 0
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sync thành công",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "inserted": {
+                          "type": "integer"
+                        },
+                        "updated": {
+                          "type": "integer"
+                        },
+                        "duration": {
+                          "type": "string"
+                        },
+                        "totalProcessed": {
+                          "type": "integer"
+                        },
+                        "batches": {
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Lỗi server"
+          }
+        }
+      }
+    },
     "/sync/audit-outgoing": {
       "get": {
         "summary": "Đồng bộ đặc trưng của văn bản đi cho luân chuyển văn bản",
