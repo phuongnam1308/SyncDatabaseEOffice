@@ -105,11 +105,11 @@ class StreamOutgoingMigrationModel extends BaseModel {
 
       // Quan trọng: check null chứ không check truthy
       if (lastId !== null && lastId !== undefined) {
-        query += ` AND ID > @lastId`;
+        query += ` AND CAST(ID AS BIGINT) > @lastId`;
         params.lastId = lastId;
       }
 
-      query += ` ORDER BY ID ASC`;
+      query += ` ORDER BY CAST(ID AS BIGINT) ASC`;
 
       const records = await this.queryOldDb(query, params);
 

@@ -41,7 +41,7 @@ class DocumentCommentsSyncModel extends BaseModel {
           dc2.*,
           ISNULL(od.document_id, NULL) as computed_document_id
         FROM camunda.dbo.document_comments2 dc2
-        LEFT JOIN camunda.dbo.outgoing_documents od 
+        LEFT JOIN camunda.dbo.outgoing_documents_sync od 
           ON od.id_outgoing_bak = dc2.DocumentID_bak
         WHERE NOT EXISTS (
           SELECT 1
@@ -155,7 +155,7 @@ class DocumentCommentsSyncModel extends BaseModel {
       const params = fields.map((_, i) => `@p${i}`).join(', ');
 
       const query = `
-        INSERT INTO camunda.dbo.document_comments
+        INSERT INTO camunda.dbo.document_comments_sync
         (${fields.join(', ')})
         VALUES (${params})
       `;

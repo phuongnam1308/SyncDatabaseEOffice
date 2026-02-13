@@ -133,7 +133,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
       // 1. Tìm OUTGOING trước
       const outgoingQuery = `
         SELECT TOP 1 document_id
-        FROM camunda.dbo.outgoing_documents2
+        FROM camunda.dbo.outgoing_documents_sync
         WHERE id_outgoing_bak = @idVanBan
       `;
 
@@ -154,7 +154,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
       // const incomingQuery = `
       //   SELECT TOP 1 document_id
       //   FROM camunda.dbo.incomming_documents
-      //   WHERE id_incomming_bak = @idVanBan
+      //   WHERE id_incoming_bak = @idVanBan
       // `;
 
       // const incoming = await this.queryNewDbTx(
@@ -174,7 +174,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
       const incomingQuery2 = `
         SELECT TOP 1 document_id
         FROM camunda.dbo.incomming_documents2
-        WHERE id_incomming_bak = @idVanBan
+        WHERE id_incoming_bak = @idVanBan
       `;
 
       const incoming2 = await this.queryNewDbTx(
@@ -222,7 +222,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
         created_at,
         updated_at,
         type_document,
-        table_backups
+        table_backup
       )
       VALUES (
         @documentId,
@@ -607,7 +607,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
           status,
           created_at,
           updated_at,
-          table_backups
+          table_backup
         )
         VALUES (
           @id,
@@ -704,7 +704,6 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
           username,
           password,
           status,
-          table_backups,
           created_at,
           updated_at
         )
@@ -714,7 +713,6 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
           @username,
           @password,
           1,
-          'stream_migration',
           GETDATE(),
           GETDATE()
         )

@@ -67,7 +67,7 @@ class StreamOutgoingMigrationService {
    * @param {number} options.batch - Số lượng bản ghi mỗi batch
    * @returns {Promise<Object>} Kết quả migration
    */
-  async migrate({ limit = 0, batch = this.defaultBatchSize }) {
+  async migrate({ limit = 0, batch = this.defaultBatchSize, lastProcessedId = 0 } = {}) {
     const startTime = Date.now();
     
     // Validate
@@ -94,7 +94,6 @@ class StreamOutgoingMigrationService {
     let totalProcessed = 0;
     let batchCount = 0;
     let hasMore = true;
-    let lastProcessedId = null;
 
     try {
       while (hasMore) {
