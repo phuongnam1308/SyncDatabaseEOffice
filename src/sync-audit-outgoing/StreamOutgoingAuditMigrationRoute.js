@@ -9,4 +9,7 @@ router.post(
   StreamOutgoingAuditSyncController.run
 );
 
+const SyncAuditController = require('./SyncAuditController');
+router.post('/audit/main', SyncAuditController.syncToMain);
+
 module.exports = router;
