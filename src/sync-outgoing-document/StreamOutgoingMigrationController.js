@@ -72,6 +72,7 @@ class StreamOutgoingMigrationController extends BaseController {
     // Lấy params từ request body hoặc query
     const limit = parseInt(req.body?.limit || req.query?.limit || 0);
     const batch = parseInt(req.body?.batch || req.query?.batch || 100);
+    const lastProcessedId = parseInt(req.body?.lastProcessedId || req.query?.lastProcessedId || 0);
 
     // Validate params
     if (batch <= 0) {
