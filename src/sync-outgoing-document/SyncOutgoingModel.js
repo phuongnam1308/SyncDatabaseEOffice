@@ -137,8 +137,7 @@ class SyncOutgoingModel extends BaseModel {
         ModifiedBy, CreatedBy, MigrateFlg, MigrateErrFlg, MigrateErrMess,
         LoaiMoc, KySoFiles, DGPId, Workflow, IsKyQuyChe, DocSignType,
         IsConverting, CodeItemId, internal_receiving_dept_old, sign_type,
-        from_create_draf, replaced, table_backup, tb_bak,
-        send_id_bak_bef_test, status_code_bak_bef_test, drafter_bak_bef_test
+        from_create_draf, replaced
       )
       VALUES (
         @document_id, @status_code, @sender_unit, @drafter, @document_type,
@@ -161,8 +160,7 @@ class SyncOutgoingModel extends BaseModel {
         @loai_moc, @ky_so_files, @dgp_id, @workflow, @is_ky_quy_che,
         @doc_sign_type, @is_converting, @code_item_id,
         @internal_receiving_dept_old, @sign_type, @from_create_draf,
-        @replaced, @table_backup, @tb_bak, @send_id_bak_bef_test,
-        @status_code_bak_bef_test, @drafter_bak_bef_test
+        @replaced
       )
     `;
 
@@ -259,12 +257,7 @@ class SyncOutgoingModel extends BaseModel {
         internal_receiving_dept_old = @internal_receiving_dept_old,
         sign_type = @sign_type,
         from_create_draf = @from_create_draf,
-        replaced = @replaced,
-        table_backup = @table_backup,
-        tb_bak = @tb_bak,
-        send_id_bak_bef_test = @send_id_bak_bef_test,
-        status_code_bak_bef_test = @status_code_bak_bef_test,
-        drafter_bak_bef_test = @drafter_bak_bef_test
+        replaced = @replaced
       WHERE document_id = @document_id
     `;
 
@@ -363,11 +356,6 @@ class SyncOutgoingModel extends BaseModel {
       sign_type: record.sign_type ?? null,
       from_create_draf: record.from_create_draf ?? null,
       replaced: record.replaced ?? null,
-      table_backup: record.table_backup ?? null,
-      tb_bak: record.tb_bak ?? null,
-      send_id_bak_bef_test: record.send_id_bak_bef_test ?? null,
-      status_code_bak_bef_test: record.status_code_bak_bef_test ?? null,
-      drafter_bak_bef_test: record.drafter_bak_bef_test ?? null,
     };
   }
 

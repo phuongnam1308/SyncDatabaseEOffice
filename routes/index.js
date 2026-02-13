@@ -801,16 +801,10 @@ router.get('/sync-manager/errors/:modelName/export', SyncManagerController.expor
 const FullOutgoingMigrationController = require('../controllers/FullOutgoingMigrationController');
 router.get('/migrate/full-outgoing-process', FullOutgoingMigrationController.runFullProcess);
 
-const StreamOutgoingMigrationController = require('../src/sync-outgoing-document/StreamOutgoingMigrationController');
-router.post(
-  '/migrate/stream-outgoing',
-  StreamOutgoingMigrationController.runStreamMigration
-);
+const OutgoingRoutes = require('../src/sync-outgoing-document/route');
+router.use('/outgoing', OutgoingRoutes);
 
-const StreamOutgoingAuditRoutes = require('../src/sync-audit-outgoing/StreamOutgoingAuditMigrationRoute');
-router.use('/migrate', StreamOutgoingAuditRoutes);
-
-const syncOutgoingController = require('../src/sync-outgoing-document/SyncOutgoingController');
-router.post('/outgoing-documents', syncOutgoingController.syncToMain);
+const AuditRoutes = require('../src/sync-audit/route');
+router.use('/audit', AuditRoutes);
 
 module.exports = router;

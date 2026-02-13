@@ -1141,9 +1141,9 @@
         ]
       }
     },
-    "/migrate/stream-outgoing": {
+    "/outgoing/migrate": {
       "post": {
-        "summary": "Migration văn bản đi theo batch stream (insert trực tiếp vào DB mới)",
+        "summary": "Migration văn bản đi theo batch stream",
         "tags": ["Migration Stream"],
         "requestBody": {
           "required": false,
@@ -1182,8 +1182,7 @@
         }
       }
     },
-
-    "/migrate/sync/audit-outgoing-stream": {
+    "/audit/migrate": {
       "post": {
         "summary": "Sync audit_sync theo nhiều bảng",
         "tags": ["Migration Stream"],
@@ -1228,7 +1227,7 @@
         }
       }
     },
-    "/outgoing-documents": {
+    "/outgoing/sync": {
       "post": {
         "summary": "Sync văn bản đi từ bảng sync sang bảng chính theo batch",
         "tags": ["Sync Outgoing"],
@@ -1304,7 +1303,7 @@
         }
       }
     },
-    "/migrate/audit/main": {
+    "/audit/sync": {
       "post": {
         "summary": "Sync audit từ bảng sync sang bảng chính theo batch",
         "tags": ["Sync Audit"],

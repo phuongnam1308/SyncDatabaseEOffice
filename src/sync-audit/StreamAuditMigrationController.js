@@ -1,8 +1,8 @@
 const BaseController = require("../../controllers/BaseController");
 const logger = require("../../utils/logger");
-const Service = require("./StreamOutgoingAuditMigrationService");
+const Service = require("./StreamAuditMigrationService");
 
-class StreamOutgoingAuditSyncController extends BaseController {
+class StreamAuditSyncController extends BaseController {
   constructor() {
     super();
     this.service = new Service();
@@ -31,4 +31,4 @@ class StreamOutgoingAuditSyncController extends BaseController {
   });
 }
 
-module.exports = new StreamOutgoingAuditSyncController();
+module.exports = new StreamAuditSyncController();

@@ -1,7 +1,7 @@
 const logger = require("../../utils/logger");
-const Model = require("./StreamOutgoingAuditMigrationModel");
+const Model = require("./StreamAuditMigrationModel");
 
-class StreamOutgoingAuditSyncService {
+class StreamAuditSyncService {
   constructor() {
     this.defaultBatch = 200;
   }
@@ -69,4 +69,4 @@ class StreamOutgoingAuditSyncService {
   }
 }
 
-module.exports = StreamOutgoingAuditSyncService;
+module.exports = StreamAuditSyncService;
