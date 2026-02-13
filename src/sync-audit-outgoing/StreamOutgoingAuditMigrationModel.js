@@ -106,7 +106,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
   async _getExistingAuditSync(idVanBan, transaction) {
     const query = `
       SELECT TOP 1 id
-      FROM camunda.dbo.audit_sync
+      FROM DiOffice.dbo.audit_sync
       WHERE id_van_ban = @idVanBan
     `;
 
@@ -133,7 +133,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
       // 1. Tìm OUTGOING trước
       const outgoingQuery = `
         SELECT TOP 1 document_id
-        FROM camunda.dbo.outgoing_documents_sync
+        FROM DiOffice.dbo.outgoing_documents_sync
         WHERE id_outgoing_bak = @idVanBan
       `;
 
@@ -153,7 +153,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
       // // 2. Nếu không có → tìm INCOMING
       // const incomingQuery = `
       //   SELECT TOP 1 document_id
-      //   FROM camunda.dbo.incomming_documents
+      //   FROM DiOffice.dbo.incomming_documents
       //   WHERE id_incoming_bak = @idVanBan
       // `;
 
@@ -173,7 +173,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
       // 3. Nếu không có → tìm INCOMING 2
       const incomingQuery2 = `
         SELECT TOP 1 document_id
-        FROM camunda.dbo.incomming_documents2
+        FROM DiOffice.dbo.incomming_documents2
         WHERE id_incoming_bak = @idVanBan
       `;
 
@@ -211,7 +211,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
     }
 
     const query = `
-      INSERT INTO camunda.dbo.audit_sync (
+      INSERT INTO DiOffice.dbo.audit_sync (
         document_id,
         time,
         display_name,
@@ -260,7 +260,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
 
   async _update(data, transaction) {
     const query = `
-      UPDATE camunda.dbo.audit_sync
+      UPDATE DiOffice.dbo.audit_sync
       SET
         time = @time,
         display_name = @displayName,
@@ -581,7 +581,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
 
       const selectQuery = `
         SELECT TOP 1 id
-        FROM camunda.dbo.organization_units
+        FROM DiOffice.dbo.organization_units
         WHERE LTRIM(RTRIM(name)) = @name
           AND status = 1
       `;
@@ -600,7 +600,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
       const code = normalizedName;
 
       const insertQuery = `
-        INSERT INTO camunda.dbo.organization_units (
+        INSERT INTO DiOffice.dbo.organization_units (
           id,
           name,
           code,
@@ -676,7 +676,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
 
       const selectQuery = `
         SELECT TOP 1 id
-        FROM camunda.dbo.users
+        FROM DiOffice.dbo.users
         WHERE name = @name OR id = @name
       `;
 
@@ -698,7 +698,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
       const password = await this._hashDefaultPassword();
 
       const insertQuery = `
-        INSERT INTO camunda.dbo.users (
+        INSERT INTO DiOffice.dbo.users (
           id,
           name,
           username,
@@ -862,7 +862,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
       // 1️⃣ TÌM TRƯỚC
       const selectQuery = `
         SELECT TOP 1 book_document_id AS id
-        FROM camunda.dbo.book_documents
+        FROM DiOffice.dbo.book_documents
         WHERE LTRIM(RTRIM(name)) = @name
       `;
 
@@ -874,7 +874,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
 
       // 2️⃣ KHÔNG CÓ → INSERT
       const insertQuery = `
-        INSERT INTO camunda.dbo.book_documents (
+        INSERT INTO DiOffice.dbo.book_documents (
           name,
           [year],
           status,
@@ -942,7 +942,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
     try {
       const query = `
         SELECT TOP 1 id
-        FROM camunda.dbo.crm_sources
+        FROM DiOffice.dbo.crm_sources
         WHERE code = @code
       `;
       const result = await this.queryNewDbTx(query, { code });
@@ -970,7 +970,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
       // Check xem đã tồn tại chưa
       const checkQuery = `
         SELECT TOP 1 id, value
-        FROM camunda.dbo.crm_source_data
+        FROM DiOffice.dbo.crm_source_data
         WHERE source_id = @sourceId AND value = @value
       `;
       const existing = await this.queryNewDbTx(checkQuery, { sourceId, value });
@@ -982,7 +982,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
       // Insert mới
       const id = uuidv4();
       const insertQuery = `
-        INSERT INTO camunda.dbo.crm_source_data (id, source_id, title, value, createdAt, updatedAt)
+        INSERT INTO DiOffice.dbo.crm_source_data (id, source_id, title, value, createdAt, updatedAt)
         VALUES (@id, @sourceId, @title, @value, GETDATE(), GETDATE())
       `;
 

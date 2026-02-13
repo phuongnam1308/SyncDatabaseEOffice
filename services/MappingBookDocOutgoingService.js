@@ -24,7 +24,7 @@ class MappingBookDocOutgoingService {
     try {
       const outgoingResult = await this.model.queryNewDb(`
         SELECT id, sovanban
-        FROM camunda.dbo.outgoing_documents2
+        FROM DiOffice.dbo.outgoing_documents2
         WHERE sovanban IS NOT NULL 
           AND LTRIM(RTRIM(sovanban)) <> ''
           AND (book_document_id IS NULL OR book_document_id = '')
@@ -39,7 +39,7 @@ class MappingBookDocOutgoingService {
 
           const bookResult = await this.model.queryNewDb(`
             SELECT TOP 1 book_document_id
-            FROM camunda.dbo.book_documents
+            FROM DiOffice.dbo.book_documents
             WHERE UPPER(
                 LTRIM(RTRIM(
                     REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
@@ -63,7 +63,7 @@ class MappingBookDocOutgoingService {
             const bookId = bookResult.recordset[0].book_document_id;
 
             await this.model.queryNewDb(`
-              UPDATE camunda.dbo.outgoing_documents2
+              UPDATE DiOffice.dbo.outgoing_documents2
               SET book_document_id = @bookId,
                   updated_at = GETDATE()
               WHERE id = @id
@@ -100,18 +100,18 @@ class MappingBookDocOutgoingService {
   async getMappingStatistics() {
     try {
       const totalOutgoing = await this.model.queryNewDb(`
-        SELECT COUNT(*) AS total FROM camunda.dbo.outgoing_documents2
+        SELECT COUNT(*) AS total FROM DiOffice.dbo.outgoing_documents2
       `);
 
       const mapped = await this.model.queryNewDb(`
         SELECT COUNT(*) AS mapped 
-        FROM camunda.dbo.outgoing_documents2 
+        FROM DiOffice.dbo.outgoing_documents2 
         WHERE book_document_id IS NOT NULL AND book_document_id != ''
       `);
 
       const unmapped = await this.model.queryNewDb(`
         SELECT COUNT(*) AS unmapped 
-        FROM camunda.dbo.outgoing_documents2 
+        FROM DiOffice.dbo.outgoing_documents2 
         WHERE (book_document_id IS NULL OR book_document_id = '') 
           AND sovanban IS NOT NULL 
           AND LTRIM(RTRIM(sovanban)) != ''
@@ -119,7 +119,7 @@ class MappingBookDocOutgoingService {
 
       const distinctSovanban = await this.model.queryNewDb(`
         SELECT COUNT(DISTINCT sovanban) AS distinct_sovanban 
-        FROM camunda.dbo.outgoing_documents2 
+        FROM DiOffice.dbo.outgoing_documents2 
         WHERE sovanban IS NOT NULL AND LTRIM(RTRIM(sovanban)) != ''
       `);
 

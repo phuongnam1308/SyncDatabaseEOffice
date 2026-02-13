@@ -13,7 +13,7 @@ class DrafterMigrationService {
         COUNT(*) AS total,
         SUM(CASE WHEN drafter IS NULL THEN 1 ELSE 0 END) AS drafter_null,
         SUM(CASE WHEN draft_signer IS NULL THEN 1 ELSE 0 END) AS draft_signer_null
-      FROM camunda.dbo.outgoing_documents2
+      FROM DiOffice.dbo.outgoing_documents2
     `;
     const { recordset } = await this.model.newPool.request().query(query);
     return recordset[0];
@@ -48,12 +48,12 @@ class DrafterMigrationService {
               THEN u.id
             ELSE o.draft_signer
           END
-        FROM camunda.dbo.outgoing_documents2 o
-        LEFT JOIN camunda.dbo.users u
+        FROM DiOffice.dbo.outgoing_documents2 o
+        LEFT JOIN DiOffice.dbo.users u
           ON LTRIM(RTRIM(o.NguoiKyVanBanText)) = LTRIM(RTRIM(u.name))
         WHERE o.id IN (
           SELECT TOP (${batchSize}) id
-          FROM camunda.dbo.outgoing_documents2
+          FROM DiOffice.dbo.outgoing_documents2
           WHERE drafter IS NULL OR draft_signer IS NULL
           ORDER BY id
         );

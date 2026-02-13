@@ -14,7 +14,7 @@ class DocumentCommentsReplySyncModel extends BaseModel {
         id,
         EmailReplyTo,
         ReplyTo
-      FROM camunda.${this.schema}.${this.table}
+      FROM DiOffice.${this.schema}.${this.table}
       WHERE
         [type] IS NULL
         OR [type] NOT IN ('reply', 'comment')
@@ -24,7 +24,7 @@ class DocumentCommentsReplySyncModel extends BaseModel {
 
   async updateToReply(id, emailReplyTo, replyTo) {
     const query = `
-      UPDATE camunda.${this.schema}.${this.table}
+      UPDATE DiOffice.${this.schema}.${this.table}
       SET
         [type] = 'reply',
         EmailReplyTo = @emailReplyTo,
@@ -41,7 +41,7 @@ class DocumentCommentsReplySyncModel extends BaseModel {
 
   async updateToComment(id) {
     const query = `
-      UPDATE camunda.${this.schema}.${this.table}
+      UPDATE DiOffice.${this.schema}.${this.table}
       SET
         [type] = 'comment',
         updated_at = GETDATE()

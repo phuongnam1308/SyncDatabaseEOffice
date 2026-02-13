@@ -93,7 +93,7 @@ class MigrationAgencyService {
 
       return {
         source: { database: 'DataEOfficeSNP', schema: 'dbo', table: 'Department', count: oldCount },
-        destination: { database: 'camunda', table: 'agencies', count: newCount },
+        destination: { database: 'DiOffice', table: 'agencies', count: newCount },
         migrated: newCount,
         remaining: oldCount - newCount,
         percentage: calculatePercentage(newCount, oldCount)

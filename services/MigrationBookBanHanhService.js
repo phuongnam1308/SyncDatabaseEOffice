@@ -118,7 +118,7 @@ class MigrationBookBanHanhService {
 
       return {
         source: { database: 'DataEOfficeSNP', schema: 'dbo', table: 'VanBanBanHanh', count: oldCount },
-        destination: { database: 'camunda', table: 'book_documents', count: newCount },
+        destination: { database: 'DiOffice', table: 'book_documents', count: newCount },
         migrated_books: newCount,
         remaining: oldCount - newCount,
         percentage: oldCount > 0 ? ((newCount / oldCount) * 100).toFixed(2) + '%' : '0%'

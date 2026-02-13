@@ -43,7 +43,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
       // Đếm tổng số đã migrate trong DB mới
       const countNewQuery = `
         SELECT COUNT(*) AS total
-        FROM camunda.${this.newDbSchema}.${this.newDbTable}
+        FROM DiOffice.${this.newDbSchema}.${this.newDbTable}
         WHERE table_backup = 'stream_migration'
       `;
       const newResult = await this.queryNewDbTx(countNewQuery);
@@ -52,7 +52,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
       // Lấy ID cuối cùng đã migrate
       const lastIdQuery = `
         SELECT TOP 1 id_outgoing_bak
-        FROM camunda.${this.newDbSchema}.${this.newDbTable}
+        FROM DiOffice.${this.newDbSchema}.${this.newDbTable}
         WHERE table_backup = 'stream_migration'
         ORDER BY createdAt DESC
       `;
@@ -288,7 +288,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
         try {
           // Kiểm tra xem record đã tồn tại chưa (dựa vào id_outgoing_bak)
           const existingQuery = `
-            SELECT id FROM camunda.${this.newDbSchema}.${this.newDbTable}
+            SELECT id FROM DiOffice.${this.newDbSchema}.${this.newDbTable}
             WHERE id_outgoing_bak = @oldId AND table_backup = 'stream_migration'
           `;
           const existing = await this.queryNewDbTx(
@@ -515,7 +515,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
   async rollback(options = {}) {
     try {
       const query = `
-        DELETE FROM camunda.${this.newDbSchema}.${this.newDbTable}
+        DELETE FROM DiOffice.${this.newDbSchema}.${this.newDbTable}
         WHERE table_backup = 'stream_migration'
       `;
 
@@ -829,7 +829,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
 
       const selectQuery = `
         SELECT TOP 1 id
-        FROM camunda.dbo.organization_units
+        FROM DiOffice.dbo.organization_units
         WHERE LTRIM(RTRIM(name)) = @name
           AND status = 1
       `;
@@ -848,7 +848,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
       const code = normalizedName;
 
       const insertQuery = `
-        INSERT INTO camunda.dbo.organization_units (
+        INSERT INTO DiOffice.dbo.organization_units (
           id,
           name,
           code,
@@ -924,7 +924,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
 
       const selectQuery = `
         SELECT TOP 1 id
-        FROM camunda.dbo.users
+        FROM DiOffice.dbo.users
         WHERE name = @name OR id = @name
       `;
 
@@ -946,7 +946,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
       const password = await this._hashDefaultPassword();
 
       const insertQuery = `
-        INSERT INTO camunda.dbo.users (
+        INSERT INTO DiOffice.dbo.users (
           id,
           name,
           username,
@@ -1112,7 +1112,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
       // 1️⃣ TÌM TRƯỚC
       const selectQuery = `
         SELECT TOP 1 book_document_id AS id
-        FROM camunda.dbo.book_documents
+        FROM DiOffice.dbo.book_documents
         WHERE LTRIM(RTRIM(name)) = @name
       `;
 
@@ -1124,7 +1124,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
 
       // 2️⃣ KHÔNG CÓ → INSERT
       const insertQuery = `
-        INSERT INTO camunda.dbo.book_documents (
+        INSERT INTO DiOffice.dbo.book_documents (
           name,
           [year],
           status,
@@ -1192,7 +1192,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
     try {
       const query = `
         SELECT TOP 1 id
-        FROM camunda.dbo.crm_sources
+        FROM DiOffice.dbo.crm_sources
         WHERE code = @code
       `;
       const result = await this.queryNewDbTx(query, { code });
@@ -1220,7 +1220,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
       // Check xem đã tồn tại chưa
       const checkQuery = `
         SELECT TOP 1 id, value
-        FROM camunda.dbo.crm_source_data
+        FROM DiOffice.dbo.crm_source_data
         WHERE source_id = @sourceId AND value = @value
       `;
       const existing = await this.queryNewDbTx(checkQuery, { sourceId, value });
@@ -1232,7 +1232,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
       // Insert mới
       const id = uuidv4();
       const insertQuery = `
-        INSERT INTO camunda.dbo.crm_source_data (id, source_id, title, value, createdAt, updatedAt)
+        INSERT INTO DiOffice.dbo.crm_source_data (id, source_id, title, value, createdAt, updatedAt)
         VALUES (@id, @sourceId, @title, @value, GETDATE(), GETDATE())
       `;
 
