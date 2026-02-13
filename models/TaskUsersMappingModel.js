@@ -21,7 +21,7 @@ class TaskUsersMappingModel extends BaseModel {
         WHERE t.id_taskBackups IS NOT NULL
         ORDER BY t.id_taskBackups
       `;
-      return await this.queryNewDb(query); // vì cả 2 bảng đều ở DiOffice
+      return await this.queryNewDb(query); // vì cả 2 bảng đều ở camunda
     } catch (error) {
       logger.error('Lỗi lấy dữ liệu mapping từ task2:', error);
       throw error;

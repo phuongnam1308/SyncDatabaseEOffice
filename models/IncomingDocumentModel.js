@@ -93,7 +93,7 @@
 //     try {
 //       const query = `
 //         SELECT book_document_id
-//         FROM DiOffice.dbo.book_documents
+//         FROM camunda.dbo.book_documents
 //         WHERE to_book_code = @soDen AND type_document = 'IncommingDocument'
 //       `;
 //       const result = await this.newPool.request()
@@ -232,7 +232,7 @@ class IncomingDocumentModel extends BaseModel {
     try {
       const query = `
         SELECT book_document_id
-        FROM DiOffice.dbo.book_documents
+        FROM camunda.dbo.book_documents
         WHERE to_book_code = @soDen AND type_document = 'IncommingDocument'
       `;
       const result = await this.newPool.request()
@@ -336,7 +336,7 @@ class IncomingDocumentModel extends BaseModel {
   async countUnsyncedFromTempTable() {
     const query = `
       SELECT COUNT(*) as total 
-      FROM DiOffice.dbo.incomming_documents2 
+      FROM camunda.dbo.incomming_documents2 
       WHERE tb_update IS NULL OR tb_update = 0
     `;
     const result = await this.queryNewDb(query);
@@ -347,7 +347,7 @@ class IncomingDocumentModel extends BaseModel {
   async getUnsyncedFromTempTable() {
     const query = `
       SELECT * 
-      FROM DiOffice.dbo.incomming_documents2 
+      FROM camunda.dbo.incomming_documents2 
       WHERE tb_update IS NULL OR tb_update = 0
       ORDER BY id_incoming_bak
     `;
@@ -356,7 +356,7 @@ class IncomingDocumentModel extends BaseModel {
 
   // Kiểm tra tồn tại trong bảng chính
   async checkExistsInMainTable(id_bak, doc_id) {
-    let query = `SELECT 1 FROM DiOffice.dbo.incomming_documents WHERE `;
+    let query = `SELECT 1 FROM camunda.dbo.incomming_documents WHERE `;
     const params = {};
 
     if (doc_id) {
@@ -378,7 +378,7 @@ class IncomingDocumentModel extends BaseModel {
     const fields = Object.keys(data);
     const values = fields.map((_, i) => `@p${i}`).join(', ');
     const query = `
-      INSERT INTO DiOffice.dbo.incomming_documents 
+      INSERT INTO camunda.dbo.incomming_documents 
       (${fields.join(', ')}) 
       VALUES (${values})
     `;
@@ -410,7 +410,7 @@ class IncomingDocumentModel extends BaseModel {
   // Đánh dấu đã sync
   async markAsSynced(identifier) {
     const query = `
-      UPDATE DiOffice.dbo.incomming_documents2 
+      UPDATE camunda.dbo.incomming_documents2 
       SET tb_update = 1, tb_bak = @identifier 
       WHERE id_incoming_bak = @identifier OR document_id = @identifier
     `;
@@ -419,15 +419,15 @@ class IncomingDocumentModel extends BaseModel {
 
   // Các hàm count khác
   async countTempTable() {
-    return await this.count('incomming_documents2', 'DiOffice.dbo', false);
+    return await this.count('incomming_documents2', 'camunda.dbo', false);
   }
 
   async countMainTable() {
-    return await this.count('incomming_documents', 'DiOffice.dbo', false);
+    return await this.count('incomming_documents', 'camunda.dbo', false);
   }
 
   async countSynced() {
-    const query = `SELECT COUNT(*) as cnt FROM DiOffice.dbo.incomming_documents2 WHERE tb_update = 1`;
+    const query = `SELECT COUNT(*) as cnt FROM camunda.dbo.incomming_documents2 WHERE tb_update = 1`;
     const res = await this.queryNewDb(query);
     return res[0]?.cnt || 0;
   }

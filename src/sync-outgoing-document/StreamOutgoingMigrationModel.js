@@ -24,7 +24,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
 
       const countNewQuery = `
         SELECT COUNT(*) AS total
-        FROM DiOffice.${this.newDbSchema}.${this.newDbTable}
+        FROM camunda.${this.newDbSchema}.${this.newDbTable}
         WHERE table_backup = 'stream_migration'
       `;
       const newResult = await this.queryNewDbTx(countNewQuery);
@@ -32,7 +32,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
 
       const lastIdQuery = `
         SELECT TOP 1 id_outgoing_bak
-        FROM DiOffice.${this.newDbSchema}.${this.newDbTable}
+        FROM camunda.${this.newDbSchema}.${this.newDbTable}
         WHERE table_backup = 'stream_migration'
         ORDER BY createdAt DESC
       `;
@@ -197,7 +197,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
       for (const record of records) {
         try {
           const existingQuery = `
-            SELECT id FROM DiOffice.${this.newDbSchema}.${this.newDbTable}
+            SELECT id FROM camunda.${this.newDbSchema}.${this.newDbTable}
             WHERE id_outgoing_bak = @oldId AND table_backup = 'stream_migration'
           `;
           const existing = await this.queryNewDbTx(existingQuery, { oldId: record.id_outgoing_bak }, transaction);
@@ -338,7 +338,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
   async rollback(options = {}) {
     try {
       const query = `
-        DELETE FROM DiOffice.${this.newDbSchema}.${this.newDbTable}
+        DELETE FROM camunda.${this.newDbSchema}.${this.newDbTable}
         WHERE table_backup = 'stream_migration'
       `;
 

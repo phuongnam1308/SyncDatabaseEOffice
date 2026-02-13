@@ -9,7 +9,7 @@ class Files2Model extends BaseModel {
     super();
     this.table = 'files2';
     this.schema = 'dbo';
-    this.database = 'DiOffice'; // Giả sử bảng ở DB mới DiOffice
+    this.database = 'camunda'; // Giả sử bảng ở DB mới camunda
   }
 
   async getAllRecords() {

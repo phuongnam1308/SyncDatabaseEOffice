@@ -33,7 +33,7 @@ class IncomingFileMigrationModel extends BaseModel {
     const values = fields.map((_, i) => `@p${i}`).join(',');
 
     const sql = `
-      INSERT INTO DiOffice.dbo.files2 (${fields.join(',')})
+      INSERT INTO camunda.dbo.files2 (${fields.join(',')})
       VALUES (${values})
     `;
 

@@ -104,7 +104,7 @@ class OutgoingDocumentDeleteModel extends BaseModel {
     try {
       const query = `
         SELECT book_document_id
-        FROM DiOffice.dbo.book_documents
+        FROM camunda.dbo.book_documents
         WHERE to_book_code = @soVanBan AND type_document = 'OutGoingDocument'
       `;
       const result = await this.newPool.request()

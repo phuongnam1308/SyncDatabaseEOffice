@@ -1,13 +1,13 @@
 module.exports = {
   taskUsers2ProcessMapping: {
     sourceTable: {
-      database: 'DiOffice',
+      database: 'camunda',
       schema: 'dbo',
       table: 'task_users2'
     },
 
     userTable: {
-      database: 'DiOffice',
+      database: 'camunda',
       schema: 'dbo',
       table: 'users'
     },
