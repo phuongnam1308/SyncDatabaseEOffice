@@ -90,7 +90,7 @@ class StreamOutgoingMigrationController extends BaseController {
       await this.service.initialize();
 
       // Thực hiện migration
-      const result = await this.service.migrate({ limit, batch });
+      const result = await this.service.migrate({ limit, batch, lastProcessedId });
 
       // Tính thời gian thực thi
       const duration = ((Date.now() - startTime) / 1000).toFixed(2);
