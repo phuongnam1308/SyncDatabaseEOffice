@@ -278,16 +278,21 @@ class MigrationHelper {
 
     async mapUserName(Name, transaction = null) {
     try {
-        const displayName = this.extractDisplayName(Name);
-        if (!displayName) return null;
-
-        const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-        if (uuidPattern.test(displayName)) {
-        return displayName;
+        if (
+          !Name ||
+          typeof Name !== 'string' ||
+          !Name.trim() ||
+          /^\d+$/.test(Name) ||
+          /^[0-9a-f-]{32,}$/i.test(Name) ||
+          !/[a-zA-ZÀ-ỹ]/.test(Name)
+        ) {
+          return Name;
         }
+        const displayName = this.extractDisplayName(Name);
+        if (!displayName) return Name;
 
         const usernameBase = this.buildUsernameFromName(displayName);
-        if (!usernameBase) return null;
+        if (!usernameBase) return Name;
 
         const selectQuery = `
         SELECT TOP 1 id
@@ -522,6 +527,222 @@ class MigrationHelper {
       logger.error("[checkOrInsertSourceData] Error:", error);
       return null;
     }
+  }
+
+  parseActionString(create_by, value) {
+    try {
+      if (!value || typeof value !== 'string') {
+        return {
+          action_code: null,
+          receiver: create_by ? [create_by] : [],
+          receiver_unit: [],
+        };
+      }
+
+      const clean = value
+        .trim()
+        .replace(/^[\s"'.,]+/, '')
+        .replace(/[\s"'.,]+$/, '');
+
+      if (!clean) {
+        return {
+          action_code: null,
+          receiver: create_by ? [create_by] : [],
+          receiver_unit: [],
+        };
+      }
+
+      let outsideText = clean;
+      let insideText = null;
+
+      let actionCode = null;
+      let receiver = [];
+      let receiverUnit = [];
+
+      // ===== STEP 2: Extract inside / outside parentheses =====
+      try {
+        const firstOpenIndex = clean.indexOf('(');
+        const lastCloseIndex = clean.lastIndexOf(')');
+
+        if (firstOpenIndex === -1 || lastCloseIndex === -1) {
+          outsideText = clean;
+        } else if (firstOpenIndex < lastCloseIndex) {
+          outsideText = clean.substring(0, firstOpenIndex).trim();
+          insideText = clean
+            .substring(firstOpenIndex + 1, lastCloseIndex)
+            .trim();
+
+          if (!insideText) {
+            insideText = null;
+          }
+        } else {
+          outsideText = clean;
+          insideText = null;
+        }
+      } catch (err) {
+        logger.warn(`[parseActionString][STEP2] Extract error: ${err.message}`);
+        outsideText = clean;
+        insideText = null;
+      }
+
+      // ===== STEP 3: Clean HTML & split into blocks =====
+      let parsedBlocks = [];
+
+      try {
+        const targetText = insideText ? insideText : outsideText;
+
+        if (targetText && typeof targetText === 'string') {
+
+          let cleaned = targetText
+            .replace(/<br\s*\/?>/gi, '\n')
+            .replace(/<\/p>/gi, '\n');
+
+          cleaned = cleaned.replace(/<[^>]*>/g, '');
+
+          const rawBlocks = cleaned.split('\n');
+
+          parsedBlocks = rawBlocks
+            .map(i => i.replace(/\s+/g, ' ').trim())
+            .filter(Boolean);
+        }
+
+      } catch (err) {
+        logger.warn(`[parseActionString][STEP3] HTML split error: ${err.message}`);
+        parsedBlocks = [];
+      }
+
+      // ===== STEP 4: Build receiver / receiver_unit / actionCode =====
+      try {
+        let blocksToProcess = [];
+        if (!insideText) {
+          actionCode = parsedBlocks && parsedBlocks.length
+            ? parsedBlocks[0]
+            : outsideText || null;
+
+          // loại phần tử đầu (đã dùng làm actionCode)
+          blocksToProcess = parsedBlocks && parsedBlocks.length > 1
+            ? parsedBlocks.slice(1)
+            : [];
+
+        } else {
+          actionCode = outsideText || null;
+          blocksToProcess = parsedBlocks || [];
+        }
+
+        if (Array.isArray(blocksToProcess) && blocksToProcess.length) {
+          blocksToProcess.forEach(block => {
+            if (!block) return;
+
+            const normalized = block.toLowerCase();
+
+            if (
+              normalized.includes('đơn vị xử lý') ||
+              normalized.includes('đơn vị')
+            ) {
+              receiverUnit.push(block);
+            } else {
+              receiver.push(block);
+            }
+          });
+        }
+
+      } catch (err) {
+        logger.warn(`[parseActionString][STEP4] Build receiver error: ${err.message}`);
+      }
+
+      // ===== STEP 5: Final split & normalize =====
+      try {
+
+        const normalizeAndSplit = (arr) => {
+          if (!Array.isArray(arr)) return [];
+
+          return arr
+            .map(item => {
+              if (!item || typeof item !== 'string') return null;
+
+              const colonIndex = item.indexOf(':');
+              let cleaned = colonIndex !== -1
+                ? item.substring(colonIndex + 1)
+                : item;
+
+              return cleaned
+                .split(/[.;]/)
+                .map(i => i.trim())
+                .filter(Boolean);
+            })
+            .flat()
+            .map(i =>
+              i
+                .replace(/^\d+[\.\)]\s*/, '')
+                .trim()
+            )
+            .filter(Boolean);
+        };
+
+        receiver = normalizeAndSplit(receiver);
+        receiverUnit = normalizeAndSplit(receiverUnit);
+
+      } catch (err) {
+        logger.warn(`[parseActionString][STEP5] Final normalize error: ${err.message}`);
+      }
+
+      // ===== Fallback =====
+      if (!receiver.length && !receiverUnit.length && create_by) {
+        receiver = [create_by];
+      }
+
+      return {
+        action_code: actionCode || null,
+        receiver,
+        receiver_unit: receiverUnit,
+      };
+
+    } catch (error) {
+      logger.warn(`[parseActionString] Error: ${error.message}`);
+      return {
+        action_code: null,
+        receiver: create_by ? [create_by] : [],
+        receiver_unit: [],
+      };
+    }
+  }
+
+  _expandMappedRecords(mapped) {
+    if (!mapped?.id_van_ban) return [];
+
+    const results = [];
+
+    const receivers = Array.isArray(mapped.receiver)
+      ? mapped.receiver.filter(Boolean)
+      : mapped.receiver
+      ? [mapped.receiver]
+      : [];
+
+    const receiverUnits = Array.isArray(mapped.receiver_unit)
+      ? mapped.receiver_unit.filter(Boolean)
+      : mapped.receiver_unit
+      ? [mapped.receiver_unit]
+      : [];
+
+    // Tách từng receiver
+    for (const r of receivers) {
+      results.push({
+        ...mapped,
+        receiver: r,
+        receiver_unit: null,
+      });
+    }
+
+    // Tách từng receiver_unit
+    for (const ru of receiverUnits) {
+      results.push({
+        ...mapped,
+        receiver: null,
+        receiver_unit: ru,
+      });
+    }
+
+    return results;
   }
 }
 
