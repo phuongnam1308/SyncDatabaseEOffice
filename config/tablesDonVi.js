@@ -17,7 +17,7 @@ const tableMappings = {
     // ========== DATABASE MỚI ==========
     newTable: 'organization_units',
     newSchema: 'dbo',
-    newDatabase: 'camunda',
+    newDatabase: 'DiOffice',
     
     // ========== MAPPING CÁC TRƯỜNG ==========
     // Ánh xạ: Tên cột cũ → Tên cột mới

@@ -7,7 +7,7 @@ const tableMappings = {
 
     newTable: 'outgoing_documents2',
     newSchema: 'dbo',
-    newDatabase: 'camunda',
+    newDatabase: 'DiOffice',
 
     fieldMapping: {
       'ID': 'id_outgoing_bak',

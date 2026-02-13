@@ -11,7 +11,7 @@ class IncomingStatusCodeUpdateModel extends BaseModel {
    */
   async updateStatusCodeByTrangThai() {
     const query = `
-      UPDATE camunda.dbo.incomming_documents2
+      UPDATE DiOffice.dbo.incomming_documents2
       SET status_code = CASE
         WHEN TrangThai LIKE N'%Trình Chỉ huy%' THEN 10
         WHEN TrangThai LIKE N'%Chuyển văn thư%' THEN 6
@@ -32,7 +32,7 @@ class IncomingStatusCodeUpdateModel extends BaseModel {
   async statisticStatusCode() {
     const query = `
       SELECT status_code, COUNT(*) AS total
-      FROM camunda.dbo.incomming_documents2
+      FROM DiOffice.dbo.incomming_documents2
       GROUP BY status_code
       ORDER BY status_code
     `;

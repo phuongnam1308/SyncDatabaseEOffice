@@ -47,7 +47,7 @@ class FileRelations2Model extends BaseModel {
         FETCH NEXT @pageSize ROWS ONLY
       `;
       const offset = page * pageSize;
-      logger.info(`Chạy query getFromOldDbPaged trên camunda: page=${page}, offset=${offset}, pageSize=${pageSize}`);
+      logger.info(`Chạy query getFromOldDbPaged trên DiOffice: page=${page}, offset=${offset}, pageSize=${pageSize}`);
       return await this.queryNewDb(query, { offset, pageSize });
     } catch (error) {
       logger.error('Lỗi lấy danh sách files2 paged từ DB cũ:', error);
@@ -97,7 +97,7 @@ class FileRelations2Model extends BaseModel {
 
   async countOldDb() {
     try {
-      logger.info(`Đếm bản ghi bảng old: ${this.oldSchema}.${this.oldTable} trong camunda`);
+      logger.info(`Đếm bản ghi bảng old: ${this.oldSchema}.${this.oldTable} trong DiOffice`);
       const query = `SELECT COUNT(*) AS Total FROM ${this.oldSchema}.${this.oldTable}`;
       const result = await this.queryNewDb(query);
       return result[0].Total;

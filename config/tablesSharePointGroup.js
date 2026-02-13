@@ -9,7 +9,7 @@ const tableMappings = {
     
     newTable: 'group_users',
     newSchema: 'dbo',
-    newDatabase: 'camunda',
+    newDatabase: 'DiOffice',
     
     // CHỈ map các trường có trong cả 2 bảng
     fieldMapping: {

@@ -1,6 +1,6 @@
 # Hệ thống Migration Dữ liệu SQL Server
 
-Hệ thống migration dữ liệu từ SQL Server cũ (DataEOfficeSNP) sang SQL Server mới (camunda) với kiến trúc MVC.
+Hệ thống migration dữ liệu từ SQL Server cũ (DataEOfficeSNP) sang SQL Server mới (DiOffice) với kiến trúc MVC.
 
 ## 📋 Mô tả
 
@@ -35,7 +35,7 @@ OLD_DB_PASSWORD=12345678
 
 # Database mới
 NEW_DB_SERVER=192.168.0.999
-NEW_DB_NAME=camunda
+NEW_DB_NAME=DiOffice
 NEW_DB_USER=lifetex
 NEW_DB_PASSWORD=cccjjj
 ```
@@ -121,7 +121,7 @@ GET /api/statistics
       "count": 150
     },
     "destination": {
-      "database": "camunda",
+      "database": "DiOffice",
       "table": "organization_units",
       "count": 145
     },

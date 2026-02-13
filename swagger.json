@@ -92,7 +92,7 @@
     },
     "/migrate/full-outgoing-process": {
       "get": {
-        "summary": "Chạy toàn bộ quy trình đồng bộ văn bản đi (6 bước)",
+        "summary": "Chạy toàn bộ quy trình đồng bộ văn bản đi (7 bước)",
         "tags": [
           "Dong bo van ban di"
         ]
@@ -1570,6 +1570,7 @@
         }
       }
     },
+    
     "/test/create-task-audit": {
       "post": {
         "summary": "Tạo audit từ task + task_users",
@@ -1686,6 +1687,7 @@
         }
       }
     },
+    
     "/update/incoming-status-code": {
       "get": {
         "summary": "Cập nhật trạng thái văn bản đến ở bảng trung gian",
@@ -1771,6 +1773,10 @@
     {
       "name": "Update File Names in files2",
       "description": "Cập nhật file_name từ file_path trong bảng files2"
+    },
+    {
+      "name": "Migration Stream",
+      "description": "Migration văn bản đi theo batch stream"
     }
   ]
 }

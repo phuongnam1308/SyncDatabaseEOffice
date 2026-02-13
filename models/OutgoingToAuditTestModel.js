@@ -9,7 +9,7 @@ class OutgoingToAuditTestModel extends BaseModel {
   async getOutgoingTestData() {
     const query = `
       SELECT document_id, created_at
-      FROM camunda.dbo.outgoing_documents
+      FROM DiOffice.dbo.outgoing_documents
       WHERE table_backup = 'outgoing_documents2'
     `;
     return this.queryNewDb(query);
@@ -17,7 +17,7 @@ class OutgoingToAuditTestModel extends BaseModel {
 
   async insertAudit(data) {
     const query = `
-      INSERT INTO camunda.dbo.audit (
+      INSERT INTO DiOffice.dbo.audit (
         document_id, [time], user_id, display_name, [role],
         action_code, from_node_id, to_node_id, details,
         origin_id, created_by, receiver, receiver_unit,
