@@ -146,6 +146,18 @@ class StreamOutgoingMigrationModel extends BaseModel {
       const bookDocumentId = bookDocumentObj ? bookDocumentObj.id : null;
       const toBook = bookDocumentObj ? bookDocumentObj.count : null;
 
+      let workflow = null;
+      if (
+        typeof oldRecord.Workflow === "string" &&
+        oldRecord.Workflow.trim() !== "" &&
+        oldRecord.Workflow.trim().toUpperCase() !== "NULL"
+      ) {
+        const cleaned = this.helper.cleanText(oldRecord.Workflow);
+        if (cleaned) {
+          workflow = cleaned;
+        }
+      }
+
       const mapped = {
         document_id: `${Date.now()}${Math.floor(Math.random() * 10000)}`,
         id_outgoing_bak: String(oldRecord.ID),
@@ -164,8 +176,8 @@ class StreamOutgoingMigrationModel extends BaseModel {
         release_no: this.helper.cleanText(oldRecord.Title),
         to_book_text_symbols: this.helper.cleanText(oldRecord.Title),
         release_date: promulgationDate || null,
-        bpmn_version: oldRecord.Workflow ? "VAN_BAN_DI" : null,
-        type_of_process: oldRecord.Workflow ? this.helper.cleanText(oldRecord.Workflow) : null,
+        bpmn_version: workflow || "VAN_BAN_DI",
+        type_of_process: workflow || "VAN_BAN_DI",
         book_document_id: bookDocumentId,
         status: "1",
         replaced: 0,

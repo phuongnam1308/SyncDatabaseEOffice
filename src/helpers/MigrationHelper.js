@@ -17,9 +17,25 @@ class MigrationHelper {
 
   parseDate(date) {
     if (!date) return null;
+
     try {
-      const parsed = new Date(date);
+      if (date instanceof Date) {
+        return isNaN(date.getTime()) ? null : date;
+      }
+
+      if (typeof date !== "string") return null;
+
+      const trimmed = date.trim();
+      if (!trimmed) return null;
+      if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(trimmed)) {
+        const iso = trimmed.replace(" ", "T");
+        const parsed = new Date(iso);
+        return isNaN(parsed.getTime()) ? null : parsed;
+      }
+
+      const parsed = new Date(trimmed);
       return isNaN(parsed.getTime()) ? null : parsed;
+
     } catch {
       return null;
     }
@@ -337,6 +353,9 @@ class MigrationHelper {
       raw = raw.trim();
       if (!raw) return null;
 
+      if (raw.toUpperCase() === "NULL") return null;
+
+      // SharePoint format id;#name
       if (raw.includes(";#")) {
         const parts = raw.split(";#");
         if (parts.length >= 2) {
@@ -344,7 +363,17 @@ class MigrationHelper {
         }
       }
 
-      return raw || null;
+      // 🔹 Remove chức danh sau dấu -
+      // Hỗ trợ: -, –, —
+      raw = raw.split(/\s*[-–—]\s*/)[0].trim();
+
+      // 🔹 Remove nội dung trong ()
+      raw = raw.replace(/\(.*?\)/g, "").trim();
+
+      if (!raw) return null;
+
+      return raw;
+
     } catch {
       return null;
     }
