@@ -2,14 +2,14 @@ const express = require('express');
 const router = express.Router();
 
 const StreamAuditSyncController =
-  require('./StreamAuditMigrationController');
+  require('./migrate/StreamAuditMigrationController');
 
 router.post(
   '/migrate',
   StreamAuditSyncController.run
 );
 
-const SyncAuditController = require('./SyncAuditController');
+const SyncAuditController = require('./apply/SyncAuditController');
 router.post('/sync', SyncAuditController.syncToMain);
 
 module.exports = router;

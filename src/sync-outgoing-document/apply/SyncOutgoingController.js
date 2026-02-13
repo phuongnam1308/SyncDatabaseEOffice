@@ -1,6 +1,6 @@
 // sync-outgoing.controller.js
-const BaseController = require('../../controllers/BaseController');
-const logger = require('../../utils/logger');
+const BaseController = require('../../../controllers/BaseController');
+const logger = require('../../../utils/logger');
 const SyncOutgoingService = require('./SyncOutgoingService');
 
 class SyncOutgoingController extends BaseController {

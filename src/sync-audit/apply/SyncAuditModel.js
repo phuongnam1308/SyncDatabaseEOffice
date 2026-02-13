@@ -1,6 +1,6 @@
 // sync-audit.model.js
-const BaseModel = require("../../models/BaseModel");
-const logger = require("../../utils/logger");
+const BaseModel = require("../../../models/BaseModel");
+const logger = require("../../../utils/logger");
 const sql = require('mssql');
 
 class SyncAuditModel extends BaseModel {

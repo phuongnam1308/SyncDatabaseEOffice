@@ -1,8 +1,8 @@
-// sync-outgoing.service.js
-const logger = require('../../utils/logger');
-const SyncOutgoingModel = require('./SyncOutgoingModel');
+// sync-audit.service.js
+const logger = require('../../../utils/logger');
+const SyncAuditModel = require('./SyncAuditModel');
 
-class SyncOutgoingService {
+class SyncAuditService {
   constructor() {
     this.model = null;
     this.defaultBatchSize = 100;
@@ -10,11 +10,11 @@ class SyncOutgoingService {
 
   async initialize() {
     try {
-      this.model = new SyncOutgoingModel();
+      this.model = new SyncAuditModel();
       await this.model.initialize();
-      logger.info('[SyncOutgoingService] Initialized successfully');
+      logger.info('[SyncAuditService] Initialized successfully');
     } catch (error) {
-      logger.error('[SyncOutgoingService] Initialize error:', error);
+      logger.error('[SyncAuditService] Initialize error:', error);
       throw new Error(`Không thể khởi tạo service: ${error.message}`);
     }
   }
@@ -37,7 +37,7 @@ class SyncOutgoingService {
     let hasMore = true;
 
     logger.info('='.repeat(80));
-    logger.info(`[SyncOutgoingService] BẮT ĐẦU SYNC`);
+    logger.info(`[SyncAuditService] BẮT ĐẦU SYNC AUDIT`);
     logger.info(`├─ Limit: ${limit || 'ALL'}`);
     logger.info(`├─ Batch Size: ${batch}`);
     logger.info('='.repeat(80));
@@ -57,7 +57,7 @@ class SyncOutgoingService {
           break;
         }
 
-        logger.info(`│  ✓ Fetched ${syncRecords.length} records from sync table`);
+        logger.info(`│  ✓ Fetched ${syncRecords.length} records from audit_sync`);
 
         const batchResult = await this.model.insertBatchToMain(syncRecords);
         
@@ -90,7 +90,7 @@ class SyncOutgoingService {
       const totalDuration = ((Date.now() - startTime) / 1000).toFixed(2);
       
       logger.info('\n' + '='.repeat(80));
-      logger.info('✅ SYNC HOÀN TẤT THÀNH CÔNG');
+      logger.info('✅ SYNC AUDIT HOÀN TẤT THÀNH CÔNG');
       logger.info('─'.repeat(80));
       logger.info(`├─ Total Processed: ${totalProcessed}`);
       logger.info(`├─ Total Inserted: ${totalInserted}`);
@@ -111,7 +111,7 @@ class SyncOutgoingService {
     } catch (error) {
       const duration = ((Date.now() - startTime) / 1000).toFixed(2);
       logger.error('\n' + '='.repeat(80));
-      logger.error('❌ SYNC FAILED');
+      logger.error('❌ SYNC AUDIT FAILED');
       logger.error('─'.repeat(80));
       logger.error(`├─ Error: ${error.message}`);
       logger.error(`├─ Processed before error: ${totalProcessed}`);
@@ -122,4 +122,4 @@ class SyncOutgoingService {
   }
 }
 
-module.exports = SyncOutgoingService;
+module.exports = SyncAuditService;

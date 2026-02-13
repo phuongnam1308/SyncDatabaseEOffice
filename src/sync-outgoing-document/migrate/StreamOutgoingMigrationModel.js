@@ -1,7 +1,7 @@
-const BaseModel = require("../../models/BaseModel");
-const logger = require("../../utils/logger");
+const BaseModel = require("../../../models/BaseModel");
+const logger = require("../../../utils/logger");
 const sql = require('mssql');
-const MigrationHelper = require("../helpers/MigrationHelper");
+const MigrationHelper = require("../../helpers/MigrationHelper");
 
 class StreamOutgoingMigrationModel extends BaseModel {
   constructor() {
@@ -301,7 +301,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
         document_type = @documentType, urgency_level = @urgencyLevel, private_level = @privateLevel,
         report_signer = @reportSigner, report_document_symbol = @reportDocumentSymbol,
         deadline_reply = @deadlineReply, book_document_id = @bookDocumentId, status = @status,
-        release_no = @releaseNo, to_book_text_symbols = @toBookTextSymbols, to_book = @toBook, release_date = @releaseDate, text_symbols = @textSymbols,
+        release_no = @releaseNo, to_book_text_symbols = @toBookTextSymbols, release_date = @releaseDate, text_symbols = @textSymbols,
         type_doc = @typeDoc, bpmn_version = @bpmnVersion, type_of_process = @typeOfProcess,
         replaced = @replaced, abstract_note = @abstractNote, updated_at = GETDATE()
       WHERE id_outgoing_bak = @idOutgoingBak AND table_backup = 'stream_migration'
@@ -321,7 +321,6 @@ class StreamOutgoingMigrationModel extends BaseModel {
       status: record.status ?? 1,
       releaseNo: record.release_no ?? null,
       toBookTextSymbols: record.to_book_text_symbols ?? null,
-      toBook: record.to_book ?? null,
       releaseDate: record.release_date ?? null,
       textSymbols: record.text_symbols ?? null,
       typeDoc: record.type_doc ?? 1,

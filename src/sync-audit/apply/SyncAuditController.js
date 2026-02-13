@@ -1,6 +1,6 @@
 // sync-audit.controller.js
-const BaseController = require('../../controllers/BaseController');
-const logger = require('../../utils/logger');
+const BaseController = require('../../../controllers/BaseController');
+const logger = require('../../../utils/logger');
 const SyncAuditService = require('./SyncAuditService');
 
 class SyncAuditController extends BaseController {

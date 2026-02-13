@@ -1,7 +1,7 @@
-const BaseModel = require("../../models/BaseModel");
-const logger = require("../../utils/logger");
+const BaseModel = require("../../../models/BaseModel");
+const logger = require("../../../utils/logger");
 const sql = require('mssql');
-const MigrationHelper = require("../helpers/MigrationHelper");
+const MigrationHelper = require("../../helpers/MigrationHelper");
 
 class StreamOutgoingAuditSyncModel extends BaseModel {
   constructor(oldDbTable) {
