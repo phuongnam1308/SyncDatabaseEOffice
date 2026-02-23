@@ -19,6 +19,9 @@ module.exports = swaggerJSDoc({
     './controllers/**/*.js',
     './routes/**/*.js',
       './DonVi/*.js',
-    './modules/**/**/*.controller.js', // 🔥 quan trọng
+    './modules/**/**/*.controller.js',
+     './src/sync-outgoing-document/StreamOutgoingMigrationController.js',
+    './src/sync-audit-outgoing/StreamOutgoingAuditMigrationController.js',
+    // 🔥 quan trọng
   ]
 });

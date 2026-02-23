@@ -1,5 +1,5 @@
-const BaseController = require('../../controllers/BaseController');
-const logger = require('../../utils/logger');
+const BaseController = require('../../../controllers/BaseController');
+const logger = require('../../../utils/logger');
 const StreamOutgoingMigrationService = require('./StreamOutgoingMigrationService');
 
 /**
@@ -72,6 +72,7 @@ class StreamOutgoingMigrationController extends BaseController {
     // Lấy params từ request body hoặc query
     const limit = parseInt(req.body?.limit || req.query?.limit || 0);
     const batch = parseInt(req.body?.batch || req.query?.batch || 100);
+    const lastProcessedId = parseInt(req.body?.lastProcessedId || req.query?.lastProcessedId || 0);
 
     // Validate params
     if (batch <= 0) {
@@ -89,7 +90,7 @@ class StreamOutgoingMigrationController extends BaseController {
       await this.service.initialize();
 
       // Thực hiện migration
-      const result = await this.service.migrate({ limit, batch });
+      const result = await this.service.migrate({ limit, batch, lastProcessedId });
 
       // Tính thời gian thực thi
       const duration = ((Date.now() - startTime) / 1000).toFixed(2);
