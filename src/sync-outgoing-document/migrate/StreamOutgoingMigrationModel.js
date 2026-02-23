@@ -254,14 +254,14 @@ class StreamOutgoingMigrationModel extends BaseModel {
       INSERT INTO ${this.newDbSchema}.${this.newDbTable} (
         document_id, status_code, sender_unit, abstract_note, drafter, document_type,
         urgency_level, private_level, report_signer, report_document_symbol, deadline_reply,
-        book_document_id, status, release_no, to_book_text_symbols, to_book, release_date, text_symbols, type_doc,
+        book_document_id, status, release_no, release_date, to_book_text_symbols, to_book, text_symbols, type_doc,
         bpmn_version, type_of_process, id_outgoing_bak, created_at, updated_at,
         replaced, table_backup, tb_bak
       )
       VALUES (
         @documentId, @statusCode, @senderUnit, @abstractNote, @drafter, @documentType,
         @urgencyLevel, @privateLevel, @reportSigner, @reportDocumentSymbol, @deadlineReply,
-        @bookDocumentId, @status, @releaseNo, @releaseDate, @textSymbols, @typeDoc,
+        @bookDocumentId, @status, @releaseNo, @releaseDate, @toBookTextSymbols, @toBook, @textSymbols, @typeDoc,
         @bpmnVersion, @typeOfProcess, @idOutgoingBak, @createdAt, @updatedAt,
         @replaced, @tableBackup, @tbBak
       )
