@@ -134,15 +134,15 @@ class SyncManagerController extends BaseController {
               <table class="table table-hover table-bordered">
                 <thead class="table-dark">
                   <tr>
-                    <th>MODEL</th>
-                    <th>STATUS</th>
-                    <th>PROGRESS</th>
-                    <th>SYNCED / TOTAL</th>
-                    <th>PERCENT</th>
-                    <th>LAST SYNC TIME</th>
-                    <th>LAST RUN TIME</th>
-                    <th>CURRENT JOB</th>
-                    <th>Action</th>
+                    <th>ĐỐI TƯỢNG</th>
+                    <th>TRẠNG THÁI</th>
+                    <th>TIẾN TRÌNH</th>
+                    <th>SỐ LƯỢNG / TỔNG SỐ</th>
+                    <th>PHẦN TRĂM</th>
+                    <th>LẦN ĐỒNG BỘ GẦN NHẤT</th>
+                    <th>LẦN ĐỒNG BỘ CUỐI</th>
+                    <th>PHIÊN ĐỒNG BỘ HIỆN TẠI</th>
+                    <th>HÀNH ĐỘNG</th>
                   </tr>
                 </thead>
                 <tbody>
