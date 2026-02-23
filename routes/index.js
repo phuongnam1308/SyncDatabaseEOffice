@@ -3,7 +3,7 @@ const router = express.Router();
 require('dotenv').config();
 const MigrationController = require('../controllers/MigrationOrganizationUnitsController');
 const MigrationUserGroupController = require('../controllers/MigrationUserGroupController');
-const MigrationUserController = require('../controllers/MigrationUserController');
+
 const MigrationUserDeleteController = require('../controllers/MigrationUserDeleteController');
 const MigrationUserInGroupController = require('../controllers/MigrationUserInGroupController');
 const MappingController = require('../controllers/MappingController');
@@ -118,11 +118,9 @@ router.get('/statistics/usergroup', MigrationUserGroupController.getStatistics);
 // Migration UserGroup (nên dùng POST thực tế, nhưng để test dùng GET)
 router.get('/migrate/usergroup', MigrationUserGroupController.migrateUserGroup);
 
-// Thống kê User
-router.get('/statistics/user', MigrationUserController.getStatistics);
 
-// Migration User (nên dùng POST thực tế, nhưng để test dùng GET)
-router.get('/migrate/user', MigrationUserController.migrateUser);
+
+
 
 // Thống kê UserDelete (thêm mới)
 router.get('/statistics/userdelete', MigrationUserDeleteController.getStatistics);
@@ -806,5 +804,8 @@ router.use('/outgoing', OutgoingRoutes);
 
 const AuditRoutes = require('../src/sync-audit/route');
 router.use('/audit', AuditRoutes);
+
+const UserRoutes = require('../src/sync-user/route');
+router.use('/user', UserRoutes);
 
 module.exports = router;

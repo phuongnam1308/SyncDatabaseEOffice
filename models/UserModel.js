@@ -715,6 +715,125 @@ class UserModel extends BaseModel {
       errorDetails: errors
     };
   }
+
+  async updateUserDepartments() {
+    try {
+      logger.info('Bắt đầu cập nhật organization_units và parent cho user...');
+      const query = `
+        SET NOCOUNT ON;
+
+        -- Create a temporary table to store the inserted organization unit IDs and names
+        CREATE TABLE #TempOrg (
+            id NVARCHAR(255) PRIMARY KEY,
+            name NVARCHAR(255)
+        );
+
+        -- Logic to insert new organization units from user departments
+        WITH DeptList AS (
+            SELECT DISTINCT Department
+            FROM ${this.newSchema}.${this.newTable}
+            WHERE Department IS NOT NULL AND Department <> ''
+        )
+        INSERT INTO ${this.newSchema}.organization_units
+        (
+            id, name, code, [type],
+            display_order, status,
+            created_at, updated_at,
+            table_backups
+        )
+        OUTPUT inserted.id, inserted.name
+        INTO #TempOrg(id, name)
+        SELECT 
+            NEWID(),
+            Department,
+            UPPER(REPLACE(Department,' ','')),
+            1,
+            0,
+            1,
+            GETDATE(),
+            GETDATE(),
+            'render2302'
+        FROM DeptList
+        WHERE NOT EXISTS (
+            SELECT 1 FROM ${this.newSchema}.organization_units ou WHERE ou.name = DeptList.Department
+        );
+
+        -- Update the parent field for users
+        UPDATE u
+        SET u.parent = t.id
+        FROM ${this.newSchema}.${this.newTable} u
+        JOIN #TempOrg t ON u.Department = t.name;
+
+        -- Drop the temporary table
+        DROP TABLE #TempOrg;
+      `;
+      
+      const request = this.newPool.request();
+      await request.query(query);
+      
+      logger.info('✓ Cập nhật organization_units và parent cho user thành công!');
+      return { success: true };
+    } catch (error) {
+      logger.error('❌ Lỗi khi cập nhật organization_units và parent cho user:', error);
+      throw error;
+    }
+  }
+
+  async updateUserFieldsAfterMigration() {
+    try {
+      logger.info('Bắt đầu cập nhật các trường bổ sung cho user (password, name, email...)...');
+      const query = `
+        UPDATE ${this.newSchema}.${this.newTable}
+        SET 
+            password = '$2b$10$Ohcqw9J1YStppJHeYdoD5.yWjnCm5Mt7MQxWoIMNc0LBwbFRW1DU2',
+
+            -- name: chỉ bỏ phần sau dấu "-"
+            name = LTRIM(RTRIM(
+                        LEFT(FullName,
+                             CASE 
+                                 WHEN CHARINDEX('-', FullName) > 0 
+                                 THEN CHARINDEX('-', FullName) - 1
+                                 ELSE LEN(FullName)
+                             END
+                        )
+                   )),
+
+            -- code_nd lấy từ username sau "\"
+            code_nd = CASE 
+                        WHEN CHARINDEX('\\', username) > 0 
+                        THEN RIGHT(username, LEN(username) - CHARINDEX('\\', username))
+                        ELSE username
+                      END,
+
+            -- email nếu NULL thì tạo từ code_nd
+            email_user = CASE 
+                           WHEN email_user IS NULL 
+                           THEN 
+                             (
+                               CASE 
+                                 WHEN CHARINDEX('\\', username) > 0 
+                                 THEN RIGHT(username, LEN(username) - CHARINDEX('\\', username))
+                                 ELSE username
+                               END
+                             ) + '@saigonnewport.com.vn'
+                           ELSE email_user
+                         END,
+
+            roles_by_process = N'[{"processKey":"PHUC_DAP_DV","name":"PHUC_DAP_DV","roles":[{"roleCode":"LANH_DAO_TCT","name":"LANH_DAO_TCT"}]},{"processKey":"KY_SO_HS_VBD","name":"KY_SO_HS_VBD","roles":[{"roleCode":"NGUOI_KY_PHE_DUYET","name":"NGUOI_KY_PHE_DUYET"}]},{"processKey":"SOANTHAO_PHATHANH_VBD","name":"SOANTHAO_PHATHANH_VBD","roles":[{"roleCode":"NGUOI_KY_NOI_DUNG","name":"NGUOI_KY_NOI_DUNG"}]}]'
+
+        WHERE table_backups = 'PersonalProfile';
+      `;
+      
+      const request = this.newPool.request();
+      await request.query(query);
+      
+      logger.info('✓ Cập nhật các trường bổ sung cho user thành công!');
+      return { success: true };
+    } catch (error) {
+      logger.error('❌ Lỗi khi cập nhật các trường bổ sung cho user:', error);
+      throw error;
+    }
+  }
 }
 
 module.exports = UserModel;

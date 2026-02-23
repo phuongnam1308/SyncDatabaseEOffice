@@ -394,6 +394,26 @@ class MigrationUserService {
         });
       }
 
+      if (totalInserted > 0) {
+        try {
+          logger.info('Bắt đầu quá trình cập nhật phòng ban cho user...');
+          await this.userModel.updateUserDepartments();
+          logger.info('✓ Cập nhật phòng ban cho user hoàn tất.');
+        } catch (deptError) {
+          logger.error('Lỗi nghiêm trọng trong quá trình cập nhật phòng ban:', deptError);
+        }
+
+        try {
+          logger.info('Bắt đầu quá trình cập nhật các trường bổ sung (password, name, email...)...');
+          await this.userModel.updateUserFieldsAfterMigration();
+          logger.info('✓ Cập nhật các trường bổ sung cho user hoàn tất.');
+        } catch (updateFieldsError) {
+          logger.error('Lỗi nghiêm trọng trong quá trình cập nhật các trường bổ sung:', updateFieldsError);
+        }
+      } else {
+        logger.info('Không có user nào được insert, bỏ qua các bước cập nhật bổ sung.');
+      }
+
       return {
         success: totalErrors === 0,
         total: totalRecords,

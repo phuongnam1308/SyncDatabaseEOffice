@@ -61,7 +61,7 @@ class MigrationUserController extends BaseController {
    * /migrate/user:
    *   get:
    *     summary: Thực hiện đồng bộ dữ liệu người dùng
-   *     description: Chạy migrate toàn bộ dữ liệu user từ hệ thống cũ sang hệ thống mới
+   *     description: "Chạy migrate toàn bộ dữ liệu user. Quy trình này bao gồm: 1. Di chuyển dữ liệu user. 2. Tạo các đơn vị tổ chức từ phòng ban và liên kết user. 3. Cập nhật các trường bổ sung như password, name, email cho user đã di chuyển."
    *     tags: [Dong bo nguoi dung]
    *     responses:
    *       200:
