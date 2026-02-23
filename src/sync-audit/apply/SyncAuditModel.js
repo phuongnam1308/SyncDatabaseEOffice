@@ -84,6 +84,8 @@ class SyncAuditModel extends BaseModel {
             SELECT id FROM camunda.${this.mainSchema}.${this.mainTable}
             WHERE document_id = @documentId 
               AND [time] = @time
+              AND receiver = @receiver
+              AND receiver_unit = @receiverUnit
               AND user_id = @userId
           `;
           const existing = await this.queryNewDbTx(
@@ -91,6 +93,8 @@ class SyncAuditModel extends BaseModel {
             { 
               documentId: record.document_id,
               time: record.time,
+              receiver: record.receiver,
+              receiverUnit: record.receiver_unit,
               userId: record.user_id
             },
             transaction
@@ -191,7 +195,7 @@ class SyncAuditModel extends BaseModel {
       details: record.details ?? null,
       origin_id: record.origin_id ?? null,
       created_by: record.created_by ?? null,
-      receiver: '6915f2387e39c2ba33cef79a' ?? null,
+      receiver: record.receiver ?? null,
       receiver_unit: record.receiver_unit ?? null,
       group_: record.group_ ?? null,
       roleProcess: record.roleProcess ?? null,

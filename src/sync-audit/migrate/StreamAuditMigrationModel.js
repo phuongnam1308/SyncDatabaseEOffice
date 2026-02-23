@@ -40,14 +40,21 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
           const audits = this.helper._expandMappedRecords(mapped);
 
           for (const audit of audits) {
-            const existed = await this._getExistingAuditSync(audit, transaction);
+            // FIX 1: try-catch riêng từng audit, tránh 1 audit lỗi làm skip toàn bộ raw record
+            try {
+              const existed = await this._getExistingAuditSync(audit, transaction);
 
-            if (existed) {
-              await this._update(audit, transaction);
-              updated++;
-            } else {
-              await this._insert(audit, transaction);
-              inserted++;
+              if (existed) {
+                await this._update(audit, transaction);
+                updated++;
+              } else {
+                await this._insert(audit, transaction);
+                inserted++;
+              }
+            } catch (auditErr) {
+              logger.warn(
+                `[AuditSync:${this.oldDbTable}] Skip audit id_van_ban=${audit?.id_van_ban} receiver=${audit?.receiver}: ${auditErr.message}`
+              );
             }
           }
         } catch (err) {
@@ -89,10 +96,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
       ];
       const mappedResults = [];
       for (const username of uniqueReceivers) {
-        const mappedUser = await this.helper.mapUserName(
-          username,
-          transaction
-        );
+        const mappedUser = await this.helper.mapUserName(username, transaction);
         if (mappedUser) {
           mappedResults.push(String(mappedUser));
         }
@@ -111,10 +115,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
       ];
       const mappedResults = [];
       for (const unitname of uniqueReceiverUnits) {
-        const mappedUnit = await this.helper.mapSenderUnitId(
-          unitname,
-          transaction
-        );
+        const mappedUnit = await this.helper.mapSenderUnitId(unitname, transaction);
         if (mappedUnit) {
           mappedResults.push(String(mappedUnit));
         }
@@ -131,7 +132,17 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
       receiver_unit: receiverUnitArray || [],
       display_name: userName,
       user_id: user_id,
+      roleProcess: actionParsed.roleProcess || null,
+      stage_status: actionParsed.stage_status || null,
     };
+  }
+
+  _normalizeArrayField(value) {
+    if (!value) return null;
+    if (Array.isArray(value)) {
+      return value.length ? value.join(',') : null;
+    }
+    return String(value).trim() || null;
   }
 
   async _getExistingAuditSync(audit, transaction) {
@@ -141,7 +152,10 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
 
     if (!audit?.id_van_ban) return null;
 
-    if (!audit.receiver && !audit.receiver_unit) return null;
+    const receiver = this._normalizeArrayField(audit.receiver);
+    const receiverUnit = this._normalizeArrayField(audit.receiver_unit);
+
+    if (!receiver && !receiverUnit) return null;
 
     let query = `
       SELECT TOP 1 id
@@ -149,18 +163,16 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
       WHERE id_van_ban = @idVanBan
     `;
 
-    const params = {
-      idVanBan: audit.id_van_ban,
-    };
+    const params = { idVanBan: audit.id_van_ban };
 
-    if (audit.receiver) {
+    if (receiver) {
       query += ` AND receiver = @receiver`;
-      params.receiver = audit.receiver;
+      params.receiver = receiver;
     }
 
-    if (audit.receiver_unit) {
+    if (receiverUnit) {
       query += ` AND receiver_unit = @receiverUnit`;
-      params.receiverUnit = audit.receiver_unit;
+      params.receiverUnit = receiverUnit;
     }
 
     const result = await this.queryNewDbTx(query, params, transaction);
@@ -223,15 +235,19 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
       return;
     }
 
+    // FIX 2: normalize array → string trước khi insert
+    const receiver = this._normalizeArrayField(data.receiver);
+    const receiverUnit = this._normalizeArrayField(data.receiver_unit);
+
     const query = `
       INSERT INTO camunda.dbo.audit_sync (
         document_id, time, display_name, user_id, created_by,
-        receiver, receiver_unit, action_code,
+        receiver, receiver_unit, action_code, roleProcess, stage_status,
         id_van_ban, created_at, updated_at, type_document, table_backup
       )
       VALUES (
         @documentId, @time, @displayName, @userId, @createdBy,
-        @receiver, @receiverUnit, @actionCode,
+        @receiver, @receiverUnit, @actionCode, @roleProcess, @stageStatus,
         @idVanBan, @time, GETDATE(), @typeDocument, @sourceTable
       )
     `;
@@ -242,11 +258,11 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
       displayName: data.display_name,
       userId: '6915f2387e39c2ba33cef79a',
       createdBy: data.user_id,
-
-      receiver: data.receiver,
-      receiverUnit: data.receiver_unit,
+      receiver,
+      receiverUnit,
       actionCode: data.action_code,
-
+      roleProcess: data.roleProcess || null,
+      stageStatus: data.stage_status || null,
       idVanBan: data.id_van_ban,
       typeDocument: data.document_id.type_document,
       sourceTable: this.oldDbTable,
@@ -254,25 +270,46 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
   }
 
   async _update(data, transaction) {
-    const query = `
-      UPDATE camunda.dbo.audit_sync
-      SET
-        time = @time, display_name = @displayName, user_id = @userId,
-        created_by = @createBy, action_code = @actionCode, receiver = @receiver, receiver_unit = @receiverUnit,
-        updated_at = GETDATE()
-      WHERE id_van_ban = @idVanBan
-    `;
+    // FIX 2: normalize array → string
+    const receiver = this._normalizeArrayField(data.receiver);
+    const receiverUnit = this._normalizeArrayField(data.receiver_unit);
 
-    await this.queryNewDbTx(query, {
+    // FIX 3: WHERE phải filter thêm receiver và receiver_unit
+    // tránh update tất cả rows có cùng id_van_ban
+    let whereClause = `WHERE id_van_ban = @idVanBan`;
+    const params = {
       time: data.time,
       displayName: data.display_name,
       userId: '6915f2387e39c2ba33cef79a',
       createBy: data.user_id,
-      actionCode: data.action_code,      
-      receiver: data.receiver,
-      receiverUnit: data.receiver_unit,
+      actionCode: data.action_code,
+      receiver,
+      receiverUnit,
+      roleProcess: data.roleProcess || null,
+      stageStatus: data.stage_status || null,
       idVanBan: data.id_van_ban,
-    }, transaction);
+    };
+
+    if (receiver) {
+      whereClause += ` AND receiver = @receiver`;
+    }
+
+    if (receiverUnit) {
+      whereClause += ` AND receiver_unit = @receiverUnit`;
+    }
+
+    const query = `
+      UPDATE camunda.dbo.audit_sync
+      SET
+        time = @time, display_name = @displayName, user_id = @userId,
+        created_by = @createBy, action_code = @actionCode,
+        receiver = @receiver, receiver_unit = @receiverUnit,
+        roleProcess = @roleProcess, stage_status = @stageStatus,
+        updated_at = GETDATE()
+      ${whereClause}
+    `;
+
+    await this.queryNewDbTx(query, params, transaction);
   }
 
   async beginTransaction() {
