@@ -809,7 +809,7 @@ const UserRoutes = require('../src/sync-user/route');
 router.use('/user', UserRoutes);
 
 module.exports = router;
-const SrcSyncManagerController = require('../src/SyncManagerController');
+const SrcSyncManagerController = require('../src/sync-manager/SyncManagerController');
 router.get('/sync-manager-src/dashboard', SrcSyncManagerController.getDashboard);
 router.post('/sync-manager-src/start', SrcSyncManagerController.startSync);
 router.post('/sync-manager-src/models/:modelName/start', SrcSyncManagerController.startModelSync);
