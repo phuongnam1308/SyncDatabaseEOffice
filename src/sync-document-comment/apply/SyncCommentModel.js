@@ -32,7 +32,7 @@ class SyncCommentModel extends BaseModel {
     const params = { batch };
     if (lastId !== null && lastId !== undefined) {
       query += ` AND id > @lastId`;
-      params.lastId = lastId;
+      params.lastId = String(lastId);
     }
     query += ` ORDER BY id ASC`;
     return this.queryNewDbTx(query, params);
