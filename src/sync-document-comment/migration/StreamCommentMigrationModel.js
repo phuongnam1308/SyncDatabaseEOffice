@@ -64,7 +64,7 @@ class StreamCommentMigrationModel extends BaseModel {
     const userId = await this.helper.mapUserName(record.Author, transaction);
     const userName = this.helper.extractDisplayName(record.Author);
 
-    const id = `${Date.now()}${Math.random().toString(36).substring(2, 10)}`;
+    const id = Date.now();
 
     return {
       id,

@@ -51,7 +51,7 @@ class SyncAuditModel extends BaseModel {
 
       if (lastId !== null && lastId !== undefined) {
         query += ` AND id > @lastId`;
-        params.lastId = lastId;
+        params.lastId = String(lastId);
       }
 
       query += ` ORDER BY id ASC`;
@@ -80,23 +80,28 @@ class SyncAuditModel extends BaseModel {
 
       for (const record of records) {
         try {
-          const existingQuery = `
-            SELECT id FROM camunda.${this.mainSchema}.${this.mainTable}
-            WHERE document_id = @documentId 
+          let existingQuery = `
+            SELECT TOP 1 id
+            FROM camunda.${this.mainSchema}.${this.mainTable}
+            WHERE document_id = @documentId
               AND [time] = @time
-              AND receiver = @receiver
-              AND receiver_unit = @receiverUnit
-              AND user_id = @userId
           `;
+
+          const params = {
+            documentId: record.document_id,
+            time: record.time,
+          };
+
+          if (record.user_id !== undefined && record.user_id !== null) {
+            existingQuery += ` AND user_id = @userId`;
+            params.userId = record.user_id;
+          } else {
+            existingQuery += ` AND user_id IS NULL`;
+          }
+
           const existing = await this.queryNewDbTx(
             existingQuery,
-            { 
-              documentId: record.document_id,
-              time: record.time,
-              receiver: record.receiver,
-              receiverUnit: record.receiver_unit,
-              userId: record.user_id
-            },
+            params,
             transaction
           );
 
