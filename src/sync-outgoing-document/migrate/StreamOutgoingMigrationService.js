@@ -15,7 +15,7 @@ const StreamOutgoingMigrationModel = require('./StreamOutgoingMigrationModel');
  * 4. Lặp lại cho đến khi hết data
  */
 class StreamOutgoingMigrationService {
-  
+
   constructor() {
     this.model = null;
     this.defaultBatchSize = 100;
@@ -46,7 +46,7 @@ class StreamOutgoingMigrationService {
       }
 
       const status = await this.model.getStatus();
-      
+
       return {
         totalInOldDb: status.totalInOldDb || 0,
         totalInNewDb: status.totalInNewDb || 0,
@@ -69,7 +69,7 @@ class StreamOutgoingMigrationService {
    */
   async migrate({ limit = 0, batch = this.defaultBatchSize, lastProcessedId = 0 } = {}) {
     const startTime = Date.now();
-    
+
     // Validate
     if (!this.model) {
       throw new Error('Service chưa được khởi tạo. Gọi initialize() trước.');
@@ -102,7 +102,7 @@ class StreamOutgoingMigrationService {
 
         logger.info('');
         logger.info(`┌─ BATCH ${batchCount} ─────────────────────────────────────`);
-        
+
         try {
           // === BƯỚC 1: LẤY DỮ LIỆU TỪ DB CŨ ===
           logger.info(`│  📥 Fetching ${batch} records from OLD DB...`);
@@ -127,10 +127,10 @@ class StreamOutgoingMigrationService {
           // === BƯỚC 3: INSERT/UPDATE VÀO DB MỚI ===
           logger.info(`│  💾 Inserting/Updating to NEW DB...`);
           const batchResult = await this.model.insertBatchToNewDb(mappedRecords);
-          
+
           const inserted = batchResult.inserted || 0;
           const updated = batchResult.updated || 0;
-          
+
           totalInserted += inserted;
           totalUpdated += updated;
           totalProcessed += oldRecords.length;
@@ -141,7 +141,7 @@ class StreamOutgoingMigrationService {
           }
 
           const batchDuration = ((Date.now() - batchStartTime) / 1000).toFixed(2);
-          
+
           logger.info(`│  ✓ Inserted: ${inserted}, Updated: ${updated}`);
           logger.info(`│  ⏱️  Batch duration: ${batchDuration}s`);
           logger.info(`└──────────────────────────────────────────────────`);
@@ -168,7 +168,7 @@ class StreamOutgoingMigrationService {
             message: batchError.message,
             stack: batchError.stack
           });
-          
+
           // Throw lỗi để dừng migration
           throw new Error(`Batch ${batchCount} failed: ${batchError.message}`);
         }
@@ -176,7 +176,7 @@ class StreamOutgoingMigrationService {
 
       // === TỔNG KẾT ===
       const totalDuration = ((Date.now() - startTime) / 1000).toFixed(2);
-      
+
       logger.info('');
       logger.info('='.repeat(80));
       logger.info('✅ MIGRATION HOÀN TẤT THÀNH CÔNG');
@@ -199,7 +199,7 @@ class StreamOutgoingMigrationService {
 
     } catch (error) {
       const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-      
+
       logger.error('');
       logger.error('='.repeat(80));
       logger.error('❌ MIGRATION FAILED');

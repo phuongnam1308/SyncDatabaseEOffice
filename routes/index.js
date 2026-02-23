@@ -807,7 +807,7 @@ router.use('/outgoing', OutgoingRoutes);
 const AuditRoutes = require('../src/sync-audit/route');
 router.use('/audit', AuditRoutes);
 
-const SrcSyncManagerController = require('../src/SyncManagerController');
+const SrcSyncManagerController = require('../src/sync-manager/SyncManagerController');
 router.get('/sync-manager-src/dashboard', SrcSyncManagerController.getDashboard);
 router.post('/sync-manager-src/start', SrcSyncManagerController.startSync);
 router.post('/sync-manager-src/models/:modelName/start', SrcSyncManagerController.startModelSync);

@@ -1,9 +1,9 @@
-const BaseController = require('../controllers/BaseController');
+const BaseController = require('../../controllers/BaseController');
 const SyncManagerService = require('./SyncManagerService');
-const SyncOutgoingModel = require('./sync-outgoing-document/apply/SyncOutgoingModel');
-
-const SyncAuditModel = require('./sync-audit/apply/SyncAuditModel');
-const logger = require('../utils/logger');
+const SyncOutgoingModel = require('../sync-outgoing-document/apply/SyncOutgoingModel');
+const SyncAuditModel = require('../sync-audit/apply/SyncAuditModel');
+const SyncHandlerModel = require('./SyncHandlerModel');
+const logger = require('../../utils/logger');
 
 class SyncManagerController extends BaseController {
   constructor() {
@@ -14,90 +14,24 @@ class SyncManagerController extends BaseController {
   async ensureInitialized() {
     if (this.initialized) return;
 
-    const outgoingModel = new SyncOutgoingModel();
-    await outgoingModel.initialize();
+    try {
+      // Register SYNC_OUTGOING_DOCUMENT
+      const outgoingModel = new SyncOutgoingModel();
+      await outgoingModel.initialize();
+      const outgoingHandler = new SyncHandlerModel(outgoingModel);
+      await outgoingHandler.registerHandlers(SyncManagerService, 'SYNC_OUTGOING_DOCUMENT');
 
-    SyncManagerService.register(
-      'SYNC_OUTGOING_DOCUMENT',
-      async (lastTime, limit, _offset, cursor = {}) => {
-        const lastSyncId = Number(cursor.lastSyncId || 0);
-        const query = `
-          SELECT TOP (@limit) *
-          FROM (
-            SELECT
-              *,
-              COALESCE(updated_at, created_at, [Modified], [Created]) AS __sync_time,
-              ISNULL(CAST(id AS BIGINT), 0) AS __sync_id
-            FROM camunda.${outgoingModel.syncSchema}.${outgoingModel.syncTable}
-          ) src
-          WHERE (
-            src.__sync_time > @lastTime
-            OR (src.__sync_time = @lastTime AND src.__sync_id > @lastSyncId)
-          )
-          ORDER BY src.__sync_time ASC, src.__sync_id ASC
-        `;
+      // Register SYNC_AUDIT
+      const auditModel = new SyncAuditModel();
+      await auditModel.initialize();
+      const auditHandler = new SyncHandlerModel(auditModel);
+      await auditHandler.registerHandlers(SyncManagerService, 'SYNC_AUDIT');
 
-        const records = await outgoingModel.queryNewDbTx(query, {
-          lastTime,
-          lastSyncId,
-          limit
-        });
-
-        return records.map((record) => ({
-          ...record,
-          updated_at: record.updated_at || record.__sync_time,
-          __sync_id: record.__sync_id
-        }));
-      },
-      async (record) => {
-        await outgoingModel.insertBatchToMain([record]);
-      }
-    );
-
-    logger.info('[SyncManagerController] Registered SYNC_OUTGOING_DOCUMENT');
-
-    const auditModel = new SyncAuditModel();
-    await auditModel.initialize();
-
-    SyncManagerService.register(
-      'SYNC_AUDIT',
-      async (lastTime, limit, _offset, cursor = {}) => {
-        const lastSyncId = Number(cursor.lastSyncId || 0);
-        const query = `
-          SELECT TOP (@limit) *
-          FROM (
-            SELECT
-              *,
-              COALESCE(updated_at, created_at, [Modified], [Created]) AS __sync_time,
-              ISNULL(CAST(id AS BIGINT), 0) AS __sync_id
-            FROM camunda.${auditModel.syncSchema}.${auditModel.syncTable}
-          ) src
-          WHERE (
-            src.__sync_time > @lastTime
-            OR (src.__sync_time = @lastTime AND src.__sync_id > @lastSyncId)
-          )
-          ORDER BY src.__sync_time ASC, src.__sync_id ASC
-        `;
-
-        const records = await auditModel.queryNewDbTx(query, {
-          lastTime,
-          lastSyncId,
-          limit
-        });
-
-        return records.map((record) => ({
-          ...record,
-          updated_at: record.updated_at || record.__sync_time,
-          __sync_id: record.__sync_id
-        }));
-      },
-      async (record) => {
-        await auditModel.insertBatchToMain([record]);
-      }
-    );
-
-    logger.info('[SyncManagerController] Registered SYNC_AUDIT');
-    this.initialized = true;
+      this.initialized = true;
+    } catch (error) {
+      logger.error('[SyncManagerController] Failed to initialize:', error);
+      throw error;
+    }
   }
 
   /**
@@ -155,7 +89,7 @@ class SyncManagerController extends BaseController {
    */
   getDashboard = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
-    const data = SyncManagerService.getDashboardData();
+    const data = await SyncManagerService.getDashboardData();
 
     const html = `
       <!DOCTYPE html>
@@ -168,7 +102,12 @@ class SyncManagerController extends BaseController {
         <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
         <style>
           .status-running { color: #0d6efd; font-weight: bold; }
+          .status-resuming { color: #0d6efd; font-weight: bold; }
+          .status-pause_requested { color: #fd7e14; font-weight: bold; }
+          .status-paused { color: #fd7e14; font-weight: bold; }
           .status-completed { color: #198754; font-weight: bold; }
+          .status-failed { color: #dc3545; font-weight: bold; }
+          .status-crashed { color: #dc3545; font-weight: bold; }
           .status-error { color: #dc3545; font-weight: bold; }
           .status-idle { color: #6c757d; }
         </style>
@@ -179,7 +118,7 @@ class SyncManagerController extends BaseController {
             <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
               <h3 class="mb-0">Sync Manager Dashboard</h3>
               <span class="badge bg-light text-dark">
-                ${data.isRunning ? 'DANG CHAY...' : 'DANG CHO'}
+                ${data.isRunning ? 'SYNCING...' : 'WAITING...'}
               </span>
             </div>
             <div class="card-body">
@@ -197,7 +136,9 @@ class SyncManagerController extends BaseController {
                   <tr>
                     <th>MODEL</th>
                     <th>STATUS</th>
-                    <th>TOTAL SYNCHRONIZED</th>
+                    <th>PROGRESS</th>
+                    <th>SYNCED / TOTAL</th>
+                    <th>PERCENT</th>
                     <th>LAST SYNC TIME</th>
                     <th>LAST RUN TIME</th>
                     <th>CURRENT JOB</th>
@@ -207,31 +148,64 @@ class SyncManagerController extends BaseController {
                 <tbody>
                   ${Object.entries(data.entities).map(([name, info]) => `
                     ${(() => {
-                      const currentJob = info.activeJobId ? data.jobs[info.activeJobId] : null;
-                      const canPause = currentJob && ['RUNNING', 'PAUSE_REQUESTED', 'RESUMING'].includes(currentJob.status);
-                      const canResume = currentJob && currentJob.status === 'PAUSED';
-                      const canStart = !['RUNNING', 'PAUSE_REQUESTED', 'RESUMING'].includes(info.status);
-                      const actionHtml = `
+        const jobs = Object.values(data.jobs || {})
+          .filter((job) => job.modelName === name)
+          .sort((a, b) => {
+            const ta = new Date(a.updatedAt || a.startedAt || 0).getTime();
+            const tb = new Date(b.updatedAt || b.startedAt || 0).getTime();
+            return tb - ta;
+          });
+
+        const runningOrPausedJob = jobs.find((job) =>
+          ['RUNNING', 'PAUSE_REQUESTED', 'RESUMING', 'PAUSED'].includes(job.status)
+        );
+
+        const currentJob = (info.activeJobId && data.jobs && data.jobs[info.activeJobId])
+          ? data.jobs[info.activeJobId]
+          : (runningOrPausedJob || jobs[0] || null);
+
+        const modelStatus = (info.status || 'IDLE').toUpperCase();
+        const jobStatus = currentJob ? String(currentJob.status || '').toUpperCase() : null;
+
+        const canStart = ['IDLE', 'COMPLETED', 'FAILED', 'CRASHED'].includes(modelStatus);
+        const canPause = jobStatus === 'RUNNING' || jobStatus === 'RESUMING';
+        const canResume = modelStatus === 'PAUSED' || jobStatus === 'PAUSED';
+        const resumeJobId = canResume
+          ? ((currentJob && currentJob.jobId) || info.activeJobId || '')
+          : '';
+
+        const actionHtml = `
                         <button class="btn btn-sm btn-primary me-1" onclick="startModel('${name}', false)" ${canStart ? '' : 'disabled'}>Start</button>
                         <button class="btn btn-sm btn-outline-danger me-1" onclick="startModel('${name}', true)" ${canStart ? '' : 'disabled'}>Reset</button>
                         <button class="btn btn-sm btn-warning me-1" onclick="pauseJob('${currentJob ? currentJob.jobId : ''}')" ${canPause ? '' : 'disabled'}>Pause</button>
-                        <button class="btn btn-sm btn-success" onclick="resumeJob('${currentJob ? currentJob.jobId : ''}')" ${canResume ? '' : 'disabled'}>Resume</button>
+                        <button class="btn btn-sm btn-success" onclick="resumeJob('${resumeJobId}')" ${canResume ? '' : 'disabled'}>Resume</button>
                       `;
-                      const jobInfo = currentJob
-                        ? `${currentJob.jobId}<br/><small>${currentJob.status}</small>`
-                        : '-';
-                      return `
+        const jobInfo = currentJob
+          ? `${currentJob.jobId}<br/><small>${currentJob.status}</small>`
+          : '-';
+
+        const progressBar = info.currentProgressPercent != null
+          ? `<div class="progress" style="height: 20px;"><div class="progress-bar" role="progressbar" style="width: ${info.currentProgressPercent}%;" aria-valuenow="${info.currentProgressPercent}" aria-valuemin="0" aria-valuemax="100">${info.currentProgressPercent}%</div></div>`
+          : '-';
+
+        const syncedTotal = info.currentTotalToSync != null
+          ? `${(info.currentSynced || 0).toLocaleString()} / ${info.currentTotalToSync.toLocaleString()}`
+          : '-';
+
+        return `
                     <tr>
                       <td>${name}</td>
                       <td class="status-${info.status.toLowerCase()}">${info.status}</td>
-                      <td>${info.totalSynced.toLocaleString()}</td>
-                      <td>${info.lastSyncTime || 'Chua co'}</td>
+                      <td>${progressBar}</td>
+                      <td><strong>${syncedTotal}</strong></td>
+                      <td>${info.currentProgressPercent != null ? (info.currentProgressPercent + '%') : '-'}</td>
+                      <td>${info.lastSyncTime ? new Date(info.lastSyncTime).toLocaleString('vi-VN') : '-'}</td>
                       <td>${info.lastRun ? new Date(info.lastRun).toLocaleString('vi-VN') : '-'}</td>
                       <td>${jobInfo}</td>
                       <td>${actionHtml}</td>
                     </tr>
                   `;
-                    })()}
+      })()}
                   `).join('')}
                 </tbody>
               </table>
