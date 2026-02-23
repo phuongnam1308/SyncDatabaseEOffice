@@ -91,13 +91,26 @@ class SyncManagerController extends BaseController {
     await this.ensureInitialized();
     const data = await SyncManagerService.getDashboardData();
 
+    const statusTranslations = {
+      RUNNING: 'Đang chạy',
+      PAUSE_REQUESTED: 'Yêu cầu dừng',
+      RESUMING: 'Đang tiếp tục',
+      PAUSED: 'Đã dừng',
+      COMPLETED: 'Hoàn thành',
+      FAILED: 'Thất bại',
+      CRASHED: 'Bị lỗi',
+      IDLE: 'Chờ',
+      ERROR: 'Lỗi',
+    };
+    const translateStatus = (status) => (status ? statusTranslations[status.toUpperCase()] : status) || status;
+
     const html = `
       <!DOCTYPE html>
       <html lang="vi">
       <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Migration Dashboard</title>
+        <title>Phần mềm đồng bộ dữ liệu</title>
         <meta http-equiv="refresh" content="5">
         <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
         <style>
@@ -181,7 +194,7 @@ class SyncManagerController extends BaseController {
                         <button class="btn btn-sm btn-success" onclick="resumeJob('${resumeJobId}')" ${canResume ? '' : 'disabled'}>Tiếp tục</button>
                       `;
         const jobInfo = currentJob
-          ? `${currentJob.jobId}<br/><small>${currentJob.status}</small>`
+          ? `${currentJob.jobId}<br/><small>${translateStatus(currentJob.status)}</small>`
           : '-';
 
         const progressBar = info.currentProgressPercent != null
@@ -195,7 +208,7 @@ class SyncManagerController extends BaseController {
         return `
                     <tr>
                       <td>${name}</td>
-                      <td class="status-${info.status.toLowerCase()}">${info.status}</td>
+                      <td class="status-${info.status.toLowerCase()}">${translateStatus(info.status)}</td>
                       <td>${progressBar}</td>
                       <td><strong>${syncedTotal}</strong></td>
                       <td>${info.currentProgressPercent != null ? (info.currentProgressPercent + '%') : '-'}</td>
