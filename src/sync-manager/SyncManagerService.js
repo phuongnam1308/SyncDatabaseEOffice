@@ -1,8 +1,8 @@
 const fs = require('fs');
 const path = require('path');
-const logger = require('../utils/logger');
+const logger = require('../../utils/logger');
 
-const STATE_FILE = path.join(__dirname, '../logs/sync_state_src.json');
+const STATE_FILE = path.join(__dirname, '../../logs/sync_state_src.json');
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 const RUNNING_STATUSES = new Set(['RUNNING', 'PAUSE_REQUESTED', 'RESUMING']);
 const INTERRUPTED_STATUSES = new Set(['RUNNING', 'PAUSE_REQUESTED', 'RESUMING']);
@@ -10,7 +10,7 @@ const INTERRUPTED_STATUSES = new Set(['RUNNING', 'PAUSE_REQUESTED', 'RESUMING'])
 class SyncManagerService {
   constructor() {
     this.registry = new Map();
-    this.batchSize = parseInt(process.env.BATCH_SIZE || '100', 10);
+    this.batchSize = parseInt(process.env.BATCH_SIZE || '10', 10);
     this.activeJobPromises = new Map();
     this.state = this.normalizeState(this.loadRawState());
     this.recoverInterruptedJobs();
@@ -173,9 +173,14 @@ class SyncManagerService {
    * @param {string} name
    * @param {(lastUpdatedAt: string, limit: number, offset: number, cursor?: Object) => Promise<Array>} fetchFn
    * @param {(record: any, context?: Object) => Promise<void>} processFn
+   * @param {{ countFn?: (lastUpdatedAt: string, lastSyncId: number) => Promise<number> }} [options]
    */
-  register(name, fetchFn, processFn) {
-    this.registry.set(name, { fetchFn, processFn });
+  register(name, fetchFn, processFn, options = {}) {
+    this.registry.set(name, {
+      fetchFn,
+      processFn,
+      countFn: typeof options.countFn === 'function' ? options.countFn : null
+    });
     this.getModelState(name);
     this.saveState();
   }
@@ -205,6 +210,7 @@ class SyncManagerService {
       batchSize: parseInt(options.batchSize || this.batchSize, 10),
       lastSyncTime: modelState.lastSyncTime || DEFAULT_SYNC_TIME,
       lastSyncId: modelState.lastSyncId || 0,
+      totalToSync: null,
       totalProcessed: 0,
       totalSuccess: 0,
       totalErrors: 0,
@@ -222,6 +228,7 @@ class SyncManagerService {
       endedAt: job.endedAt,
       lastSyncTime: job.lastSyncTime,
       lastSyncId: job.lastSyncId,
+      totalToSync: job.totalToSync,
       totalProcessed: 0,
       totalSuccess: 0,
       totalErrors: 0,
@@ -248,6 +255,7 @@ class SyncManagerService {
       heartbeatAt: job.heartbeatAt,
       lastSyncTime: job.lastSyncTime,
       lastSyncId: job.lastSyncId,
+      totalToSync: job.totalToSync,
       totalProcessed: job.totalProcessed,
       totalSuccess: job.totalSuccess,
       totalErrors: job.totalErrors,
@@ -389,6 +397,16 @@ class SyncManagerService {
     return this.state.jobs[jobId] || null;
   }
 
+  findLatestJobByModel(modelName) {
+    return Object.values(this.state.jobs)
+      .filter((job) => job.modelName === modelName)
+      .sort((a, b) => {
+        const ta = new Date(a.updatedAt || a.startedAt || 0).getTime();
+        const tb = new Date(b.updatedAt || b.startedAt || 0).getTime();
+        return tb - ta;
+      })[0] || null;
+  }
+
   async runJob(jobId) {
     const job = this.state.jobs[jobId];
     if (!job) return;
@@ -410,6 +428,17 @@ class SyncManagerService {
     let cursorId = Number(job.lastSyncId || modelState.lastSyncId || 0);
 
     try {
+      if (job.totalToSync == null && typeof handlers.countFn === 'function') {
+        try {
+          job.totalToSync = await handlers.countFn(cursorTime, cursorId);
+        } catch (countError) {
+          logger.error(`[SyncManagerService][${job.modelName}] Count remaining failed:`, countError);
+          job.totalToSync = null;
+        }
+        this.updateSyncLogFromJob(job);
+        this.saveState();
+      }
+
       while (true) {
         if (job.pauseRequested) {
           this.markJobPaused(job);
@@ -437,6 +466,10 @@ class SyncManagerService {
         let batchSuccess = 0;
 
         for (const record of records) {
+          if (job.pauseRequested) {
+            break;
+          }
+
           try {
             await handlers.processFn(record, {
               modelName: job.modelName,
@@ -546,10 +579,36 @@ class SyncManagerService {
     this.saveState();
   }
 
-  getDashboardData() {
+  async getDashboardData() {
+    const entities = {};
+
+    for (const [modelName, modelState] of Object.entries(this.state.models)) {
+      // Always prioritize activeJob if exists
+      const currentJob = modelState.activeJobId
+        ? this.state.jobs[modelState.activeJobId]
+        : this.findLatestJobByModel(modelName);
+
+      const jobSynced = currentJob ? Number(currentJob.totalSuccess || 0) : 0;
+      const jobNeeded = currentJob && Number.isFinite(Number(currentJob.totalToSync))
+        ? Number(currentJob.totalToSync)
+        : null;
+      const progressPercent = jobNeeded && jobNeeded > 0
+        ? Math.min(100, Math.round((jobSynced / jobNeeded) * 100))
+        : null;
+
+      entities[modelName] = {
+        ...modelState,
+        currentJobId: currentJob ? currentJob.jobId : null,
+        currentJobStatus: currentJob ? currentJob.status : null,
+        currentSynced: jobSynced,
+        currentTotalToSync: jobNeeded,
+        currentProgressPercent: progressPercent
+      };
+    }
+
     return {
       isRunning: this.isRunning,
-      entities: this.state.models,
+      entities,
       jobs: this.state.jobs,
       syncLogs: this.state.syncLogs,
       registeredCount: this.registry.size
