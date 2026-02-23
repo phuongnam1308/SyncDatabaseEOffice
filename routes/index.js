@@ -815,4 +815,7 @@ router.post('/sync-manager-src/jobs/:jobId/pause', SrcSyncManagerController.paus
 router.post('/sync-manager-src/jobs/:jobId/resume', SrcSyncManagerController.resumeJobSync);
 router.get('/sync-manager-src/jobs/:jobId', SrcSyncManagerController.getJobSyncStatus);
 
+const CommentRoutes = require('../src/sync-document-comment/route');
+router.use('/document-comments', CommentRoutes);
+
 module.exports = router;

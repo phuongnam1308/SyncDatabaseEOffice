@@ -1395,6 +1395,22 @@
         ]
       }
     },
+    "/document-comments/sync": {
+      "post": {
+        "summary": "Sync comments từ document_comments_sync sang document_comments",
+        "tags": [
+          "Document Comments"
+        ]
+      }
+    },
+    "/document-comments/migrate": {
+      "post": {
+        "summary": "Migrate comments từ các bảng nguồn sang document_comments_sync",
+        "tags": [
+          "Document Comments"
+        ]
+      }
+    },
     "/sync/task-users2-type": {
       "get": {
         "summary": "Đồng bộ trạng thái xử lý công việc ở bảng trung gian",
