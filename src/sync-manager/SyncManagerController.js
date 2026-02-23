@@ -19,13 +19,13 @@ class SyncManagerController extends BaseController {
       const outgoingModel = new SyncOutgoingModel();
       await outgoingModel.initialize();
       const outgoingHandler = new SyncHandlerModel(outgoingModel);
-      await outgoingHandler.registerHandlers(SyncManagerService, 'SYNC_OUTGOING_DOCUMENT');
+      await outgoingHandler.registerHandlers(SyncManagerService, 'Đồng bộ văn bản đi');
 
       // Register SYNC_AUDIT
       const auditModel = new SyncAuditModel();
       await auditModel.initialize();
       const auditHandler = new SyncHandlerModel(auditModel);
-      await auditHandler.registerHandlers(SyncManagerService, 'SYNC_AUDIT');
+      await auditHandler.registerHandlers(SyncManagerService, 'Đồng bộ nhật kí thao tác văn bản');
 
       this.initialized = true;
     } catch (error) {
@@ -44,7 +44,7 @@ class SyncManagerController extends BaseController {
 
     SyncManagerService.start(reset === true || reset === 'true');
 
-    return this.success(res, { message: 'Da kich hoat tien trinh dong bo background' });
+    return this.success(res, { message: 'Đã kích hoạt tiến trình đồng bộ' });
   });
 
   startModelSync = this.asyncHandler(async (req, res) => {
@@ -57,21 +57,21 @@ class SyncManagerController extends BaseController {
       batchSize
     });
 
-    return this.success(res, result, 'Da kich hoat dong bo model');
+    return this.success(res, result, 'Đã kích hoạt đồng bộ đối tượng');
   });
 
   pauseJobSync = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
     const { jobId } = req.params;
     const result = SyncManagerService.pauseJob(jobId);
-    return this.success(res, result, 'Da gui yeu cau pause');
+    return this.success(res, result, 'Đồng chí đã yêu cầu dừng lại tiến trình');
   });
 
   resumeJobSync = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
     const { jobId } = req.params;
     const result = SyncManagerService.resumeJob(jobId);
-    return this.success(res, result, 'Da tiep tuc tien trinh pause');
+    return this.success(res, result, 'Đã tiếp tục tiến trình phần mềm');
   });
 
   getJobSyncStatus = this.asyncHandler(async (req, res) => {
@@ -79,7 +79,7 @@ class SyncManagerController extends BaseController {
     const { jobId } = req.params;
     const job = SyncManagerService.getJob(jobId);
     if (!job) {
-      return this.notFound(res, `Khong tim thay job ${jobId}`);
+      return this.notFound(res, `Không tìm thấy bản ghi với số mã :  ${jobId}`);
     }
     return this.success(res, job);
   });
@@ -116,18 +116,18 @@ class SyncManagerController extends BaseController {
         <div class="container py-5">
           <div class="card shadow">
             <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
-              <h3 class="mb-0">Sync Manager Dashboard</h3>
+              <h3 class="mb-0">BẢNG ĐIỀU KHIỂN ĐỒNG BỘ</h3>
               <span class="badge bg-light text-dark">
-                ${data.isRunning ? 'SYNCING...' : 'WAITING...'}
+                ${data.isRunning ? 'Đang đồng bộ...' : 'Sẵn sàng'}
               </span>
             </div>
             <div class="card-body">
               <div class="mb-4">
                 <button onclick="triggerSync(false)" class="btn btn-success me-2" ${data.isRunning ? 'disabled' : ''}>
-                  Chay tat ca model (Incremental)
+                  Chạy tất cả các đối tượng
                 </button>
                 <button onclick="triggerSync(true)" class="btn btn-danger" ${data.isRunning ? 'disabled' : ''}>
-                  Chay tat ca model (Reset)
+                  Chạy lại toàn bộ tất cả đối tượng
                 </button>
               </div>
 
@@ -175,10 +175,10 @@ class SyncManagerController extends BaseController {
           : '';
 
         const actionHtml = `
-                        <button class="btn btn-sm btn-primary me-1" onclick="startModel('${name}', false)" ${canStart ? '' : 'disabled'}>Start</button>
-                        <button class="btn btn-sm btn-outline-danger me-1" onclick="startModel('${name}', true)" ${canStart ? '' : 'disabled'}>Reset</button>
-                        <button class="btn btn-sm btn-warning me-1" onclick="pauseJob('${currentJob ? currentJob.jobId : ''}')" ${canPause ? '' : 'disabled'}>Pause</button>
-                        <button class="btn btn-sm btn-success" onclick="resumeJob('${resumeJobId}')" ${canResume ? '' : 'disabled'}>Resume</button>
+                        <button class="btn btn-sm btn-primary me-1" onclick="startModel('${name}', false)" ${canStart ? '' : 'disabled'}>Chạy đồng bộ</button>
+                        <button class="btn btn-sm btn-outline-danger me-1" onclick="startModel('${name}', true)" ${canStart ? '' : 'disabled'}>Chạy lại </button>
+                        <button class="btn btn-sm btn-warning me-1" onclick="pauseJob('${currentJob ? currentJob.jobId : ''}')" ${canPause ? '' : 'disabled'}>Dừng lại</button>
+                        <button class="btn btn-sm btn-success" onclick="resumeJob('${resumeJobId}')" ${canResume ? '' : 'disabled'}>Tiếp tục</button>
                       `;
         const jobInfo = currentJob
           ? `${currentJob.jobId}<br/><small>${currentJob.status}</small>`
@@ -210,17 +210,17 @@ class SyncManagerController extends BaseController {
                 </tbody>
               </table>
 
-              ${Object.keys(data.entities).length === 0 ? '<p class="text-center text-muted">Chua co doi tuong nao duoc dang ky.</p>' : ''}
+              ${Object.keys(data.entities).length === 0 ? '<p class="text-center text-muted">Chưa có đối tượng nào được đăng kí đồng bộ liên hệ quản trị viên</p>' : ''}
             </div>
             <div class="card-footer text-muted">
-              Tu dong refresh moi 5 giay.
+              Tự động làm mởi mỗi 5 giây.
             </div>
           </div>
         </div>
 
         <script>
           async function triggerSync(reset) {
-            if(!confirm(reset ? 'Ban chac chan muon chay lai tu dau?' : 'Bat dau dong bo tiep theo?')) return;
+            if(!confirm(reset ? 'Ban chac chan muon chay lai tu dau?' : 'Bắt đầu đồng bộ đối tượng tiếp theo?')) return;
 
             try {
               const res = await fetch('/api/sync-manager-src/start', {
@@ -229,7 +229,7 @@ class SyncManagerController extends BaseController {
                 body: JSON.stringify({ reset })
               });
               const json = await res.json();
-              alert(json.message || 'Da gui lenh');
+              alert(json.message || 'Đồng chí đã gửi lệnh');
               window.location.reload();
             } catch (e) {
               alert('Loi: ' + e.message);
@@ -244,7 +244,7 @@ class SyncManagerController extends BaseController {
                 body: JSON.stringify({ reset })
               });
               const json = await res.json();
-              alert(json.message || 'Da gui lenh');
+              alert(json.message || 'Đồng chí đã gửi lệnh');
               window.location.reload();
             } catch (e) {
               alert('Loi: ' + e.message);
@@ -259,7 +259,7 @@ class SyncManagerController extends BaseController {
                 headers: {'Content-Type': 'application/json'}
               });
               const json = await res.json();
-              alert(json.message || 'Da gui lenh pause');
+              alert(json.message || 'Đồng chí đã yêu cầu dừng lại');
               window.location.reload();
             } catch (e) {
               alert('Loi: ' + e.message);
@@ -274,7 +274,7 @@ class SyncManagerController extends BaseController {
                 headers: {'Content-Type': 'application/json'}
               });
               const json = await res.json();
-              alert(json.message || 'Da gui lenh resume');
+              alert(json.message || 'Đông chí đã yêu cầu tiếp tục');
               window.location.reload();
             } catch (e) {
               alert('Loi: ' + e.message);
