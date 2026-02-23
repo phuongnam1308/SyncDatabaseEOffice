@@ -1,6 +1,8 @@
 const BaseController = require('../controllers/BaseController');
 const SyncManagerService = require('./SyncManagerService');
 const SyncOutgoingModel = require('./sync-outgoing-document/apply/SyncOutgoingModel');
+
+const SyncAuditModel = require('./sync-audit/apply/SyncAuditModel');
 const logger = require('../utils/logger');
 
 class SyncManagerController extends BaseController {
@@ -17,29 +19,34 @@ class SyncManagerController extends BaseController {
 
     SyncManagerService.register(
       'SYNC_OUTGOING_DOCUMENT',
-      async (lastTime, limit, offset) => {
+      async (lastTime, limit, _offset, cursor = {}) => {
+        const lastSyncId = Number(cursor.lastSyncId || 0);
         const query = `
-          SELECT *
+          SELECT TOP (@limit) *
           FROM (
             SELECT
               *,
-              COALESCE(updated_at, created_at, [Modified], [Created]) AS __sync_time
+              COALESCE(updated_at, created_at, [Modified], [Created]) AS __sync_time,
+              ISNULL(CAST(id AS BIGINT), 0) AS __sync_id
             FROM camunda.${outgoingModel.syncSchema}.${outgoingModel.syncTable}
           ) src
-          WHERE src.__sync_time > @lastTime
-          ORDER BY src.__sync_time ASC, src.id ASC
-          OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY
+          WHERE (
+            src.__sync_time > @lastTime
+            OR (src.__sync_time = @lastTime AND src.__sync_id > @lastSyncId)
+          )
+          ORDER BY src.__sync_time ASC, src.__sync_id ASC
         `;
 
         const records = await outgoingModel.queryNewDbTx(query, {
           lastTime,
-          offset,
+          lastSyncId,
           limit
         });
 
         return records.map((record) => ({
           ...record,
-          updated_at: record.updated_at || record.__sync_time
+          updated_at: record.updated_at || record.__sync_time,
+          __sync_id: record.__sync_id
         }));
       },
       async (record) => {
@@ -48,6 +55,48 @@ class SyncManagerController extends BaseController {
     );
 
     logger.info('[SyncManagerController] Registered SYNC_OUTGOING_DOCUMENT');
+
+    const auditModel = new SyncAuditModel();
+    await auditModel.initialize();
+
+    SyncManagerService.register(
+      'SYNC_AUDIT',
+      async (lastTime, limit, _offset, cursor = {}) => {
+        const lastSyncId = Number(cursor.lastSyncId || 0);
+        const query = `
+          SELECT TOP (@limit) *
+          FROM (
+            SELECT
+              *,
+              COALESCE(updated_at, created_at, [Modified], [Created]) AS __sync_time,
+              ISNULL(CAST(id AS BIGINT), 0) AS __sync_id
+            FROM camunda.${auditModel.syncSchema}.${auditModel.syncTable}
+          ) src
+          WHERE (
+            src.__sync_time > @lastTime
+            OR (src.__sync_time = @lastTime AND src.__sync_id > @lastSyncId)
+          )
+          ORDER BY src.__sync_time ASC, src.__sync_id ASC
+        `;
+
+        const records = await auditModel.queryNewDbTx(query, {
+          lastTime,
+          lastSyncId,
+          limit
+        });
+
+        return records.map((record) => ({
+          ...record,
+          updated_at: record.updated_at || record.__sync_time,
+          __sync_id: record.__sync_id
+        }));
+      },
+      async (record) => {
+        await auditModel.insertBatchToMain([record]);
+      }
+    );
+
+    logger.info('[SyncManagerController] Registered SYNC_AUDIT');
     this.initialized = true;
   }
 
@@ -62,6 +111,43 @@ class SyncManagerController extends BaseController {
     SyncManagerService.start(reset === true || reset === 'true');
 
     return this.success(res, { message: 'Da kich hoat tien trinh dong bo background' });
+  });
+
+  startModelSync = this.asyncHandler(async (req, res) => {
+    await this.ensureInitialized();
+    const { modelName } = req.params;
+    const { reset = false, batchSize } = req.body || {};
+
+    const result = SyncManagerService.startModel(modelName, {
+      reset: reset === true || reset === 'true',
+      batchSize
+    });
+
+    return this.success(res, result, 'Da kich hoat dong bo model');
+  });
+
+  pauseJobSync = this.asyncHandler(async (req, res) => {
+    await this.ensureInitialized();
+    const { jobId } = req.params;
+    const result = SyncManagerService.pauseJob(jobId);
+    return this.success(res, result, 'Da gui yeu cau pause');
+  });
+
+  resumeJobSync = this.asyncHandler(async (req, res) => {
+    await this.ensureInitialized();
+    const { jobId } = req.params;
+    const result = SyncManagerService.resumeJob(jobId);
+    return this.success(res, result, 'Da tiep tuc tien trinh pause');
+  });
+
+  getJobSyncStatus = this.asyncHandler(async (req, res) => {
+    await this.ensureInitialized();
+    const { jobId } = req.params;
+    const job = SyncManagerService.getJob(jobId);
+    if (!job) {
+      return this.notFound(res, `Khong tim thay job ${jobId}`);
+    }
+    return this.success(res, job);
   });
 
   /**
@@ -99,32 +185,53 @@ class SyncManagerController extends BaseController {
             <div class="card-body">
               <div class="mb-4">
                 <button onclick="triggerSync(false)" class="btn btn-success me-2" ${data.isRunning ? 'disabled' : ''}>
-                  Tiep tuc dong bo (Incremental)
+                  Chay tat ca model (Incremental)
                 </button>
                 <button onclick="triggerSync(true)" class="btn btn-danger" ${data.isRunning ? 'disabled' : ''}>
-                  Dong bo lai tu dau (Reset)
+                  Chay tat ca model (Reset)
                 </button>
               </div>
 
               <table class="table table-hover table-bordered">
                 <thead class="table-dark">
                   <tr>
-                    <th>Doi tuong</th>
-                    <th>Trang thai</th>
-                    <th>Tong da sync</th>
-                    <th>Moc thoi gian</th>
-                    <th>Lan chay cuoi</th>
+                    <th>MODEL</th>
+                    <th>STATUS</th>
+                    <th>TOTAL SYNCHRONIZED</th>
+                    <th>LAST SYNC TIME</th>
+                    <th>LAST RUN TIME</th>
+                    <th>CURRENT JOB</th>
+                    <th>Action</th>
                   </tr>
                 </thead>
                 <tbody>
                   ${Object.entries(data.entities).map(([name, info]) => `
+                    ${(() => {
+                      const currentJob = info.activeJobId ? data.jobs[info.activeJobId] : null;
+                      const canPause = currentJob && ['RUNNING', 'PAUSE_REQUESTED', 'RESUMING'].includes(currentJob.status);
+                      const canResume = currentJob && currentJob.status === 'PAUSED';
+                      const canStart = !['RUNNING', 'PAUSE_REQUESTED', 'RESUMING'].includes(info.status);
+                      const actionHtml = `
+                        <button class="btn btn-sm btn-primary me-1" onclick="startModel('${name}', false)" ${canStart ? '' : 'disabled'}>Start</button>
+                        <button class="btn btn-sm btn-outline-danger me-1" onclick="startModel('${name}', true)" ${canStart ? '' : 'disabled'}>Reset</button>
+                        <button class="btn btn-sm btn-warning me-1" onclick="pauseJob('${currentJob ? currentJob.jobId : ''}')" ${canPause ? '' : 'disabled'}>Pause</button>
+                        <button class="btn btn-sm btn-success" onclick="resumeJob('${currentJob ? currentJob.jobId : ''}')" ${canResume ? '' : 'disabled'}>Resume</button>
+                      `;
+                      const jobInfo = currentJob
+                        ? `${currentJob.jobId}<br/><small>${currentJob.status}</small>`
+                        : '-';
+                      return `
                     <tr>
                       <td>${name}</td>
                       <td class="status-${info.status.toLowerCase()}">${info.status}</td>
                       <td>${info.totalSynced.toLocaleString()}</td>
                       <td>${info.lastSyncTime || 'Chua co'}</td>
                       <td>${info.lastRun ? new Date(info.lastRun).toLocaleString('vi-VN') : '-'}</td>
+                      <td>${jobInfo}</td>
+                      <td>${actionHtml}</td>
                     </tr>
+                  `;
+                    })()}
                   `).join('')}
                 </tbody>
               </table>
@@ -142,13 +249,58 @@ class SyncManagerController extends BaseController {
             if(!confirm(reset ? 'Ban chac chan muon chay lai tu dau?' : 'Bat dau dong bo tiep theo?')) return;
 
             try {
-              const res = await fetch('/api/sync-manager/start', {
+              const res = await fetch('/api/sync-manager-src/start', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ reset })
               });
               const json = await res.json();
               alert(json.message || 'Da gui lenh');
+              window.location.reload();
+            } catch (e) {
+              alert('Loi: ' + e.message);
+            }
+          }
+
+          async function startModel(modelName, reset = false) {
+            try {
+              const res = await fetch('/api/sync-manager-src/models/' + encodeURIComponent(modelName) + '/start', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ reset })
+              });
+              const json = await res.json();
+              alert(json.message || 'Da gui lenh');
+              window.location.reload();
+            } catch (e) {
+              alert('Loi: ' + e.message);
+            }
+          }
+
+          async function pauseJob(jobId) {
+            if (!jobId) return;
+            try {
+              const res = await fetch('/api/sync-manager-src/jobs/' + encodeURIComponent(jobId) + '/pause', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'}
+              });
+              const json = await res.json();
+              alert(json.message || 'Da gui lenh pause');
+              window.location.reload();
+            } catch (e) {
+              alert('Loi: ' + e.message);
+            }
+          }
+
+          async function resumeJob(jobId) {
+            if (!jobId) return;
+            try {
+              const res = await fetch('/api/sync-manager-src/jobs/' + encodeURIComponent(jobId) + '/resume', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'}
+              });
+              const json = await res.json();
+              alert(json.message || 'Da gui lenh resume');
               window.location.reload();
             } catch (e) {
               alert('Loi: ' + e.message);
