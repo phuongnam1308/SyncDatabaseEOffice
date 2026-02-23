@@ -58,22 +58,22 @@ class BaseModel {
   }
 
   async queryNewDbTx(query, params = {}, transaction = null) {
-  try {
-    const request = transaction
-      ? new sql.Request(transaction)
-      : this.newPool.request();
+    try {
+      const request = transaction
+        ? new sql.Request(transaction)
+        : this.newPool.request();
 
-    Object.keys(params || {}).forEach(key => {
-      request.input(key, params[key]);
-    });
+      Object.keys(params || {}).forEach(key => {
+        request.input(key, params[key]);
+      });
 
-    const result = await request.query(query);
-    return result.recordset;
-  } catch (error) {
-    logger.error(`Lỗi query database mới: ${error.message}`);
-    throw error;
+      const result = await request.query(query);
+      return result.recordset;
+    } catch (error) {
+      logger.error(`Lỗi query database mới: ${error.message}`);
+      throw error;
+    }
   }
-}
 
   // Execute query trên database mới
   async executeNewDb(query, params = {}) {

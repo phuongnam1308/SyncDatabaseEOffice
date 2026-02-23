@@ -131,6 +131,8 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
       receiver_unit: receiverUnitArray || [],
       display_name: userName,
       user_id: user_id,
+      roleProcess: actionParsed.roleProcess || null,
+      stage_status: actionParsed.stage_status || null,
     };
   }
 
@@ -164,7 +166,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
     }
 
     const result = await this.queryNewDbTx(query, params, transaction);
-
+    
     return result?.[0] || null;
   }
 
@@ -226,12 +228,12 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
     const query = `
       INSERT INTO camunda.dbo.audit_sync (
         document_id, time, display_name, user_id, created_by,
-        receiver, receiver_unit, action_code,
+        receiver, receiver_unit, action_code, roleProcess, stage_status,
         id_van_ban, created_at, updated_at, type_document, table_backup
       )
       VALUES (
         @documentId, @time, @displayName, @userId, @createdBy,
-        @receiver, @receiverUnit, @actionCode,
+        @receiver, @receiverUnit, @actionCode, @roleProcess, @stageStatus,
         @idVanBan, @time, GETDATE(), @typeDocument, @sourceTable
       )
     `;
@@ -246,6 +248,8 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
       receiver: data.receiver,
       receiverUnit: data.receiver_unit,
       actionCode: data.action_code,
+      roleProcess: data.roleProcess || null,
+      stageStatus: data.stage_status || null,
 
       idVanBan: data.id_van_ban,
       typeDocument: data.document_id.type_document,
@@ -258,7 +262,8 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
       UPDATE camunda.dbo.audit_sync
       SET
         time = @time, display_name = @displayName, user_id = @userId,
-        created_by = @createBy, action_code = @actionCode, receiver = @receiver, receiver_unit = @receiverUnit,
+        created_by = @createBy, action_code = @actionCode, receiver = @receiver, receiver_unit = @receiverUnit, 
+        roleProcess = @roleProcess, stage_status = @stageStatus,
         updated_at = GETDATE()
       WHERE id_van_ban = @idVanBan
     `;
@@ -271,6 +276,8 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
       actionCode: data.action_code,      
       receiver: data.receiver,
       receiverUnit: data.receiver_unit,
+      roleProcess: data.roleProcess || null,
+      stageStatus: data.stage_status || null,
       idVanBan: data.id_van_ban,
     }, transaction);
   }

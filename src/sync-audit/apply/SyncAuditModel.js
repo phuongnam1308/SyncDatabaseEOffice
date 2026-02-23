@@ -191,7 +191,7 @@ class SyncAuditModel extends BaseModel {
       details: record.details ?? null,
       origin_id: record.origin_id ?? null,
       created_by: record.created_by ?? null,
-      receiver: '6915f2387e39c2ba33cef79a' ?? null,
+      receiver: record.receiver ?? null,
       receiver_unit: record.receiver_unit ?? null,
       group_: record.group_ ?? null,
       roleProcess: record.roleProcess ?? null,

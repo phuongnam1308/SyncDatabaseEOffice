@@ -276,7 +276,7 @@ class MigrationHelper {
     }
   }
 
-    async mapUserName(Name, transaction = null) {
+  async mapUserName(Name, transaction = null) {
     try {
         if (
           !Name ||
@@ -536,6 +536,8 @@ class MigrationHelper {
           action_code: null,
           receiver: create_by ? [create_by] : [],
           receiver_unit: [],
+          roleProcess: null,
+          stage_status: null,
         };
       }
 
@@ -549,6 +551,8 @@ class MigrationHelper {
           action_code: null,
           receiver: create_by ? [create_by] : [],
           receiver_unit: [],
+          roleProcess: null,
+          stage_status: null,
         };
       }
 
@@ -557,6 +561,8 @@ class MigrationHelper {
 
       let actionCode = null;
       let receiver = [];
+      let roleProcess = null;
+      let stageStatus = null;
       let receiverUnit = [];
 
       // ===== STEP 2: Extract inside / outside parentheses =====
@@ -594,22 +600,46 @@ class MigrationHelper {
         if (targetText && typeof targetText === 'string') {
 
           let cleaned = targetText
-            .replace(/<br\s*\/?>/gi, '\n')
-            .replace(/<\/p>/gi, '\n');
+          .replace(/<br\s*\/?>/gi, '\n')
+          .replace(/<\/b>/gi, '\n')
+          .replace(/<b>/gi, '')
+          .replace(/<[^>]*>/g, '')
+          .trim();
 
-          cleaned = cleaned.replace(/<[^>]*>/g, '');
+        const rawBlocks = cleaned.split('\n');
 
-          const rawBlocks = cleaned.split('\n');
+        parsedBlocks = rawBlocks
+          .flatMap((line) => {
+            const normalized = line.replace(/\s+/g, ' ').trim();
+            if (!normalized) return [];
 
-          parsedBlocks = rawBlocks
-            .map(i => i.replace(/\s+/g, ' ').trim())
-            .filter(Boolean);
+            const colonIndex = normalized.indexOf(':');
+
+            // Không có :
+            if (colonIndex === -1) {
+              return [normalized];
+            }
+
+            const before = normalized.slice(0, colonIndex + 1).trim(); // giữ dấu :
+            const after = normalized.slice(colonIndex + 1).trim();
+
+            // Nếu sau : có nội dung → tách
+            if (after) {
+              return [before, after];
+            }
+
+            // Nếu chỉ có label:
+            return [before];
+          })
+          .filter(Boolean);
         }
 
       } catch (err) {
         logger.warn(`[parseActionString][STEP3] HTML split error: ${err.message}`);
         parsedBlocks = [];
       }
+      console.log('Parsed blocks:', parsedBlocks);
+      console.log('Outside text:', outsideText);
 
       // ===== STEP 4: Build receiver / receiver_unit / actionCode =====
       try {
@@ -628,22 +658,88 @@ class MigrationHelper {
           actionCode = outsideText || null;
           blocksToProcess = parsedBlocks || [];
         }
+        
+        if (actionCode && typeof actionCode === 'string') {
+          const acNormalized = actionCode.toLowerCase().trim();
+
+          if (acNormalized.includes('trình')) {
+            actionCode = 'TRINH_KY';
+          } else if (
+            acNormalized.includes('chuyển') ||
+            acNormalized.includes('phân công') ||
+            acNormalized.includes('cập nhật') ||
+            acNormalized.includes('đã xem')
+          ) {
+            actionCode = 'CHUYEN_XU_LY';
+          } else if (
+            acNormalized.includes('hoàn tất') ||
+            acNormalized.includes('hoàn') ||
+            acNormalized.includes('đóng')
+          ) {
+            actionCode = 'HOAN_THANH_VAN_BAN';
+            stageStatus = 'HOAN_THANH_VAN_BAN';
+          } else if (acNormalized.includes('phát hành')) {
+            actionCode = 'BAN_HANH';
+            stageStatus = 'DA_BAN_HANH';
+          } else if (acNormalized.includes('xóa')) {
+            actionCode = 'THU_HOI';
+          } else {
+            actionCode = 'CREATE';
+          stageStatus = 'DA_XU_LY';
+          }
+        } else {
+          actionCode = 'CREATE';
+          stageStatus = 'DA_XU_LY';
+        }
 
         if (Array.isArray(blocksToProcess) && blocksToProcess.length) {
-          blocksToProcess.forEach(block => {
-            if (!block) return;
+          let currentMode = null;
 
-            const normalized = block.toLowerCase();
+          for (const raw of blocksToProcess) {
+            if (!raw || typeof raw !== 'string') continue;
 
-            if (
-              normalized.includes('đơn vị xử lý') ||
-              normalized.includes('đơn vị')
-            ) {
+            const block = raw.trim();
+            if (!block) continue;
+
+            const colonIndex = block.indexOf(':');
+
+            if (colonIndex !== -1) {
+              const label = block.slice(0, colonIndex).trim();
+              const labelNormalized = label.toLowerCase();
+
+              if (labelNormalized.includes('để biết')) {
+                roleProcess = 'viewer';
+              } else {
+                roleProcess = 'processor';
+              }
+
+              if (
+                labelNormalized.includes('đơn vị xử lý') ||
+                labelNormalized.includes('đơn vị')
+              ) {
+                currentMode = 'unit';
+              } else {
+                currentMode = 'person';
+              }
+
+              const after = block.slice(colonIndex + 1).trim();
+              if (after) {
+                if (currentMode === 'unit') {
+                  receiverUnit.push(after);
+                } else {
+                  receiver.push(after);
+                }
+              }
+
+              continue;
+            }
+
+            if (currentMode === 'unit') {
               receiverUnit.push(block);
             } else {
               receiver.push(block);
             }
-          });
+          }
         }
 
       } catch (err) {
@@ -676,7 +772,7 @@ class MigrationHelper {
                 .replace(/^\d+[\.\)]\s*/, '')
                 .trim()
             )
-            .filter(Boolean);
+            .filter(i => i && i.length >= 2);
         };
 
         receiver = normalizeAndSplit(receiver);
@@ -695,6 +791,8 @@ class MigrationHelper {
         action_code: actionCode || null,
         receiver,
         receiver_unit: receiverUnit,
+        roleProcess: roleProcess || null,
+        stage_status: stageStatus || null,
       };
 
     } catch (error) {
@@ -703,6 +801,8 @@ class MigrationHelper {
         action_code: null,
         receiver: create_by ? [create_by] : [],
         receiver_unit: [],
+        roleProcess: null,
+        stage_status: null,
       };
     }
   }
