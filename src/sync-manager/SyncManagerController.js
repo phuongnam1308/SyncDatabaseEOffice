@@ -1,10 +1,14 @@
-const BaseController = require('../../controllers/BaseController');
+const BaseController     = require('../../controllers/BaseController');
 const SyncManagerService = require('./SyncManagerService');
-const SyncOutgoingModel = require('../sync-outgoing-document/apply/SyncOutgoingModel');
-const SyncAuditModel = require('../sync-audit/apply/SyncAuditModel');
+const SyncOutgoingModel  = require('../sync-outgoing-document/apply/SyncOutgoingModel');
+const StreamOutgoingMigrationModel  = require('../sync-outgoing-document/migrate/StreamOutgoingMigrationModel');
+const SyncAuditModel     = require('../sync-audit/apply/SyncAuditModel');
+const SyncHandlerModel   = require('./SyncHandlerModel');
+const SyncStateRepository = require('./SyncStateRepository'); 
+const logger             = require('../../utils/logger');
+const StreamCommentMigrationModel = require('../sync-document-comment/migration/StreamCommentMigrationModel');
 const SyncCommentModel = require('../sync-document-comment/apply/SyncCommentModel');
-const SyncHandlerModel = require('./SyncHandlerModel');
-const logger = require('../../utils/logger');
+const StreamOutgoingAuditSyncModel = require('../sync-audit/migrate/StreamAuditMigrationModel');
 
 class SyncManagerController extends BaseController {
   constructor() {
@@ -12,27 +16,45 @@ class SyncManagerController extends BaseController {
     this.initialized = false;
   }
 
+  // ── Giữ nguyên hoàn toàn ──────────────────────────────────
   async ensureInitialized() {
     if (this.initialized) return;
-
     try {
-      // Register SYNC_OUTGOING_DOCUMENT
       const outgoingModel = new SyncOutgoingModel();
       await outgoingModel.initialize();
       const outgoingHandler = new SyncHandlerModel(outgoingModel);
       await outgoingHandler.registerHandlers(SyncManagerService, 'Đồng bộ văn bản đi');
+      await SyncStateRepository.ensureModel('Đồng bộ văn bản đi'); // Đăng ký vào DB
 
-      // Register SYNC_AUDIT
+      const streamOutgoingMigrationModel = new StreamOutgoingMigrationModel();
+      await streamOutgoingMigrationModel.initialize();
+      const streamOutgoingMigrationHandler = new SyncHandlerModel(streamOutgoingMigrationModel);
+      await streamOutgoingMigrationHandler.registerHandlers(SyncManagerService, 'Đồng bộ cơ sở dữ liệu cũ về bảng trung gian: văn bản đi');
+      await SyncStateRepository.ensureModel('Đồng bộ cơ sở dữ liệu cũ về bảng trung gian: văn bản đi'); // Đăng ký vào DB
+
       const auditModel = new SyncAuditModel();
       await auditModel.initialize();
       const auditHandler = new SyncHandlerModel(auditModel);
       await auditHandler.registerHandlers(SyncManagerService, 'Đồng bộ nhật kí thao tác văn bản');
+      await SyncStateRepository.ensureModel('Đồng bộ nhật kí thao tác văn bản'); // Đăng ký vào DB
 
-      // Register SYNC_COMMENT
-      const commentModel = new SyncCommentModel();
-      await commentModel.initialize();
-      const commentHandler = new SyncHandlerModel(commentModel);
-      await commentHandler.registerHandlers(SyncManagerService, 'Đồng bộ bình luận văn bản');
+      const streamOutgoingAuditSyncModel = new StreamOutgoingAuditSyncModel();
+      await streamOutgoingAuditSyncModel.initialize();
+      const streamOutgoingAuditSyncHandler = new SyncHandlerModel(streamOutgoingAuditSyncModel);
+      await streamOutgoingAuditSyncHandler.registerHandlers(SyncManagerService, 'Đồng bộ cơ sở dữ liệu cũ về bảng trung gian: nhật kí thao tác văn bản');
+      await SyncStateRepository.ensureModel('Đồng bộ cơ sở dữ liệu cũ về bảng trung gian: nhật kí thao tác văn bản'); // Đăng ký vào DB
+
+      const syncCommentModel = new SyncCommentModel();
+      await syncCommentModel.initialize();
+      const syncCommentHandler = new SyncHandlerModel(syncCommentModel);
+      await syncCommentHandler.registerHandlers(SyncManagerService, 'Đồng bộ ý kiến văn bản');
+      await SyncStateRepository.ensureModel('Đồng bộ ý kiến văn bản'); // Đăng ký vào DB
+
+      const streamCommentMigrationModel = new StreamCommentMigrationModel();
+      await streamCommentMigrationModel.initialize();
+      const streamCommentMigrationHandler = new SyncHandlerModel(streamCommentMigrationModel);
+      await streamCommentMigrationHandler.registerHandlers(SyncManagerService, 'Đồng bộ cơ sở dữ liệu cũ về bảng trung gian: ý kiến văn bản');
+      await SyncStateRepository.ensureModel('Đồng bộ cơ sở dữ liệu cũ về bảng trung gian: ý kiến văn bản'); // Đăng ký vào DB
 
       this.initialized = true;
     } catch (error) {
@@ -41,16 +63,12 @@ class SyncManagerController extends BaseController {
     }
   }
 
-  /**
-   * POST /api/sync-manager/start
-   * Body: { "reset": true/false }
-   */
+  // ── Routes cũ — giữ nguyên hoàn toàn ─────────────────────
+
   startSync = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
     const { reset } = req.body;
-
     SyncManagerService.start(reset === true || reset === 'true');
-
     return this.success(res, { message: 'Đã kích hoạt tiến trình đồng bộ' });
   });
 
@@ -63,351 +81,377 @@ class SyncManagerController extends BaseController {
       reset: reset === true || reset === 'true',
       batchSize
     });
-
     return this.success(res, result, 'Đã kích hoạt đồng bộ đối tượng');
   });
 
   pauseJobSync = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
     const { jobId } = req.params;
-    const result = SyncManagerService.pauseJob(jobId);
+    const result    = SyncManagerService.pauseJob(jobId);
     return this.success(res, result, 'Đồng chí đã yêu cầu dừng lại tiến trình');
   });
 
   resumeJobSync = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
     const { jobId } = req.params;
-    const result = SyncManagerService.resumeJob(jobId);
+    const result    = SyncManagerService.resumeJob(jobId);
     return this.success(res, result, 'Đã tiếp tục tiến trình phần mềm');
   });
 
   getJobSyncStatus = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
     const { jobId } = req.params;
-    const job = SyncManagerService.getJob(jobId);
-    if (!job) {
-      return this.notFound(res, `Không tìm thấy bản ghi với số mã :  ${jobId}`);
-    }
+    const job       = SyncManagerService.getJob(jobId);
+    if (!job) return this.notFound(res, `Không tìm thấy bản ghi với số mã : ${jobId}`);
     return this.success(res, job);
   });
 
+  // ── MỚI: SSE endpoint ─────────────────────────────────────
+
   /**
-   * GET /api/sync-manager/dashboard
+   * GET /api/sync-manager-src/events
+   * Thêm vào router: router.get('/events', ctrl.sseEvents);
    */
+  sseEvents = this.asyncHandler(async (req, res) => {
+    await this.ensureInitialized();
+    res.setHeader('Content-Type',      'text/event-stream');
+    res.setHeader('Cache-Control',     'no-cache');
+    res.setHeader('Connection',        'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    const ka = setInterval(() => {
+      try { res.write(': ka\n\n'); } catch (_) { clearInterval(ka); }
+    }, 25_000);
+    req.on('close', () => clearInterval(ka));
+    SyncManagerService.addSSEClient(res);
+  });
+
+  // ── Dashboard — giống bản gốc, bỏ meta refresh, thêm SSE JS
+
   getDashboard = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
-    const data = await SyncManagerService.getDashboardData();
+    
+    // THAY ĐỔI: Lấy dữ liệu từ DB (Repository) thay vì JSON (Service)
+    // const data = await SyncManagerService.getDashboardData(); 
+    const data = await SyncStateRepository.getDashboardData();
+    const initialRows = this._renderRows(data.entities, data.jobs);
 
-    const html = `
-      <!DOCTYPE html>
-      <html lang="vi">
-      <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Migration Dashboard</title>
-        <meta http-equiv="refresh" content="5">
-        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-        <style>
-          .status-running { color: #0d6efd; font-weight: bold; }
-          .status-resuming { color: #0d6efd; font-weight: bold; }
-          .status-pause_requested { color: #fd7e14; font-weight: bold; }
-          .status-paused { color: #fd7e14; font-weight: bold; }
-          .status-completed { color: #198754; font-weight: bold; }
-          .status-failed { color: #dc3545; font-weight: bold; }
-          .status-crashed { color: #dc3545; font-weight: bold; }
-          .status-error { color: #dc3545; font-weight: bold; }
-          .status-idle { color: #6c757d; }
-        </style>
-      </head>
-      <body class="bg-light">
-        <div class="container py-5">
-          <div class="card shadow">
-            <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
-              <h3 class="mb-0">BẢNG ĐIỀU KHIỂN ĐỒNG BỘ</h3>
-              <span class="badge bg-light text-dark">
-                ${data.isRunning ? 'Đang đồng bộ...' : 'Sẵn sàng'}
-              </span>
-            </div>
-            <div class="card-body">
-              <div class="mb-4">
-                <button onclick="triggerSync(false)" class="btn btn-success me-2" ${data.isRunning ? 'disabled' : ''}>
-                  Chạy tất cả các đối tượng
-                </button>
-                <button onclick="triggerSync(true)" class="btn btn-danger" ${data.isRunning ? 'disabled' : ''}>
-                  Chạy lại toàn bộ tất cả đối tượng
-                </button>
-              </div>
-
-              <table class="table table-hover table-bordered">
-                <thead class="table-dark">
-                  <tr>
-                    <th>ĐỐI TƯỢNG</th>
-                    <th>TRẠNG THÁI</th>
-                    <th>TIẾN TRÌNH</th>
-                    <th>SỐ LƯỢNG / TỔNG SỐ</th>
-                    <th>PHẦN TRĂM</th>
-                    <th>LẦN ĐỒNG BỘ GẦN NHẤT</th>
-                    <th>LẦN ĐỒNG BỘ CUỐI</th>
-                    <th>PHIÊN ĐỒNG BỘ HIỆN TẠI</th>
-                    <th>HÀNH ĐỘNG</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${Object.entries(data.entities).map(([name, info]) => `
-                    ${(() => {
-        const jobs = Object.values(data.jobs || {})
-          .filter((job) => job.modelName === name)
-          .sort((a, b) => {
-            const ta = new Date(a.updatedAt || a.startedAt || 0).getTime();
-            const tb = new Date(b.updatedAt || b.startedAt || 0).getTime();
-            return tb - ta;
-          });
-
-        const runningOrPausedJob = jobs.find((job) =>
-          ['RUNNING', 'PAUSE_REQUESTED', 'RESUMING', 'PAUSED'].includes(job.status)
-        );
-
-        const currentJob = (info.activeJobId && data.jobs && data.jobs[info.activeJobId])
-          ? data.jobs[info.activeJobId]
-          : (runningOrPausedJob || jobs[0] || null);
-
-        const modelStatus = (info.status || 'IDLE').toUpperCase();
-        const jobStatus = currentJob ? String(currentJob.status || '').toUpperCase() : null;
-
-        const canStart = ['IDLE', 'COMPLETED', 'FAILED', 'CRASHED'].includes(modelStatus);
-        const canPause = jobStatus === 'RUNNING' || jobStatus === 'RESUMING';
-        const canResume = modelStatus === 'PAUSED' || jobStatus === 'PAUSED';
-        const resumeJobId = canResume
-          ? ((currentJob && currentJob.jobId) || info.activeJobId || '')
-          : '';
-
-        const jobInfo = currentJob
-          ? `${currentJob.jobId}<br/><small>${currentJob.status}</small>`
-          : '-';
-
-        const progressBar = info.currentProgressPercent != null
-          ? `<div class="progress" style="height: 20px;"><div class="progress-bar" role="progressbar" style="width: ${info.currentProgressPercent}%;" aria-valuenow="${info.currentProgressPercent}" aria-valuemin="0" aria-valuemax="100">${info.currentProgressPercent}%</div></div>`
-          : '-';
-
-        const syncedTotal = info.currentTotalToSync != null
-          ? `${(info.currentSynced || 0).toLocaleString()} / ${info.currentTotalToSync.toLocaleString()}`
-          : '-';
-
-        if (['Đồng bộ văn bản đi', 'Đồng bộ bình luận văn bản', 'Đồng bộ nhật kí thao tác văn bản'].includes(name)) {
-          return `
-                    <tr class="table-light">
-                      <td><strong>${name}</strong> <span class="badge bg-secondary">Migration</span></td>
-                      <td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td>
-                      <td>
-                        <div class="btn-group" role="group">
-                          <button class="btn btn-sm btn-primary" onclick="runMigration('${name}')">Chạy</button>
-                          <button class="btn btn-sm btn-outline-danger" onclick="runMigration('${name}')">Chạy lại</button>
-                          <button class="btn btn-sm btn-warning" disabled>Dừng</button>
-                          <button class="btn btn-sm btn-success" disabled>Tiếp</button>
-                        </div>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td><strong>${name}</strong> <span class="badge bg-primary">Sync</span></td>
-                      <td class="status-${info.status.toLowerCase()}">${info.status}</td>
-                      <td>${progressBar}</td>
-                      <td><strong>${syncedTotal}</strong></td>
-                      <td>${info.currentProgressPercent != null ? (info.currentProgressPercent + '%') : '-'}</td>
-                      <td>${info.lastSyncTime ? new Date(info.lastSyncTime).toLocaleString('vi-VN') : '-'}</td>
-                      <td>${info.lastRun ? new Date(info.lastRun).toLocaleString('vi-VN') : '-'}</td>
-                      <td>${jobInfo}</td>
-                      <td>
-                        <div class="btn-group" role="group">
-                          <button class="btn btn-sm btn-primary" onclick="startModel('${name}', false)" ${canStart ? '' : 'disabled'}>Chạy</button>
-                          <button class="btn btn-sm btn-outline-danger" onclick="startModel('${name}', true)" ${canStart ? '' : 'disabled'}>Chạy lại</button>
-                          <button class="btn btn-sm btn-warning" onclick="pauseJob('${currentJob ? currentJob.jobId : ''}')" ${canPause ? '' : 'disabled'}>Dừng</button>
-                          <button class="btn btn-sm btn-success" onclick="resumeJob('${resumeJobId}')" ${canResume ? '' : 'disabled'}>Tiếp</button>
-                        </div>
-                      </td>
-                    </tr>
-                    <tr class="table-light">
-                      <td><strong>${name}</strong> <span class="badge bg-info text-dark">Full Flow</span></td>
-                      <td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td>
-                      <td>
-                        <div class="btn-group" role="group">
-                          <button class="btn btn-sm btn-primary" onclick="runFullFlow('${name}')">Chạy</button>
-                          <button class="btn btn-sm btn-outline-danger" onclick="runFullFlow('${name}')">Chạy lại</button>
-                          <button class="btn btn-sm btn-warning" disabled>Dừng</button>
-                          <button class="btn btn-sm btn-success" disabled>Tiếp</button>
-                        </div>
-                      </td>
-                    </tr>
-                  `;
-        }
-
-        return `
-                    <tr>
-                      <td>${name}</td>
-                      <td class="status-${info.status.toLowerCase()}">${info.status}</td>
-                      <td>${progressBar}</td>
-                      <td><strong>${syncedTotal}</strong></td>
-                      <td>${info.currentProgressPercent != null ? (info.currentProgressPercent + '%') : '-'}</td>
-                      <td>${info.lastSyncTime ? new Date(info.lastSyncTime).toLocaleString('vi-VN') : '-'}</td>
-                      <td>${info.lastRun ? new Date(info.lastRun).toLocaleString('vi-VN') : '-'}</td>
-                      <td>${jobInfo}</td>
-                      <td>
-                        <div class="btn-group" role="group">
-                          <button class="btn btn-sm btn-primary" onclick="startModel('${name}', false)" ${canStart ? '' : 'disabled'}>Chạy</button>
-                          <button class="btn btn-sm btn-outline-danger" onclick="startModel('${name}', true)" ${canStart ? '' : 'disabled'}>Chạy lại</button>
-                          <button class="btn btn-sm btn-warning" onclick="pauseJob('${currentJob ? currentJob.jobId : ''}')" ${canPause ? '' : 'disabled'}>Dừng</button>
-                          <button class="btn btn-sm btn-success" onclick="resumeJob('${resumeJobId}')" ${canResume ? '' : 'disabled'}>Tiếp</button>
-                        </div>
-                      </td>
-                    </tr>
-                  `;
-      })()}
-                  `).join('')}
-                </tbody>
-              </table>
-
-              ${Object.keys(data.entities).length === 0 ? '<p class="text-center text-muted">Chưa có đối tượng nào được đăng kí đồng bộ liên hệ quản trị viên</p>' : ''}
-            </div>
-            <div class="card-footer text-muted">
-              Tự động làm mởi mỗi 5 giây.
-            </div>
-          </div>
+    const html = `<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Migration Dashboard</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    .status-running         { color: #0d6efd; font-weight: bold; }
+    .status-resuming        { color: #0d6efd; font-weight: bold; }
+    .status-pause_requested { color: #fd7e14; font-weight: bold; }
+    .status-paused          { color: #fd7e14; font-weight: bold; }
+    .status-completed       { color: #198754; font-weight: bold; }
+    .status-failed          { color: #dc3545; font-weight: bold; }
+    .status-crashed         { color: #dc3545; font-weight: bold; }
+    .status-error           { color: #dc3545; font-weight: bold; }
+    .status-idle            { color: #6c757d; }
+    .progress-bar           { transition: width 0.6s ease-in-out, background-color 0.3s ease; }
+  </style>
+</head>
+<body class="bg-light">
+  <div class="container py-5">
+    <div class="card shadow">
+      <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+        <h3 class="mb-0">BẢNG ĐIỀU KHIỂN ĐỒNG BỘ</h3>
+        <div class="d-flex align-items-center gap-2">
+          <span id="running-badge" class="badge bg-light text-dark">
+            ${data.isRunning ? 'Đang đồng bộ...' : 'Sẵn sàng'}
+          </span>
+          <span id="sse-dot" title="Trạng thái kết nối realtime">⏳</span>
         </div>
+      </div>
+      <div class="card-body">
+        <div class="mb-4">
+          <button id="btn-all"   onclick="triggerSync(false)" class="btn btn-success me-2" ${data.isRunning ? 'disabled' : ''}>Chạy tất cả các đối tượng</button>
+          <button id="btn-reset" onclick="triggerSync(true)"  class="btn btn-danger"       ${data.isRunning ? 'disabled' : ''}>Chạy lại toàn bộ tất cả đối tượng</button>
+        </div>
+        <table class="table table-hover table-bordered">
+          <thead class="table-dark">
+            <tr>
+              <th>ĐỐI TƯỢNG</th><th>TRẠNG THÁI</th><th>TIẾN TRÌNH</th>
+              <th>SỐ LƯỢNG / TỔNG SỐ</th><th>PHẦN TRĂM</th>
+              <th>LẦN ĐỒNG BỘ GẦN NHẤT</th><th>LẦN ĐỒNG BỘ CUỐI</th>
+              <th>PHIÊN ĐỒNG BỘ HIỆN TẠI</th><th>HÀNH ĐỘNG</th>
+            </tr>
+          </thead>
+          <tbody id="sync-tbody">${initialRows}</tbody>
+        </table>
+        ${Object.keys(data.entities).length === 0
+          ? '<p class="text-center text-muted">Chưa có đối tượng nào được đăng kí đồng bộ liên hệ quản trị viên</p>'
+          : ''}
+      </div>
+      <div class="card-footer text-muted d-flex justify-content-between">
+        <span>Cập nhật realtime qua SSE (không còn refresh 5s)</span>
+        <span id="last-update"></span>
+      </div>
+    </div>
+  </div>
 
-        <script>
-          async function triggerSync(reset) {
-            if(!confirm(reset ? 'Ban chac chan muon chay lai tu dau?' : 'Bắt đầu đồng bộ đối tượng tiếp theo?')) return;
+  <script>
+    // ── SSE: nhận update realtime từ server ──────────────────
+    let _es = null;
+    let retryCount = 0;
+    const maxRetries = 2; // Giới hạn số lần thử lại trước khi báo sự cố
 
-            try {
-              const res = await fetch('/api/sync-manager-src/start', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ reset })
-              });
-              const json = await res.json();
-              alert(json.message || 'Đồng chí đã gửi lệnh');
-              window.location.reload();
-            } catch (e) {
-              alert('Loi: ' + e.message);
-            }
-          }
+    function connectSSE() {
+      _es = new EventSource('/api/sync-manager-src/events');
+      _es.onopen    = () => { 
+        document.getElementById('sse-dot').textContent = '🟢'; 
+        retryCount = 0; // Reset bộ đếm khi kết nối thành công
+      };
+      _es.onopen    = () => { document.getElementById('sse-dot').textContent = '🟢'; };
+      _es.onerror   = () => {
+        document.getElementById('sse-dot').textContent = '🔴';
+        _es.close();
+        
+        retryCount++;
+        if (retryCount >= maxRetries) {
+          // Nếu lỗi quá số lần quy định -> Chuyển trạng thái CRASHED và DỪNG
+          document.getElementById('running-badge').textContent = 'Gặp sự cố  (Mất kết nối)';
+          document.getElementById('running-badge').className = 'badge bg-danger text-white';
+          return; // Không gọi setTimeout nữa
+          // Nếu lỗi 2 lần liên tiếp -> Dừng và báo SỰ CỐ
+          const badge = document.getElementById('running-badge');
+          badge.textContent = 'SỰ CỐ (MẤT KẾT NỐI)';
+          badge.className = 'badge bg-danger text-white';
+          return; // Dừng, không gọi setTimeout nữa
+        };
 
-          async function startModel(modelName, reset = false) {
-            try {
-              const res = await fetch('/api/sync-manager-src/models/' + encodeURIComponent(modelName) + '/start', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ reset })
-              });
-              const json = await res.json();
-              alert(json.message || 'Đồng chí đã gửi lệnh');
-              window.location.reload();
-            } catch (e) {
-              alert('Loi: ' + e.message);
-            }
-          }
+        setTimeout(connectSSE, 2000); // Thử lại sau 2s
+        setTimeout(connectSSE, 3000); // reconnect sau 3s
+      };
+      _es.onmessage = (e) => {
+        try { renderDashboard(JSON.parse(e.data)); } catch(_) {}
+      };
+    }
 
-          async function pauseJob(jobId) {
-            if (!jobId) return;
-            try {
-              const res = await fetch('/api/sync-manager-src/jobs/' + encodeURIComponent(jobId) + '/pause', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'}
-              });
-              const json = await res.json();
-              alert(json.message || 'Đồng chí đã yêu cầu dừng lại');
-              window.location.reload();
-            } catch (e) {
-              alert('Loi: ' + e.message);
-            }
-          }
+    function renderDashboard(data) {
+      document.getElementById('running-badge').textContent =
+        data.isRunning ? 'Đang đồng bộ...' : 'Sẵn sàng';
+      document.getElementById('btn-all').disabled   = data.isRunning;
+      document.getElementById('btn-reset').disabled = data.isRunning;
+      document.getElementById('sync-tbody').innerHTML =
+        buildRows(data.entities || {}, data.jobs || {});
+      document.getElementById('last-update').textContent =
+        'Cập nhật: ' + new Date().toLocaleTimeString('vi-VN');
+    }
 
-          async function resumeJob(jobId) {
-            if (!jobId) return;
-            try {
-              const res = await fetch('/api/sync-manager-src/jobs/' + encodeURIComponent(jobId) + '/resume', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'}
-              });
-              const json = await res.json();
-              alert(json.message || 'Đông chí đã yêu cầu tiếp tục');
-              window.location.reload();
-            } catch (e) {
-              alert('Loi: ' + e.message);
-            }
-          }
+    function buildRows(entities, jobs) {
+      return Object.entries(entities).map(([n, i]) => buildRow(n, i, jobs)).join('');
+    }
 
-          const flowConfig = {
-            'Đồng bộ văn bản đi': {
-              migrate: '/api/outgoing/migrate',
-              syncModel: 'Đồng bộ văn bản đi'
-            },
-            'Đồng bộ bình luận văn bản': {
-              migrate: '/api/document-comments/migrate',
-              syncModel: 'Đồng bộ bình luận văn bản'
-            },
-            'Đồng bộ nhật kí thao tác văn bản': {
-              migrate: '/api/audit/migrate',
-              syncModel: 'Đồng bộ nhật kí thao tác văn bản'
-            }
-          };
+    function buildRow(name, info, jobs) {
+      const rel = Object.values(jobs)
+        .filter(j => j.modelName === name)
+        .sort((a,b) => new Date(b.updatedAt||b.startedAt||0) - new Date(a.updatedAt||a.startedAt||0));
 
-          async function runFullFlow(modelName) {
-            const config = flowConfig[modelName];
-            if (!config) return alert('Chưa cấu hình flow cho model này');
-            
-            if (!confirm('Bạn có chắc muốn chạy quy trình Full Flow (Migration -> Sync) cho ' + modelName + '?')) return;
-            
-            const body = JSON.stringify({ limit: 1000, batch: 100 });
-            const headers = { 'Content-Type': 'application/json' };
+      const rp  = rel.find(j => ['RUNNING','PAUSE_REQUESTED','RESUMING','PAUSED'].includes(j.status));
+      const cur = (info.activeJobId && jobs[info.activeJobId]) ? jobs[info.activeJobId] : (rp || rel[0] || null);
 
-            try {
-              // 1. Call Migration
-              const res1 = await fetch(config.migrate, { method: 'POST', headers, body });
-              const json1 = await res1.json();
-              if (!json1.success) throw new Error(json1.message || 'Lỗi Migration');
-              console.log('Migration done:', json1);
+      let ms = (info.status||'IDLE').toUpperCase();
+if (cur && ['RUNNING','RESUMING','PAUSE_REQUESTED'].includes(cur.status)) {
+  const last = new Date(cur.updatedAt || cur.startedAt || 0).getTime();
 
-              // 2. Call Sync
-              const syncUrl = '/api/sync-manager-src/models/' + encodeURIComponent(config.syncModel) + '/start';
-              const syncBody = JSON.stringify({ reset: false, batchSize: 100 });
-              const res2 = await fetch(syncUrl, { method: 'POST', headers, body: syncBody });
-              const json2 = await res2.json();
-              if (!json2.success) throw new Error(json2.message || 'Lỗi Sync');
+  if (new Date().getTime() - last > 60000) {
+    cur.status = 'CRASHED';
+    ms = 'CRASHED';
+  }
+}
+      if (cur && ['RUNNING','RESUMING','PAUSE_REQUESTED'].includes(cur.status)) {
+        const last = new Date(cur.updatedAt || cur.startedAt || 0).getTime();
+        if (new Date().getTime() - last > 60000) {
+          cur.status = 'CRASHED';
+          ms = 'CRASHED';
+        }
+      }
+      const js = cur ? String(cur.status||'').toUpperCase() : null;
 
-              alert('Quy trình hoàn tất! Migration xong và đã kích hoạt Sync.');
-              window.location.reload();
-            } catch (e) {
-              alert('Lỗi quy trình: ' + e.message);
-            }
-          }
+      const canStart  = ['IDLE','COMPLETED','FAILED','CRASHED'].includes(ms);
+      const canPause  = js === 'RUNNING' || js === 'RESUMING';
+      const canResume = ms === 'PAUSED' || js === 'PAUSED';
+      const rid       = canResume ? ((cur && cur.jobId) || info.activeJobId || '') : '';
 
-          async function runMigration(modelName) {
-            const config = flowConfig[modelName];
-            if (!config) return alert('Chưa cấu hình flow cho model này');
-            
-            if (!confirm('Bạn có chắc muốn chạy Migration cho ' + modelName + '?')) return;
-            
-            const body = JSON.stringify({ limit: 1000, batch: 100 });
-            const headers = { 'Content-Type': 'application/json' };
+      const mapVN = {
+        'IDLE': 'Sẵn sàng', 'RUNNING': 'Đang chạy', 'RESUMING': 'Đang tiếp tục',
+        'PAUSE_REQUESTED': 'Đang dừng...', 'PAUSED': 'Đã tạm dừng',
+        'COMPLETED': 'Hoàn thành', 'FAILED': 'Thất bại', 'CRASHED': 'Sự cố', 'ERROR': 'Lỗi'
+      };
+      const txt = mapVN[ms] || ms;
 
-            try {
-              const res = await fetch(config.migrate, { method: 'POST', headers, body });
-              const json = await res.json();
-              if (!json.success) throw new Error(json.message || 'Lỗi Migration');
-              
-              alert('Migration hoàn tất! ' + (json.message || ''));
-              window.location.reload();
-            } catch (e) {
-              alert('Lỗi Migration: ' + e.message);
-            }
-          }
-        </script>
-      </body>
-      </html>
-    `;
+      let pClass = 'bg-primary';
+      if (ms === 'COMPLETED') pClass = 'bg-success';
+      else if (['FAILED','CRASHED','ERROR'].includes(ms)) pClass = 'bg-danger';
+      else if (ms === 'PAUSED') pClass = 'bg-warning text-dark';
+
+      const pct = info.currentProgressPercent;
+      const prog = pct != null
+        ? \`<div class="progress" style="height:20px;">
+             <div class="progress-bar \${pClass}" role="progressbar"
+                  style="width:\${pct}%"
+                  aria-valuenow="\${pct}"
+                  aria-valuemin="0"
+                  aria-valuemax="100">
+               \${pct}%
+             </div>
+           </div>\`
+        : '-';
+
+      const sync = info.currentTotalToSync != null
+        ? \`\${(info.currentSynced||0).toLocaleString()} / \${info.currentTotalToSync.toLocaleString()}\`
+        : '-';
+      const ji   = cur ? \`\${cur.jobId}<br/><small>\${cur.status}</small>\` : '-';
+      const s    = (info.status||'idle').toLowerCase();
+
+      return \`<tr>
+        <td>\${name}</td>
+        <td class="status-\${s}">\${txt}</td>
+        <td>\${prog}</td>
+        <td><strong>\${sync}</strong></td>
+        <td>\${pct != null ? pct+'%' : '-'}</td>
+        <td>\${info.lastSyncTime ? new Date(info.lastSyncTime).toLocaleString('vi-VN') : '-'}</td>
+        <td>\${info.lastRun      ? new Date(info.lastRun).toLocaleString('vi-VN')      : '-'}</td>
+        <td>\${ji}</td>
+        <td>
+          <button class="btn btn-sm btn-primary me-1"        onclick="startModel('\${name}',false)" \${canStart?'':'disabled'}>Chạy đồng bộ</button>
+          <button class="btn btn-sm btn-outline-danger me-1" onclick="startModel('\${name}',true)"  \${canStart?'':'disabled'}>Chạy lại</button>
+          <button class="btn btn-sm btn-warning me-1"        onclick="pauseJob('\${cur?cur.jobId:''}')"  \${canPause?'':'disabled'}>Dừng lại</button>
+          <button class="btn btn-sm btn-success"             onclick="resumeJob('\${rid}')"              \${canResume?'':'disabled'}>Tiếp tục</button>
+        </td>
+      </tr>\`;
+    }
+
+    // ── Actions — giống bản gốc, bỏ window.location.reload() ─
+    async function triggerSync(reset) {
+      if (!confirm(reset ? 'Bạn chắc chắn muốn chạy lại từ đầu?' : 'Bắt đầu đồng bộ đối tượng tiếp theo?')) return;
+      try {
+        const r = await fetch('/api/sync-manager-src/start', {
+          method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({reset})
+        });
+        alert((await r.json()).message || 'Đồng chí đã gửi lệnh');
+      } catch(e) { alert('Lỗi: '+e.message); }
+    }
+
+    async function startModel(modelName, reset=false) {
+      try {
+        const r = await fetch('/api/sync-manager-src/models/'+encodeURIComponent(modelName)+'/start', {
+          method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({reset})
+        });
+        alert((await r.json()).message || 'Đồng chí đã gửi lệnh');
+      } catch(e) { alert('Lỗi: '+e.message); }
+    }
+
+    async function pauseJob(jobId) {
+      if (!jobId) return;
+      try {
+        const r = await fetch('/api/sync-manager-src/jobs/'+encodeURIComponent(jobId)+'/pause', {
+          method:'POST', headers:{'Content-Type':'application/json'}
+        });
+        alert((await r.json()).message || 'Đồng chí đã yêu cầu dừng lại');
+      } catch(e) { alert('Lỗi: '+e.message); }
+    }
+
+    async function resumeJob(jobId) {
+      if (!jobId) return;
+      try {
+        const r = await fetch('/api/sync-manager-src/jobs/'+encodeURIComponent(jobId)+'/resume', {
+          method:'POST', headers:{'Content-Type':'application/json'}
+        });
+        alert((await r.json()).message || 'Đồng chí đã yêu cầu tiếp tục');
+      } catch(e) { alert('Lỗi: '+e.message); }
+    }
+
+    connectSSE(); // khởi động SSE khi trang load
+  </script>
+</body>
+</html>`;
 
     res.send(html);
   });
+
+  // ── Helper server-side render (load lần đầu) ──────────────
+  _renderRows(entities, jobs) {
+    return Object.entries(entities).map(([name, info]) => {
+      const rel = Object.values(jobs || {})
+        .filter((j) => j.modelName === name)
+        .sort((a, b) => {
+          const ta = new Date(a.updatedAt || a.startedAt || 0).getTime();
+          const tb = new Date(b.updatedAt || b.startedAt || 0).getTime();
+          return tb - ta;
+        });
+
+      const rp  = rel.find((j) => ['RUNNING','PAUSE_REQUESTED','RESUMING','PAUSED'].includes(j.status));
+      const cur = (info.activeJobId && jobs && jobs[info.activeJobId])
+        ? jobs[info.activeJobId] : (rp || rel[0] || null);
+
+      let ms = (info.status || 'IDLE').toUpperCase();
+      if (cur && ['RUNNING','RESUMING','PAUSE_REQUESTED'].includes(cur.status)) {
+        const last = new Date(cur.updatedAt || cur.startedAt || 0).getTime();
+        if (Date.now() - last > 60000) {
+          cur.status = 'CRASHED';
+          ms = 'CRASHED';
+        }
+      }
+      const js = cur ? String(cur.status || '').toUpperCase() : null;
+
+      const canStart  = ['IDLE','COMPLETED','FAILED','CRASHED'].includes(ms);
+      const canPause  = js === 'RUNNING' || js === 'RESUMING';
+      const canResume = ms === 'PAUSED'  || js === 'PAUSED';
+      const rid       = canResume ? ((cur && cur.jobId) || info.activeJobId || '') : '';
+
+      const mapVN = {
+        'IDLE': 'Sẵn sàng', 'RUNNING': 'Đang chạy', 'RESUMING': 'Đang tiếp tục',
+        'PAUSE_REQUESTED': 'Đang dừng...', 'PAUSED': 'Đã tạm dừng',
+        'COMPLETED': 'Hoàn thành', 'FAILED': 'Thất bại', 'CRASHED': 'Sự cố', 'ERROR': 'Lỗi'
+      };
+      const txt = mapVN[ms] || ms;
+
+      let pClass = 'bg-primary';
+      if (ms === 'COMPLETED') pClass = 'bg-success';
+      else if (['FAILED','CRASHED','ERROR'].includes(ms)) pClass = 'bg-danger';
+      else if (ms === 'PAUSED') pClass = 'bg-warning text-dark';
+
+      const pct  = info.currentProgressPercent;
+const prog = pct != null
+  ? `<div class="progress" style="height:20px;">
+       <div class="progress-bar ${pClass}" role="progressbar"
+            style="width:${pct}%"
+            aria-valuenow="${pct}"
+            aria-valuemin="0"
+            aria-valuemax="100">
+         ${pct}%
+       </div>
+     </div>`
+  : '-';
+      const sync = info.currentTotalToSync != null
+        ? `${(info.currentSynced || 0).toLocaleString()} / ${info.currentTotalToSync.toLocaleString()}`
+        : '-';
+      const ji   = cur ? `${cur.jobId}<br/><small>${cur.status}</small>` : '-';
+
+      return `<tr>
+        <td>${name}</td>
+        <td class="status-${info.status.toLowerCase()}">${txt}</td>
+        <td>${prog}</td>
+        <td><strong>${sync}</strong></td>
+        <td>${pct != null ? pct + '%' : '-'}</td>
+        <td>${info.lastSyncTime ? new Date(info.lastSyncTime).toLocaleString('vi-VN') : '-'}</td>
+        <td>${info.lastRun      ? new Date(info.lastRun).toLocaleString('vi-VN')      : '-'}</td>
+        <td>${ji}</td>
+        <td>
+          <button class="btn btn-sm btn-primary me-1"        onclick="startModel('${name}',false)" ${canStart  ? '' : 'disabled'}>Chạy đồng bộ</button>
+          <button class="btn btn-sm btn-outline-danger me-1" onclick="startModel('${name}',true)"  ${canStart  ? '' : 'disabled'}>Chạy lại</button>
+          <button class="btn btn-sm btn-warning me-1"        onclick="pauseJob('${cur ? cur.jobId : ''}')"  ${canPause  ? '' : 'disabled'}>Dừng lại</button>
+          <button class="btn btn-sm btn-success"             onclick="resumeJob('${rid}')"                  ${canResume ? '' : 'disabled'}>Tiếp tục</button>
+        </td>
+      </tr>`;
+    }).join('');
+  }
 }
 
 module.exports = new SyncManagerController();

@@ -6,6 +6,20 @@ class StreamCommentMigrationService {
     this.defaultBatch = 100;
   }
 
+  /**
+   * Khởi tạo model
+   */
+  async initialize() {
+    try {
+      this.model = new Model();
+      await this.model.initialize();
+      logger.info('[StreamOutgoingMigrationService] Initialized successfully');
+    } catch (error) {
+      logger.error('[StreamOutgoingMigrationService] Initialize error:', error);
+      throw new Error(`Không thể khởi tạo service: ${error.message}`);
+    }
+  }
+
   async migrate({ tables = [], limit = 0, batch = this.defaultBatch }) {
     if (!Array.isArray(tables) || tables.length === 0)
       throw new Error("Tables không hợp lệ");
