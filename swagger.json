@@ -1157,22 +1157,6 @@
         ]
       }
     },
-    "/document-comments/sync": {
-      "post": {
-        "summary": "Sync comments từ document_comments_sync sang document_comments",
-        "tags": [
-          "Document Comments"
-        ]
-      }
-    },
-    "/document-comments/migrate": {
-      "post": {
-        "summary": "Migrate comments từ các bảng nguồn sang document_comments_sync",
-        "tags": [
-          "Document Comments"
-        ]
-      }
-    },
     "/sync/task-users2-type": {
       "get": {
         "summary": "Đồng bộ trạng thái xử lý công việc ở bảng trung gian",
@@ -1473,6 +1457,290 @@
         "responses": {
           "200": {
             "description": "Lấy thống kê thành công"
+          },
+          "500": {
+            "description": "Lỗi hệ thống"
+          }
+        }
+      }
+    },
+    "/outgoing/migrate": {
+      "post": {
+        "summary": "Di chuyển dữ liệu văn bản đi (migrate)",
+        "tags": ["Dong bo van ban di"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "limit": {
+                    "type": "integer",
+                    "example": 1000,
+                    "description": "Số lượng bản ghi tối đa cần xử lý"
+                  },
+                  "batch": {
+                    "type": "integer",
+                    "example": 100,
+                    "description": "Số lượng bản ghi xử lý mỗi batch"
+                  },
+                  "lastProcessedId": {
+                    "type": "integer",
+                    "example": 935,
+                    "description": "ID cuối cùng đã xử lý, dùng để tiếp tục từ điểm dừng"
+                  }
+                },
+                "required": ["limit", "batch"]
+              }
+            }
+          }
+        },
+        "security": [{ "basicAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Migrate văn bản đi thành công"
+          },
+          "401": {
+            "description": "Không có quyền truy cập"
+          },
+          "500": {
+            "description": "Lỗi hệ thống"
+          }
+        }
+      }
+    },
+    "/outgoing/sync": {
+      "post": {
+        "summary": "Đồng bộ dữ liệu văn bản đi",
+        "tags": ["Dong bo van ban di"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "limit": {
+                    "type": "integer",
+                    "example": 1000,
+                    "description": "Số lượng bản ghi tối đa cần đồng bộ"
+                  },
+                  "batch": {
+                    "type": "integer",
+                    "example": 100,
+                    "description": "Số lượng bản ghi xử lý mỗi batch"
+                  },
+                  "lastProcessedId": {
+                    "type": "integer",
+                    "example": 0,
+                    "description": "ID cuối cùng đã xử lý, 0 để bắt đầu từ đầu"
+                  }
+                },
+                "required": ["limit", "batch", "lastProcessedId"]
+              }
+            }
+          }
+        },
+        "security": [{ "basicAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Đồng bộ văn bản đi thành công"
+          },
+          "401": {
+            "description": "Không có quyền truy cập"
+          },
+          "500": {
+            "description": "Lỗi hệ thống"
+          }
+        }
+      }
+    },
+    "/audit/migrate": {
+      "post": {
+        "summary": "Di chuyển dữ liệu audit log (migrate)",
+        "tags": ["Dong bo audit log"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "tables": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "example": ["LuanChuyenVanBan_ATPC"],
+                    "description": "Danh sách tên bảng cần migrate"
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "example": 10,
+                    "description": "Số lượng bản ghi tối đa cần xử lý"
+                  },
+                  "batch": {
+                    "type": "integer",
+                    "example": 5,
+                    "description": "Số lượng bản ghi xử lý mỗi batch"
+                  }
+                },
+                "required": ["tables", "limit", "batch"]
+              }
+            }
+          }
+        },
+        "security": [{ "basicAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Migrate audit log thành công"
+          },
+          "400": {
+            "description": "Dữ liệu đầu vào không hợp lệ"
+          },
+          "401": {
+            "description": "Không có quyền truy cập"
+          },
+          "500": {
+            "description": "Lỗi hệ thống"
+          }
+        }
+      }
+    },
+    "/audit/sync": {
+      "post": {
+        "summary": "Đồng bộ dữ liệu audit log",
+        "tags": ["Dong bo audit log"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "limit": {
+                    "type": "integer",
+                    "example": 10,
+                    "description": "Số lượng bản ghi tối đa cần đồng bộ"
+                  },
+                  "batch": {
+                    "type": "integer",
+                    "example": 5,
+                    "description": "Số lượng bản ghi xử lý mỗi batch"
+                  },
+                  "lastProcessedId": {
+                    "type": "integer",
+                    "example": 0,
+                    "description": "ID cuối cùng đã xử lý, 0 để bắt đầu từ đầu"
+                  }
+                },
+                "required": ["limit", "batch", "lastProcessedId"]
+              }
+            }
+          }
+        },
+        "security": [{ "basicAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Đồng bộ audit log thành công"
+          },
+          "401": {
+            "description": "Không có quyền truy cập"
+          },
+          "500": {
+            "description": "Lỗi hệ thống"
+          }
+        }
+      }
+    },
+    "/document-comments/migrate": {
+      "post": {
+        "summary": "Di chuyển dữ liệu bình luận văn bản (migrate)",
+        "tags": ["Dong bo binh luan van ban"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "tables": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "example": ["Comments"],
+                    "description": "Danh sách tên bảng bình luận cần migrate"
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "example": 10,
+                    "description": "Số lượng bản ghi tối đa cần xử lý"
+                  },
+                  "batch": {
+                    "type": "integer",
+                    "example": 5,
+                    "description": "Số lượng bản ghi xử lý mỗi batch"
+                  }
+                },
+                "required": ["tables", "limit", "batch"]
+              }
+            }
+          }
+        },
+        "security": [{ "basicAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Migrate bình luận văn bản thành công"
+          },
+          "400": {
+            "description": "Dữ liệu đầu vào không hợp lệ"
+          },
+          "401": {
+            "description": "Không có quyền truy cập"
+          },
+          "500": {
+            "description": "Lỗi hệ thống"
+          }
+        }
+      }
+    },
+    "/document-comments/sync": {
+      "post": {
+        "summary": "Đồng bộ dữ liệu bình luận văn bản",
+        "tags": ["Dong bo binh luan van ban"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "limit": {
+                    "type": "integer",
+                    "example": 10,
+                    "description": "Số lượng bản ghi tối đa cần đồng bộ"
+                  },
+                  "batch": {
+                    "type": "integer",
+                    "example": 5,
+                    "description": "Số lượng bản ghi xử lý mỗi batch"
+                  },
+                  "lastProcessedId": {
+                    "type": "integer",
+                    "example": 0,
+                    "description": "ID cuối cùng đã xử lý, 0 để bắt đầu từ đầu"
+                  }
+                },
+                "required": ["limit", "batch", "lastProcessedId"]
+              }
+            }
+          }
+        },
+        "security": [{ "basicAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Đồng bộ bình luận văn bản thành công"
+          },
+          "401": {
+            "description": "Không có quyền truy cập"
           },
           "500": {
             "description": "Lỗi hệ thống"

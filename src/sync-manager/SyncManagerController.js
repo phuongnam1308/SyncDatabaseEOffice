@@ -1,10 +1,14 @@
 const BaseController     = require('../../controllers/BaseController');
 const SyncManagerService = require('./SyncManagerService');
 const SyncOutgoingModel  = require('../sync-outgoing-document/apply/SyncOutgoingModel');
+const StreamOutgoingMigrationModel  = require('../sync-outgoing-document/migrate/StreamOutgoingMigrationModel');
 const SyncAuditModel     = require('../sync-audit/apply/SyncAuditModel');
 const SyncHandlerModel   = require('./SyncHandlerModel');
 const SyncStateRepository = require('./SyncStateRepository'); 
 const logger             = require('../../utils/logger');
+const StreamCommentMigrationModel = require('../sync-document-comment/migration/StreamCommentMigrationModel');
+const SyncCommentModel = require('../sync-document-comment/apply/SyncCommentModel');
+const StreamOutgoingAuditSyncModel = require('../sync-audit/migrate/StreamAuditMigrationModel');
 
 class SyncManagerController extends BaseController {
   constructor() {
@@ -22,11 +26,35 @@ class SyncManagerController extends BaseController {
       await outgoingHandler.registerHandlers(SyncManagerService, 'Đồng bộ văn bản đi');
       await SyncStateRepository.ensureModel('Đồng bộ văn bản đi'); // Đăng ký vào DB
 
+      const streamOutgoingMigrationModel = new StreamOutgoingMigrationModel();
+      await streamOutgoingMigrationModel.initialize();
+      const streamOutgoingMigrationHandler = new SyncHandlerModel(streamOutgoingMigrationModel);
+      await streamOutgoingMigrationHandler.registerHandlers(SyncManagerService, 'Đồng bộ cơ sở dữ liệu cũ về bảng trung gian: văn bản đi');
+      await SyncStateRepository.ensureModel('Đồng bộ cơ sở dữ liệu cũ về bảng trung gian: văn bản đi'); // Đăng ký vào DB
+
       const auditModel = new SyncAuditModel();
       await auditModel.initialize();
       const auditHandler = new SyncHandlerModel(auditModel);
       await auditHandler.registerHandlers(SyncManagerService, 'Đồng bộ nhật kí thao tác văn bản');
       await SyncStateRepository.ensureModel('Đồng bộ nhật kí thao tác văn bản'); // Đăng ký vào DB
+
+      const streamOutgoingAuditSyncModel = new StreamOutgoingAuditSyncModel();
+      await streamOutgoingAuditSyncModel.initialize();
+      const streamOutgoingAuditSyncHandler = new SyncHandlerModel(streamOutgoingAuditSyncModel);
+      await streamOutgoingAuditSyncHandler.registerHandlers(SyncManagerService, 'Đồng bộ cơ sở dữ liệu cũ về bảng trung gian: nhật kí thao tác văn bản');
+      await SyncStateRepository.ensureModel('Đồng bộ cơ sở dữ liệu cũ về bảng trung gian: nhật kí thao tác văn bản'); // Đăng ký vào DB
+
+      const syncCommentModel = new SyncCommentModel();
+      await syncCommentModel.initialize();
+      const syncCommentHandler = new SyncHandlerModel(syncCommentModel);
+      await syncCommentHandler.registerHandlers(SyncManagerService, 'Đồng bộ ý kiến văn bản');
+      await SyncStateRepository.ensureModel('Đồng bộ ý kiến văn bản'); // Đăng ký vào DB
+
+      const streamCommentMigrationModel = new StreamCommentMigrationModel();
+      await streamCommentMigrationModel.initialize();
+      const streamCommentMigrationHandler = new SyncHandlerModel(streamCommentMigrationModel);
+      await streamCommentMigrationHandler.registerHandlers(SyncManagerService, 'Đồng bộ cơ sở dữ liệu cũ về bảng trung gian: ý kiến văn bản');
+      await SyncStateRepository.ensureModel('Đồng bộ cơ sở dữ liệu cũ về bảng trung gian: ý kiến văn bản'); // Đăng ký vào DB
 
       this.initialized = true;
     } catch (error) {
