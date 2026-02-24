@@ -2,6 +2,7 @@ const BaseController = require('../../controllers/BaseController');
 const SyncManagerService = require('./SyncManagerService');
 const SyncOutgoingModel = require('../sync-outgoing-document/apply/SyncOutgoingModel');
 const SyncAuditModel = require('../sync-audit/apply/SyncAuditModel');
+const SyncCommentModel = require('../sync-document-comment/apply/SyncCommentModel');
 const SyncHandlerModel = require('./SyncHandlerModel');
 const logger = require('../../utils/logger');
 
@@ -26,6 +27,12 @@ class SyncManagerController extends BaseController {
       await auditModel.initialize();
       const auditHandler = new SyncHandlerModel(auditModel);
       await auditHandler.registerHandlers(SyncManagerService, 'Đồng bộ nhật kí thao tác văn bản');
+
+      // Register SYNC_COMMENT
+      const commentModel = new SyncCommentModel();
+      await commentModel.initialize();
+      const commentHandler = new SyncHandlerModel(commentModel);
+      await commentHandler.registerHandlers(SyncManagerService, 'Đồng bộ bình luận văn bản');
 
       this.initialized = true;
     } catch (error) {
@@ -174,12 +181,6 @@ class SyncManagerController extends BaseController {
           ? ((currentJob && currentJob.jobId) || info.activeJobId || '')
           : '';
 
-        const actionHtml = `
-                        <button class="btn btn-sm btn-primary me-1" onclick="startModel('${name}', false)" ${canStart ? '' : 'disabled'}>Chạy đồng bộ</button>
-                        <button class="btn btn-sm btn-outline-danger me-1" onclick="startModel('${name}', true)" ${canStart ? '' : 'disabled'}>Chạy lại </button>
-                        <button class="btn btn-sm btn-warning me-1" onclick="pauseJob('${currentJob ? currentJob.jobId : ''}')" ${canPause ? '' : 'disabled'}>Dừng lại</button>
-                        <button class="btn btn-sm btn-success" onclick="resumeJob('${resumeJobId}')" ${canResume ? '' : 'disabled'}>Tiếp tục</button>
-                      `;
         const jobInfo = currentJob
           ? `${currentJob.jobId}<br/><small>${currentJob.status}</small>`
           : '-';
@@ -192,6 +193,53 @@ class SyncManagerController extends BaseController {
           ? `${(info.currentSynced || 0).toLocaleString()} / ${info.currentTotalToSync.toLocaleString()}`
           : '-';
 
+        if (['Đồng bộ văn bản đi', 'Đồng bộ bình luận văn bản', 'Đồng bộ nhật kí thao tác văn bản'].includes(name)) {
+          return `
+                    <tr class="table-light">
+                      <td><strong>${name}</strong> <span class="badge bg-secondary">Migration</span></td>
+                      <td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td>
+                      <td>
+                        <div class="btn-group" role="group">
+                          <button class="btn btn-sm btn-primary" onclick="runMigration('${name}')">Chạy</button>
+                          <button class="btn btn-sm btn-outline-danger" onclick="runMigration('${name}')">Chạy lại</button>
+                          <button class="btn btn-sm btn-warning" disabled>Dừng</button>
+                          <button class="btn btn-sm btn-success" disabled>Tiếp</button>
+                        </div>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td><strong>${name}</strong> <span class="badge bg-primary">Sync</span></td>
+                      <td class="status-${info.status.toLowerCase()}">${info.status}</td>
+                      <td>${progressBar}</td>
+                      <td><strong>${syncedTotal}</strong></td>
+                      <td>${info.currentProgressPercent != null ? (info.currentProgressPercent + '%') : '-'}</td>
+                      <td>${info.lastSyncTime ? new Date(info.lastSyncTime).toLocaleString('vi-VN') : '-'}</td>
+                      <td>${info.lastRun ? new Date(info.lastRun).toLocaleString('vi-VN') : '-'}</td>
+                      <td>${jobInfo}</td>
+                      <td>
+                        <div class="btn-group" role="group">
+                          <button class="btn btn-sm btn-primary" onclick="startModel('${name}', false)" ${canStart ? '' : 'disabled'}>Chạy</button>
+                          <button class="btn btn-sm btn-outline-danger" onclick="startModel('${name}', true)" ${canStart ? '' : 'disabled'}>Chạy lại</button>
+                          <button class="btn btn-sm btn-warning" onclick="pauseJob('${currentJob ? currentJob.jobId : ''}')" ${canPause ? '' : 'disabled'}>Dừng</button>
+                          <button class="btn btn-sm btn-success" onclick="resumeJob('${resumeJobId}')" ${canResume ? '' : 'disabled'}>Tiếp</button>
+                        </div>
+                      </td>
+                    </tr>
+                    <tr class="table-light">
+                      <td><strong>${name}</strong> <span class="badge bg-info text-dark">Full Flow</span></td>
+                      <td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td>
+                      <td>
+                        <div class="btn-group" role="group">
+                          <button class="btn btn-sm btn-primary" onclick="runFullFlow('${name}')">Chạy</button>
+                          <button class="btn btn-sm btn-outline-danger" onclick="runFullFlow('${name}')">Chạy lại</button>
+                          <button class="btn btn-sm btn-warning" disabled>Dừng</button>
+                          <button class="btn btn-sm btn-success" disabled>Tiếp</button>
+                        </div>
+                      </td>
+                    </tr>
+                  `;
+        }
+
         return `
                     <tr>
                       <td>${name}</td>
@@ -202,7 +250,14 @@ class SyncManagerController extends BaseController {
                       <td>${info.lastSyncTime ? new Date(info.lastSyncTime).toLocaleString('vi-VN') : '-'}</td>
                       <td>${info.lastRun ? new Date(info.lastRun).toLocaleString('vi-VN') : '-'}</td>
                       <td>${jobInfo}</td>
-                      <td>${actionHtml}</td>
+                      <td>
+                        <div class="btn-group" role="group">
+                          <button class="btn btn-sm btn-primary" onclick="startModel('${name}', false)" ${canStart ? '' : 'disabled'}>Chạy</button>
+                          <button class="btn btn-sm btn-outline-danger" onclick="startModel('${name}', true)" ${canStart ? '' : 'disabled'}>Chạy lại</button>
+                          <button class="btn btn-sm btn-warning" onclick="pauseJob('${currentJob ? currentJob.jobId : ''}')" ${canPause ? '' : 'disabled'}>Dừng</button>
+                          <button class="btn btn-sm btn-success" onclick="resumeJob('${resumeJobId}')" ${canResume ? '' : 'disabled'}>Tiếp</button>
+                        </div>
+                      </td>
                     </tr>
                   `;
       })()}
@@ -278,6 +333,72 @@ class SyncManagerController extends BaseController {
               window.location.reload();
             } catch (e) {
               alert('Loi: ' + e.message);
+            }
+          }
+
+          const flowConfig = {
+            'Đồng bộ văn bản đi': {
+              migrate: '/api/outgoing/migrate',
+              syncModel: 'Đồng bộ văn bản đi'
+            },
+            'Đồng bộ bình luận văn bản': {
+              migrate: '/api/document-comments/migrate',
+              syncModel: 'Đồng bộ bình luận văn bản'
+            },
+            'Đồng bộ nhật kí thao tác văn bản': {
+              migrate: '/api/audit/migrate',
+              syncModel: 'Đồng bộ nhật kí thao tác văn bản'
+            }
+          };
+
+          async function runFullFlow(modelName) {
+            const config = flowConfig[modelName];
+            if (!config) return alert('Chưa cấu hình flow cho model này');
+            
+            if (!confirm('Bạn có chắc muốn chạy quy trình Full Flow (Migration -> Sync) cho ' + modelName + '?')) return;
+            
+            const body = JSON.stringify({ limit: 1000, batch: 100 });
+            const headers = { 'Content-Type': 'application/json' };
+
+            try {
+              // 1. Call Migration
+              const res1 = await fetch(config.migrate, { method: 'POST', headers, body });
+              const json1 = await res1.json();
+              if (!json1.success) throw new Error(json1.message || 'Lỗi Migration');
+              console.log('Migration done:', json1);
+
+              // 2. Call Sync
+              const syncUrl = '/api/sync-manager-src/models/' + encodeURIComponent(config.syncModel) + '/start';
+              const syncBody = JSON.stringify({ reset: false, batchSize: 100 });
+              const res2 = await fetch(syncUrl, { method: 'POST', headers, body: syncBody });
+              const json2 = await res2.json();
+              if (!json2.success) throw new Error(json2.message || 'Lỗi Sync');
+
+              alert('Quy trình hoàn tất! Migration xong và đã kích hoạt Sync.');
+              window.location.reload();
+            } catch (e) {
+              alert('Lỗi quy trình: ' + e.message);
+            }
+          }
+
+          async function runMigration(modelName) {
+            const config = flowConfig[modelName];
+            if (!config) return alert('Chưa cấu hình flow cho model này');
+            
+            if (!confirm('Bạn có chắc muốn chạy Migration cho ' + modelName + '?')) return;
+            
+            const body = JSON.stringify({ limit: 1000, batch: 100 });
+            const headers = { 'Content-Type': 'application/json' };
+
+            try {
+              const res = await fetch(config.migrate, { method: 'POST', headers, body });
+              const json = await res.json();
+              if (!json.success) throw new Error(json.message || 'Lỗi Migration');
+              
+              alert('Migration hoàn tất! ' + (json.message || ''));
+              window.location.reload();
+            } catch (e) {
+              alert('Lỗi Migration: ' + e.message);
             }
           }
         </script>
