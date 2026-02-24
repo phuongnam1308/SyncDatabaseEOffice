@@ -2,65 +2,13 @@ const BaseController = require('../../controllers/BaseController');
 const SyncManagerService = require('./SyncManagerService');
 const SyncOutgoingModel = require('../sync-outgoing-document/apply/SyncOutgoingModel');
 const SyncAuditModel = require('../sync-audit/apply/SyncAuditModel');
-const SyncCommentModel = require('../sync-document-comment/apply/SyncCommentModel');
 const SyncHandlerModel = require('./SyncHandlerModel');
-
-const StreamOutgoingMigrationService = require('../sync-outgoing-document/migrate/StreamOutgoingMigrationService');
-const StreamAuditMigrationService = require('../sync-audit/migrate/StreamAuditMigrationService');
-const StreamCommentMigrationService = require('../sync-document-comment/migration/StreamCommentMigrationService');
 const logger = require('../../utils/logger');
 
 class SyncManagerController extends BaseController {
   constructor() {
     super();
     this.initialized = false;
-  }
-
-  async registerMigrationHandler(serviceClass, modelName) {
-    if (!serviceClass) {
-      logger.error(`[SyncManagerController] Service class cho '${modelName}' bị undefined. Kiểm tra lại đường dẫn import.`);
-      return;
-    }
-
-    const service = new serviceClass();
-
-    // Kiểm tra xem hàm initialize có tồn tại không trước khi gọi
-    if (typeof service.initialize === 'function') {
-      await service.initialize();
-    } else {
-      logger.warn(`[SyncManagerController] Service '${modelName}' không có hàm initialize(). Đảm bảo model đã được khởi tạo.`);
-    }
-
-    if (!service.model) {
-      logger.error(`[SyncManagerController] Service '${modelName}' chưa có property 'model'. Bỏ qua đăng ký.`);
-      return;
-    }
-
-    const fetchFn = async (lastTime, limit, offset, cursor) => {
-      const lastId = cursor?.lastSyncId || 0;
-      // SyncManager passes limit as batchSize
-      const records = await service.model.fetchBatchFromOldDb({ batch: limit, lastId });
-      return records.map((r) => ({
-        ...r,
-        __sync_id: r.ID,
-        __sync_time: null
-      }));
-    };
-
-    const processFn = async (record) => {
-      if (service.model.findByBackupId) {
-        const existing = await service.model.findByBackupId(record.ID);
-        if (existing) return;
-      }
-      const newRecord = service.safeMapRecord(record);
-      await service.model.insertToNewDb(newRecord);
-    };
-
-    const countFn = async () => {
-      return 0; // Migration count logic can be added if needed
-    };
-
-    SyncManagerService.register(modelName, fetchFn, processFn, { countFn });
   }
 
   async ensureInitialized() {
@@ -78,17 +26,6 @@ class SyncManagerController extends BaseController {
       await auditModel.initialize();
       const auditHandler = new SyncHandlerModel(auditModel);
       await auditHandler.registerHandlers(SyncManagerService, 'Đồng bộ nhật kí thao tác văn bản');
-
-      // Register SYNC_COMMENT
-      const commentModel = new SyncCommentModel();
-      await commentModel.initialize();
-      const commentHandler = new SyncHandlerModel(commentModel);
-      await commentHandler.registerHandlers(SyncManagerService, 'Đồng bộ bình luận văn bản');
-
-      // Register Migration Models
-      await this.registerMigrationHandler(StreamOutgoingMigrationService, 'Migration văn bản đi');
-      await this.registerMigrationHandler(StreamAuditMigrationService, 'Migration nhật kí thao tác văn bản');
-      await this.registerMigrationHandler(StreamCommentMigrationService, 'Migration bình luận văn bản');
 
       this.initialized = true;
     } catch (error) {
@@ -113,19 +50,7 @@ class SyncManagerController extends BaseController {
   startModelSync = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
     const { modelName } = req.params;
-    const { reset = false, batchSize, fullFlow = false } = req.body || {};
-
-    if (fullFlow) {
-      const migrationName = modelName.replace('Đồng bộ', 'Migration');
-      const job = SyncManagerService.startModel(migrationName, {
-        reset: reset === true || reset === 'true',
-        batchSize
-      });
-
-      this.runFullFlowChain(job.jobId, modelName, { reset, batchSize });
-
-      return this.success(res, job, 'Đã kích hoạt Full Flow (Migration -> Sync)');
-    }
+    const { reset = false, batchSize } = req.body || {};
 
     const result = SyncManagerService.startModel(modelName, {
       reset: reset === true || reset === 'true',
@@ -134,18 +59,6 @@ class SyncManagerController extends BaseController {
 
     return this.success(res, result, 'Đã kích hoạt đồng bộ đối tượng');
   });
-
-  async runFullFlowChain(migrationJobId, syncModelName, options) {
-    try {
-      await SyncManagerService.waitForJobCompletion(migrationJobId);
-      const job = SyncManagerService.getJob(migrationJobId);
-      if (job && job.status === 'COMPLETED') {
-        SyncManagerService.startModel(syncModelName, options);
-      }
-    } catch (e) {
-      logger.error('Full flow chain error', e);
-    }
-  }
 
   pauseJobSync = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
@@ -261,6 +174,12 @@ class SyncManagerController extends BaseController {
           ? ((currentJob && currentJob.jobId) || info.activeJobId || '')
           : '';
 
+        const actionHtml = `
+                        <button class="btn btn-sm btn-primary me-1" onclick="startModel('${name}', false)" ${canStart ? '' : 'disabled'}>Chạy đồng bộ</button>
+                        <button class="btn btn-sm btn-outline-danger me-1" onclick="startModel('${name}', true)" ${canStart ? '' : 'disabled'}>Chạy lại </button>
+                        <button class="btn btn-sm btn-warning me-1" onclick="pauseJob('${currentJob ? currentJob.jobId : ''}')" ${canPause ? '' : 'disabled'}>Dừng lại</button>
+                        <button class="btn btn-sm btn-success" onclick="resumeJob('${resumeJobId}')" ${canResume ? '' : 'disabled'}>Tiếp tục</button>
+                      `;
         const jobInfo = currentJob
           ? `${currentJob.jobId}<br/><small>${currentJob.status}</small>`
           : '-';
@@ -273,53 +192,6 @@ class SyncManagerController extends BaseController {
           ? `${(info.currentSynced || 0).toLocaleString()} / ${info.currentTotalToSync.toLocaleString()}`
           : '-';
 
-        if (['Đồng bộ văn bản đi', 'Đồng bộ bình luận văn bản', 'Đồng bộ nhật kí thao tác văn bản'].includes(name)) {
-          return `
-                    <tr class="table-light">
-                      <td><strong>${name}</strong> <span class="badge bg-secondary">Migration</span></td>
-                      <td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td>
-                      <td>
-                        <div class="btn-group" role="group">
-                          <button class="btn btn-sm btn-primary" onclick="runMigration('${name}', false)">Chạy</button>
-                          <button class="btn btn-sm btn-outline-danger" onclick="runMigration('${name}', true)">Chạy lại</button>
-                          <button class="btn btn-sm btn-warning" disabled>Dừng</button>
-                          <button class="btn btn-sm btn-success" disabled>Tiếp</button>
-                        </div>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td><strong>${name}</strong> <span class="badge bg-primary">Sync</span></td>
-                      <td class="status-${info.status.toLowerCase()}">${info.status}</td>
-                      <td>${progressBar}</td>
-                      <td><strong>${syncedTotal}</strong></td>
-                      <td>${info.currentProgressPercent != null ? (info.currentProgressPercent + '%') : '-'}</td>
-                      <td>${info.lastSyncTime ? new Date(info.lastSyncTime).toLocaleString('vi-VN') : '-'}</td>
-                      <td>${info.lastRun ? new Date(info.lastRun).toLocaleString('vi-VN') : '-'}</td>
-                      <td>${jobInfo}</td>
-                      <td>
-                        <div class="btn-group" role="group">
-                          <button class="btn btn-sm btn-primary" onclick="startModel('${name}', false)" ${canStart ? '' : 'disabled'}>Chạy</button>
-                          <button class="btn btn-sm btn-outline-danger" onclick="startModel('${name}', true)" ${canStart ? '' : 'disabled'}>Chạy lại</button>
-                          <button class="btn btn-sm btn-warning" onclick="pauseJob('${currentJob ? currentJob.jobId : ''}')" ${canPause ? '' : 'disabled'}>Dừng</button>
-                          <button class="btn btn-sm btn-success" onclick="resumeJob('${resumeJobId}')" ${canResume ? '' : 'disabled'}>Tiếp</button>
-                        </div>
-                      </td>
-                    </tr>
-                    <tr class="table-light">
-                      <td><strong>${name}</strong> <span class="badge bg-info text-dark">Full Flow</span></td>
-                      <td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td>
-                      <td>
-                        <div class="btn-group" role="group">
-                          <button class="btn btn-sm btn-primary" onclick="runFullFlow('${name}', false)">Chạy</button>
-                          <button class="btn btn-sm btn-outline-danger" onclick="runFullFlow('${name}', true)">Chạy lại</button>
-                          <button class="btn btn-sm btn-warning" disabled>Dừng</button>
-                          <button class="btn btn-sm btn-success" disabled>Tiếp</button>
-                        </div>
-                      </td>
-                    </tr>
-                  `;
-        }
-
         return `
                     <tr>
                       <td>${name}</td>
@@ -330,14 +202,7 @@ class SyncManagerController extends BaseController {
                       <td>${info.lastSyncTime ? new Date(info.lastSyncTime).toLocaleString('vi-VN') : '-'}</td>
                       <td>${info.lastRun ? new Date(info.lastRun).toLocaleString('vi-VN') : '-'}</td>
                       <td>${jobInfo}</td>
-                      <td>
-                        <div class="btn-group" role="group">
-                          <button class="btn btn-sm btn-primary" onclick="startModel('${name}', false)" ${canStart ? '' : 'disabled'}>Chạy</button>
-                          <button class="btn btn-sm btn-outline-danger" onclick="startModel('${name}', true)" ${canStart ? '' : 'disabled'}>Chạy lại</button>
-                          <button class="btn btn-sm btn-warning" onclick="pauseJob('${currentJob ? currentJob.jobId : ''}')" ${canPause ? '' : 'disabled'}>Dừng</button>
-                          <button class="btn btn-sm btn-success" onclick="resumeJob('${resumeJobId}')" ${canResume ? '' : 'disabled'}>Tiếp</button>
-                        </div>
-                      </td>
+                      <td>${actionHtml}</td>
                     </tr>
                   `;
       })()}
@@ -413,72 +278,6 @@ class SyncManagerController extends BaseController {
               window.location.reload();
             } catch (e) {
               alert('Loi: ' + e.message);
-            }
-          }
-
-          const flowConfig = {
-            'Đồng bộ văn bản đi': {
-              migrate: '/api/outgoing/migrate',
-              syncModel: 'Đồng bộ văn bản đi'
-            },
-            'Đồng bộ bình luận văn bản': {
-              migrate: '/api/document-comments/migrate',
-              syncModel: 'Đồng bộ bình luận văn bản'
-            },
-            'Đồng bộ nhật kí thao tác văn bản': {
-              migrate: '/api/audit/migrate',
-              syncModel: 'Đồng bộ nhật kí thao tác văn bản'
-            }
-          };
-
-          async function runFullFlow(modelName) {
-            const config = flowConfig[modelName];
-            if (!config) return alert('Chưa cấu hình flow cho model này');
-            
-            if (!confirm('Bạn có chắc muốn chạy quy trình Full Flow (Migration -> Sync) cho ' + modelName + '?')) return;
-            
-            const body = JSON.stringify({ limit: 1000, batch: 100 });
-            const headers = { 'Content-Type': 'application/json' };
-
-            try {
-              // 1. Call Migration
-              const res1 = await fetch(config.migrate, { method: 'POST', headers, body });
-              const json1 = await res1.json();
-              if (!json1.success) throw new Error(json1.message || 'Lỗi Migration');
-              console.log('Migration done:', json1);
-
-              // 2. Call Sync
-              const syncUrl = '/api/sync-manager-src/models/' + encodeURIComponent(config.syncModel) + '/start';
-              const syncBody = JSON.stringify({ reset: false, batchSize: 100 });
-              const res2 = await fetch(syncUrl, { method: 'POST', headers, body: syncBody });
-              const json2 = await res2.json();
-              if (!json2.success) throw new Error(json2.message || 'Lỗi Sync');
-
-              alert('Quy trình hoàn tất! Migration xong và đã kích hoạt Sync.');
-              window.location.reload();
-            } catch (e) {
-              alert('Lỗi quy trình: ' + e.message);
-            }
-          }
-
-          async function runMigration(modelName) {
-            const config = flowConfig[modelName];
-            if (!config) return alert('Chưa cấu hình flow cho model này');
-            
-            if (!confirm('Bạn có chắc muốn chạy Migration cho ' + modelName + '?')) return;
-            
-            const body = JSON.stringify({ limit: 1000, batch: 100 });
-            const headers = { 'Content-Type': 'application/json' };
-
-            try {
-              const res = await fetch(config.migrate, { method: 'POST', headers, body });
-              const json = await res.json();
-              if (!json.success) throw new Error(json.message || 'Lỗi Migration');
-              
-              alert('Migration hoàn tất! ' + (json.message || ''));
-              window.location.reload();
-            } catch (e) {
-              alert('Lỗi Migration: ' + e.message);
             }
           }
         </script>
