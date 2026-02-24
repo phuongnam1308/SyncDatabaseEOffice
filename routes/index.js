@@ -808,6 +808,9 @@ router.use('/audit', AuditRoutes);
 const UserRoutes = require('../src/sync-user/route');
 router.use('/user', UserRoutes);
 
+const FileRoutes = require('../src/sync-file/route');
+router.use('/file', FileRoutes);
+
 module.exports = router;
 const SrcSyncManagerController = require('../src/sync-manager/SyncManagerController');
 router.get('/sync-manager-src/dashboard', SrcSyncManagerController.getDashboard);
