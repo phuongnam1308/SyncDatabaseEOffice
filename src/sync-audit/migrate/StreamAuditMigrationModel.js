@@ -208,7 +208,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
 
       const incomingQuery2 = `
         SELECT TOP 1 document_id
-        FROM camunda.dbo.incomming_documents2
+        FROM camunda.dbo.incomming_documents
         WHERE id_incoming_bak = @idVanBan
       `;
 
@@ -256,7 +256,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
       documentId: data.document_id.document_id,
       time: data.time,
       displayName: data.display_name,
-      userId: '6915f2387e39c2ba33cef79a',
+      userId: data.user_id || '6915f2387e39c2ba33cef79a',
       createdBy: data.user_id,
       receiver,
       receiverUnit,

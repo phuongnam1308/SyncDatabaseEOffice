@@ -83,12 +83,12 @@ class SyncCommentModel extends BaseModel {
       INSERT INTO camunda.${this.mainSchema}.${this.mainTable} (
         id, document_id, parent_id, user_id, user_name, content, [type],
         is_edited, created_at, updated_at, fileId, likes, is_leader_suggestion,
-        id_comments_bak, document_id_bak, type_bak, table_bak,
+        id_comments_bak, type_bak, table_bak,
         parent_id_bak, user_id_bak
       ) VALUES (
         @id, @documentId, @parentId, @userId, @userName, @content, @type,
         0, @createdAt, GETDATE(), @fileId, @likes, 0,
-        @idCommentsBak, @documentIdBak, @typeBak, @tableBak,
+        @idCommentsBak, @typeBak, @tableBak,
         @parentIdBak, @userIdBak
       )
     `;
@@ -125,7 +125,6 @@ class SyncCommentModel extends BaseModel {
       fileId: record.file_id ?? null,
       likes: record.likes ?? null,
       idCommentsBak: record.id_comments_bak ?? null,
-      documentIdBak: record.document_id_bak ?? null,
       typeBak: record.type_bak ?? null,
       tableBak: record.table_backup ?? null,
       parentIdBak: record.parent_id_bak ?? null,

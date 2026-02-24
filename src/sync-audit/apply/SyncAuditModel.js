@@ -118,7 +118,7 @@ class SyncAuditModel extends BaseModel {
       }
 
       await this.commitTransaction(transaction);
-      logger.debug(`[insertBatchToMain] Inserted: ${inserted}, Updated: ${updated}`);
+      logger.info(`[insertBatchToMain] Inserted: ${inserted}, Updated: ${updated}`);
 
       return { inserted, updated };
     } catch (error) {

@@ -536,7 +536,7 @@ class MigrationHelper {
           action_code: null,
           receiver: create_by ? [create_by] : [],
           receiver_unit: [],
-          roleProcess: null,
+          roleProcess: 'VANTHU',
           stage_status: null,
         };
       }
@@ -551,7 +551,7 @@ class MigrationHelper {
           action_code: null,
           receiver: create_by ? [create_by] : [],
           receiver_unit: [],
-          roleProcess: null,
+          roleProcess: 'VANTHU',
           stage_status: null,
         };
       }
@@ -561,8 +561,8 @@ class MigrationHelper {
 
       let actionCode = null;
       let receiver = [];
-      let roleProcess = null;
-      let stageStatus = null;
+      let roleProcess = 'VANTHU';
+      let stageStatus = 'DA_XU_LY';
       let receiverUnit = [];
 
       // ===== STEP 2: Extract inside / outside parentheses =====
@@ -791,8 +791,8 @@ class MigrationHelper {
         action_code: actionCode || null,
         receiver,
         receiver_unit: receiverUnit,
-        roleProcess: roleProcess || null,
-        stage_status: stageStatus || null,
+        roleProcess: roleProcess || 'VANTHU',
+        stage_status: stageStatus || 'DA_XU_LY',
       };
 
     } catch (error) {
@@ -801,7 +801,7 @@ class MigrationHelper {
         action_code: null,
         receiver: create_by ? [create_by] : [],
         receiver_unit: [],
-        roleProcess: null,
+        roleProcess: 'VANTHU',
         stage_status: null,
       };
     }

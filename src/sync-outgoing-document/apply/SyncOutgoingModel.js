@@ -137,7 +137,7 @@ class SyncOutgoingModel extends BaseModel {
         ModifiedBy, CreatedBy, MigrateFlg, MigrateErrFlg, MigrateErrMess,
         LoaiMoc, KySoFiles, DGPId, Workflow, IsKyQuyChe, DocSignType,
         IsConverting, CodeItemId, internal_receiving_dept_old, sign_type,
-        from_create_draf, replaced
+        from_create_draf, replaced, tb_bak
       )
       VALUES (
         @document_id, @status_code, @sender_unit, @drafter, @document_type,
@@ -160,7 +160,7 @@ class SyncOutgoingModel extends BaseModel {
         @loai_moc, @ky_so_files, @dgp_id, @workflow, @is_ky_quy_che,
         @doc_sign_type, @is_converting, @code_item_id,
         @internal_receiving_dept_old, @sign_type, @from_create_draf,
-        @replaced
+        @replaced, @tbBak
       )
     `;
 
@@ -257,7 +257,8 @@ class SyncOutgoingModel extends BaseModel {
         internal_receiving_dept_old = @internal_receiving_dept_old,
         sign_type = @sign_type,
         from_create_draf = @from_create_draf,
-        replaced = @replaced
+        replaced = @replaced,
+        tb_bak = @tbBak
       WHERE document_id = @document_id
     `;
 
@@ -356,6 +357,7 @@ class SyncOutgoingModel extends BaseModel {
       sign_type: record.sign_type ?? null,
       from_create_draf: record.from_create_draf ?? null,
       replaced: record.replaced ?? null,
+      tbBak: true ?? null,
     };
   }
 
