@@ -23,7 +23,7 @@ class SyncHandlerModel {
         FROM (
           SELECT
             *,
-            COALESCE(updated_at, created_at, [Modified], [Created]) AS __sync_time,
+            COALESCE(updated_at, created_at) AS __sync_time,
             ISNULL(CAST(id AS BIGINT), 0) AS __sync_id
           FROM camunda.${schemaName}.${tableName}
         ) src
@@ -64,21 +64,38 @@ class SyncHandlerModel {
      * @param {string} tableName - Table name
      * @returns {Function} Count function
      */
-    createCountFn(schemaName, tableName) {
+    createCountFn(schemaName, tableName, mode = 'new') {
         return async (lastTime, lastSyncId = 0) => {
+
+            const schema =
+                mode === 'old'
+                    ? this.syncModel.oldDbSchema
+                    : (schemaName || this.syncModel.newDbSchema);
+
+            const table =
+                mode === 'old'
+                    ? this.syncModel.oldDbTable
+                    : (tableName || this.syncModel.newDbTable);
+
+            if (!schema || !table) {
+                throw new Error(
+                    `[SyncHandlerModel] Missing schema/table for mode=${mode}`
+                );
+            }
+
             const query = `
-        SELECT COUNT(1) AS total
-        FROM (
-          SELECT
-            COALESCE(updated_at, created_at, [Modified], [Created]) AS __sync_time,
-            ISNULL(CAST(id AS BIGINT), 0) AS __sync_id
-          FROM camunda.${schemaName}.${tableName}
-        ) src
-        WHERE (
-          src.__sync_time > @lastTime
-          OR (src.__sync_time = @lastTime AND src.__sync_id > @lastSyncId)
-        )
-      `;
+            SELECT COUNT(1) AS total
+            FROM (
+            SELECT
+                COALESCE(updated_at, created_at) AS __sync_time,
+                ISNULL(CAST(id AS BIGINT), 0) AS __sync_id
+            FROM camunda.${schema}.${table}
+            ) src
+            WHERE (
+            src.__sync_time > @lastTime
+            OR (src.__sync_time = @lastTime AND src.__sync_id > @lastSyncId)
+            )
+            `;
 
             const rows = await this.syncModel.queryNewDbTx(query, {
                 lastTime,

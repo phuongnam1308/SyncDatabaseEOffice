@@ -47,14 +47,14 @@ class SyncManagerController extends BaseController {
       const syncCommentModel = new SyncCommentModel();
       await syncCommentModel.initialize();
       const syncCommentHandler = new SyncHandlerModel(syncCommentModel);
-      await syncCommentHandler.registerHandlers(SyncManagerService, 'Đồng bộ ý kiến văn bản');
-      await SyncStateRepository.ensureModel('Đồng bộ ý kiến văn bản'); // Đăng ký vào DB
+      await syncCommentHandler.registerHandlers(SyncManagerService, 'Đồng bộ bình luận văn bản');
+      await SyncStateRepository.ensureModel('Đồng bộ bình luận văn bản'); // Đăng ký vào DB
 
       const streamCommentMigrationModel = new StreamCommentMigrationModel();
       await streamCommentMigrationModel.initialize();
       const streamCommentMigrationHandler = new SyncHandlerModel(streamCommentMigrationModel);
-      await streamCommentMigrationHandler.registerHandlers(SyncManagerService, 'Đồng bộ cơ sở dữ liệu cũ về bảng trung gian: ý kiến văn bản');
-      await SyncStateRepository.ensureModel('Đồng bộ cơ sở dữ liệu cũ về bảng trung gian: ý kiến văn bản'); // Đăng ký vào DB
+      await streamCommentMigrationHandler.registerHandlers(SyncManagerService, 'Đồng bộ cơ sở dữ liệu cũ về bảng trung gian: bình luận văn bản');
+      await SyncStateRepository.ensureModel('Đồng bộ cơ sở dữ liệu cũ về bảng trung gian: bình luận văn bản'); // Đăng ký vào DB
 
       this.initialized = true;
     } catch (error) {
