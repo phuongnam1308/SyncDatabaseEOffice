@@ -216,8 +216,8 @@ class SyncHandlerModel {
      */
     async registerHandlers(syncManagerService, modelName) {
         try {
-            const schemaName = this.syncModel.syncSchema || this.syncModel.oldDbSchema;
-            const tableName = this.syncModel.syncTable || this.syncModel.oldDbTable;
+            const schemaName = this.syncModel.syncSchema || this.syncModel.oldDbSchema || this.syncModel.oldSchema;
+            const tableName = this.syncModel.syncTable || this.syncModel.oldDbTable || this.syncModel.oldTable;
             let fetchFn, countFn, processFn;
 
             if (this.syncModel.syncSchema) {

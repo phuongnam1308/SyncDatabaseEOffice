@@ -29,6 +29,12 @@ class StreamUserMigrationModel extends BaseModel {
     this.newTable = 'users';          // Tên bảng đích
     this.newSchema = 'dbo';           // Schema của bảng đích
     this.sql = sql;                   // Tham chiếu đến thư viện mssql
+
+    // Compatibility with SyncHandlerModel
+    this.oldDbTable = this.oldTable;
+    this.oldDbSchema = this.oldSchema;
+    this.newDbTable = this.newTable;
+    this.newDbSchema = this.newSchema;
   }
 
   /**
