@@ -7,12 +7,12 @@ class FileRelationsModel extends BaseModel {
     super();
 
     // ===== DB NGUỒN =====
-    this.oldDatabase = 'DiOffice';
+    this.oldDatabase = 'camunda';
     this.oldSchema = 'dbo';
     this.oldTable = 'files2';
 
     // ===== DB ĐÍCH =====
-    this.newDatabase = 'DiOffice';
+    this.newDatabase = 'camunda';
     this.newSchema = 'dbo';
     this.newTable = 'file_relations2';
   }

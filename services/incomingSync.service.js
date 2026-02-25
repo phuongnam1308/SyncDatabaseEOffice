@@ -13,9 +13,9 @@ class IncomingSyncService {
   async preview() {
     const sql = `
       SELECT COUNT(*) AS total_can_sync
-      FROM DiOffice.dbo.${this.srcTable} s
+      FROM camunda.dbo.${this.srcTable} s
       WHERE NOT EXISTS (
-        SELECT 1 FROM DiOffice.dbo.${this.destTable} d
+        SELECT 1 FROM camunda.dbo.${this.destTable} d
         WHERE d.document_id = s.document_id
       )
     `;
@@ -27,7 +27,7 @@ class IncomingSyncService {
   async sync(batchSize = 1000) {
     /** ---------- INSERT ---------- */
     const insertSql = `
-      INSERT INTO DiOffice.dbo.${this.destTable} (
+      INSERT INTO camunda.dbo.${this.destTable} (
         document_id,
         status_code,
         created_at,
@@ -90,9 +90,9 @@ class IncomingSyncService {
         s.id_incoming_bak,
         s.TrangThai,
         '${this.tableBackupName}'
-      FROM DiOffice.dbo.${this.srcTable} s
+      FROM camunda.dbo.${this.srcTable} s
       WHERE NOT EXISTS (
-        SELECT 1 FROM DiOffice.dbo.${this.destTable} d
+        SELECT 1 FROM camunda.dbo.${this.destTable} d
         WHERE d.document_id = s.document_id
       )
       ORDER BY s.created_at;
@@ -107,8 +107,8 @@ class IncomingSyncService {
     const updateSql = `
       UPDATE d
       SET d.tb_bak = '${this.tableBackupName}'
-      FROM DiOffice.dbo.${this.destTable} d
-      JOIN DiOffice.dbo.${this.srcTable} s
+      FROM camunda.dbo.${this.destTable} d
+      JOIN camunda.dbo.${this.srcTable} s
         ON d.document_id = s.document_id
       WHERE d.tb_bak IS NULL
     `;

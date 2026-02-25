@@ -98,8 +98,8 @@ class MigrationFileRelations2Service {
       const newCount = await this.model.countNewDb();
 
       return {
-        source: { database: 'DiOffice', schema: 'dbo', table: 'files2', count: oldCount },
-        destination: { database: 'DiOffice', schema: 'dbo', table: 'file_relations2', count: newCount },
+        source: { database: 'camunda', schema: 'dbo', table: 'files2', count: oldCount },
+        destination: { database: 'camunda', schema: 'dbo', table: 'file_relations2', count: newCount },
         migrated: newCount,
         remaining: oldCount - newCount,
         percentage: calculatePercentage(newCount, oldCount)

@@ -7,7 +7,7 @@ const tableMappings = {
 
     newTable: 'book_documents',
     newSchema: 'dbo',
-    newDatabase: 'DiOffice',
+    newDatabase: 'camunda',
 
     fieldMapping: {
       'Title': 'name',                    // Title cũ → name (sổ)

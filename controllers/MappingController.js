@@ -28,7 +28,7 @@ class MappingController extends BaseController {
           table_backups,
           created_at,
           updated_at
-        FROM DiOffice.dbo.users
+        FROM camunda.dbo.users
         WHERE id_user_bak IS NOT NULL OR id_user_del_bak IS NOT NULL
         ORDER BY table_backups, username
       `);
@@ -44,7 +44,7 @@ class MappingController extends BaseController {
           status,
           createdAt AS created_at,
           updatedAt AS updated_at
-        FROM DiOffice.dbo.group_users
+        FROM camunda.dbo.group_users
         WHERE id_group_bk IS NOT NULL
         ORDER BY code
       `);
@@ -63,11 +63,11 @@ class MappingController extends BaseController {
           gu.id AS mapped_group_id,
           gu.name AS mapped_group_name,
           gu.code AS mapped_group_code
-        FROM DiOffice.dbo.user_group_users_bak ug
-        LEFT JOIN DiOffice.dbo.users u 
+        FROM camunda.dbo.user_group_users_bak ug
+        LEFT JOIN camunda.dbo.users u 
           ON ug.id_user_bak = u.id_user_bak 
           OR ug.id_user_bak = u.id_user_del_bak
-        LEFT JOIN DiOffice.dbo.group_users gu 
+        LEFT JOIN camunda.dbo.group_users gu 
           ON ug.id_group_bak = gu.id_group_bk
         ORDER BY ug.table_bak, ug.id_user_bak
       `);
@@ -102,18 +102,18 @@ class MappingController extends BaseController {
 
       // Bước 1: Đổ dữ liệu thật vào bảng user_group_users (nếu chưa tồn tại)
       const insertResult = await pool.request().query(`
-        INSERT INTO DiOffice.dbo.user_group_users (user_id, group_user_id)
+        INSERT INTO camunda.dbo.user_group_users (user_id, group_user_id)
         SELECT DISTINCT
           u.Id AS user_id,                  -- PK của users (sửa nếu tên cột khác)
           gu.id AS group_user_id
-        FROM DiOffice.dbo.user_group_users_bak ug
-        INNER JOIN DiOffice.dbo.users u 
+        FROM camunda.dbo.user_group_users_bak ug
+        INNER JOIN camunda.dbo.users u 
           ON ug.id_user_bak = u.id_user_bak OR ug.id_user_bak = u.id_user_del_bak
-        INNER JOIN DiOffice.dbo.group_users gu 
+        INNER JOIN camunda.dbo.group_users gu 
           ON ug.id_group_bak = gu.id_group_bk
         WHERE NOT EXISTS (
           SELECT 1 
-          FROM DiOffice.dbo.user_group_users tgt 
+          FROM camunda.dbo.user_group_users tgt 
           WHERE tgt.user_id = u.Id AND tgt.group_user_id = gu.id
         );
       `);
@@ -122,8 +122,8 @@ class MappingController extends BaseController {
       const updateTableBak = await pool.request().query(`
         UPDATE ug
         SET ug.table_bak = u.table_backups
-        FROM DiOffice.dbo.user_group_users_bak ug
-        INNER JOIN DiOffice.dbo.users u 
+        FROM camunda.dbo.user_group_users_bak ug
+        INNER JOIN camunda.dbo.users u 
           ON ug.id_user_bak = u.id_user_bak OR ug.id_user_bak = u.id_user_del_bak
         WHERE ug.table_bak IS NULL OR ug.table_bak = '';
       `);

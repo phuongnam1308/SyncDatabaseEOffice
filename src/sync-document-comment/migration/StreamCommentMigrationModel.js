@@ -91,14 +91,14 @@ class StreamCommentMigrationModel extends BaseModel {
     if (!normalized) return null;
 
     const outgoing = await this.queryNewDbTx(
-      `SELECT TOP 1 document_id FROM DiOffice.dbo.outgoing_documents_sync WHERE id_outgoing_bak = @id`,
+      `SELECT TOP 1 document_id FROM camunda.dbo.outgoing_documents_sync WHERE id_outgoing_bak = @id`,
       { id: normalized },
       transaction
     );
     if (outgoing?.length) return { document_id: outgoing[0].document_id, type_document: "OutgoingDocument" };
 
     const incoming = await this.queryNewDbTx(
-      `SELECT TOP 1 document_id FROM DiOffice.dbo.incomming_documents2 WHERE id_incoming_bak = @id`,
+      `SELECT TOP 1 document_id FROM camunda.dbo.incomming_documents2 WHERE id_incoming_bak = @id`,
       { id: normalized },
       transaction
     );
@@ -110,7 +110,7 @@ class StreamCommentMigrationModel extends BaseModel {
   async _getExisting(mapped, transaction) {
     if (!mapped?.id_comments_bak) return null;
     const result = await this.queryNewDbTx(
-      `SELECT TOP 1 id FROM DiOffice.dbo.document_comments_sync WHERE id_comments_bak = @bak AND table_backup = @table`,
+      `SELECT TOP 1 id FROM camunda.dbo.document_comments_sync WHERE id_comments_bak = @bak AND table_backup = @table`,
       { bak: mapped.id_comments_bak, table: mapped.table_backup },
       transaction
     );
@@ -119,7 +119,7 @@ class StreamCommentMigrationModel extends BaseModel {
 
   async _insert(data, transaction) {
     const query = `
-      INSERT INTO DiOffice.dbo.document_comments_sync (
+      INSERT INTO camunda.dbo.document_comments_sync (
         id, document_id, user_id, user_name, content, [type],
         created_at, updated_at, file_id, likes,
         id_comments_bak, document_id_bak, type_bak,
@@ -152,7 +152,7 @@ class StreamCommentMigrationModel extends BaseModel {
 
   async _update(data, transaction) {
     const query = `
-      UPDATE DiOffice.dbo.document_comments_sync
+      UPDATE camunda.dbo.document_comments_sync
       SET
         document_id = @documentId,
         user_id = @userId,
