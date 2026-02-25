@@ -55,7 +55,7 @@ class StreamAuditSyncService {
         logger.info(
           `[${table}] >>> BATCH ${batchCount} START | Records: ${records.length} | ID: ${records.ID}`
         );
-        const result = await model.upsertBatch(records);
+        const result = await model.insertBatchToNewDb(records);
 
         totalInserted += result.inserted;
         totalUpdated += result.updated;

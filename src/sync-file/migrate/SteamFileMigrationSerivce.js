@@ -66,7 +66,7 @@ class StreamFileMigrationService {
       while (hasMore) {
         batchCount += 1;
 
-        const oldRecords = await this.model.fetchBatchFromOldDb({
+        const oldRecords = await this.model.insertBatchToMain({
           batch,
           lastId: lastProcessedId
         });

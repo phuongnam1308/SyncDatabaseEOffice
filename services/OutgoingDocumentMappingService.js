@@ -90,7 +90,7 @@ class OutgoingDocumentMappingService {
     try {
       const query = `
         SELECT TOP 1 id
-        FROM camunda.dbo.crm_sources
+        FROM DiOffice.dbo.crm_sources
         WHERE code = @code
       `;
       const result = await this.model.queryNewDb(query, { code });
@@ -115,7 +115,7 @@ class OutgoingDocumentMappingService {
       // Check xem đã tồn tại chưa
       const checkQuery = `
         SELECT TOP 1 id, value
-        FROM camunda.dbo.crm_source_data
+        FROM DiOffice.dbo.crm_source_data
         WHERE source_id = @sourceId AND value = @value
       `;
       const existing = await this.model.queryNewDb(checkQuery, { sourceId, value });
@@ -128,7 +128,7 @@ class OutgoingDocumentMappingService {
       // Insert mới
       const id = uuidv4();
       const insertQuery = `
-        INSERT INTO camunda.dbo.crm_source_data (id, source_id, title, value, createdAt, updatedAt)
+        INSERT INTO DiOffice.dbo.crm_source_data (id, source_id, title, value, createdAt, updatedAt)
         VALUES (@id, @sourceId, @title, @value, GETDATE(), GETDATE())
       `;
       

@@ -269,7 +269,7 @@ class StreamUserMigrationService {
         logger.info(`BATCH ${batchCount}`);
         
         // 1. Lấy dữ liệu từ DB cũ
-        const oldRecords = await this.model.fetchBatchFromOldDb({ batch, lastId: lastProcessedId });
+        const oldRecords = await this.model.insertBatchToNewDb({ batch, lastId: lastProcessedId });
 
         // Nếu không còn bản ghi nào, dừng lại
         if (!oldRecords || oldRecords.length === 0) {

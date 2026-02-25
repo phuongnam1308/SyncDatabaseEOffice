@@ -193,7 +193,7 @@ class MigrationDonViService {
           count: oldCount
         },
         destination: {
-          database: 'camunda',
+          database: 'DiOffice',
           table: 'organization_units',
           count: newCount
         },

@@ -7,7 +7,7 @@ module.exports = {
     },
 
     target: {
-      database: 'camunda',
+      database: 'DiOffice',
       schema: 'dbo',
       table: 'document_comments2'
     },

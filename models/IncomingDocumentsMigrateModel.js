@@ -11,7 +11,7 @@ class IncomingDocumentsMigrateModel extends BaseModel {
    */
   async migrate(limit = 100) {
     const query = `
-      INSERT INTO camunda.dbo.incomming_documents (
+      INSERT INTO DiOffice.dbo.incomming_documents (
         document_id, status_code, created_at, updated_at,
         book_document_id, abstract_note, to_book,
         sender_unit, receiver_unit, document_date, receive_date,
@@ -53,10 +53,10 @@ class IncomingDocumentsMigrateModel extends BaseModel {
         s.ModifiedBy, s.CreatedBy, s.DGPId,
         1 AS tb_update,
         'incomming_documents2' AS tb_bak
-      FROM camunda.dbo.incomming_documents2 s
+      FROM DiOffice.dbo.incomming_documents2 s
       WHERE NOT EXISTS (
         SELECT 1
-        FROM camunda.dbo.incomming_documents d
+        FROM DiOffice.dbo.incomming_documents d
         WHERE d.document_id = s.document_id
       )
       ORDER BY s.created_at;

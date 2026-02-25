@@ -130,7 +130,7 @@ class MigrationTaskDeleteService {
 
       return {
         source: { database: 'DataEOfficeSNP', schema: 'dbo', table: 'TaskVBDenDelete', count: oldCount },
-        destination: { database: 'camunda', schema: 'dbo', table: 'task2', count: newCount },
+        destination: { database: 'DiOffice', schema: 'dbo', table: 'task2', count: newCount },
         migrated: newCount,  // Không chính xác, nhưng để giống
         remaining: oldCount - newCount,
         percentage: calculatePercentage(newCount, oldCount)

@@ -22,7 +22,7 @@ class AuditOutgoingSyncModel {
       SELECT TOP (${limit})
         a.id,
         a.VBId
-      FROM camunda.dbo.audit2 a
+      FROM DiOffice.dbo.audit2 a
       WHERE a.type_document = 'OutgoingDocument'
         AND a.document_id IS NULL
         AND a.VBId IS NOT NULL
@@ -37,7 +37,7 @@ class AuditOutgoingSyncModel {
       .input('vbId', mssql.NVarChar(255), vbId)
       .query(`
         SELECT TOP 1 id
-        FROM camunda.dbo.outgoing_documents
+        FROM DiOffice.dbo.outgoing_documents
         WHERE id_outgoing_bak = @vbId
           AND tb_bak = 1
       `);
@@ -52,7 +52,7 @@ class AuditOutgoingSyncModel {
       .input('auditId', mssql.Int, auditId)
       .input('docId', mssql.Int, documentId)
       .query(`
-        UPDATE camunda.dbo.audit2
+        UPDATE DiOffice.dbo.audit2
         SET document_id = @docId
         WHERE id = @auditId
       `);

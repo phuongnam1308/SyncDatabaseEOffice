@@ -1,11 +1,11 @@
-const BaseController     = require('../../controllers/BaseController');
+const BaseController = require('../../controllers/BaseController');
 const SyncManagerService = require('./SyncManagerService');
-const SyncOutgoingModel  = require('../sync-outgoing-document/apply/SyncOutgoingModel');
-const StreamOutgoingMigrationModel  = require('../sync-outgoing-document/migrate/StreamOutgoingMigrationModel');
-const SyncAuditModel     = require('../sync-audit/apply/SyncAuditModel');
-const SyncHandlerModel   = require('./SyncHandlerModel');
-const SyncStateRepository = require('./SyncStateRepository'); 
-const logger             = require('../../utils/logger');
+const SyncOutgoingModel = require('../sync-outgoing-document/apply/SyncOutgoingModel');
+const StreamOutgoingMigrationModel = require('../sync-outgoing-document/migrate/StreamOutgoingMigrationModel');
+const SyncAuditModel = require('../sync-audit/apply/SyncAuditModel');
+const SyncHandlerModel = require('./SyncHandlerModel');
+const SyncStateRepository = require('./SyncStateRepository');
+const logger = require('../../utils/logger');
 const StreamCommentMigrationModel = require('../sync-document-comment/migration/StreamCommentMigrationModel');
 const SyncCommentModel = require('../sync-document-comment/apply/SyncCommentModel');
 const StreamOutgoingAuditSyncModel = require('../sync-audit/migrate/StreamAuditMigrationModel');
@@ -56,6 +56,13 @@ class SyncManagerController extends BaseController {
       await streamCommentMigrationHandler.registerHandlers(SyncManagerService, 'Đồng bộ cơ sở dữ liệu cũ về bảng trung gian: ý kiến văn bản');
       await SyncStateRepository.ensureModel('Đồng bộ cơ sở dữ liệu cũ về bảng trung gian: ý kiến văn bản'); // Đăng ký vào DB
 
+      // Register SYNC_FILE
+      const SyncFileModel = require('../sync-file/apply/SyncFileModel');
+      const fileModel = new SyncFileModel();
+      await fileModel.initialize();
+      const fileHandler = new SyncHandlerModel(fileModel);
+      await fileHandler.registerHandlers(SyncManagerService, 'Đồng bộ file tài liệu');
+
       this.initialized = true;
     } catch (error) {
       logger.error('[SyncManagerController] Failed to initialize:', error);
@@ -87,21 +94,21 @@ class SyncManagerController extends BaseController {
   pauseJobSync = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
     const { jobId } = req.params;
-    const result    = SyncManagerService.pauseJob(jobId);
+    const result = SyncManagerService.pauseJob(jobId);
     return this.success(res, result, 'Đồng chí đã yêu cầu dừng lại tiến trình');
   });
 
   resumeJobSync = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
     const { jobId } = req.params;
-    const result    = SyncManagerService.resumeJob(jobId);
+    const result = SyncManagerService.resumeJob(jobId);
     return this.success(res, result, 'Đã tiếp tục tiến trình phần mềm');
   });
 
   getJobSyncStatus = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
     const { jobId } = req.params;
-    const job       = SyncManagerService.getJob(jobId);
+    const job = SyncManagerService.getJob(jobId);
     if (!job) return this.notFound(res, `Không tìm thấy bản ghi với số mã : ${jobId}`);
     return this.success(res, job);
   });
@@ -114,9 +121,9 @@ class SyncManagerController extends BaseController {
    */
   sseEvents = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
-    res.setHeader('Content-Type',      'text/event-stream');
-    res.setHeader('Cache-Control',     'no-cache');
-    res.setHeader('Connection',        'keep-alive');
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
     const ka = setInterval(() => {
       try { res.write(': ka\n\n'); } catch (_) { clearInterval(ka); }
@@ -129,7 +136,7 @@ class SyncManagerController extends BaseController {
 
   getDashboard = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
-    
+
     // THAY ĐỔI: Lấy dữ liệu từ DB (Repository) thay vì JSON (Service)
     // const data = await SyncManagerService.getDashboardData(); 
     const data = await SyncStateRepository.getDashboardData();
@@ -184,8 +191,8 @@ class SyncManagerController extends BaseController {
           <tbody id="sync-tbody">${initialRows}</tbody>
         </table>
         ${Object.keys(data.entities).length === 0
-          ? '<p class="text-center text-muted">Chưa có đối tượng nào được đăng kí đồng bộ liên hệ quản trị viên</p>'
-          : ''}
+        ? '<p class="text-center text-muted">Chưa có đối tượng nào được đăng kí đồng bộ liên hệ quản trị viên</p>'
+        : ''}
       </div>
       <div class="card-footer text-muted d-flex justify-content-between">
         <span>Cập nhật realtime qua SSE (không còn refresh 5s)</span>
@@ -386,12 +393,12 @@ if (cur && ['RUNNING','RESUMING','PAUSE_REQUESTED'].includes(cur.status)) {
           return tb - ta;
         });
 
-      const rp  = rel.find((j) => ['RUNNING','PAUSE_REQUESTED','RESUMING','PAUSED'].includes(j.status));
+      const rp = rel.find((j) => ['RUNNING', 'PAUSE_REQUESTED', 'RESUMING', 'PAUSED'].includes(j.status));
       const cur = (info.activeJobId && jobs && jobs[info.activeJobId])
         ? jobs[info.activeJobId] : (rp || rel[0] || null);
 
       let ms = (info.status || 'IDLE').toUpperCase();
-      if (cur && ['RUNNING','RESUMING','PAUSE_REQUESTED'].includes(cur.status)) {
+      if (cur && ['RUNNING', 'RESUMING', 'PAUSE_REQUESTED'].includes(cur.status)) {
         const last = new Date(cur.updatedAt || cur.startedAt || 0).getTime();
         if (Date.now() - last > 60000) {
           cur.status = 'CRASHED';
@@ -400,10 +407,10 @@ if (cur && ['RUNNING','RESUMING','PAUSE_REQUESTED'].includes(cur.status)) {
       }
       const js = cur ? String(cur.status || '').toUpperCase() : null;
 
-      const canStart  = ['IDLE','COMPLETED','FAILED','CRASHED'].includes(ms);
-      const canPause  = js === 'RUNNING' || js === 'RESUMING';
-      const canResume = ms === 'PAUSED'  || js === 'PAUSED';
-      const rid       = canResume ? ((cur && cur.jobId) || info.activeJobId || '') : '';
+      const canStart = ['IDLE', 'COMPLETED', 'FAILED', 'CRASHED'].includes(ms);
+      const canPause = js === 'RUNNING' || js === 'RESUMING';
+      const canResume = ms === 'PAUSED' || js === 'PAUSED';
+      const rid = canResume ? ((cur && cur.jobId) || info.activeJobId || '') : '';
 
       const mapVN = {
         'IDLE': 'Sẵn sàng', 'RUNNING': 'Đang chạy', 'RESUMING': 'Đang tiếp tục',
@@ -414,12 +421,12 @@ if (cur && ['RUNNING','RESUMING','PAUSE_REQUESTED'].includes(cur.status)) {
 
       let pClass = 'bg-primary';
       if (ms === 'COMPLETED') pClass = 'bg-success';
-      else if (['FAILED','CRASHED','ERROR'].includes(ms)) pClass = 'bg-danger';
+      else if (['FAILED', 'CRASHED', 'ERROR'].includes(ms)) pClass = 'bg-danger';
       else if (ms === 'PAUSED') pClass = 'bg-warning text-dark';
 
-      const pct  = info.currentProgressPercent;
-const prog = pct != null
-  ? `<div class="progress" style="height:20px;">
+      const pct = info.currentProgressPercent;
+      const prog = pct != null
+        ? `<div class="progress" style="height:20px;">
        <div class="progress-bar ${pClass}" role="progressbar"
             style="width:${pct}%"
             aria-valuenow="${pct}"
@@ -428,11 +435,11 @@ const prog = pct != null
          ${pct}%
        </div>
      </div>`
-  : '-';
+        : '-';
       const sync = info.currentTotalToSync != null
         ? `${(info.currentSynced || 0).toLocaleString()} / ${info.currentTotalToSync.toLocaleString()}`
         : '-';
-      const ji   = cur ? `${cur.jobId}<br/><small>${cur.status}</small>` : '-';
+      const ji = cur ? `${cur.jobId}<br/><small>${cur.status}</small>` : '-';
 
       return `<tr>
         <td>${name}</td>
@@ -441,12 +448,12 @@ const prog = pct != null
         <td><strong>${sync}</strong></td>
         <td>${pct != null ? pct + '%' : '-'}</td>
         <td>${info.lastSyncTime ? new Date(info.lastSyncTime).toLocaleString('vi-VN') : '-'}</td>
-        <td>${info.lastRun      ? new Date(info.lastRun).toLocaleString('vi-VN')      : '-'}</td>
+        <td>${info.lastRun ? new Date(info.lastRun).toLocaleString('vi-VN') : '-'}</td>
         <td>${ji}</td>
         <td>
-          <button class="btn btn-sm btn-primary me-1"        onclick="startModel('${name}',false)" ${canStart  ? '' : 'disabled'}>Chạy đồng bộ</button>
-          <button class="btn btn-sm btn-outline-danger me-1" onclick="startModel('${name}',true)"  ${canStart  ? '' : 'disabled'}>Chạy lại</button>
-          <button class="btn btn-sm btn-warning me-1"        onclick="pauseJob('${cur ? cur.jobId : ''}')"  ${canPause  ? '' : 'disabled'}>Dừng lại</button>
+          <button class="btn btn-sm btn-primary me-1"        onclick="startModel('${name}',false)" ${canStart ? '' : 'disabled'}>Chạy đồng bộ</button>
+          <button class="btn btn-sm btn-outline-danger me-1" onclick="startModel('${name}',true)"  ${canStart ? '' : 'disabled'}>Chạy lại</button>
+          <button class="btn btn-sm btn-warning me-1"        onclick="pauseJob('${cur ? cur.jobId : ''}')"  ${canPause ? '' : 'disabled'}>Dừng lại</button>
           <button class="btn btn-sm btn-success"             onclick="resumeJob('${rid}')"                  ${canResume ? '' : 'disabled'}>Tiếp tục</button>
         </td>
       </tr>`;

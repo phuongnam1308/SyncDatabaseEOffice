@@ -12,7 +12,7 @@ class IncomingDocumentSyncModel {
   async connect() {
     if (!this.pool) {
       this.pool = await mssql.connect(newDbConfig);
-      logger.info('[SyncModel] Kết nối camunda OK');
+      logger.info('[SyncModel] Kết nối DiOffice OK');
     }
     return this.pool;
   }
@@ -29,7 +29,7 @@ class IncomingDocumentSyncModel {
     const pool = await this.connect();
     const result = await pool.request().query(`
       SELECT TOP ${limit} *
-      FROM camunda.dbo.incomming_documents2
+      FROM DiOffice.dbo.incomming_documents2
       ORDER BY id_incoming_bak
     `);
     return result.recordset;
@@ -42,7 +42,7 @@ class IncomingDocumentSyncModel {
       .input('bak', mssql.NVarChar(255), id_incoming_bak)
       .query(`
         SELECT TOP 1 1 
-        FROM camunda.dbo.incomming_documents 
+        FROM DiOffice.dbo.incomming_documents 
         WHERE id_incoming_bak = @bak
       `);
     return result.recordset.length > 0;
@@ -56,7 +56,7 @@ class IncomingDocumentSyncModel {
     const columns = Object.keys(cleaned);
     const placeholders = columns.map(col => `@${col}`).join(', ');
     const query = `
-      INSERT INTO camunda.dbo.incomming_documents 
+      INSERT INTO DiOffice.dbo.incomming_documents 
       (${columns.join(', ')}) 
       VALUES (${placeholders})
     `;
@@ -99,8 +99,8 @@ class IncomingDocumentSyncModel {
   async getStatistics() {
     const pool = await this.connect();
     const [sourceRes, destRes] = await Promise.all([
-      pool.request().query(`SELECT COUNT(*) as cnt FROM camunda.dbo.incomming_documents2`),
-      pool.request().query(`SELECT COUNT(*) as cnt FROM camunda.dbo.incomming_documents`)
+      pool.request().query(`SELECT COUNT(*) as cnt FROM DiOffice.dbo.incomming_documents2`),
+      pool.request().query(`SELECT COUNT(*) as cnt FROM DiOffice.dbo.incomming_documents`)
     ]);
 
     const source = sourceRes.recordset[0].cnt;

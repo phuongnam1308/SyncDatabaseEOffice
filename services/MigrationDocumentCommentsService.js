@@ -24,7 +24,7 @@ class MigrationDocumentCommentsService {
       // Thử tìm trong incoming_documents trước
       const incomingQuery = `
         SELECT TOP 1 document_id
-        FROM camunda.dbo.incomming_documents2
+        FROM DiOffice.dbo.incomming_documents2
         WHERE id_incoming_bak = @documentIdBak
       `;
       
@@ -36,7 +36,7 @@ class MigrationDocumentCommentsService {
       // Nếu không tìm thấy, thử tìm trong outgoing_documents
       const outgoingQuery = `
         SELECT TOP 1 document_id
-        FROM camunda.dbo.outgoing_documents2
+        FROM DiOffice.dbo.outgoing_documents2
         WHERE id_outgoing_bak = @documentIdBak
       `;
       

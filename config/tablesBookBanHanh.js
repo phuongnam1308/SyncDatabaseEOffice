@@ -7,7 +7,7 @@
 
 //     newTable: 'book_documents',
 //     newSchema: 'dbo',
-//     newDatabase: 'camunda',
+//     newDatabase: 'DiOffice',
 
 //     fieldMapping: {
 //       'SoVanBan': 'to_book_code',         // SoVanBan → to_book_code (unique key cho sổ)
@@ -47,7 +47,7 @@ const tableMappings = {
 
     newTable: 'book_documents',
     newSchema: 'dbo',
-    newDatabase: 'camunda',
+    newDatabase: 'DiOffice',
 
     fieldMapping: {
       'SoVanBan': 'to_book_code',         // SoVanBan → to_book_code (unique key cho sổ)

@@ -16,14 +16,14 @@ class SyncAuditModel extends BaseModel {
     try {
       const countSyncQuery = `
         SELECT COUNT(*) AS total
-        FROM camunda.${this.syncSchema}.${this.syncTable}
+        FROM DiOffice.${this.syncSchema}.${this.syncTable}
       `;
       const syncResult = await this.queryNewDbTx(countSyncQuery);
       const totalInSync = syncResult[0]?.total || 0;
 
       const countMainQuery = `
         SELECT COUNT(*) AS total
-        FROM camunda.${this.mainSchema}.${this.mainTable}
+        FROM DiOffice.${this.mainSchema}.${this.mainTable}
       `;
       const mainResult = await this.queryNewDbTx(countMainQuery);
       const totalInMain = mainResult[0]?.total || 0;
@@ -43,7 +43,7 @@ class SyncAuditModel extends BaseModel {
     try {
       let query = `
         SELECT TOP (@batch) *
-        FROM camunda.${this.syncSchema}.${this.syncTable}
+        FROM DiOffice.${this.syncSchema}.${this.syncTable}
         WHERE 1=1
       `;
 
@@ -82,7 +82,7 @@ class SyncAuditModel extends BaseModel {
         try {
           let existingQuery = `
             SELECT TOP 1 id
-            FROM camunda.${this.mainSchema}.${this.mainTable}
+            FROM DiOffice.${this.mainSchema}.${this.mainTable}
             WHERE document_id = @documentId
               AND [time] = @time
           `;
@@ -133,7 +133,7 @@ class SyncAuditModel extends BaseModel {
 
   async _insertRecord(record, transaction) {
     const query = `
-      INSERT INTO camunda.${this.mainSchema}.${this.mainTable} (
+      INSERT INTO DiOffice.${this.mainSchema}.${this.mainTable} (
         document_id, [time], user_id, display_name, [role],
         action_code, from_node_id, to_node_id, details, origin_id,
         created_by, receiver, receiver_unit, group_, roleProcess,
@@ -155,7 +155,7 @@ class SyncAuditModel extends BaseModel {
 
   async _updateRecord(record, transaction) {
     const query = `
-      UPDATE camunda.${this.mainSchema}.${this.mainTable}
+      UPDATE DiOffice.${this.mainSchema}.${this.mainTable}
       SET
         display_name = @display_name,
         [role] = @role,
