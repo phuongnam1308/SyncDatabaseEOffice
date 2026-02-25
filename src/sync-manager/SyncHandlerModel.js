@@ -65,13 +65,8 @@ class SyncHandlerModel {
                 );
             }
 
-            // Sửa: Xử lý lastSyncId cho bảng dùng GUID (PersonalProfile)
-            let lastSyncId = cursor.lastSyncId;
-            if (tableName === 'PersonalProfile') {
-                lastSyncId = lastSyncId ? String(lastSyncId) : '0';
-            } else {
-                lastSyncId = lastSyncId || 0;
-            }
+            // Sửa: Không ép kiểu Number cho lastSyncId để hỗ trợ GUID
+            const lastSyncId = cursor.lastSyncId || 0;
 
             // Sửa: Thêm PersonalProfile vào danh sách dùng NgayTao
             const timeColumn = (tableName.includes('LuanChuyen') || tableName === 'PersonalProfile')
@@ -93,10 +88,6 @@ class SyncHandlerModel {
             )
             ORDER BY [${timeColumn}] ASC, id ASC
             `;
-
-            if (tableName === 'PersonalProfile') {
-                logger.info(`[SyncHandlerModel] Querying PersonalProfile: lastTime=${lastTime}, lastSyncId=${lastSyncId} (type=${typeof lastSyncId})`);
-            }
 
             const records = await this.syncModel.queryOldDb(query, {
                 lastTime,
@@ -200,13 +191,6 @@ class SyncHandlerModel {
                 ? 'NgayTao'
                 : 'Created';
 
-            let safeLastSyncId = lastSyncId;
-            if (tableName === 'PersonalProfile') {
-                safeLastSyncId = lastSyncId ? String(lastSyncId) : '0';
-            } else {
-                safeLastSyncId = lastSyncId || 0;
-            }
-
             const query = `
             SELECT COUNT(1) AS total
             FROM ${this.dbOldName}.${schemaName}.${tableName}
@@ -218,7 +202,7 @@ class SyncHandlerModel {
 
             const rows = await this.syncModel.queryOldDb(query, {
                 lastTime,
-                lastSyncId: safeLastSyncId
+                lastSyncId: lastSyncId || 0
             });
 
             return Number(rows?.[0]?.total || 0);
