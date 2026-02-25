@@ -67,19 +67,20 @@ class SyncHandlerModel {
 
             // Sửa: Xử lý lastSyncId cho bảng dùng GUID (PersonalProfile)
             let lastSyncId = cursor.lastSyncId;
-            if (tableName === 'PersonalProfile') {
+            // Sửa: Dùng includes để bắt cả trường hợp dbo.PersonalProfile
+            if (tableName && tableName.includes('PersonalProfile')) {
                 lastSyncId = lastSyncId ? String(lastSyncId) : '0';
             } else {
                 lastSyncId = lastSyncId || 0;
             }
 
             // Sửa: Thêm PersonalProfile vào danh sách dùng NgayTao
-            const timeColumn = (tableName.includes('LuanChuyen') || tableName === 'PersonalProfile')
+            const timeColumn = (tableName.includes('LuanChuyen') || tableName.includes('PersonalProfile'))
                 ? 'NgayTao'
                 : 'Created';
 
             // Sửa: Nếu là PersonalProfile (GUID) thì không cast sang BIGINT
-            const idColumn = tableName === 'PersonalProfile' ? 'id' : 'ISNULL(CAST(id AS BIGINT), 0)';
+            const idColumn = (tableName && tableName.includes('PersonalProfile')) ? 'id' : 'ISNULL(CAST(id AS BIGINT), 0)';
 
             const query = `
             SELECT TOP (@limit)
@@ -94,7 +95,7 @@ class SyncHandlerModel {
             ORDER BY [${timeColumn}] ASC, id ASC
             `;
 
-            if (tableName === 'PersonalProfile') {
+            if (tableName && tableName.includes('PersonalProfile')) {
                 logger.info(`[SyncHandlerModel] Querying PersonalProfile: lastTime=${lastTime}, lastSyncId=${lastSyncId} (type=${typeof lastSyncId})`);
             }
 
@@ -196,12 +197,12 @@ class SyncHandlerModel {
             }
 
             // Sửa: Thêm PersonalProfile
-            const timeColumn = (tableName.includes('LuanChuyen') || tableName === 'PersonalProfile')
+            const timeColumn = (tableName.includes('LuanChuyen') || tableName.includes('PersonalProfile'))
                 ? 'NgayTao'
                 : 'Created';
 
             let safeLastSyncId = lastSyncId;
-            if (tableName === 'PersonalProfile') {
+            if (tableName && tableName.includes('PersonalProfile')) {
                 safeLastSyncId = lastSyncId ? String(lastSyncId) : '0';
             } else {
                 safeLastSyncId = lastSyncId || 0;
