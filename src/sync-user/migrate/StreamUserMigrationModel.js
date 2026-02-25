@@ -37,6 +37,78 @@ class StreamUserMigrationModel extends BaseModel {
     this.newDbSchema = this.newSchema;
   }
 
+  // Helper: Map dữ liệu từ record cũ sang record mới
+  mapRecord(oldRecord) {
+    const safeString = (val) => (val ? String(val).trim() : null);
+    const safeDate = (val) => (val ? new Date(val) : null);
+
+    // Xử lý giới tính
+    let gender = null;
+    if (oldRecord.Gender === 1) gender = 'nam';
+    else if (oldRecord.Gender === 0) gender = 'nu';
+
+    // Xử lý trạng thái (-1 là nghỉ việc/xóa -> 3, còn lại là 1)
+    let status = 1;
+    if (oldRecord.WorkStatus === -1) status = 3;
+
+    return {
+      id: require('uuid').v4().toUpperCase(),
+      password: process.env.DEFAULT_USER_PASSWORD || '$10$mH.NYj.Bapxk4auiGaPKhOfCqUnA8jr1JO5fvP3miKbhIfwU3CVRa',
+      name: safeString(oldRecord.FullName || oldRecord.AccountName || 'Unknown'),
+      avatar: oldRecord.Image || '[]',
+      username: oldRecord.AccountName,
+      email_user: safeString(oldRecord.Email),
+      phone_number_user: safeString(oldRecord.Mobile),
+      position: safeString(oldRecord.Position),
+      leader: safeString(oldRecord.Manager),
+      address_user: safeString(oldRecord.Address),
+      orders: oldRecord.Orders || 1000,
+      birthday: safeDate(oldRecord.BirthDay),
+      gender: gender,
+      identification_card: safeString(oldRecord.CMND),
+      status: status,
+      created_at: safeDate(oldRecord.NgayTao) || new Date(),
+      updated_at: safeDate(oldRecord.Modified) || new Date(),
+      
+      // Các trường backup/mapping
+      id_user_bak: oldRecord.ID,
+      AccountID: safeString(oldRecord.AccountID),
+      Department: safeString(oldRecord.Department),
+      DepartmentId: safeString(oldRecord.DepartmentId),
+      PhongBanID: safeString(oldRecord.PhongBanID),
+      IsTCT: oldRecord.IsTCT,
+      table_backups: 'PersonalProfile'
+    };
+  }
+
+  // Hàm được SyncHandlerModel gọi để xử lý batch
+  async insertBatchToNewDb(records) {
+    if (!records || records.length === 0) return;
+
+    for (const oldRecord of records) {
+      try {
+        // 1. Kiểm tra tồn tại (dựa vào ID backup)
+        const existing = await this.findByBackupId(oldRecord.ID);
+        if (existing) continue; 
+
+        // 2. Kiểm tra trùng username
+        if (oldRecord.AccountName) {
+          const usernameExists = await this.checkUsernameExists(oldRecord.AccountName);
+          if (usernameExists) continue;
+        }
+
+        // 3. Map dữ liệu
+        const newRecord = this.mapRecord(oldRecord);
+
+        // 4. Insert
+        await this.insertToNewDb(newRecord);
+      } catch (err) {
+        logger.error(`[StreamUserMigrationModel] Error processing user ${oldRecord.AccountName}: ${err.message}`);
+        // Không throw để tiếp tục xử lý các record khác trong batch
+      }
+    }
+  }
+
   /**
    * Lấy một "đợt" (batch) các bản ghi người dùng từ cơ sở dữ liệu cũ.
    * Dữ liệu được lấy tuần tự dựa trên `ID` để đảm bảo không bỏ sót và không xử lý lại.
