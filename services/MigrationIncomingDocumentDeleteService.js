@@ -97,7 +97,7 @@ class MigrationIncomingDocumentDeleteService {
 
       return {
         source: { database: 'DataEOfficeSNP', schema: 'dbo', table: 'VanBanDenDelete', count: oldCount },
-        destination: { database: 'camunda', table: 'incomming_documents', count: newCount },
+        destination: { database: process.env.NEW_DB_NAME, table: 'incomming_documents', count: newCount },
         migrated: newCount,
         remaining: oldCount - newCount,
         percentage: calculatePercentage(newCount, oldCount)

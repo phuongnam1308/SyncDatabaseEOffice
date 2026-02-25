@@ -7,12 +7,12 @@ class FileRelationsModel extends BaseModel {
     super();
 
     // ===== DB NGUỒN =====
-    this.oldDatabase = 'camunda';
+    this.oldDatabase = process.env.NEW_DB_NAME;
     this.oldSchema = 'dbo';
     this.oldTable = 'files2';
 
     // ===== DB ĐÍCH =====
-    this.newDatabase = 'camunda';
+    this.newDatabase = process.env.NEW_DB_NAME;
     this.newSchema = 'dbo';
     this.newTable = 'file_relations2';
   }

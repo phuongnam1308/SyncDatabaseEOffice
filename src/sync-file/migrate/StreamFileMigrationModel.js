@@ -5,7 +5,7 @@ class StreamFileMigrationModel extends BaseModel {
     constructor() {
         super();
         //WSS_Content_eoffice_khkd
-        this.dbName = 'camunda';
+        this.dbName = process.env.NEW_DB_NAME;
         this.oldDbSchema = "dbo";
         this.oldDbTable = "AllDocs";
         this.newDbSchema = "dbo";

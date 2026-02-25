@@ -97,7 +97,7 @@
 
 //       return {
 //         source: { database: 'DataEOfficeSNP', schema: 'dbo', table: 'VanBanBanHanh', count: oldCount },
-//         destination: { database: 'camunda', table: 'outgoing_documents', count: newCount },
+//         destination: { database: process.env.NEW_DB_NAME, table: 'outgoing_documents', count: newCount },
 //         migrated: newCount,
 //         remaining: oldCount - newCount,
 //         percentage: calculatePercentage(newCount, oldCount)

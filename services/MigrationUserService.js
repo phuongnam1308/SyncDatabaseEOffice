@@ -112,7 +112,7 @@
 
 //       return {
 //         source: { database: 'DataEOfficeSNP', schema: 'SNP', table: 'User', count: oldCount },
-//         destination: { database: 'camunda', table: 'users', count: newCount },
+//         destination: { database: process.env.NEW_DB_NAME, table: 'users', count: newCount },
 //         migrated: newCount,
 //         remaining: oldCount - newCount,
 //         percentage: calculatePercentage(newCount, oldCount)
@@ -506,7 +506,7 @@ class MigrationUserService {
           count: oldCount 
         },
         destination: { 
-          database: 'camunda', 
+          database: process.env.NEW_DB_NAME, 
           schema: 'dbo',
           table: 'users', 
           count: newCount 

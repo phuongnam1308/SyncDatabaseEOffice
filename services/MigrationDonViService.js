@@ -193,7 +193,7 @@ class MigrationDonViService {
           count: oldCount
         },
         destination: {
-          database: 'camunda',
+          database: process.env.NEW_DB_NAME,
           table: 'organization_units',
           count: newCount
         },

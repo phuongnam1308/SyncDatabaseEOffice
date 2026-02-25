@@ -7,7 +7,7 @@ const logger = require('../../utils/logger');
 class SyncHandlerModel {
     constructor(syncModel) {
         this.syncModel = syncModel;
-        this.dbName = 'camunda';
+        this.dbName = process.env.NEW_DB_NAME;
         this.dbOldName = 'DataEOfficeSNP';
     }
 

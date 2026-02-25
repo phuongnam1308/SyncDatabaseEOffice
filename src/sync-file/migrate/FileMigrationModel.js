@@ -24,7 +24,7 @@ class FileMigrationModel extends BaseModel {
 
       const countNewQuery = `
         SELECT COUNT(*) AS total
-        FROM camunda.${this.newDbSchema}.${this.newDbTable}
+        FROM ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable}
         WHERE table_backup = 'file_migration'
       `;
       const newResult = await this.queryNewDbTx(countNewQuery);
@@ -32,7 +32,7 @@ class FileMigrationModel extends BaseModel {
 
       const lastIdQuery = `
         SELECT TOP 1 id_outgoing_bak
-        FROM camunda.${this.newDbSchema}.${this.newDbTable}
+        FROM ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable}
         WHERE table_backup = 'file_migration'
         ORDER BY createdAt DESC
       `;
@@ -209,7 +209,7 @@ class FileMigrationModel extends BaseModel {
       for (const record of records) {
         try {
           const existingQuery = `
-            SELECT id FROM camunda.${this.newDbSchema}.${this.newDbTable}
+            SELECT id FROM ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable}
             WHERE id_outgoing_bak = @oldId AND table_backup = 'file_migration'
           `;
           const existing = await this.queryNewDbTx(existingQuery, { oldId: record.id_outgoing_bak }, transaction);
@@ -349,7 +349,7 @@ class FileMigrationModel extends BaseModel {
   async rollback(options = {}) {
     try {
       const query = `
-        DELETE FROM camunda.${this.newDbSchema}.${this.newDbTable}
+        DELETE FROM ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable}
         WHERE table_backup = 'file_migration'
       `;
 

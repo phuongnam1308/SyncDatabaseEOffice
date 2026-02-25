@@ -22,7 +22,7 @@ class AuditIncomingSyncModel {
       SELECT TOP (${limit})
         a.id,
         a.VBId
-      FROM camunda.dbo.audit2 a
+      FROM ${process.env.NEW_DB_NAME}.dbo.audit2 a
       WHERE a.type_document = 'IncomingDocument'
         AND a.document_id IS NULL
         AND a.VBId IS NOT NULL
@@ -37,7 +37,7 @@ class AuditIncomingSyncModel {
       .input('vbId', mssql.NVarChar(255), vbId)
       .query(`
         SELECT TOP 1 document_id
-        FROM camunda.dbo.incomming_documents
+        FROM ${process.env.NEW_DB_NAME}.dbo.incomming_documents
         WHERE id_incoming_bak = @vbId
           AND tb_bak = 1
       `);
@@ -52,7 +52,7 @@ class AuditIncomingSyncModel {
       .input('auditId', mssql.Int, auditId)
       .input('docId', mssql.VarChar(64), documentId)
       .query(`
-        UPDATE camunda.dbo.audit2
+        UPDATE ${process.env.NEW_DB_NAME}.dbo.audit2
         SET document_id = @docId
         WHERE id = @auditId
       `);

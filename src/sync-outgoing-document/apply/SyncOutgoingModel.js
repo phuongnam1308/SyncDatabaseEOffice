@@ -6,7 +6,7 @@ const sql = require('mssql');
 class SyncOutgoingModel extends BaseModel {
   constructor() {
     super();
-    this.dbName = 'camunda';
+    this.dbName = process.env.NEW_DB_NAME;
     this.syncSchema = "dbo";
     this.syncTable = "outgoing_documents_sync";
     this.mainSchema = "dbo";

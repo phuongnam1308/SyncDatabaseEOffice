@@ -102,7 +102,7 @@ class MigrationUserInGroupService {
 
       return {
         source: { database: 'DataEOfficeSNP', schema: 'dbo', table: 'UserInGroup', count: oldCount },
-        destination: { database: 'camunda', table: 'user_group_users_bak', count: newCount },
+        destination: { database: process.env.NEW_DB_NAME, table: 'user_group_users_bak', count: newCount },
         migrated: newCount,
         remaining: oldCount - newCount,
         percentage: (newCount / oldCount * 100).toFixed(2) + '%'
