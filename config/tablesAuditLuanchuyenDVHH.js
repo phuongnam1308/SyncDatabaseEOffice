@@ -3,11 +3,11 @@ const tableMappings = {
   auditLuanchuyenDVHH: {
     oldTable: 'LuanChuyenVanBan_DVHH',
     oldSchema: 'dbo',
-    oldDatabase: 'DataEOfficeSNP',
+    oldDatabase: process.env.OLD_DB_NAME,
 
     newTable: 'audit3',
     newSchema: 'dbo',
-    newDatabase: 'camunda',
+    newDatabase: process.env.NEW_DB_NAME,
 
     fieldMapping: {
       ID: 'origin_id',

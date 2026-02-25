@@ -8,7 +8,7 @@ class SyncHandlerModel {
     constructor(syncModel) {
         this.syncModel = syncModel;
         this.dbName = process.env.NEW_DB_NAME;
-        this.dbOldName = 'DataEOfficeSNP';
+        this.dbOldName = process.env.OLD_DB_NAME;
     }
 
     /**
@@ -65,17 +65,22 @@ class SyncHandlerModel {
                 );
             }
 
-            const lastSyncId = Number(cursor.lastSyncId || 0);
+            // Sửa: Không ép kiểu Number cho lastSyncId để hỗ trợ GUID
+            const lastSyncId = cursor.lastSyncId || 0;
 
-            const timeColumn = tableName.includes('LuanChuyen')
+            // Sửa: Thêm PersonalProfile vào danh sách dùng NgayTao
+            const timeColumn = (tableName.includes('LuanChuyen') || tableName === 'PersonalProfile')
                 ? 'NgayTao'
                 : 'Created';
+
+            // Sửa: Nếu là PersonalProfile (GUID) thì không cast sang BIGINT
+            const idColumn = tableName === 'PersonalProfile' ? 'id' : 'ISNULL(CAST(id AS BIGINT), 0)';
 
             const query = `
             SELECT TOP (@limit)
                 *,
                 [${timeColumn}] AS __sync_time,
-                ISNULL(CAST(id AS BIGINT), 0) AS __sync_id
+                ${idColumn} AS __sync_id
             FROM ${this.dbOldName}.${schemaName}.${tableName}
             WHERE (
             [${timeColumn}] > @lastTime
@@ -181,7 +186,8 @@ class SyncHandlerModel {
                 );
             }
 
-            const timeColumn = tableName.includes('LuanChuyen')
+            // Sửa: Thêm PersonalProfile
+            const timeColumn = (tableName.includes('LuanChuyen') || tableName === 'PersonalProfile')
                 ? 'NgayTao'
                 : 'Created';
 
@@ -196,7 +202,7 @@ class SyncHandlerModel {
 
             const rows = await this.syncModel.queryOldDb(query, {
                 lastTime,
-                lastSyncId: Number(lastSyncId || 0)
+                lastSyncId: lastSyncId || 0
             });
 
             return Number(rows?.[0]?.total || 0);

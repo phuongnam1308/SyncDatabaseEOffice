@@ -280,7 +280,7 @@ class MigrationService {
 
       return {
         source: {
-          database: 'DataEOfficeSNP',
+          database: process.env.OLD_DB_NAME,
           table: 'PhongBan',
           count: oldCount
         },
@@ -307,7 +307,7 @@ class MigrationService {
 
       return {
         source: {
-          database: 'DataEOfficeSNP',
+          database: process.env.OLD_DB_NAME,
           table: 'Position',
           count: oldCount
         },

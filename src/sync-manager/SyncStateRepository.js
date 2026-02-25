@@ -38,41 +38,55 @@ class SyncStateRepository extends BaseModel {
   }
 
   /**
-   * Lấy dữ liệu tổng hợp cho Dashboard (thay thế cho JSON)
+   * Lấy dữ liệu tổng hợp cho Dashboard
+   * ĐÃ SỬA: trả về đúng cấu trúc { entities, jobs, syncLogs, isRunning, registeredCount }
    */
   async getDashboardData() {
     try {
       // 1. Lấy danh sách Models
-      const models = await this.queryNewDb(`SELECT * FROM ${this.tblModels}`);
+      const models = await this.queryNewDb(`
+        SELECT * FROM ${this.tblModels} 
+        ORDER BY model_name
+      `);
       
-      // 2. Lấy danh sách Jobs gần đây (50 job mới nhất)
+      // 2. Lấy danh sách Jobs gần đây (100 job mới nhất)
       const jobs = await this.queryNewDb(`
-        SELECT TOP 50 * 
+        SELECT TOP 100 * 
         FROM ${this.tblJobs} 
         ORDER BY updated_at DESC
       `);
 
-      // 3. Format dữ liệu giống cấu trúc JSON cũ để Dashboard HTML hoạt động không cần sửa
+      // 3. Format dữ liệu giống cấu trúc JSON cũ
       const entities = {};
+      const jobsMap = {};
+      const syncLogs = {};  // THÊM: syncLogs giống jobsMap
       let isRunning = false;
 
-      // Map Jobs
-      const jobsMap = {};
+      // Map Jobs -> jobsMap và syncLogs
       if (jobs && Array.isArray(jobs)) {
         jobs.forEach(j => {
-          jobsMap[j.job_id] = {
+          const jobData = {
             jobId: j.job_id,
             modelName: j.model_name,
             status: j.status,
             startedAt: j.started_at,
             updatedAt: j.updated_at,
             endedAt: j.ended_at,
+            heartbeatAt: j.heartbeat_at,
+            pauseRequested: j.pause_requested === 1,
+            reset: j.is_reset === 1,
+            batchSize: j.batch_size,
+            lastSyncTime: j.last_sync_time,
+            lastSyncId: j.last_sync_id,
             totalToSync: j.total_to_sync || 0,
             totalProcessed: j.total_processed || 0,
             totalSuccess: j.total_success || 0,
             totalErrors: j.total_errors || 0,
-            errorMessage: j.error_message
+            error: j.error_message
           };
+          
+          jobsMap[j.job_id] = jobData;
+          syncLogs[j.job_id] = { ...jobData }; // Clone vào syncLogs
 
           // Kiểm tra cờ isRunning toàn cục
           if (['RUNNING', 'RESUMING', 'PAUSE_REQUESTED'].includes(j.status)) {
@@ -81,39 +95,63 @@ class SyncStateRepository extends BaseModel {
         });
       }
 
-      // Map Models
+      // Map Models -> entities
       if (models && Array.isArray(models)) {
         models.forEach(m => {
+          // Tìm job active hoặc job gần nhất
+          let currentJob = null;
+          if (m.active_job_id && jobsMap[m.active_job_id]) {
+            currentJob = jobsMap[m.active_job_id];
+          } else {
+            // Tìm job gần nhất của model này
+            currentJob = Object.values(jobsMap)
+              .filter(j => j.modelName === m.model_name)
+              .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))[0];
+          }
+
+          const jobSynced = currentJob ? Number(currentJob.totalSuccess || 0) : 0;
+          const jobNeeded = currentJob && Number.isFinite(Number(currentJob.totalToSync))
+            ? Number(currentJob.totalToSync) : null;
+          const progressPercent = jobNeeded && jobNeeded > 0
+            ? Math.min(100, Math.round((jobSynced / jobNeeded) * 100)) : 0;
+
           entities[m.model_name] = {
             status: m.status || 'IDLE',
             lastSyncTime: m.last_sync_time,
+            lastSyncId: m.last_sync_id,
+            totalSynced: m.total_synced || 0,
             lastRun: m.last_run,
             activeJobId: m.active_job_id,
-            // Các chỉ số này sẽ được tính toán lại từ Job đang chạy nếu có
-            currentProgressPercent: 0,
-            currentSynced: m.total_synced || 0,
-            currentTotalToSync: 0
+            error: m.last_error,
+            // Các trường tính toán cho dashboard
+            currentJobId: currentJob ? currentJob.jobId : null,
+            currentJobStatus: currentJob ? currentJob.status : null,
+            currentSynced: jobSynced,
+            currentTotalToSync: jobNeeded,
+            currentProgressPercent: progressPercent
           };
-
-          // Nếu đây là Job đang kích hoạt của Model, cập nhật thông tin tiến độ cho Model
-          if (m.active_job_id && jobsMap[m.active_job_id]) {
-            const j = jobsMap[m.active_job_id];
-            const total = j.totalToSync || 0;
-            const processed = j.totalProcessed || 0;
-            const pct = total > 0 ? Math.floor((processed / total) * 100) : 0;
-
-            entities[m.model_name].currentProgressPercent = pct;
-            entities[m.model_name].currentSynced = j.totalSuccess;
-            entities[m.model_name].currentTotalToSync = total;
-          }
         });
       }
 
-      return { entities, jobs: jobsMap, isRunning };
+      // TRẢ VỀ ĐÚNG CẤU TRÚC mà dashboard cần
+      return { 
+        entities, 
+        jobs: jobsMap, 
+        syncLogs,           // QUAN TRỌNG: thiếu cái này là không hiển thị tiến trình
+        isRunning,
+        registeredCount: models?.length || 0
+      };
 
     } catch (error) {
       logger.error('[SyncStateRepository] Error getting dashboard data:', error);
-      return { entities: {}, jobs: {}, isRunning: false };
+      // Trả về cấu trúc rỗng nhưng đầy đủ
+      return { 
+        entities: {}, 
+        jobs: {}, 
+        syncLogs: {}, 
+        isRunning: false,
+        registeredCount: 0
+      };
     }
   }
 
@@ -185,7 +223,7 @@ class SyncStateRepository extends BaseModel {
     await this.queryNewDb(query, {
       modelName,
       lastSyncTime: state.lastSyncTime || null,
-      lastSyncId:   Number(state.lastSyncId || 0),
+      lastSyncId:   state.lastSyncId,
       totalSynced:  Number(state.totalSynced || 0),
       status:       state.status || 'IDLE',
       lastRun:      state.lastRun || null,
@@ -222,7 +260,7 @@ class SyncStateRepository extends BaseModel {
       isReset:        job.reset          ? 1 : 0,
       batchSize:      job.batchSize,
       lastSyncTime:   job.lastSyncTime   || null,
-      lastSyncId:     Number(job.lastSyncId   || 0),
+      lastSyncId:     job.lastSyncId,
       totalToSync:    job.totalToSync    ?? null,
       totalProcessed: Number(job.totalProcessed || 0),
       totalSuccess:   Number(job.totalSuccess   || 0),

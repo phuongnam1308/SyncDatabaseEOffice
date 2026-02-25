@@ -188,7 +188,7 @@ class MigrationDonViService {
 
       return {
         source: {
-          database: 'DataEOfficeSNP',
+          database: process.env.OLD_DB_NAME,
           table: 'DonVi',
           count: oldCount
         },

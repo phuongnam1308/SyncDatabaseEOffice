@@ -95,7 +95,7 @@ class MigrationAuditService {
       const newCount = await this.model.countNewDb();
 
       return {
-        source: { database: 'DataEOfficeSNP', schema: 'dbo', table: 'LuanChuyenVanBan', count: oldCount },
+        source: { database: process.env.OLD_DB_NAME, schema: 'dbo', table: 'LuanChuyenVanBan', count: oldCount },
         destination: { database: process.env.NEW_DB_NAME, schema: 'dbo', table: 'audit2', count: newCount },
         migrated: newCount,
         remaining: oldCount - newCount,

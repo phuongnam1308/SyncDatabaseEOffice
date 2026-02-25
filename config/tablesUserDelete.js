@@ -82,11 +82,11 @@ const tableMappings = {
   userdelete: {
     oldTable: 'PersonalProfileDelete',
     oldSchema: 'dbo',
-    oldDatabase: 'DataEOfficeSNP',
+    oldDatabase: process.env.OLD_DB_NAME,
 
     newTable: 'users',
     newSchema: 'dbo',
-    newDatabase: 'camunda',
+    newDatabase: process.env.NEW_DB_NAME,
 
     fieldMapping: {
       'AccountID': 'AccountID',

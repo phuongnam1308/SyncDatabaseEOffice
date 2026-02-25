@@ -101,7 +101,7 @@ class MigrationUserInGroupService {
       const newCount = await this.userInGroupModel.countNewDb();
 
       return {
-        source: { database: 'DataEOfficeSNP', schema: 'dbo', table: 'UserInGroup', count: oldCount },
+        source: { database: process.env.OLD_DB_NAME, schema: 'dbo', table: 'UserInGroup', count: oldCount },
         destination: { database: process.env.NEW_DB_NAME, table: 'user_group_users_bak', count: newCount },
         migrated: newCount,
         remaining: oldCount - newCount,

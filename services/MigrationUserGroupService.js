@@ -285,7 +285,7 @@ class MigrationUserGroupService {
 
       return {
         source: { 
-          database: 'DataEOfficeSNP', 
+          database: process.env.OLD_DB_NAME, 
           schema: 'SNP', 
           table: 'UserGroup', 
           count: oldCount 

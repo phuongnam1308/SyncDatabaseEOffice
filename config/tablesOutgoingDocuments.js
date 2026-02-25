@@ -92,6 +92,12 @@
 // config/tablesOutgoingDocuments2.js (sửa phần này)
 const tableMappings = {
   outgoingdocument2: {
+    oldTable: 'VanBanBanHanh',
+    oldSchema: 'dbo',
+    oldDatabase: process.env.OLD_DB_NAME,
+    newTable: 'outgoing_documents2',
+    newSchema: 'dbo',
+    newDatabase: process.env.NEW_DB_NAME,
     // ... giữ nguyên phần khác ...
     fieldMapping: {
       'ID': 'id_outgoing_bak',

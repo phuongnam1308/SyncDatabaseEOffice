@@ -90,7 +90,7 @@ class MigrationTaskUsersVBDiService {
     const newCount = await this.model.countNewDb();
 
     return {
-      source: { database: 'DataEOfficeSNP', table: 'TaskVBDiPermission + UserField', count: oldCount },
+      source: { database: process.env.OLD_DB_NAME, table: 'TaskVBDiPermission + UserField', count: oldCount },
       destination: { database: process.env.NEW_DB_NAME, table: 'task_users2 (tổng)', count: newCount },
       migrated_estimate: oldCount,  // vì cùng đích, chỉ để tham khảo
       percentage: calculatePercentage(oldCount, oldCount) // dummy

@@ -26,7 +26,7 @@ class MigrationIncomingDocumentSyncService {
 
       // Lấy record chưa sync
       const records = await pool.request().query(`
-        SELECT * FROM camunda.dbo.incomming_documents2
+        SELECT * FROM ${process.env.NEW_DB_NAME}.dbo.incomming_documents2
         WHERE tb_update IS NULL OR tb_update = 0
         ORDER BY id_incoming_bak
       `);
@@ -49,7 +49,7 @@ class MigrationIncomingDocumentSyncService {
             const exist = await pool.request()
               .input('bak', mssql.NVarChar, row.id_incoming_bak)
               .query(`
-                SELECT 1 FROM camunda.dbo.incomming_documents
+                SELECT 1 FROM ${process.env.NEW_DB_NAME}.dbo.incomming_documents
                 WHERE id_incoming_bak = @bak
               `);
 
@@ -65,7 +65,7 @@ class MigrationIncomingDocumentSyncService {
             const fields = Object.keys(data);
             const placeholders = fields.map((_, i) => `@p${i}`).join(', ');
             const sql = `
-              INSERT INTO camunda.dbo.incomming_documents (${fields.join(', ')})
+              INSERT INTO ${process.env.NEW_DB_NAME}.dbo.incomming_documents (${fields.join(', ')})
               VALUES (${placeholders})
             `;
 
@@ -78,7 +78,7 @@ class MigrationIncomingDocumentSyncService {
             await pool.request()
               .input('bak', mssql.NVarChar, row.id_incoming_bak)
               .query(`
-                UPDATE camunda.dbo.incomming_documents2
+                UPDATE ${process.env.NEW_DB_NAME}.dbo.incomming_documents2
                 SET tb_update = 1, tb_bak = id_incoming_bak
                 WHERE id_incoming_bak = @bak
               `);

@@ -117,7 +117,7 @@ class MigrationBookBanHanhDeleteService {
       const newCount = await this.model.countNewDb();
 
       return {
-        source: { database: 'DataEOfficeSNP', schema: 'dbo', table: 'VanBanBanHanhDelete', count: oldCount },
+        source: { database: process.env.OLD_DB_NAME, schema: 'dbo', table: 'VanBanBanHanhDelete', count: oldCount },
         destination: { database: process.env.NEW_DB_NAME, table: 'book_documents', count: newCount },
         migrated_books: newCount,
         remaining: oldCount - newCount,

@@ -3,11 +3,11 @@ const tableMappings = {
   file_relations2: {
     oldTable: 'files2',
     oldSchema: 'dbo',
-    oldDatabase: 'camunda',  // Sửa nếu cần: nếu files2 ở DB cũ như 'DataEOfficeSNP', đổi thành 'DataEOfficeSNP'
+    oldDatabase: process.env.NEW_DB_NAME,  // Sửa nếu cần: nếu files2 ở DB cũ như 'DataEOfficeSNP', đổi thành 'DataEOfficeSNP'
 
     newTable: 'file_relations2',
     newSchema: 'dbo',
-    newDatabase: 'camunda',
+    newDatabase: process.env.NEW_DB_NAME,
 
     fieldMapping: {
       'id_bak': 'object_id_bak',

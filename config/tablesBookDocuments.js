@@ -42,11 +42,11 @@ const tableMappings = {
   bookdocument: {
     oldTable: 'VanBanDen',
     oldSchema: 'dbo',
-    oldDatabase: 'DataEOfficeSNP',
+    oldDatabase: process.env.OLD_DB_NAME,
 
     newTable: 'book_documents',
     newSchema: 'dbo',
-    newDatabase: 'camunda',
+    newDatabase: process.env.NEW_DB_NAME,
 
     fieldMapping: {
       'Title': 'name',                    // Title cũ → name

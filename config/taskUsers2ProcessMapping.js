@@ -1,13 +1,13 @@
 module.exports = {
   taskUsers2ProcessMapping: {
     sourceTable: {
-      database: 'camunda',
+      database: process.env.NEW_DB_NAME,
       schema: 'dbo',
       table: 'task_users2'
     },
 
     userTable: {
-      database: 'camunda',
+      database: process.env.NEW_DB_NAME,
       schema: 'dbo',
       table: 'users'
     },

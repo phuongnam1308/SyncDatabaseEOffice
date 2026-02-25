@@ -4,11 +4,11 @@ const tableMappings = {
     oldTable: 'TaskVBDenPermission',
     oldJoinTable: 'UserField',
     oldSchema: 'dbo',
-    oldDatabase: 'DataEOfficeSNP',
+    oldDatabase: process.env.OLD_DB_NAME,
 
     newTable: 'task_users2',
     newSchema: 'dbo',
-    newDatabase: 'camunda',
+    newDatabase: process.env.NEW_DB_NAME,
 
     fieldMapping: {
       // cột từ query → cột trong task_users2

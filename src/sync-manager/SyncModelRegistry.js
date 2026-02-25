@@ -11,6 +11,7 @@ const StreamOutgoingAuditSyncModel = require('../sync-audit/migrate/StreamAuditM
 const SyncCommentModel             = require('../sync-document-comment/apply/SyncCommentModel');
 const StreamCommentMigrationModel  = require('../sync-document-comment/migration/StreamCommentMigrationModel');
 const SyncFileModel                = require('../sync-file/apply/SyncFileModel');
+const StreamUserMigrationModel     = require('../sync-user/migrate/StreamUserMigrationModel');
 
 const AUDIT_MIGRATION_TABLES = [
   'LuanChuyenVanBan',
@@ -149,6 +150,11 @@ const MODEL_DEFINITIONS = [
     groupLabel: 'Đồng bộ cơ sở dữ liệu cũ: bình luận văn bản',
     ModelClass: StreamCommentMigrationModel,
     tables: COMMENT_MIGRATION_TABLES,
+  },
+  {
+    key: 'user-migration',
+    label: 'Đồng bộ cơ sở dữ liệu cũ: người dùng',
+    ModelClass: StreamUserMigrationModel,
   },
 ];
 

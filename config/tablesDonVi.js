@@ -12,12 +12,12 @@ const tableMappings = {
     // ========== DATABASE CŨ ==========
     oldTable: 'DonVi',
     oldSchema: 'dbo',
-    oldDatabase: 'DataEOfficeSNP',
+    oldDatabase: process.env.OLD_DB_NAME,
     
     // ========== DATABASE MỚI ==========
     newTable: 'organization_units',
     newSchema: 'dbo',
-    newDatabase: 'camunda',
+    newDatabase: process.env.NEW_DB_NAME,
     
     // ========== MAPPING CÁC TRƯỜNG ==========
     // Ánh xạ: Tên cột cũ → Tên cột mới

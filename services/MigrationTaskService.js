@@ -130,7 +130,7 @@ class MigrationTaskService {
       const newCount = await this.model.countNewDb();
 
       return {
-        source: { database: 'DataEOfficeSNP', schema: 'dbo', table: 'TaskVBDen', count: oldCount },
+        source: { database: process.env.OLD_DB_NAME, schema: 'dbo', table: 'TaskVBDen', count: oldCount },
         destination: { database: process.env.NEW_DB_NAME, schema: 'dbo', table: 'task2', count: newCount },
         migrated: newCount,
         remaining: oldCount - newCount,

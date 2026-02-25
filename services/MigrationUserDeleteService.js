@@ -459,7 +459,7 @@ class MigrationUserDeleteService {
 
       return {
         source: { 
-          database: 'DataEOfficeSNP', 
+          database: process.env.OLD_DB_NAME, 
           schema: 'dbo', 
           table: 'PersonalProfileDelete', 
           count: oldCount 
