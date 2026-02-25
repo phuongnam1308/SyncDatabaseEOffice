@@ -32,7 +32,7 @@ const tableMappings = {
       'Mobile': 'phone_number_user',
       'Email': 'email_user',
       'Position': 'position',
-      'PhongBan': 'Department',      // Chú ý: Cột này có thể trùng lặp hoặc là một tên gọi khác cho 'Department'.
+      'PhongBan': 'Department', 
       'Orders': 'orders',
       'DepartmentId': 'DepartmentId',
       'PhongBanID': 'PhongBanID',
