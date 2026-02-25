@@ -64,7 +64,7 @@ class OutgoingSyncWrapperModel extends BaseModel {
     // Return count of already synced
     const query = `
       SELECT COUNT(*) AS total
-      FROM DiOffice.dbo.outgoing_documents
+      FROM camunda.dbo.outgoing_documents
     `;
     const { recordset } = await this.newPool.request().query(query);
     return recordset[0].total || 0;

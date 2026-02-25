@@ -5,7 +5,7 @@ class StreamFileMigrationModel extends BaseModel {
     constructor() {
         super();
         //WSS_Content_eoffice_khkd
-        this.dbName = 'DiOffice';
+        this.dbName = 'camunda';
         this.oldDbSchema = "dbo";
         this.oldDbTable = "AllDocs";
         this.newDbSchema = "dbo";

@@ -15,14 +15,14 @@ class SyncFileModel extends BaseModel {
     try {
       const countSyncQuery = `
         SELECT COUNT(*) AS total
-        FROM DiOffice.${this.syncSchema}.${this.syncTable}
+        FROM camunda.${this.syncSchema}.${this.syncTable}
       `;
       const syncResult = await this.queryNewDbTx(countSyncQuery);
       const totalInSync = syncResult[0]?.total || 0;
 
       const countMainQuery = `
         SELECT COUNT(*) AS total
-        FROM DiOffice.${this.mainSchema}.${this.mainTable}
+        FROM camunda.${this.mainSchema}.${this.mainTable}
       `;
       const mainResult = await this.queryNewDbTx(countMainQuery);
       const totalInMain = mainResult[0]?.total || 0;

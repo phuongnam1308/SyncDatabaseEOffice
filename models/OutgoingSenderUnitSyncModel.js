@@ -32,7 +32,7 @@ class OutgoingSenderUnitSyncModel extends BaseModel {
 
     const query = `
       SELECT id, name
-      FROM DiOffice.dbo.organization_units
+      FROM camunda.dbo.organization_units
       WHERE name IN (${placeholders})
     `;
 

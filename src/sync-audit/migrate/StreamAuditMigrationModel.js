@@ -7,7 +7,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
   constructor(oldDbTable) {
     super();
     this.oldDbSchema = "dbo";
-    this.oldDbTable = oldDbTable;
+    this.oldDbTable = "LuanChuyenVanBan_ATPC";
     this.newDbSchema = "dbo";
     this.newDbTable = "audit_sync";
     this.helper = new MigrationHelper(this.queryNewDbTx.bind(this));
@@ -159,7 +159,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
 
     let query = `
       SELECT TOP 1 id
-      FROM DiOffice.dbo.audit_sync
+      FROM camunda.dbo.audit_sync
       WHERE id_van_ban = @idVanBan
     `;
 
@@ -193,7 +193,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
 
       const outgoingQuery = `
         SELECT TOP 1 document_id
-        FROM DiOffice.dbo.outgoing_documents_sync
+        FROM camunda.dbo.outgoing_documents_sync
         WHERE id_outgoing_bak = @idVanBan
       `;
 
@@ -208,7 +208,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
 
       const incomingQuery2 = `
         SELECT TOP 1 document_id
-        FROM DiOffice.dbo.incomming_documents
+        FROM camunda.dbo.incomming_documents
         WHERE id_incoming_bak = @idVanBan
       `;
 
@@ -240,7 +240,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
     const receiverUnit = this._normalizeArrayField(data.receiver_unit);
 
     const query = `
-      INSERT INTO DiOffice.dbo.audit_sync (
+      INSERT INTO camunda.dbo.audit_sync (
         document_id, time, display_name, user_id, created_by,
         receiver, receiver_unit, action_code, roleProcess, stage_status,
         id_van_ban, created_at, updated_at, type_document, table_backup
@@ -299,7 +299,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
     }
 
     const query = `
-      UPDATE DiOffice.dbo.audit_sync
+      UPDATE camunda.dbo.audit_sync
       SET
         time = @time, display_name = @displayName, user_id = @userId,
         created_by = @createBy, action_code = @actionCode,

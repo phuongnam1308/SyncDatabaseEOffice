@@ -24,23 +24,23 @@ class FormatOutgoing2Service {
       // 1. Clean private_level (độ mật)
       const privateQueries = [
         // Chuẩn hóa về mã ngắn
-        `UPDATE DiOffice.dbo.outgoing_documents2
+        `UPDATE camunda.dbo.outgoing_documents2
          SET private_level = 'thng'
          WHERE private_level IN (N'Thường', N'Thu?ng', N'Thư?ng', N'thng', '', '11', NULL)`,
 
-        `UPDATE DiOffice.dbo.outgoing_documents2
+        `UPDATE camunda.dbo.outgoing_documents2
          SET private_level = 'mt'
          WHERE private_level IN (N'Mật', N'M?t', N'mt')`,
 
-        `UPDATE DiOffice.dbo.outgoing_documents2
+        `UPDATE camunda.dbo.outgoing_documents2
          SET private_level = 'ti-mt'
          WHERE private_level IN (N'Tối mật', N'T?i m?t', N'ti-mt')`,
 
-        `UPDATE DiOffice.dbo.outgoing_documents2
+        `UPDATE camunda.dbo.outgoing_documents2
          SET private_level = 'tuyt-mt'
          WHERE private_level IN (N'Tuyệt mật', N'Tuy?t m?t', N'tuyt-mt')`,
 
-        `UPDATE DiOffice.dbo.outgoing_documents2
+        `UPDATE camunda.dbo.outgoing_documents2
          SET private_level = 'hn-ch-truy-cp'
          WHERE private_level IN (N'Hạn chế truy cập', N'H?n ch? truy c?p', N'khn')`,
       ];
@@ -54,11 +54,11 @@ class FormatOutgoing2Service {
 
       // 2. Clean urgency_level (độ khẩn)
       const urgencyQueries = [
-        `UPDATE DiOffice.dbo.outgoing_documents2
+        `UPDATE camunda.dbo.outgoing_documents2
          SET urgency_level = 'khn'
          WHERE urgency_level IN (N'Khẩn', N'KHẨN', N'Kh?n', N'khn')`,
 
-        `UPDATE DiOffice.dbo.outgoing_documents2
+        `UPDATE camunda.dbo.outgoing_documents2
          SET urgency_level = 'thng'
          WHERE urgency_level IN (N'Thường', N'THƯỜNG', N'Thu?ng', N'Thư?ng', '', NULL)`,
       ];
@@ -73,11 +73,11 @@ class FormatOutgoing2Service {
       // 3. Clean document_type (loại văn bản) - chỉ xử lý một số trường hợp phổ biến còn sót
       const docTypeQueries = [
         // Một số fix bổ sung nếu migration chưa xử lý hết
-        `UPDATE DiOffice.dbo.outgoing_documents2
+        `UPDATE camunda.dbo.outgoing_documents2
          SET document_type = '55;#Cong van'
          WHERE document_type LIKE N'%Cong van%' OR document_type LIKE N'%công văn%'`,
 
-        `UPDATE DiOffice.dbo.outgoing_documents2
+        `UPDATE camunda.dbo.outgoing_documents2
          SET document_type = TRIM(REPLACE(document_type, N'# ', N'#'))  -- loại bỏ khoảng trắng thừa`,
       ];
 
@@ -90,7 +90,7 @@ class FormatOutgoing2Service {
 
       // 4. Map status_code từ TrangThai (nếu cần khôi phục logic cũ)
       const statusQuery = `
-        UPDATE DiOffice.dbo.outgoing_documents2
+        UPDATE camunda.dbo.outgoing_documents2
         SET status_code = 
             CASE TRIM(TrangThai)
                 WHEN N'Chờ phát hành' THEN '6'
@@ -130,21 +130,21 @@ class FormatOutgoing2Service {
     try {
       const privateStats = await this.model.queryNewDb(`
         SELECT private_level, COUNT(*) AS count
-        FROM DiOffice.dbo.outgoing_documents2
+        FROM camunda.dbo.outgoing_documents2
         GROUP BY private_level
         ORDER BY count DESC
       `);
 
       const urgencyStats = await this.model.queryNewDb(`
         SELECT urgency_level, COUNT(*) AS count
-        FROM DiOffice.dbo.outgoing_documents2
+        FROM camunda.dbo.outgoing_documents2
         GROUP BY urgency_level
         ORDER BY count DESC
       `);
 
       const statusStats = await this.model.queryNewDb(`
         SELECT status_code, COUNT(*) AS count
-        FROM DiOffice.dbo.outgoing_documents2
+        FROM camunda.dbo.outgoing_documents2
         GROUP BY status_code
         ORDER BY count DESC
       `);

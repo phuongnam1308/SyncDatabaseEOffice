@@ -14,10 +14,10 @@ class DocumentCommentsSyncModel extends BaseModel {
     try {
       const query = `
         SELECT COUNT(*) as total
-        FROM DiOffice.dbo.document_comments2 dc2
+        FROM camunda.dbo.document_comments2 dc2
         WHERE NOT EXISTS (
           SELECT 1
-          FROM DiOffice.dbo.document_comments dc
+          FROM camunda.dbo.document_comments dc
           WHERE dc.id = dc2.id
         )
       `;
@@ -40,12 +40,12 @@ class DocumentCommentsSyncModel extends BaseModel {
         SELECT
           dc2.*,
           ISNULL(od.document_id, NULL) as computed_document_id
-        FROM DiOffice.dbo.document_comments2 dc2
-        LEFT JOIN DiOffice.dbo.outgoing_documents_sync od 
+        FROM camunda.dbo.document_comments2 dc2
+        LEFT JOIN camunda.dbo.outgoing_documents_sync od 
           ON od.id_outgoing_bak = dc2.DocumentID_bak
         WHERE NOT EXISTS (
           SELECT 1
-          FROM DiOffice.dbo.document_comments dc
+          FROM camunda.dbo.document_comments dc
           WHERE dc.id = dc2.id
         )
         ORDER BY dc2.created_at ASC
@@ -68,7 +68,7 @@ class DocumentCommentsSyncModel extends BaseModel {
     try {
       const query = `
         SELECT id, document_id, id_comments_bak
-        FROM DiOffice.dbo.document_comments
+        FROM camunda.dbo.document_comments
         WHERE id = @id
       `;
       
@@ -117,7 +117,7 @@ class DocumentCommentsSyncModel extends BaseModel {
       
       const setClause = fields.map(f => `${f} = @${f}`).join(', ');
       const query = `
-        UPDATE DiOffice.dbo.document_comments
+        UPDATE camunda.dbo.document_comments
         SET ${setClause}, updated_at = GETDATE()
         WHERE id = @id
       `;
@@ -155,7 +155,7 @@ class DocumentCommentsSyncModel extends BaseModel {
       const params = fields.map((_, i) => `@p${i}`).join(', ');
 
       const query = `
-        INSERT INTO DiOffice.dbo.document_comments_sync
+        INSERT INTO camunda.dbo.document_comments_sync
         (${fields.join(', ')})
         VALUES (${params})
       `;

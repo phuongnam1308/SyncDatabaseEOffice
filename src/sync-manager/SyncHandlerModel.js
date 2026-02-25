@@ -7,7 +7,7 @@ const logger = require('../../utils/logger');
 class SyncHandlerModel {
     constructor(syncModel) {
         this.syncModel = syncModel;
-        this.dbName = 'DiOffice';
+        this.dbName = 'camunda';
         this.dbOldName = 'DataEOfficeSNP';
     }
 
@@ -58,22 +58,31 @@ class SyncHandlerModel {
      */
     createFetchFnOld(schemaName, tableName) {
         return async (lastTime, limit, _offset, cursor = {}) => {
+
+            if (!tableName || typeof tableName !== 'string') {
+                throw new Error(
+                    `[MigrationModel] Invalid tableName: ${tableName}`
+                );
+            }
+
             const lastSyncId = Number(cursor.lastSyncId || 0);
+
+            const timeColumn = tableName.includes('LuanChuyen')
+                ? 'NgayTao'
+                : 'Created';
+
             const query = `
-        SELECT TOP (@limit) *
-        FROM (
-          SELECT
-            *,
-            COALESCE([Modified], [Created]) AS __sync_time,
-            ISNULL(CAST(id AS BIGINT), 0) AS __sync_id
-          FROM ${this.dbOldName}.${schemaName}.${tableName}
-        ) src
-        WHERE (
-          src.__sync_time > @lastTime
-          OR (src.__sync_time = @lastTime AND src.__sync_id > @lastSyncId)
-        )
-        ORDER BY src.__sync_time ASC, src.__sync_id ASC
-      `;
+            SELECT TOP (@limit)
+                *,
+                [${timeColumn}] AS __sync_time,
+                ISNULL(CAST(id AS BIGINT), 0) AS __sync_id
+            FROM ${this.dbOldName}.${schemaName}.${tableName}
+            WHERE (
+            [${timeColumn}] > @lastTime
+            OR ([${timeColumn}] = @lastTime AND id > @lastSyncId)
+            )
+            ORDER BY [${timeColumn}] ASC, id ASC
+            `;
 
             const records = await this.syncModel.queryOldDb(query, {
                 lastTime,
@@ -165,19 +174,25 @@ class SyncHandlerModel {
      */
     createCountFnOld(schemaName, tableName) {
         return async (lastTime, lastSyncId = 0) => {
+
+            if (!tableName || typeof tableName !== 'string') {
+                throw new Error(
+                    `[MigrationModel] Invalid tableName: ${tableName}`
+                );
+            }
+
+            const timeColumn = tableName.includes('LuanChuyen')
+                ? 'NgayTao'
+                : 'Created';
+
             const query = `
-        SELECT COUNT(1) AS total
-        FROM (
-          SELECT
-            COALESCE([Modified], [Created]) AS __sync_time,
-            ISNULL(CAST(id AS BIGINT), 0) AS __sync_id
-          FROM ${this.dbOldName}.${schemaName}.${tableName}
-        ) src
-        WHERE (
-          src.__sync_time > @lastTime
-          OR (src.__sync_time = @lastTime AND src.__sync_id > @lastSyncId)
-        )
-      `;
+            SELECT COUNT(1) AS total
+            FROM ${this.dbOldName}.${schemaName}.${tableName}
+            WHERE (
+            [${timeColumn}] > @lastTime
+            OR ([${timeColumn}] = @lastTime AND id > @lastSyncId)
+            )
+            `;
 
             const rows = await this.syncModel.queryOldDb(query, {
                 lastTime,

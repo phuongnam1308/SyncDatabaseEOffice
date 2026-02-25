@@ -6,7 +6,7 @@ const tableMappings = {
     
     newTable: 'organization_units',
     newSchema: 'dbo',
-    newDatabase: 'DiOffice',
+    newDatabase: 'camunda',
     
     fieldMapping: {
       'ID': 'id',
@@ -44,7 +44,7 @@ const tableMappings = {
     
     newTable: 'organization_units',
     newSchema: 'dbo',
-    newDatabase: 'DiOffice',
+    newDatabase: 'camunda',
     
     fieldMapping: {
       'ID': 'id',

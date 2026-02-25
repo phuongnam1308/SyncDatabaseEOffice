@@ -285,7 +285,7 @@ class MigrationService {
           count: oldCount
         },
         destination: {
-          database: 'DiOffice',
+          database: 'camunda',
           table: 'organization_units',
           count: newCount
         },
@@ -312,7 +312,7 @@ class MigrationService {
           count: oldCount
         },
         destination: {
-          database: 'DiOffice',
+          database: 'camunda',
           table: 'organization_units',
           note: 'Cùng bảng với PhongBan, phân biệt bằng table_backups',
           count: newCount

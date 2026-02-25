@@ -116,7 +116,7 @@ class MigrationBookDocumentDeleteService {
 
       return {
         source: { database: 'DataEOfficeSNP', schema: 'dbo', table: 'VanBanDenDelete', count: oldCount },
-        destination: { database: 'DiOffice', table: 'book_documents', count: newCount },
+        destination: { database: 'camunda', table: 'book_documents', count: newCount },
         migrated_books: newCount,
         remaining: oldCount - newCount,
         percentage: oldCount > 0 ? ((newCount / oldCount) * 100).toFixed(2) + '%' : '0%'

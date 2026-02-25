@@ -13,10 +13,10 @@ class SyncCommentModel extends BaseModel {
 
   async getStatus() {
     const syncResult = await this.queryNewDbTx(
-      `SELECT COUNT(*) AS total FROM DiOffice.${this.syncSchema}.${this.syncTable}`
+      `SELECT COUNT(*) AS total FROM camunda.${this.syncSchema}.${this.syncTable}`
     );
     const mainResult = await this.queryNewDbTx(
-      `SELECT COUNT(*) AS total FROM DiOffice.${this.mainSchema}.${this.mainTable}`
+      `SELECT COUNT(*) AS total FROM camunda.${this.mainSchema}.${this.mainTable}`
     );
     const totalInSync = syncResult[0]?.total || 0;
     const totalInMain = mainResult[0]?.total || 0;
@@ -26,7 +26,7 @@ class SyncCommentModel extends BaseModel {
   async fetchBatchFromSync({ batch, lastId = null }) {
     let query = `
       SELECT TOP (@batch) *
-      FROM DiOffice.${this.syncSchema}.${this.syncTable}
+      FROM camunda.${this.syncSchema}.${this.syncTable}
       WHERE 1=1
     `;
     const params = { batch };
@@ -51,7 +51,7 @@ class SyncCommentModel extends BaseModel {
       for (const record of records) {
         try {
           const existing = await this.queryNewDbTx(
-            `SELECT id FROM DiOffice.${this.mainSchema}.${this.mainTable}
+            `SELECT id FROM camunda.${this.mainSchema}.${this.mainTable}
              WHERE id_comments_bak = @bak AND table_bak = @table`,
             { bak: record.id_comments_bak, table: record.table_backup },
             transaction
@@ -80,7 +80,7 @@ class SyncCommentModel extends BaseModel {
   async _insertRecord(record, transaction) {
     const id = `${Date.now()}${Math.random().toString(36).substring(2, 10)}`;
     const query = `
-      INSERT INTO DiOffice.${this.mainSchema}.${this.mainTable} (
+      INSERT INTO camunda.${this.mainSchema}.${this.mainTable} (
         id, document_id, parent_id, user_id, user_name, content, [type],
         is_edited, created_at, updated_at, fileId, likes, is_leader_suggestion,
         id_comments_bak, type_bak, table_bak,
@@ -97,7 +97,7 @@ class SyncCommentModel extends BaseModel {
 
   async _updateRecord(record, transaction) {
     const query = `
-      UPDATE DiOffice.${this.mainSchema}.${this.mainTable}
+      UPDATE camunda.${this.mainSchema}.${this.mainTable}
       SET
         document_id = @documentId,
         user_id = @userId,

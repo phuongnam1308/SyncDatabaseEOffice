@@ -7,7 +7,7 @@
 
 //     newTable: 'users',
 //     newSchema: 'dbo',
-//     newDatabase: 'DiOffice',
+//     newDatabase: 'camunda',
 
 //     fieldMapping: {
 //       'AccountID': 'AccountID',
@@ -89,7 +89,7 @@ const tableMappings = {
 
     newTable: 'users',
     newSchema: 'dbo',
-    newDatabase: 'DiOffice',
+    newDatabase: 'camunda',
 
     fieldMapping: {
       'AccountID': 'AccountID',
