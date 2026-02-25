@@ -24,7 +24,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
 
       const countNewQuery = `
         SELECT COUNT(*) AS total
-        FROM camunda.${this.newDbSchema}.${this.newDbTable}
+        FROM DiOffice.${this.newDbSchema}.${this.newDbTable}
         WHERE table_backup = 'stream_migration'
       `;
       const newResult = await this.queryNewDbTx(countNewQuery);
@@ -32,7 +32,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
 
       const lastIdQuery = `
         SELECT TOP 1 id_outgoing_bak
-        FROM camunda.${this.newDbSchema}.${this.newDbTable}
+        FROM DiOffice.${this.newDbSchema}.${this.newDbTable}
         WHERE table_backup = 'stream_migration'
         ORDER BY createdAt DESC
       `;
@@ -208,21 +208,22 @@ class StreamOutgoingMigrationModel extends BaseModel {
 
       for (const record of records) {
         try {
+          const mapped = await this._mapSingleRecord(record);
           const existingQuery = `
-            SELECT id FROM camunda.${this.newDbSchema}.${this.newDbTable}
+            SELECT id FROM DiOffice.${this.newDbSchema}.${this.newDbTable}
             WHERE id_outgoing_bak = @oldId AND table_backup = 'stream_migration'
           `;
-          const existing = await this.queryNewDbTx(existingQuery, { oldId: record.id_outgoing_bak }, transaction);
+          const existing = await this.queryNewDbTx(existingQuery, { oldId: mapped.id_outgoing_bak }, transaction);
 
           if (existing && existing.length > 0) {
-            await this._updateRecord(record, transaction);
+            await this._updateRecord(mapped, transaction);
             updated++;
           } else {
-            await this._insertRecord(record, transaction);
+            await this._insertRecord(mapped, transaction);
             inserted++;
           }
         } catch (recordError) {
-          logger.warn(`[insertBatchToNewDb] Skip record id_outgoing_bak=${record.id_outgoing_bak}:`, recordError.message);
+          logger.warn(`[insertBatchToNewDb] Skip record id_outgoing_bak=${mapped.id_outgoing_bak}:`, recordError.message);
         }
       }
 
@@ -349,7 +350,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
   async rollback(options = {}) {
     try {
       const query = `
-        DELETE FROM camunda.${this.newDbSchema}.${this.newDbTable}
+        DELETE FROM DiOffice.${this.newDbSchema}.${this.newDbTable}
         WHERE table_backup = 'stream_migration'
       `;
 

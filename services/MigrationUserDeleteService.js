@@ -106,7 +106,7 @@
 
 //       return {
 //         source: { database: 'DataEOfficeSNP', schema: 'dbo', table: 'PersonalProfileDelete', count: oldCount },
-//         destination: { database: 'camunda', table: 'users', count: newCount },
+//         destination: { database: 'DiOffice', table: 'users', count: newCount },
 //         migrated: newCount,
 //         remaining: oldCount - newCount,
 //         percentage: calculatePercentage(newCount, oldCount)
@@ -465,7 +465,7 @@ class MigrationUserDeleteService {
           count: oldCount 
         },
         destination: { 
-          database: 'camunda', 
+          database: 'DiOffice', 
           schema: 'dbo',
           table: 'users', 
           count: newCount 

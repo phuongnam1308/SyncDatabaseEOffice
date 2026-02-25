@@ -7,7 +7,7 @@ const tableMappings = {
 
     newTable: 'audit2',
     newSchema: 'dbo',
-    newDatabase: 'camunda',
+    newDatabase: 'DiOffice',
 
     fieldMapping: {
       'ID': 'origin_id',  // Lưu ID cũ vào origin_id

@@ -94,7 +94,7 @@ class MigrationTaskUsers2Service {
 
     return {
       source: { database: 'DataEOfficeSNP', table: 'TaskVBDenPermission + UserField', count: oldCount },
-      destination: { database: 'camunda', table: 'task_users2', count: newCount },
+      destination: { database: 'DiOffice', table: 'task_users2', count: newCount },
       migrated: newCount,
       remaining: oldCount - newCount,
       percentage: calculatePercentage(newCount, oldCount)

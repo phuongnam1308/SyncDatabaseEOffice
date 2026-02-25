@@ -50,7 +50,7 @@ class StreamCommentMigrationService {
         batchCount++;
         logger.info(`[${table}] BATCH ${batchCount} | Records: ${records.length}`);
 
-        const result = await model.upsertBatch(records);
+        const result = await model.insertBatchToNewDb(records);
         totalInserted += result.inserted;
         totalUpdated += result.updated;
         totalProcessed += records.length;

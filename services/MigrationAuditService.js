@@ -96,7 +96,7 @@ class MigrationAuditService {
 
       return {
         source: { database: 'DataEOfficeSNP', schema: 'dbo', table: 'LuanChuyenVanBan', count: oldCount },
-        destination: { database: 'camunda', schema: 'dbo', table: 'audit2', count: newCount },
+        destination: { database: 'DiOffice', schema: 'dbo', table: 'audit2', count: newCount },
         migrated: newCount,
         remaining: oldCount - newCount,
         percentage: calculatePercentage(newCount, oldCount)

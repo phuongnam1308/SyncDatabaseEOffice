@@ -41,7 +41,7 @@ class StreamUserMigrationModel extends BaseModel {
    *                                  các bản ghi có ID lớn hơn giá trị này.
    * @returns {Promise<Array<object>>} Một mảng chứa các đối tượng người dùng từ DB cũ.
    */
-  async fetchBatchFromOldDb({ batch, lastId }) {
+  async insertBatchToMain({ batch, lastId }) {
     try {
       const query = `
         SELECT TOP ${batch}

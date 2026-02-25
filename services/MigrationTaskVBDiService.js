@@ -127,7 +127,7 @@ class MigrationTaskVBDiService {
 
       return {
         source: { database: 'DataEOfficeSNP', schema: 'dbo', table: 'TaskVBDi', count: oldCount },
-        destination: { database: 'camunda', schema: 'dbo', table: 'task3', count: newCount },
+        destination: { database: 'DiOffice', schema: 'dbo', table: 'task3', count: newCount },
         migrated: newCount,
         remaining: oldCount - newCount,
         percentage: calculatePercentage(newCount, oldCount)

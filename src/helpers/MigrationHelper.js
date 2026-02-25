@@ -240,7 +240,7 @@ class MigrationHelper {
 
       const selectQuery = `
         SELECT TOP 1 id
-        FROM camunda.dbo.organization_units
+        FROM DiOffice.dbo.organization_units
         WHERE LTRIM(RTRIM(name)) = @name
           AND status = 1
       `;
@@ -255,7 +255,7 @@ class MigrationHelper {
       const code = normalizedName;
 
       const insertQuery = `
-        INSERT INTO camunda.dbo.organization_units (
+        INSERT INTO DiOffice.dbo.organization_units (
           id, name, code, status, created_at, updated_at, table_backups
         )
         VALUES (@id, @name, @code, 1, GETDATE(), GETDATE(), 'stream_migration')
@@ -296,7 +296,7 @@ class MigrationHelper {
 
         const selectQuery = `
         SELECT TOP 1 id
-        FROM camunda.dbo.users
+        FROM DiOffice.dbo.users
         WHERE name = @name OR id = @name
         `;
 
@@ -311,7 +311,7 @@ class MigrationHelper {
         const password = await this.hashDefaultPassword();
 
         const insertQuery = `
-        INSERT INTO camunda.dbo.users (
+        INSERT INTO DiOffice.dbo.users (
             id, name, username, password, parent, status, created_at, updated_at
         )
         VALUES (@id, @name, @username, @password, @parent, 1, GETDATE(), GETDATE())
@@ -436,7 +436,7 @@ class MigrationHelper {
 
       const selectQuery = `
         SELECT TOP 1 book_document_id AS id, count
-        FROM camunda.dbo.book_documents
+        FROM DiOffice.dbo.book_documents
         WHERE LTRIM(RTRIM(name)) = @name
       `;
 
@@ -444,7 +444,7 @@ class MigrationHelper {
 
       if (result?.length > 0) {
       const selectQuery = `
-        UPDATE camunda.dbo.book_documents
+        UPDATE DiOffice.dbo.book_documents
         SET count = count + 1, updated_at = GETDATE()
         WHERE book_document_id = @id
       `;
@@ -457,7 +457,7 @@ class MigrationHelper {
       }
 
       const insertQuery = `
-        INSERT INTO camunda.dbo.book_documents (
+        INSERT INTO DiOffice.dbo.book_documents (
           name, [year], status, type_document, sender_unit, private_level, count, created_at, updated_at, created_by
         )
         OUTPUT INSERTED.book_document_id
@@ -485,7 +485,7 @@ class MigrationHelper {
     try {
       const query = `
         SELECT TOP 1 id
-        FROM camunda.dbo.crm_sources
+        FROM DiOffice.dbo.crm_sources
         WHERE code = @code
       `;
       const result = await this.queryNewDbTx(query, { code });
@@ -502,7 +502,7 @@ class MigrationHelper {
 
       const checkQuery = `
         SELECT TOP 1 id, value
-        FROM camunda.dbo.crm_source_data
+        FROM DiOffice.dbo.crm_source_data
         WHERE source_id = @sourceId AND value = @value
       `;
       const existing = await this.queryNewDbTx(checkQuery, { sourceId, value });
@@ -513,7 +513,7 @@ class MigrationHelper {
 
       const id = uuidv4();
       const insertQuery = `
-        INSERT INTO camunda.dbo.crm_source_data (id, source_id, title, value, createdAt, updatedAt)
+        INSERT INTO DiOffice.dbo.crm_source_data (id, source_id, title, value, createdAt, updatedAt)
         VALUES (@id, @sourceId, @title, @value, GETDATE(), GETDATE())
       `;
 

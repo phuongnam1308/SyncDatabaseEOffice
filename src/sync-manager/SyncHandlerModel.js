@@ -7,6 +7,8 @@ const logger = require('../../utils/logger');
 class SyncHandlerModel {
     constructor(syncModel) {
         this.syncModel = syncModel;
+        this.dbName = 'DiOffice';
+        this.dbOldName = 'DataEOfficeSNP';
     }
 
     /**
@@ -25,7 +27,7 @@ class SyncHandlerModel {
             *,
             COALESCE(updated_at, created_at) AS __sync_time,
             ISNULL(CAST(id AS BIGINT), 0) AS __sync_id
-          FROM camunda.${schemaName}.${tableName}
+          FROM ${this.dbName}.${schemaName}.${tableName}
         ) src
         WHERE (
           src.__sync_time > @lastTime
@@ -49,12 +51,61 @@ class SyncHandlerModel {
     }
 
     /**
+     * Generate fetch function for fetching records from sync table
+     * @param {string} schemaName - Schema name (e.g., 'dbo')
+     * @param {string} tableName - Table name (e.g., 'outgoing_documents_sync')
+     * @returns {Function} Fetch function
+     */
+    createFetchFnOld(schemaName, tableName) {
+        return async (lastTime, limit, _offset, cursor = {}) => {
+            const lastSyncId = Number(cursor.lastSyncId || 0);
+            const query = `
+        SELECT TOP (@limit) *
+        FROM (
+          SELECT
+            *,
+            COALESCE([Modified], [Created]) AS __sync_time,
+            ISNULL(CAST(id AS BIGINT), 0) AS __sync_id
+          FROM ${this.dbOldName}.${schemaName}.${tableName}
+        ) src
+        WHERE (
+          src.__sync_time > @lastTime
+          OR (src.__sync_time = @lastTime AND src.__sync_id > @lastSyncId)
+        )
+        ORDER BY src.__sync_time ASC, src.__sync_id ASC
+      `;
+
+            const records = await this.syncModel.queryOldDb(query, {
+                lastTime,
+                lastSyncId,
+                limit
+            });
+
+            return records.map((record) => ({
+                ...record,
+                updated_at: record.updated_at || record.__sync_time,
+                __sync_id: record.__sync_id
+            }));
+        };
+    }
+
+    /**
      * Generate process function for inserting records to main table
      * @returns {Function} Process function
      */
-    createProcessFn() {
+    createProcessFn(record) {
         return async (record) => {
             await this.syncModel.insertBatchToMain([record]);
+        };
+    }
+
+    /**
+     * Generate process function for inserting records to main table
+     * @returns {Function} Process function
+     */
+    createProcessFnOld(record) {
+        return async (record) => {
+            await this.syncModel.insertBatchToNewDb([record]);
         };
     }
 
@@ -84,20 +135,51 @@ class SyncHandlerModel {
             }
 
             const query = `
-            SELECT COUNT(1) AS total
-            FROM (
-            SELECT
-                COALESCE(updated_at, created_at) AS __sync_time,
-                ISNULL(CAST(id AS BIGINT), 0) AS __sync_id
-            FROM camunda.${schema}.${table}
-            ) src
-            WHERE (
-            src.__sync_time > @lastTime
-            OR (src.__sync_time = @lastTime AND src.__sync_id > @lastSyncId)
-            )
-            `;
+        SELECT COUNT(1) AS total
+        FROM (
+          SELECT
+            COALESCE(updated_at, created_at) AS __sync_time,
+            ISNULL(CAST(id AS BIGINT), 0) AS __sync_id
+          FROM ${this.dbName}.${schemaName}.${tableName}
+        ) src
+        WHERE (
+          src.__sync_time > @lastTime
+          OR (src.__sync_time = @lastTime AND src.__sync_id > @lastSyncId)
+        )
+      `;
 
             const rows = await this.syncModel.queryNewDbTx(query, {
+                lastTime,
+                lastSyncId: Number(lastSyncId || 0)
+            });
+
+            return Number(rows?.[0]?.total || 0);
+        };
+    }
+
+    /**
+     * Generate count function for counting remaining records to sync
+     * @param {string} schemaName - Schema name
+     * @param {string} tableName - Table name
+     * @returns {Function} Count function
+     */
+    createCountFnOld(schemaName, tableName) {
+        return async (lastTime, lastSyncId = 0) => {
+            const query = `
+        SELECT COUNT(1) AS total
+        FROM (
+          SELECT
+            COALESCE([Modified], [Created]) AS __sync_time,
+            ISNULL(CAST(id AS BIGINT), 0) AS __sync_id
+          FROM ${this.dbOldName}.${schemaName}.${tableName}
+        ) src
+        WHERE (
+          src.__sync_time > @lastTime
+          OR (src.__sync_time = @lastTime AND src.__sync_id > @lastSyncId)
+        )
+      `;
+
+            const rows = await this.syncModel.queryOldDb(query, {
                 lastTime,
                 lastSyncId: Number(lastSyncId || 0)
             });
@@ -113,17 +195,31 @@ class SyncHandlerModel {
      */
     async registerHandlers(syncManagerService, modelName) {
         try {
-            const fetchFn = this.createFetchFn(
-                this.syncModel.syncSchema,
-                this.syncModel.syncTable
-            );
+            const schemaName = this.syncModel.syncSchema || this.syncModel.oldDbSchema;
+            const tableName = this.syncModel.syncTable || this.syncModel.oldDbTable;
+            let fetchFn, countFn, processFn;
 
-            const processFn = this.createProcessFn();
-
-            const countFn = this.createCountFn(
-                this.syncModel.syncSchema,
-                this.syncModel.syncTable
-            );
+            if (this.syncModel.syncSchema) {
+                countFn = this.createCountFn(
+                    schemaName,
+                    tableName
+                );
+                fetchFn = this.createFetchFn(
+                    schemaName,
+                    tableName
+                );
+                processFn = this.createProcessFn();
+            } else {
+                countFn = this.createCountFnOld(
+                    schemaName,
+                    tableName
+                );
+                fetchFn = this.createFetchFnOld(
+                    schemaName,
+                    tableName
+                );
+                processFn = this.createProcessFnOld();
+            }
 
             syncManagerService.register(modelName, fetchFn, processFn, { countFn });
 

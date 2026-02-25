@@ -7,7 +7,7 @@
 
 //     newTable: 'book_documents',
 //     newSchema: 'dbo',
-//     newDatabase: 'camunda',
+//     newDatabase: 'DiOffice',
 
 //     fieldMapping: {
 //       'Title': 'name',                    // Title cũ → name
@@ -46,7 +46,7 @@ const tableMappings = {
 
     newTable: 'book_documents',
     newSchema: 'dbo',
-    newDatabase: 'camunda',
+    newDatabase: 'DiOffice',
 
     fieldMapping: {
       'Title': 'name',                    // Title cũ → name

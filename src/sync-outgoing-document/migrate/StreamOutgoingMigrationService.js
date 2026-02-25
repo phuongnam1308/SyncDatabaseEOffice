@@ -106,7 +106,7 @@ class StreamOutgoingMigrationService {
         try {
           // === BƯỚC 1: LẤY DỮ LIỆU TỪ DB CŨ ===
           logger.info(`│  📥 Fetching ${batch} records from OLD DB...`);
-          const oldRecords = await this.model.fetchBatchFromOldDb({
+          const oldRecords = await this.model.insertBatchToMain({
             batch,
             lastId: lastProcessedId
           });

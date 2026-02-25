@@ -243,7 +243,7 @@
 //       info: {
 //         title: 'Migration API',
 //         version: '1.0.0',
-//         description: 'API phục vụ migrate dữ liệu từ DataEOfficeSNP sang camunda'
+//         description: 'API phục vụ migrate dữ liệu từ DataEOfficeSNP sang DiOffice'
 //       },
 //       servers: [
 //         {

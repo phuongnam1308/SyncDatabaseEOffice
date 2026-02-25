@@ -131,7 +131,7 @@ class MigrationTaskService {
 
       return {
         source: { database: 'DataEOfficeSNP', schema: 'dbo', table: 'TaskVBDen', count: oldCount },
-        destination: { database: 'camunda', schema: 'dbo', table: 'task2', count: newCount },
+        destination: { database: 'DiOffice', schema: 'dbo', table: 'task2', count: newCount },
         migrated: newCount,
         remaining: oldCount - newCount,
         percentage: calculatePercentage(newCount, oldCount)

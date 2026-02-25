@@ -6,6 +6,7 @@ const sql = require('mssql');
 class SyncOutgoingModel extends BaseModel {
   constructor() {
     super();
+    this.dbName = 'DiOffice';
     this.syncSchema = "dbo";
     this.syncTable = "outgoing_documents_sync";
     this.mainSchema = "dbo";
@@ -16,14 +17,14 @@ class SyncOutgoingModel extends BaseModel {
     try {
       const countSyncQuery = `
         SELECT COUNT(*) AS total
-        FROM camunda.${this.syncSchema}.${this.syncTable}
+        FROM ${this.dbName}.${this.syncSchema}.${this.syncTable}
       `;
       const syncResult = await this.queryNewDbTx(countSyncQuery);
       const totalInSync = syncResult[0]?.total || 0;
 
       const countMainQuery = `
         SELECT COUNT(*) AS total
-        FROM camunda.${this.mainSchema}.${this.mainTable}
+        FROM ${this.dbName}.${this.mainSchema}.${this.mainTable}
       `;
       const mainResult = await this.queryNewDbTx(countMainQuery);
       const totalInMain = mainResult[0]?.total || 0;
@@ -43,7 +44,7 @@ class SyncOutgoingModel extends BaseModel {
     try {
       let query = `
         SELECT TOP (@batch) *
-        FROM camunda.${this.syncSchema}.${this.syncTable}
+        FROM ${this.dbName}.${this.syncSchema}.${this.syncTable}
         WHERE 1=1
       `;
 
@@ -81,7 +82,7 @@ class SyncOutgoingModel extends BaseModel {
       for (const record of records) {
         try {
           const existingQuery = `
-            SELECT id FROM camunda.${this.mainSchema}.${this.mainTable}
+            SELECT id FROM ${this.dbName}.${this.mainSchema}.${this.mainTable}
             WHERE document_id = @documentId
           `;
           const existing = await this.queryNewDbTx(
@@ -118,7 +119,7 @@ class SyncOutgoingModel extends BaseModel {
 
   async _insertRecord(record, transaction) {
     const query = `
-      INSERT INTO camunda.${this.mainSchema}.${this.mainTable} (
+      INSERT INTO ${this.dbName}.${this.mainSchema}.${this.mainTable} (
         document_id, status_code, sender_unit, drafter, document_type,
         urgency_level, private_level, document_field, report_signer,
         report_document_symbol, to_book_text_symbols, viewers, deadline_reply,
@@ -170,7 +171,7 @@ class SyncOutgoingModel extends BaseModel {
 
   async _updateRecord(record, transaction) {
     const query = `
-      UPDATE camunda.${this.mainSchema}.${this.mainTable}
+      UPDATE ${this.dbName}.${this.mainSchema}.${this.mainTable}
       SET
         status_code = @status_code,
         sender_unit = @sender_unit,

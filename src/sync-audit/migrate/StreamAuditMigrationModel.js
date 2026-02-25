@@ -24,7 +24,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
     return this.queryOldDb(query, { batch, lastId: lastId || null });
   }
 
-  async upsertBatch(records) {
+  async insertBatchToNewDb(records) {
     if (!records?.length) return { inserted: 0, updated: 0 };
 
     const transaction = await this.beginTransaction();
@@ -159,7 +159,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
 
     let query = `
       SELECT TOP 1 id
-      FROM camunda.dbo.audit_sync
+      FROM DiOffice.dbo.audit_sync
       WHERE id_van_ban = @idVanBan
     `;
 
@@ -193,7 +193,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
 
       const outgoingQuery = `
         SELECT TOP 1 document_id
-        FROM camunda.dbo.outgoing_documents_sync
+        FROM DiOffice.dbo.outgoing_documents_sync
         WHERE id_outgoing_bak = @idVanBan
       `;
 
@@ -208,7 +208,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
 
       const incomingQuery2 = `
         SELECT TOP 1 document_id
-        FROM camunda.dbo.incomming_documents
+        FROM DiOffice.dbo.incomming_documents
         WHERE id_incoming_bak = @idVanBan
       `;
 
@@ -240,7 +240,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
     const receiverUnit = this._normalizeArrayField(data.receiver_unit);
 
     const query = `
-      INSERT INTO camunda.dbo.audit_sync (
+      INSERT INTO DiOffice.dbo.audit_sync (
         document_id, time, display_name, user_id, created_by,
         receiver, receiver_unit, action_code, roleProcess, stage_status,
         id_van_ban, created_at, updated_at, type_document, table_backup
@@ -299,7 +299,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
     }
 
     const query = `
-      UPDATE camunda.dbo.audit_sync
+      UPDATE DiOffice.dbo.audit_sync
       SET
         time = @time, display_name = @displayName, user_id = @userId,
         created_by = @createBy, action_code = @actionCode,
