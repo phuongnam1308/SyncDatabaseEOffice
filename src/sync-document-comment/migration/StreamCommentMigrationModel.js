@@ -7,7 +7,7 @@ class StreamCommentMigrationModel extends BaseModel {
   constructor(oldDbTable) {
     super();
     this.oldDbSchema = "dbo";
-    this.oldDbTable = "Comments_ATPC";
+    this.oldDbTable = oldDbTable;
     this.newDbSchema = "dbo";
     this.newDbTable = "document_comments_sync";
     this.helper = new MigrationHelper(this.queryNewDbTx.bind(this));

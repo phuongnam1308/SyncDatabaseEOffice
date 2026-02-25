@@ -7,7 +7,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
   constructor(oldDbTable) {
     super();
     this.oldDbSchema = "dbo";
-    this.oldDbTable = "LuanChuyenVanBan_ATPC";
+    this.oldDbTable = oldDbTable;
     this.newDbSchema = "dbo";
     this.newDbTable = "audit_sync";
     this.helper = new MigrationHelper(this.queryNewDbTx.bind(this));
