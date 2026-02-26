@@ -169,6 +169,7 @@ class OutGoingDocumentModel extends BaseModel {
 
     // ── Bảng sync cuối cùng của document ─────────────────────
     this.syncTable   = 'outgoing_documents_sync';
+    this.syncSchema  = 'dbo';
 
     this.helper = new MigrationHelper(this.queryNewDbTx.bind(this));
 
