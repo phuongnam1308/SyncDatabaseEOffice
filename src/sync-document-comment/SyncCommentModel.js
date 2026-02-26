@@ -1,6 +1,6 @@
-const BaseModel = require("../../../models/BaseModel");
-const logger = require("../../../utils/logger");
-const MigrationHelper = require("../../helpers/MigrationHelper");
+const BaseModel = require("../../models/BaseModel");
+const logger = require("../../utils/logger");
+const MigrationHelper = require("../helpers/MigrationHelper");
 
 class StreamCommentMigrationModel extends BaseModel {
   constructor(oldDbTable) {
