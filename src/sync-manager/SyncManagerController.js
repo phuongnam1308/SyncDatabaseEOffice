@@ -416,9 +416,6 @@ class SyncManagerController extends BaseController {
             <!-- Single models -->
             <tr class="section-title"><td colspan="9">🔄 ĐỒNG BỘ THỜI GIAN THỰC</td></tr>
             <tbody id="single-tbody">${initialSingleRows}</tbody>
-            <!-- Migration groups -->
-            <tr class="section-title"><td colspan="9">📦 MIGRATION (nhấn vào hàng để xem chi tiết từng bảng)</td></tr>
-            <tbody id="group-tbody">${initialGroupRows}</tbody>
           </tbody>
         </table>
       </div>

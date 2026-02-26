@@ -24,6 +24,85 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
     return this.queryOldDb(query, { batch, lastId: lastId || null });
   }
 
+  /**
+   * Lấy tất cả bản ghi audit liên quan đến một văn bản cụ thể từ bảng cũ.
+   * Được gọi bởi document migration model để truy vấn audit theo oldDocumentId.
+   *
+   * @param {string|number} oldDocumentId - ID văn bản trong hệ thống cũ (IDVanBan)
+   * @returns {Promise<Array>} Danh sách bản ghi audit thô từ DB cũ
+   */
+  async fetchByDocumentId(oldDocumentId) {
+    if (!oldDocumentId) return [];
+    try {
+      const query = `
+        SELECT *
+        FROM ${this.oldDbSchema}.${this.oldDbTable}
+        WHERE IDVanBan = @oldDocumentId
+        ORDER BY ID ASC
+      `;
+      return this.queryOldDb(query, { oldDocumentId: String(oldDocumentId) });
+    } catch (error) {
+      logger.error(`[StreamOutgoingAuditSyncModel.fetchByDocumentId] table=${this.oldDbTable} id=${oldDocumentId}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Migrate một bản ghi audit đơn lẻ từ DB cũ sang bảng audit_sync.
+   * Được gọi bởi document migration model thay vì xử lý theo batch.
+   *
+   * @param {object} rawRecord - Bản ghi thô từ DB cũ
+   * @param {object} [externalTransaction] - Transaction bên ngoài (tùy chọn)
+   * @returns {Promise<Array<object>|null>} Danh sách bản ghi đã được insert/update trong audit_sync,
+   *                                        hoặc null nếu bỏ qua
+   */
+  async processSingleRecord(rawRecord, externalTransaction = null) {
+    if (!rawRecord) return null;
+
+    const transaction = externalTransaction || await this.beginTransaction();
+    const ownsTransaction = !externalTransaction;
+    const syncedRecords = [];
+
+    try {
+      const mapped = await this._mapSingleRecord(rawRecord, transaction);
+      if (!mapped) {
+        if (ownsTransaction) await this.commitTransaction(transaction);
+        return null;
+      }
+
+      const audits = this.helper._expandMappedRecords(mapped);
+
+      for (const audit of audits) {
+        try {
+          const existed = await this._getExistingAuditSync(audit, transaction);
+
+          if (existed) {
+            await this._update(audit, transaction);
+          } else {
+            await this._insert(audit, transaction);
+          }
+
+          // Trả về bản ghi đã được sync để caller có thể tiếp tục apply vào bảng chính
+          syncedRecords.push({
+            ...audit,
+            _existed: !!existed,
+          });
+        } catch (auditErr) {
+          logger.warn(
+            `[AuditSync:${this.oldDbTable}] processSingleRecord skip audit id_van_ban=${audit?.id_van_ban} receiver=${audit?.receiver}: ${auditErr.message}`
+          );
+        }
+      }
+
+      if (ownsTransaction) await this.commitTransaction(transaction);
+      return syncedRecords;
+    } catch (error) {
+      if (ownsTransaction) await this.rollbackTransaction(transaction);
+      logger.error(`[StreamOutgoingAuditSyncModel.processSingleRecord] table=${this.oldDbTable} ID=${rawRecord?.ID}:`, error);
+      throw error;
+    }
+  }
+
   async insertBatchToNewDb(records) {
     if (!records?.length) return { inserted: 0, updated: 0 };
 
@@ -40,7 +119,6 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
           const audits = this.helper._expandMappedRecords(mapped);
 
           for (const audit of audits) {
-            // FIX 1: try-catch riêng từng audit, tránh 1 audit lỗi làm skip toàn bộ raw record
             try {
               const existed = await this._getExistingAuditSync(audit, transaction);
 
@@ -235,7 +313,6 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
       return;
     }
 
-    // FIX 2: normalize array → string trước khi insert
     const receiver = this._normalizeArrayField(data.receiver);
     const receiverUnit = this._normalizeArrayField(data.receiver_unit);
 
@@ -270,12 +347,9 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
   }
 
   async _update(data, transaction) {
-    // FIX 2: normalize array → string
     const receiver = this._normalizeArrayField(data.receiver);
     const receiverUnit = this._normalizeArrayField(data.receiver_unit);
 
-    // FIX 3: WHERE phải filter thêm receiver và receiver_unit
-    // tránh update tất cả rows có cùng id_van_ban
     let whereClause = `WHERE id_van_ban = @idVanBan`;
     const params = {
       time: data.time,

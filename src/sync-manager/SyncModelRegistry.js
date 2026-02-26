@@ -7,110 +7,30 @@ const SyncGroupService = require('./SyncGroupService');
 const SyncOutgoingModel            = require('../sync-outgoing-document/apply/SyncOutgoingModel');
 const StreamOutgoingMigrationModel = require('../sync-outgoing-document/migrate/StreamOutgoingMigrationModel');
 const SyncAuditModel               = require('../sync-audit/apply/SyncAuditModel');
-const StreamOutgoingAuditSyncModel = require('../sync-audit/migrate/StreamAuditMigrationModel');
 const SyncCommentModel             = require('../sync-document-comment/apply/SyncCommentModel');
-const StreamCommentMigrationModel  = require('../sync-document-comment/migration/StreamCommentMigrationModel');
 const SyncFileModel                = require('../sync-file/apply/SyncFileModel');
 
-const AUDIT_MIGRATION_TABLES = [
-  'LuanChuyenVanBan',
-  'LuanChuyenVanBan_ATPC',
-  'LuanChuyenVanBan_CLL',
-  'LuanChuyenVanBan_CNTT',
-  'LuanChuyenVanBan_CT',
-  'LuanChuyenVanBan_CVTC',
-  'LuanChuyenVanBan_DonVi',
-  'LuanChuyenVanBan_DVHH',
-  'LuanChuyenVanBan_DVKT',
-  'LuanChuyenVanBan_GNVT',
-  'LuanChuyenVanBan_HC',
-  'LuanChuyenVanBan_HT',
-  'LuanChuyenVanBan_ICDLB',
-  'LuanChuyenVanBan_ICDST',
-  'LuanChuyenVanBan_KHDT',
-  'LuanChuyenVanBan_KHKD',
-  'LuanChuyenVanBan_KTVT',
-  'LuanChuyenVanBan_KVTC',
-  'LuanChuyenVanBan_MKT',
-  'LuanChuyenVanBan_NPL',
-  'LuanChuyenVanBan_QLCT',
-  'LuanChuyenVanBan_QSBV',
-  'LuanChuyenVanBan_SNPL',
-  'LuanChuyenVanBan_TC',
-  'LuanChuyenVanBan_TC189',
-  'LuanChuyenVanBan_TCCT',
-  'LuanChuyenVanBan_TCHP',
-  'LuanChuyenVanBan_TCIDI',
-  'LuanChuyenVanBan_TCLD',
-  'LuanChuyenVanBan_TCMT',
-  'LuanChuyenVanBan_TCO',
-  'LuanChuyenVanBan_TCOT',
-  'LuanChuyenVanBan_TCPC',
-  'LuanChuyenVanBan_TCPH',
-  'LuanChuyenVanBan_TCTT',
-  'LuanChuyenVanBan_TTDDC',
-  'LuanChuyenVanBan_TTDTC',
-  'LuanChuyenVanBan_VP',
-  'LuanChuyenVanBan_VPMB',
-  'LuanChuyenVanBan_VPTNB',
-  'LuanChuyenVanBan_VTB',
-  'LuanChuyenVanBan_VTT',
-  'LuanChuyenVanBan_XDCT',
-  'LuanChuyenVanBan_xdsm',
-  'LuanChuyenVanBan_XNCG',
-  'LuanChuyenVanBan_YTE',
-];
-
-const COMMENT_MIGRATION_TABLES = [
-  'Comments',
-  'Comments_ATPC',
-  'Comments_CLL',
-  'Comments_CNTT',
-  'Comments_CT',
-  'Comments_CVTC',
-  'Comments_DonVi',
-  'Comments_DVHH',
-  'Comments_DVKT',
-  'Comments_GNVT',
-  'Comments_HC',
-  'Comments_HT',
-  'Comments_ICDLB',
-  'Comments_ICDST',
-  'Comments_KHDT',
-  'Comments_KHKD',
-  'Comments_KTVT',
-  'Comments_KVTC',
-  'Comments_MKT',
-  'Comments_NPL',
-  'Comments_QLCT',
-  'Comments_QSBV',
-  'Comments_SNPL',
-  'Comments_TC',
-  'Comments_TC189',
-  'Comments_TCCT',
-  'Comments_TCHP',
-  'Comments_TCIDI',
-  'Comments_TCLD',
-  'Comments_TCMT',
-  'Comments_TCO',
-  'Comments_TCOT',
-  'Comments_TCPC',
-  'Comments_TCPH',
-  'Comments_TCTT',
-  'Comments_TTDDC',
-  'Comments_TTDTC',
-  'Comments_VP',
-  'Comments_VPMB',
-  'Comments_VPTNB',
-  'Comments_VTB',
-  'Comments_VTT',
-  'Comments_XDCT',
-  'Comments_xdsm',
-  'Comments_XNCG',
-  'Comments_YTE',
-];
-
+/**
+ * MODEL_DEFINITIONS
+ * ─────────────────────────────────────────────────────────────────
+ *
+ * Thay đổi so với phiên bản cũ:
+ *
+ *   ❌ LOẠI BỎ:
+ *      - 'audit-migration'   (group) — không còn chạy standalone
+ *      - 'comment-migration' (group) — không còn chạy standalone
+ *        Lý do: audit và comment giờ được đồng bộ lẻ từng record
+ *        bên trong StreamOutgoingMigrationModel.processSingleDocument()
+ *
+ *   ✅ GIỮ NGUYÊN:
+ *      - 'outgoing'  — apply: outgoing_documents_sync → outgoing_documents
+ *      - 'audit'     — apply: audit_sync → audit  (vẫn hữu dụng để re-apply thủ công)
+ *      - 'comment'   — apply: document_comments_sync → document_comments (idem)
+ *      - 'file'      — apply: file_sync → file
+ *      - 'outgoing-migration' — migrate + apply document-centric (document kéo theo audit/comment)
+ */
 const MODEL_DEFINITIONS = [
+  // ── Apply models (sync table → main table) ─────────────────────
   {
     key: 'outgoing',
     label: 'Đồng bộ văn bản đi',
@@ -131,24 +51,14 @@ const MODEL_DEFINITIONS = [
     label: 'Đồng bộ file tài liệu',
     ModelClass: SyncFileModel,
   },
+
+  // ── Migration model (old DB → sync + main, document-centric) ──
   {
     key: 'outgoing-migration',
     label: 'Đồng bộ cơ sở dữ liệu cũ: văn bản đi',
     ModelClass: StreamOutgoingMigrationModel,
-  },
-  {
-    key: 'audit-migration',
-    label: 'Đồng bộ cơ sở dữ liệu cũ: nhật kí — {table}',
-    groupLabel: 'Đồng bộ cơ sở dữ liệu cũ: nhật kí thao tác',
-    ModelClass: StreamOutgoingAuditSyncModel,
-    tables: AUDIT_MIGRATION_TABLES,
-  },
-  {
-    key: 'comment-migration',
-    label: 'Đồng bộ cơ sở dữ liệu cũ: bình luận — {table}',
-    groupLabel: 'Đồng bộ cơ sở dữ liệu cũ: bình luận văn bản',
-    ModelClass: StreamCommentMigrationModel,
-    tables: COMMENT_MIGRATION_TABLES,
+    // Không có 'tables' → không tạo group, chạy như single model
+    // StreamOutgoingMigrationModel.initialize() tự quản lý tất cả bảng audit/comment bên trong
   },
 ];
 
@@ -214,7 +124,7 @@ class SyncModelRegistry {
     return this._groupKeys.has(baseKey);
   }
 
-  keys() { return [...this._registry.keys()]; }
+  keys()      { return [...this._registry.keys()]; }
   groupKeys() { return [...this._groupKeys]; }
 
   getGroupMemberLabels() {
@@ -247,12 +157,12 @@ class SyncModelRegistry {
   entries() {
     return [...this._registry.entries()].map(([key, entry]) => ({
       key,
-      label: entry.definition.label,
+      label:   entry.definition.label,
       baseKey: entry.definition.baseKey || key,
-      table: entry.definition.table || null,
+      table:   entry.definition.table   || null,
       isGroup: this._groupKeys.has(entry.definition.baseKey || key),
       instance: entry.instance,
-      handler: entry.handler,
+      handler:  entry.handler,
     }));
   }
 
@@ -263,11 +173,11 @@ class SyncModelRegistry {
         for (const tableName of def.tables) {
           resolved.push({
             ...def,
-            key: `${def.key}:${tableName}`,
-            label: def.label.replace('{table}', tableName),
+            key:             `${def.key}:${tableName}`,
+            label:           def.label.replace('{table}', tableName),
             constructorArgs: [tableName],
-            baseKey: def.key,
-            table: tableName,
+            baseKey:         def.key,
+            table:           tableName,
           });
         }
       } else {

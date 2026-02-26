@@ -51,9 +51,9 @@ class SyncHandlerModel {
     }
 
     /**
-     * Generate fetch function for fetching records from sync table
+     * Generate fetch function for fetching records from old DB table
      * @param {string} schemaName - Schema name (e.g., 'dbo')
-     * @param {string} tableName - Table name (e.g., 'outgoing_documents_sync')
+     * @param {string} tableName - Table name (e.g., 'VanBanDi')
      * @returns {Function} Fetch function
      */
     createFetchFnOld(schemaName, tableName) {
@@ -99,22 +99,44 @@ class SyncHandlerModel {
     }
 
     /**
-     * Generate process function for inserting records to main table
+     * Generate process function for inserting records to main table (new DB flow: sync → main)
      * @returns {Function} Process function
      */
-    createProcessFn(record) {
+    createProcessFn() {
         return async (record) => {
             await this.syncModel.insertBatchToMain([record]);
         };
     }
 
     /**
-     * Generate process function for inserting records to main table
+     * Generate process function for inserting records from old DB.
+     *
+     * Hỗ trợ hai trường hợp:
+     *   1. Model thông thường: insertBatchToNewDb([record]) → { inserted, updated }
+     *   2. Document model mới: insertBatchToNewDb([record]) → { inserted, updated, skipped,
+     *        auditInserted, auditUpdated, auditSkipped,
+     *        commentInserted, commentUpdated, commentSkipped }
+     *
+     * Kết quả mở rộng được log nhưng không ảnh hưởng đến SyncManagerService
+     * (vốn chỉ nhìn vào inserted + updated).
+     *
      * @returns {Function} Process function
      */
-    createProcessFnOld(record) {
+    createProcessFnOld() {
         return async (record) => {
-            await this.syncModel.insertBatchToNewDb([record]);
+            const result = await this.syncModel.insertBatchToNewDb([record]);
+
+            // Log thêm thống kê audit/comment nếu có (document-centric model)
+            if (result && (result.auditInserted !== undefined || result.commentInserted !== undefined)) {
+                logger.debug(
+                    `[SyncHandlerModel] Document ID=${record?.ID} ` +
+                    `→ doc(i=${result.inserted},u=${result.updated}) ` +
+                    `audit(i=${result.auditInserted},u=${result.auditUpdated},s=${result.auditSkipped}) ` +
+                    `comment(i=${result.commentInserted},u=${result.commentUpdated},s=${result.commentSkipped})`
+                );
+            }
+
+            return result;
         };
     }
 
@@ -122,6 +144,7 @@ class SyncHandlerModel {
      * Generate count function for counting remaining records to sync
      * @param {string} schemaName - Schema name
      * @param {string} tableName - Table name
+     * @param {string} mode - 'new' or 'old'
      * @returns {Function} Count function
      */
     createCountFn(schemaName, tableName, mode = 'new') {
@@ -167,7 +190,7 @@ class SyncHandlerModel {
     }
 
     /**
-     * Generate count function for counting remaining records to sync
+     * Generate count function for counting remaining records in old DB
      * @param {string} schemaName - Schema name
      * @param {string} tableName - Table name
      * @returns {Function} Count function
@@ -215,24 +238,14 @@ class SyncHandlerModel {
             let fetchFn, countFn, processFn;
 
             if (this.syncModel.syncSchema) {
-                countFn = this.createCountFn(
-                    schemaName,
-                    tableName
-                );
-                fetchFn = this.createFetchFn(
-                    schemaName,
-                    tableName
-                );
+                // Flow: sync table → main (apply)
+                countFn = this.createCountFn(schemaName, tableName);
+                fetchFn = this.createFetchFn(schemaName, tableName);
                 processFn = this.createProcessFn();
             } else {
-                countFn = this.createCountFnOld(
-                    schemaName,
-                    tableName
-                );
-                fetchFn = this.createFetchFnOld(
-                    schemaName,
-                    tableName
-                );
+                // Flow: old DB → (sync + main) — document-centric hoặc migration thông thường
+                countFn = this.createCountFnOld(schemaName, tableName);
+                fetchFn = this.createFetchFnOld(schemaName, tableName);
                 processFn = this.createProcessFnOld();
             }
 
