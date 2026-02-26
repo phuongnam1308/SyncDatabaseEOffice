@@ -50,31 +50,31 @@
  * ════════════════════════════════════════════════════════════════
  */
 
-const fs   = require('fs');
-const path = require('path');
+// JSON file persistence removed — state persisted in DB only
 const logger = require('../../utils/logger');
 // Sử dụng Repository để ghi log vào DB thay vì dbClient trực tiếp
 const SyncStateRepository = require('./SyncStateRepository');
 
-const STATE_FILE           = path.join(__dirname, '../../logs/sync_state_src.json');
-const DEFAULT_SYNC_TIME    = '1970-01-01T00:00:00.000Z';
-const RUNNING_STATUSES     = new Set(['RUNNING', 'PAUSE_REQUESTED', 'RESUMING']);
+// STATE_FILE removed: no JSON file persistence
+const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
+const RUNNING_STATUSES = new Set(['RUNNING', 'PAUSE_REQUESTED', 'RESUMING']);
 const INTERRUPTED_STATUSES = new Set(['RUNNING', 'PAUSE_REQUESTED', 'RESUMING']);
 
 class SyncManagerService {
   constructor() {
-    this.registry          = new Map();
-    this.batchSize         = parseInt(process.env.BATCH_SIZE || '10', 10);
+    this.registry = new Map();
+    this.batchSize = parseInt(process.env.BATCH_SIZE || '10', 10);
     this.activeJobPromises = new Map();
 
-    // Giữ nguyên: load state từ JSON khi khởi động
-    this.state = this.normalizeState(this.loadRawState());
+    // State được khởi tạo rỗng, sau đó hydrate từ DB qua ensureStateLoaded().
+    this.state = this.normalizeState(null);
+    this._stateLoaded = false;
+    this._stateLoadingPromise = null;
 
     // SSE clients (Set của Express response objects)
     this._sseClients = new Set();
 
-    // Giữ nguyên: recover các job bị crash + setup shutdown hooks
-    this.recoverInterruptedJobs();
+    // Setup shutdown hooks
     this.setupShutdownHandlers();
   }
 
@@ -83,20 +83,128 @@ class SyncManagerService {
   // ══════════════════════════════════════════════════════════════
 
   ensureStateDir() {
-    const dir = path.dirname(STATE_FILE);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    // no-op: filesystem persistence removed
   }
 
-  loadRawState() {
+  toIsoOrNull(value) {
+    if (!value) return null;
+    const dateValue = new Date(value);
+    return Number.isNaN(dateValue.getTime()) ? null : dateValue.toISOString();
+  }
+
+  mapDbModelState(row) {
+    return {
+      lastSyncTime: this.toIsoOrNull(row?.last_sync_time),
+      lastSyncId: Number(row?.last_sync_id || 0),
+      totalSynced: Number(row?.total_synced || 0),
+      status: row?.status || 'IDLE',
+      lastRun: this.toIsoOrNull(row?.last_run),
+      activeJobId: row?.active_job_id || null,
+      error: row?.last_error || null
+    };
+  }
+
+  mapDbJobState(row) {
+    return {
+      jobId: row?.job_id,
+      modelName: row?.model_name,
+      status: row?.status || 'IDLE',
+      startedAt: this.toIsoOrNull(row?.started_at),
+      updatedAt: this.toIsoOrNull(row?.updated_at),
+      endedAt: this.toIsoOrNull(row?.ended_at),
+      heartbeatAt: this.toIsoOrNull(row?.heartbeat_at || row?.updated_at),
+      pauseRequested: Boolean(row?.pause_requested),
+      reset: Boolean(row?.is_reset),
+      batchSize: Number(row?.batch_size || this.batchSize),
+      lastSyncTime: this.toIsoOrNull(row?.last_sync_time) || DEFAULT_SYNC_TIME,
+      lastSyncId: Number(row?.last_sync_id || 0),
+      totalToSync: row?.total_to_sync == null ? null : Number(row.total_to_sync),
+      totalProcessed: Number(row?.total_processed || 0),
+      totalSuccess: Number(row?.total_success || 0),
+      totalErrors: Number(row?.total_errors || 0),
+      error: row?.error_message || null,
+      errorLog: []
+    };
+  }
+
+  async loadRawState() {
     try {
-      if (fs.existsSync(STATE_FILE)) {
-        const content = fs.readFileSync(STATE_FILE, 'utf8');
-        return content.trim() ? JSON.parse(content) : null;
+      const [models, jobs] = await Promise.all([
+        SyncStateRepository.queryNewDb(
+          `
+          SELECT
+            model_name, last_sync_time, last_sync_id, total_synced,
+            status, last_run, active_job_id, last_error
+          FROM ${SyncStateRepository.tblModels}
+          `
+        ),
+        SyncStateRepository.queryNewDb(
+          `
+          SELECT
+            job_id, model_name, status,
+            started_at, updated_at, ended_at, heartbeat_at,
+            pause_requested, is_reset, batch_size,
+            last_sync_time, last_sync_id,
+            total_to_sync, total_processed, total_success, total_errors,
+            error_message
+          FROM ${SyncStateRepository.tblJobs}
+          `
+        )
+      ]);
+
+      const state = { models: {}, jobs: {}, syncLogs: {} };
+
+      for (const modelRow of (models || [])) {
+        const modelName = modelRow?.model_name;
+        if (!modelName) continue;
+        state.models[modelName] = this.mapDbModelState(modelRow);
       }
+
+      for (const jobRow of (jobs || [])) {
+        const mappedJob = this.mapDbJobState(jobRow);
+        if (!mappedJob.jobId || !mappedJob.modelName) continue;
+
+        state.jobs[mappedJob.jobId] = mappedJob;
+        state.syncLogs[mappedJob.jobId] = {
+          jobId: mappedJob.jobId,
+          modelName: mappedJob.modelName,
+          status: mappedJob.status,
+          startedAt: mappedJob.startedAt,
+          updatedAt: mappedJob.updatedAt,
+          endedAt: mappedJob.endedAt,
+          heartbeatAt: mappedJob.heartbeatAt,
+          lastSyncTime: mappedJob.lastSyncTime,
+          lastSyncId: mappedJob.lastSyncId,
+          totalToSync: mappedJob.totalToSync,
+          totalProcessed: mappedJob.totalProcessed,
+          totalSuccess: mappedJob.totalSuccess,
+          totalErrors: mappedJob.totalErrors,
+          error: mappedJob.error
+        };
+      }
+
+      return state;
     } catch (error) {
-      logger.warn('[SyncManagerService] State file corrupted or empty, resetting state:', error.message);
+      logger.warn('[SyncManagerService] Load state from DB failed, fallback to empty state:', error.message);
     }
     return null;
+  }
+
+  async ensureStateLoaded() {
+    if (this._stateLoaded) return;
+
+    if (!this._stateLoadingPromise) {
+      this._stateLoadingPromise = (async () => {
+        const rawState = await this.loadRawState();
+        this.state = this.normalizeState(rawState);
+        this._stateLoaded = true;
+        this.recoverInterruptedJobs();
+      })().finally(() => {
+        this._stateLoadingPromise = null;
+      });
+    }
+
+    await this._stateLoadingPromise;
   }
 
   normalizeState(raw) {
@@ -104,8 +212,8 @@ class SyncManagerService {
     if (!raw) return base;
     if (raw.models || raw.jobs || raw.syncLogs) {
       return {
-        models:   raw.models   || {},
-        jobs:     raw.jobs     || {},
+        models: raw.models || {},
+        jobs: raw.jobs || {},
         syncLogs: raw.syncLogs || {}
       };
     }
@@ -118,14 +226,12 @@ class SyncManagerService {
    * Thêm: broadcast SSE sau khi ghi (không block).
    */
   saveState() {
-    try {
-      this.ensureStateDir();
-      fs.writeFileSync(STATE_FILE, JSON.stringify(this.state, null, 2));
-    } catch (error) {
-      logger.error('[SyncManagerService] Cannot save state file:', error);
-    }
-    // Thêm: push realtime tới dashboard
+    // Persist state to DB and broadcast realtime snapshot
     this._broadcastSSE();
+    // Persist DB in background (fire-and-forget)
+    this._persistStateToDb().catch((err) =>
+      logger.warn('[SyncManagerService] Persist state to DB failed:', err && err.message ? err.message : err)
+    );
   }
 
   now() { return new Date().toISOString(); }
@@ -159,7 +265,7 @@ class SyncManagerService {
         console.error('[SyncManagerService] Failed to persist crash state:', error);
       }
     };
-    process.on('SIGINT',  () => { markInterrupted(); process.exit(0); });
+    process.on('SIGINT', () => { markInterrupted(); process.exit(0); });
     process.on('SIGTERM', () => { markInterrupted(); process.exit(0); });
   }
 
@@ -179,16 +285,16 @@ class SyncManagerService {
   }
 
   markJobAsCrashed(job, reason, at = this.now()) {
-    job.status      = 'CRASHED';
-    job.error       = reason;
-    job.updatedAt   = at;
-    job.endedAt     = at;
+    job.status = 'CRASHED';
+    job.error = reason;
+    job.updatedAt = at;
+    job.endedAt = at;
     job.heartbeatAt = at;
 
     const modelState = this.state.models[job.modelName];
     if (modelState) {
-      modelState.status      = 'CRASHED';
-      modelState.error       = reason;
+      modelState.status = 'CRASHED';
+      modelState.error = reason;
       modelState.activeJobId = null;
       if (job.lastSyncTime) modelState.lastSyncTime = job.lastSyncTime;
       if (job.lastSyncId !== undefined) modelState.lastSyncId = job.lastSyncId;
@@ -203,12 +309,12 @@ class SyncManagerService {
   defaultModelState() {
     return {
       lastSyncTime: null,
-      lastSyncId:   0,
-      totalSynced:  0,
-      status:       'IDLE',
-      lastRun:      null,
-      activeJobId:  null,
-      error:        null
+      lastSyncId: 0,
+      totalSynced: 0,
+      status: 'IDLE',
+      lastRun: null,
+      activeJobId: null,
+      error: null
     };
   }
 
@@ -258,6 +364,10 @@ class SyncManagerService {
     // → Tự động dedup state, không ghi đè lastSyncTime cũ
     this.getModelState(name);
 
+    // Ensure model exists in DB (fire-and-forget) and persist initial state
+    this._dbEnsureModel(name);
+    this._dbUpdateModel(name, this.getModelState(name));
+
     this.saveState();
   }
 
@@ -267,57 +377,57 @@ class SyncManagerService {
 
   createJob(modelName, options = {}) {
     const modelState = this.getModelState(modelName);
-    const now   = this.now();
+    const now = this.now();
     const reset = Boolean(options.reset);
 
     if (reset) {
       modelState.lastSyncTime = null;
-      modelState.lastSyncId   = 0;
-      modelState.totalSynced  = 0;
+      modelState.lastSyncId = 0;
+      modelState.totalSynced = 0;
     }
 
     const jobId = this.generateJobId(modelName);
     const job = {
       jobId,
       modelName,
-      status:         'RUNNING',
-      startedAt:      now,
-      updatedAt:      now,
-      endedAt:        null,
-      heartbeatAt:    now,
+      status: 'RUNNING',
+      startedAt: now,
+      updatedAt: now,
+      endedAt: null,
+      heartbeatAt: now,
       pauseRequested: false,
       reset,
-      batchSize:      parseInt(options.batchSize || this.batchSize, 10),
-      lastSyncTime:   modelState.lastSyncTime || DEFAULT_SYNC_TIME,
-      lastSyncId:     modelState.lastSyncId   || 0,
-      totalToSync:    null,
+      batchSize: parseInt(options.batchSize || this.batchSize, 10),
+      lastSyncTime: modelState.lastSyncTime || DEFAULT_SYNC_TIME,
+      lastSyncId: modelState.lastSyncId || 0,
+      totalToSync: null,
       totalProcessed: 0,
-      totalSuccess:   0,
-      totalErrors:    0,
-      error:          null,
-      errorLog:       []
+      totalSuccess: 0,
+      totalErrors: 0,
+      error: null,
+      errorLog: []
     };
 
     this.state.jobs[jobId] = job;
     this.state.syncLogs[jobId] = {
       jobId,
       modelName,
-      status:         job.status,
-      startedAt:      job.startedAt,
-      updatedAt:      job.updatedAt,
-      endedAt:        job.endedAt,
-      lastSyncTime:   job.lastSyncTime,
-      lastSyncId:     job.lastSyncId,
-      totalToSync:    job.totalToSync,
+      status: job.status,
+      startedAt: job.startedAt,
+      updatedAt: job.updatedAt,
+      endedAt: job.endedAt,
+      lastSyncTime: job.lastSyncTime,
+      lastSyncId: job.lastSyncId,
+      totalToSync: job.totalToSync,
       totalProcessed: 0,
-      totalSuccess:   0,
-      totalErrors:    0,
-      error:          null
+      totalSuccess: 0,
+      totalErrors: 0,
+      error: null
     };
 
-    modelState.status      = 'RUNNING';
-    modelState.error       = null;
-    modelState.lastRun     = now;
+    modelState.status = 'RUNNING';
+    modelState.error = null;
+    modelState.lastRun = now;
     modelState.activeJobId = jobId;
 
     this.saveState(); // ghi JSON (giữ nguyên)
@@ -331,30 +441,30 @@ class SyncManagerService {
 
   updateSyncLogFromJob(job) {
     this.state.syncLogs[job.jobId] = {
-      jobId:          job.jobId,
-      modelName:      job.modelName,
-      status:         job.status,
-      startedAt:      job.startedAt,
-      updatedAt:      job.updatedAt,
-      endedAt:        job.endedAt,
-      heartbeatAt:    job.heartbeatAt,
-      lastSyncTime:   job.lastSyncTime,
-      lastSyncId:     job.lastSyncId,
-      totalToSync:    job.totalToSync,
+      jobId: job.jobId,
+      modelName: job.modelName,
+      status: job.status,
+      startedAt: job.startedAt,
+      updatedAt: job.updatedAt,
+      endedAt: job.endedAt,
+      heartbeatAt: job.heartbeatAt,
+      lastSyncTime: job.lastSyncTime,
+      lastSyncId: job.lastSyncId,
+      totalToSync: job.totalToSync,
       totalProcessed: job.totalProcessed,
-      totalSuccess:   job.totalSuccess,
-      totalErrors:    job.totalErrors,
-      error:          job.error
+      totalSuccess: job.totalSuccess,
+      totalErrors: job.totalErrors,
+      error: job.error
     };
   }
 
   pushJobError(job, record, error) {
     job.totalErrors += 1;
-    job.error        = error.message;
+    job.error = error.message;
     job.errorLog.push({
-      at:       this.now(),
+      at: this.now(),
       recordId: this.extractRecordId(record),
-      message:  error.message
+      message: error.message
     });
     if (job.errorLog.length > 200) job.errorLog = job.errorLog.slice(-200);
 
@@ -367,7 +477,7 @@ class SyncManagerService {
   }
 
   extractRecordId(record) {
-    const raw    = record.__sync_id || record.id || record.ID || record.document_id || 0;
+    const raw = record.__sync_id || record.id || record.ID || record.document_id || 0;
     const parsed = Number(raw);
     return Number.isFinite(parsed) ? parsed : 0;
   }
@@ -375,9 +485,9 @@ class SyncManagerService {
   compareCursor(aTime, aId, bTime, bId) {
     const ta = new Date(aTime || DEFAULT_SYNC_TIME).getTime();
     const tb = new Date(bTime || DEFAULT_SYNC_TIME).getTime();
-    if (ta > tb) return  1;
+    if (ta > tb) return 1;
     if (ta < tb) return -1;
-    if ((aId || 0) > (bId || 0)) return  1;
+    if ((aId || 0) > (bId || 0)) return 1;
     if ((aId || 0) < (bId || 0)) return -1;
     return 0;
   }
@@ -402,7 +512,7 @@ class SyncManagerService {
       throw new Error(`Model ${modelName} is paused. Resume the paused job first.`);
     }
 
-    const job        = this.createJob(modelName, options);
+    const job = this.createJob(modelName, options);
     const runPromise = this.runJob(job.jobId).finally(() => this.activeJobPromises.delete(job.jobId));
     this.activeJobPromises.set(job.jobId, runPromise);
 
@@ -420,9 +530,9 @@ class SyncManagerService {
     if (!RUNNING_STATUSES.has(job.status)) throw new Error(`Job ${jobId} is not running`);
 
     job.pauseRequested = true;
-    job.status         = 'PAUSE_REQUESTED';
-    job.updatedAt      = this.now();
-    job.heartbeatAt    = job.updatedAt;
+    job.status = 'PAUSE_REQUESTED';
+    job.updatedAt = this.now();
+    job.heartbeatAt = job.updatedAt;
 
     this.getModelState(job.modelName).status = 'PAUSE_REQUESTED';
 
@@ -443,13 +553,13 @@ class SyncManagerService {
     if (this.isModelBusy(modelState)) throw new Error(`Model ${job.modelName} is already running`);
 
     job.pauseRequested = false;
-    job.status         = 'RESUMING';
-    job.updatedAt      = this.now();
-    job.heartbeatAt    = job.updatedAt;
-    job.endedAt        = null;
+    job.status = 'RESUMING';
+    job.updatedAt = this.now();
+    job.heartbeatAt = job.updatedAt;
+    job.endedAt = null;
 
-    modelState.status      = 'RESUMING';
-    modelState.error       = null;
+    modelState.status = 'RESUMING';
+    modelState.error = null;
     modelState.activeJobId = job.jobId;
 
     this.updateSyncLogFromJob(job);
@@ -463,7 +573,33 @@ class SyncManagerService {
     return { jobId: job.jobId, modelName: job.modelName, status: job.status };
   }
 
-  getJob(jobId) { return this.state.jobs[jobId] || null; }
+  async getJob(jobId) {
+    const job = await this._dbFindJobById(jobId);
+
+    if (!job) return null;
+
+    const formattedJob = this.keysToCamel(job);
+
+    return formattedJob[0];
+  }
+
+
+  toCamel(str) {
+    return str.replace(/_([a-z])/g, (_, char) => char.toUpperCase());
+  }
+
+  keysToCamel(obj) {
+    if (Array.isArray(obj)) {
+      return obj.map(v => this.keysToCamel(v));
+    } else if (obj !== null && obj.constructor === Object) {
+      return Object.keys(obj).reduce((acc, key) => {
+        const camelKey = this.toCamel(key);
+        acc[camelKey] = this.keysToCamel(obj[key]);
+        return acc;
+      }, {});
+    }
+    return obj;
+  }
 
   findLatestJobByModel(modelName) {
     return Object.values(this.state.jobs)
@@ -480,7 +616,7 @@ class SyncManagerService {
   // ══════════════════════════════════════════════════════════════
 
   async runJob(jobId) {
-    const job = this.state.jobs[jobId];
+    const job = await this.getJob(jobId);
     if (!job) return;
 
     const handlers = this.registry.get(job.modelName);
@@ -492,19 +628,20 @@ class SyncManagerService {
     const modelState = this.getModelState(job.modelName);
 
     if (job.status === 'RESUMING') {
-      job.status        = 'RUNNING';
+      job.status = 'RUNNING';
       modelState.status = 'RUNNING';
       this._dbUpdateModel(job.modelName, modelState);
     }
 
     let cursorTime = job.lastSyncTime || modelState.lastSyncTime || DEFAULT_SYNC_TIME;
-    let cursorId   = Number(job.lastSyncId || modelState.lastSyncId || 0);
+    let cursorId = Number(job.lastSyncId || modelState.lastSyncId || 0);
 
     try {
       // Đếm tổng bản ghi cần sync (để tính %)
       if (job.totalToSync == null && typeof handlers.countFn === 'function') {
         try {
           job.totalToSync = await handlers.countFn(cursorTime, cursorId);
+          logger.info(`[SyncManagerService][${job.modelName}] Total to sync: ${job.totalToSync}`);
         } catch (countError) {
           logger.error(`[SyncManagerService][${job.modelName}] Count remaining failed:`, countError);
           job.totalToSync = null;
@@ -518,33 +655,35 @@ class SyncManagerService {
         if (job.pauseRequested) { this.markJobPaused(job); return; }
 
         const now = this.now();
-        job.updatedAt   = now;
+        job.updatedAt = now;
         job.heartbeatAt = now;
         this.updateSyncLogFromJob(job);
         this.saveState();
 
         const records = await handlers.fetchFn(cursorTime, job.batchSize, 0, {
-          modelName:    job.modelName,
-          jobId:        job.jobId,
+          modelName: job.modelName,
+          jobId: job.jobId,
           lastSyncTime: cursorTime,
-          lastSyncId:   cursorId
+          lastSyncId: cursorId
         });
 
         if (!records || records.length === 0) { this.completeJob(job); return; }
 
         let batchSuccess = 0;
+        let batchProcessed = 0;
 
         for (const record of records) {
           if (job.pauseRequested) break;
+          batchProcessed += 1;
 
           try {
             await handlers.processFn(record, { modelName: job.modelName, jobId: job.jobId });
 
             const recordTime = this.extractRecordTime(record);
-            const recordId   = this.extractRecordId(record);
+            const recordId = this.extractRecordId(record);
             if (recordTime && this.compareCursor(recordTime, recordId, cursorTime, cursorId) > 0) {
               cursorTime = recordTime;
-              cursorId   = recordId;
+              cursorId = recordId;
             }
             batchSuccess += 1;
           } catch (recordError) {
@@ -552,18 +691,18 @@ class SyncManagerService {
           }
         }
 
-        job.totalProcessed += records.length;
-        job.totalSuccess   += batchSuccess;
-        job.lastSyncTime    = cursorTime;
-        job.lastSyncId      = cursorId;
+        job.totalProcessed += batchProcessed;
+        job.totalSuccess += batchSuccess;
+        job.lastSyncTime = cursorTime;
+        job.lastSyncId = cursorId;
 
-        modelState.lastSyncTime  = cursorTime;
-        modelState.lastSyncId    = cursorId;
-        modelState.totalSynced  += batchSuccess;
-        modelState.error         = job.error;
+        modelState.lastSyncTime = cursorTime;
+        modelState.lastSyncId = cursorId;
+        modelState.totalSynced += batchSuccess;
+        modelState.error = job.error;
 
         const batchNow = this.now();
-        job.updatedAt   = batchNow;
+        job.updatedAt = batchNow;
         job.heartbeatAt = batchNow;
         this.updateSyncLogFromJob(job);
         this.saveState();            // ghi JSON (giữ nguyên)
@@ -628,10 +767,10 @@ class SyncManagerService {
 
       entities[modelName] = {
         ...modelState,
-        currentJobId:           currentJob ? currentJob.jobId  : null,
-        currentJobStatus:       currentJob ? currentJob.status : null,
-        currentSynced:          jobSynced,
-        currentTotalToSync:     jobNeeded,
+        currentJobId: currentJob ? currentJob.jobId : null,
+        currentJobStatus: currentJob ? currentJob.status : null,
+        currentSynced: jobSynced,
+        currentTotalToSync: jobNeeded,
         currentProgressPercent: progressPercent
       };
     }
@@ -685,8 +824,46 @@ class SyncManagerService {
   /** @private */
   _sendSSESnapshot(res) {
     this.getDashboardData().then((data) => {
-      try { res.write(`data: ${JSON.stringify(data)}\n\n`); } catch (_) {}
-    }).catch(() => {});
+      try { res.write(`data: ${JSON.stringify(data)}\n\n`); } catch (_) { }
+    }).catch(() => { });
+  }
+
+  /**
+   * Persist current in-memory state (models + jobs) into DB.
+   * This is fire-and-forget and must not throw.
+   * @private
+   */
+  async _persistStateToDb() {
+    try {
+      const modelEntries = Object.entries(this.state.models || {});
+      const jobEntries = Object.values(this.state.jobs || {});
+
+      const modelPromises = modelEntries.map(async ([modelName, modelState]) => {
+        try {
+          await SyncStateRepository.ensureModel(modelName);
+          await SyncStateRepository.updateModel(modelName, modelState);
+        } catch (err) {
+          logger.warn(`[SyncManagerService] DB persist model(${modelName}) failed:`, err && err.message ? err.message : err);
+        }
+      });
+
+      const jobPromises = jobEntries.map(async (job) => {
+        try {
+          const existing = await SyncStateRepository.findOneJobById(job.jobId);
+          if (existing) {
+            await SyncStateRepository.updateJob(job);
+          } else {
+            await SyncStateRepository.createJob(job);
+          }
+        } catch (err) {
+          logger.warn(`[SyncManagerService] DB persist job(${job.jobId}) failed:`, err && err.message ? err.message : err);
+        }
+      });
+
+      await Promise.all([...modelPromises, ...jobPromises]);
+    } catch (err) {
+      logger.warn('[SyncManagerService] Unexpected error while persisting state to DB:', err && err.message ? err.message : err);
+    }
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -747,6 +924,12 @@ class SyncManagerService {
     SyncStateRepository.logError(jobId, recordId, errorMessage).catch((err) =>
       logger.warn(`[SyncManagerService] DB insertJobError(${jobId}) failed:`, err.message)
     );
+  }
+  _dbFindJobById(jobId) {
+    return SyncStateRepository.findOneJobById(jobId).catch((err) => {
+      logger.warn(`[SyncManagerService] DB findOneJobById(${jobId}) failed:`, err.message);
+      return null;
+    });
   }
 }
 

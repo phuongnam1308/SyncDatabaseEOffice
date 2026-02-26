@@ -16,6 +16,8 @@ class SyncManagerController extends BaseController {
     if (this.initialized) return;
 
     try {
+      await SyncManagerService.ensureStateLoaded();
+
       await this.modelRegistry.initializeAll(
         SyncManagerService,
         SyncStateRepository
