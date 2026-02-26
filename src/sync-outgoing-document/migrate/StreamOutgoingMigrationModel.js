@@ -47,7 +47,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
 
       const countNewQuery = `
         SELECT COUNT(*) AS total
-        FROM camunda.${this.newDbSchema}.${this.newDbTable}
+        FROM ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable}
         WHERE table_backup = 'stream_migration'
       `;
       const newResult = await this.queryNewDbTx(countNewQuery);
@@ -55,7 +55,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
 
       const lastIdQuery = `
         SELECT TOP 1 id_outgoing_bak
-        FROM camunda.${this.newDbSchema}.${this.newDbTable}
+        FROM ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable}
         WHERE table_backup = 'stream_migration'
         ORDER BY createdAt DESC
       `;
@@ -233,7 +233,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
         try {
           const mapped = await this._mapSingleRecord(record);
           const existingQuery = `
-            SELECT id FROM camunda.${this.newDbSchema}.${this.newDbTable}
+            SELECT id FROM ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable}
             WHERE id_outgoing_bak = @oldId AND table_backup = 'stream_migration'
           `;
           const existing = await this.queryNewDbTx(existingQuery, { oldId: mapped.id_outgoing_bak }, transaction);
@@ -307,7 +307,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
   async _insertAudits(audits, newDocumentId, transaction) {
     for (const audit of audits) {
       const query = `
-        INSERT INTO camunda.dbo.audit_sync (
+        INSERT INTO ${process.env.NEW_DB_NAME}.dbo.audit_sync (
           document_id, sender, receiver, action, created_at, 
           table_backup, id_key
         ) VALUES (
@@ -333,7 +333,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
   async _insertComments(comments, newDocumentId, transaction) {
     for (const comment of comments) {
       const query = `
-        INSERT INTO camunda.dbo.document_comments_sync (
+        INSERT INTO ${process.env.NEW_DB_NAME}.dbo.document_comments_sync (
           document_id, creator, content, created_at, 
           table_backup, id_key
         ) VALUES (
@@ -462,7 +462,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
   async rollback(options = {}) {
     try {
       const query = `
-        DELETE FROM camunda.${this.newDbSchema}.${this.newDbTable}
+        DELETE FROM ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable}
         WHERE table_backup = 'stream_migration'
       `;
 
