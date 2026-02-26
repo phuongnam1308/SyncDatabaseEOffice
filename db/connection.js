@@ -47,7 +47,7 @@ class DatabaseConnection {
     try {
       await this.connectOldDb();
       await this.connectNewDb();
-      logger.info('Kết nối tất cả database thành công!');
+      // logger.info('Kết nối tất cả database thành công!');
     } catch (error) {
       logger.error('Lỗi kết nối database:', error);
       throw error;

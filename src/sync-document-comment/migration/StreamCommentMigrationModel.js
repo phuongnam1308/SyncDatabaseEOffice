@@ -23,6 +23,69 @@ class StreamCommentMigrationModel extends BaseModel {
     return this.queryOldDb(query, { batch, lastId: lastId || null });
   }
 
+  /**
+   * Lấy tất cả bản ghi comment liên quan đến một văn bản cụ thể từ bảng cũ.
+   * Được gọi bởi document migration model để truy vấn comment theo oldDocumentId.
+   *
+   * @param {string|number} oldDocumentId - ID văn bản trong hệ thống cũ (DocumentID)
+   * @returns {Promise<Array>} Danh sách bản ghi comment thô từ DB cũ
+   */
+  async fetchByDocumentId(oldDocumentId) {
+    if (!oldDocumentId) return [];
+    try {
+      const query = `
+        SELECT *
+        FROM ${this.oldDbSchema}.${this.oldDbTable}
+        WHERE DocumentID = @oldDocumentId
+        ORDER BY ID ASC
+      `;
+      return this.queryOldDb(query, { oldDocumentId: String(oldDocumentId) });
+    } catch (error) {
+      logger.error(`[StreamCommentMigrationModel.fetchByDocumentId] table=${this.oldDbTable} id=${oldDocumentId}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Migrate một bản ghi comment đơn lẻ từ DB cũ sang bảng document_comments_sync.
+   * Được gọi bởi document migration model thay vì xử lý theo batch.
+   *
+   * @param {object} rawRecord - Bản ghi thô từ DB cũ
+   * @param {object} [externalTransaction] - Transaction bên ngoài (tùy chọn)
+   * @returns {Promise<object|null>} Bản ghi đã được sync trong document_comments_sync,
+   *                                 hoặc null nếu bỏ qua
+   */
+  async processSingleRecord(rawRecord, externalTransaction = null) {
+    if (!rawRecord) return null;
+
+    const transaction = externalTransaction || await this.beginTransaction();
+    const ownsTransaction = !externalTransaction;
+
+    try {
+      const mapped = await this._mapRecord(rawRecord, transaction);
+      if (!mapped) {
+        if (ownsTransaction) await this.commitTransaction(transaction);
+        return null;
+      }
+
+      const existed = await this._getExisting(mapped, transaction);
+      if (existed) {
+        await this._update(mapped, transaction);
+      } else {
+        await this._insert(mapped, transaction);
+      }
+
+      if (ownsTransaction) await this.commitTransaction(transaction);
+
+      // Trả về bản ghi đã sync để caller có thể tiếp tục apply vào bảng chính
+      return { ...mapped, _existed: !!existed };
+    } catch (error) {
+      if (ownsTransaction) await this.rollbackTransaction(transaction);
+      logger.error(`[StreamCommentMigrationModel.processSingleRecord] table=${this.oldDbTable} ID=${rawRecord?.ID}:`, error);
+      throw error;
+    }
+  }
+
   async insertBatchToNewDb(records) {
     if (!records?.length) return { inserted: 0, updated: 0 };
 
