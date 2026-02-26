@@ -1,6 +1,6 @@
 const BaseController = require('../../../controllers/BaseController');
 const logger = require('../../../utils/logger');
-const StreamOutgoingMigrationService = require('./StreamOutgoingMigrationService');
+const StreamOutgoingMigrationService = require('../services/StreamOutgoingMigrationService');
 
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 

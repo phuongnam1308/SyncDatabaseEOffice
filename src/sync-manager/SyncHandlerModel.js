@@ -104,7 +104,7 @@ class SyncHandlerModel {
      */
     createProcessFn() {
         return async (record) => {
-            await this.syncModel.insertBatchToMain([record]);
+            await this.syncModel.syncOldToStaging(record);
         };
     }
 
@@ -124,7 +124,7 @@ class SyncHandlerModel {
      */
     createProcessFnOld() {
         return async (record) => {
-            const result = await this.syncModel.insertBatchToNewDb([record]);
+            const result = await this.syncModel.syncOldToStaging(record);
 
             // Log thêm thống kê audit/comment nếu có (document-centric model)
             if (result && (result.auditInserted !== undefined || result.commentInserted !== undefined)) {
@@ -237,7 +237,7 @@ class SyncHandlerModel {
             const tableName = this.syncModel.syncTable || this.syncModel.oldDbTable;
             let fetchFn, countFn, processFn;
 
-            if (this.syncModel.syncSchema) {
+            if (this.syncModel.syncTable?.includes('audit') || this.syncModel.syncTable?.includes('document')) {
                 // Flow: sync table → main (apply)
                 countFn = this.createCountFn(schemaName, tableName);
                 fetchFn = this.createFetchFn(schemaName, tableName);

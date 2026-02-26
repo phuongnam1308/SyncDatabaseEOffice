@@ -1,5 +1,5 @@
-const StreamOutgoingIncrementalModel = require('./StreamOutgoingIncrementalModel');
 const SyncManagerService = require('../../sync-manager/SyncManagerService');
+const OutGoingDocumentModel = require('../models/StreamOutgoingIncrementalModel');
 
 const UNIT_TEST_MODEL_NAME = 'UNIT_TEST_STREAM_OUTGOING_INCREMENTAL';
 
@@ -10,10 +10,10 @@ class StreamOutgoingMigrationService {
 
   async initialize() {
     if (this.model) return;
-    this.model = new StreamOutgoingIncrementalModel();
+    this.model = new OutGoingDocumentModel();
     await this.model.initialize();
   }
-
+ 
   async _buildOrReuseJob(syncJobId = null) {
     if (syncJobId) return syncJobId;
 

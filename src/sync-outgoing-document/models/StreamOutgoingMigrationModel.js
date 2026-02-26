@@ -46,7 +46,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
       );
 
       if (existing && existing.length > 0) {
-        await this._updateMainTx(mapped, transaction);
+        await this._updateRecord(mapped, transaction);
 
         return {
           action: "updated",
@@ -54,7 +54,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
         };
       }
 
-      await this._insertMainTx(mapped, transaction);
+      await this._insertRecord(mapped, transaction);
 
       return {
         action: "inserted",
