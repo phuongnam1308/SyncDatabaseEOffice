@@ -1,514 +1,686 @@
+/**
+ * StreamOutgoingMigrationModel.js
+ *
+ * ════════════════════════════════════════════════════════════════
+ * LUỒNG ĐỒNG BỘ MỚI (document-centric):
+ * ────────────────────────────────────────────────────────────────
+ *
+ *  Thay vì migrate từng bảng độc lập (audit → audit_sync, comment → comment_sync,
+ *  document → document_sync, rồi apply từng bảng vào main), luồng mới là:
+ *
+ *  [OLD DB]
+ *    ↓ fetchBatch(documents)
+ *  Với mỗi document:
+ *    1. Lấy oldDocumentId (IDVanBan / SoHieuGoiThau / ...)
+ *    2. Query TẤT CẢ bảng audit cũ (LuanChuyenVanBan_*)
+ *       → processSingleAudit(raw) → migrate vào audit_sync
+ *       → applySingleAudit(syncRecord) → apply vào audit (main)
+ *    3. Query TẤT CẢ bảng comment cũ (Comments_*)
+ *       → processSingleComment(raw) → migrate vào document_comments_sync
+ *       → applySingleComment(syncRecord) → apply vào document_comments (main)
+ *    4. Migrate document → document_sync (insertBatchToNewDb)
+ *    5. Apply document_sync → document main (insertBatchToMain via SyncOutgoingModel)
+ *
+ * ════════════════════════════════════════════════════════════════
+ */
+
+'use strict';
+
 const BaseModel = require("../../../models/BaseModel");
 const logger = require("../../../utils/logger");
-const sql = require('mssql');
+const sql = require("mssql");
 const MigrationHelper = require("../../helpers/MigrationHelper");
 
-const AUDIT_TABLES = [
-  'LuanChuyenVanBan', 'LuanChuyenVanBan_ATPC', 'LuanChuyenVanBan_CLL', 'LuanChuyenVanBan_CNTT', 'LuanChuyenVanBan_CT',
-  'LuanChuyenVanBan_CVTC', 'LuanChuyenVanBan_DonVi', 'LuanChuyenVanBan_DVHH', 'LuanChuyenVanBan_DVKT', 'LuanChuyenVanBan_GNVT',
-  'LuanChuyenVanBan_HC', 'LuanChuyenVanBan_HT', 'LuanChuyenVanBan_ICDLB', 'LuanChuyenVanBan_ICDST', 'LuanChuyenVanBan_KHDT',
-  'LuanChuyenVanBan_KHKD', 'LuanChuyenVanBan_KTVT', 'LuanChuyenVanBan_KVTC', 'LuanChuyenVanBan_MKT', 'LuanChuyenVanBan_NPL',
-  'LuanChuyenVanBan_QLCT', 'LuanChuyenVanBan_QSBV', 'LuanChuyenVanBan_SNPL', 'LuanChuyenVanBan_TC', 'LuanChuyenVanBan_TC189',
-  'LuanChuyenVanBan_TCCT', 'LuanChuyenVanBan_TCHP', 'LuanChuyenVanBan_TCIDI', 'LuanChuyenVanBan_TCLD', 'LuanChuyenVanBan_TCMT',
-  'LuanChuyenVanBan_TCO', 'LuanChuyenVanBan_TCOT', 'LuanChuyenVanBan_TCPC', 'LuanChuyenVanBan_TCPH', 'LuanChuyenVanBan_TCTT',
-  'LuanChuyenVanBan_TTDDC', 'LuanChuyenVanBan_TTDTC', 'LuanChuyenVanBan_VP', 'LuanChuyenVanBan_VPMB', 'LuanChuyenVanBan_VPTNB',
-  'LuanChuyenVanBan_VTB', 'LuanChuyenVanBan_VTT', 'LuanChuyenVanBan_XDCT', 'LuanChuyenVanBan_xdsm', 'LuanChuyenVanBan_XNCG',
-  'LuanChuyenVanBan_YTE'
+// Related sync models
+const StreamOutgoingAuditSyncModel  = require("../../sync-audit/migrate/StreamAuditMigrationModel");
+const StreamCommentMigrationModel   = require("../../sync-document-comment/migration/StreamCommentMigrationModel");
+const SyncAuditModel                = require("../../sync-audit/apply/SyncAuditModel");
+const SyncCommentModel              = require("../../sync-document-comment/apply/SyncCommentModel");
+
+// Danh sách bảng audit và comment trong DB cũ
+const AUDIT_MIGRATION_TABLES = [
+  'LuanChuyenVanBan',
+  'LuanChuyenVanBan_ATPC',
+  'LuanChuyenVanBan_CLL',
+  'LuanChuyenVanBan_CNTT',
+  'LuanChuyenVanBan_CT',
+  'LuanChuyenVanBan_CVTC',
+  'LuanChuyenVanBan_DonVi',
+  'LuanChuyenVanBan_DVHH',
+  'LuanChuyenVanBan_DVKT',
+  'LuanChuyenVanBan_GNVT',
+  'LuanChuyenVanBan_HC',
+  'LuanChuyenVanBan_HT',
+  'LuanChuyenVanBan_ICDLB',
+  'LuanChuyenVanBan_ICDST',
+  'LuanChuyenVanBan_KHDT',
+  'LuanChuyenVanBan_KHKD',
+  'LuanChuyenVanBan_KTVT',
+  'LuanChuyenVanBan_KVTC',
+  'LuanChuyenVanBan_MKT',
+  'LuanChuyenVanBan_NPL',
+  'LuanChuyenVanBan_QLCT',
+  'LuanChuyenVanBan_QSBV',
+  'LuanChuyenVanBan_SNPL',
+  'LuanChuyenVanBan_TC',
+  'LuanChuyenVanBan_TC189',
+  'LuanChuyenVanBan_TCCT',
+  'LuanChuyenVanBan_TCHP',
+  'LuanChuyenVanBan_TCIDI',
+  'LuanChuyenVanBan_TCLD',
+  'LuanChuyenVanBan_TCMT',
+  'LuanChuyenVanBan_TCO',
+  'LuanChuyenVanBan_TCOT',
+  'LuanChuyenVanBan_TCPC',
+  'LuanChuyenVanBan_TCPH',
+  'LuanChuyenVanBan_TCTT',
+  'LuanChuyenVanBan_TTDDC',
+  'LuanChuyenVanBan_TTDTC',
+  'LuanChuyenVanBan_VP',
+  'LuanChuyenVanBan_VPMB',
+  'LuanChuyenVanBan_VPTNB',
+  'LuanChuyenVanBan_VTB',
+  'LuanChuyenVanBan_VTT',
+  'LuanChuyenVanBan_XDCT',
+  'LuanChuyenVanBan_xdsm',
+  'LuanChuyenVanBan_XNCG',
+  'LuanChuyenVanBan_YTE',
 ];
 
-const COMMENT_TABLES = [
-  'Comments', 'Comments_ATPC', 'Comments_CLL', 'Comments_CNTT', 'Comments_CT', 'Comments_CVTC', 'Comments_DonVi',
-  'Comments_DVHH', 'Comments_DVKT', 'Comments_GNVT', 'Comments_HC', 'Comments_HT', 'Comments_ICDLB', 'Comments_ICDST',
-  'Comments_KHDT', 'Comments_KHKD', 'Comments_KTVT', 'Comments_KVTC', 'Comments_MKT', 'Comments_NPL', 'Comments_QLCT',
-  'Comments_QSBV', 'Comments_SNPL', 'Comments_TC', 'Comments_TC189', 'Comments_TCCT', 'Comments_TCHP', 'Comments_TCIDI',
-  'Comments_TCLD', 'Comments_TCMT', 'Comments_TCO', 'Comments_TCOT', 'Comments_TCPC', 'Comments_TCPH', 'Comments_TCTT',
-  'Comments_TTDDC', 'Comments_TTDTC', 'Comments_VP', 'Comments_VPMB', 'Comments_VPTNB', 'Comments_VTB', 'Comments_VTT',
-  'Comments_XDCT', 'Comments_xdsm', 'Comments_XNCG', 'Comments_YTE'
+const COMMENT_MIGRATION_TABLES = [
+  'Comments',
+  'Comments_ATPC',
+  'Comments_CLL',
+  'Comments_CNTT',
+  'Comments_CT',
+  'Comments_CVTC',
+  'Comments_DonVi',
+  'Comments_DVHH',
+  'Comments_DVKT',
+  'Comments_GNVT',
+  'Comments_HC',
+  'Comments_HT',
+  'Comments_ICDLB',
+  'Comments_ICDST',
+  'Comments_KHDT',
+  'Comments_KHKD',
+  'Comments_KTVT',
+  'Comments_KVTC',
+  'Comments_MKT',
+  'Comments_NPL',
+  'Comments_QLCT',
+  'Comments_QSBV',
+  'Comments_SNPL',
+  'Comments_TC',
+  'Comments_TC189',
+  'Comments_TCCT',
+  'Comments_TCHP',
+  'Comments_TCIDI',
+  'Comments_TCLD',
+  'Comments_TCMT',
+  'Comments_TCO',
+  'Comments_TCOT',
+  'Comments_TCPC',
+  'Comments_TCPH',
+  'Comments_TCTT',
+  'Comments_TTDDC',
+  'Comments_TTDTC',
+  'Comments_VP',
+  'Comments_VPMB',
+  'Comments_VPTNB',
+  'Comments_VTB',
+  'Comments_VTT',
+  'Comments_XDCT',
+  'Comments_xdsm',
+  'Comments_XNCG',
+  'Comments_YTE',
 ];
 
 class StreamOutgoingMigrationModel extends BaseModel {
   constructor() {
     super();
-    this.oldDbSchema = "dbo";
-    this.oldDbTable = "VanBanBanHanh";
-    this.newDbSchema = "dbo";
-    this.newDbTable = "outgoing_documents_sync";
-    this.helper = new MigrationHelper(this.queryNewDbTx.bind(this));
+    this.oldDbSchema  = "dbo";
+    this.oldDbTable   = "VanBanDi";         // bảng văn bản đi trong DB cũ
+    this.newDbSchema  = "dbo";
+    this.newDbTable   = "outgoing_documents_sync";
+    this.helper       = new MigrationHelper(this.queryNewDbTx.bind(this));
+
+    // Lazy-init: các model liên quan được khởi tạo trong initialize()
+    this._auditMigrationModels  = [];   // StreamOutgoingAuditSyncModel[]
+    this._commentMigrationModels = [];  // StreamCommentMigrationModel[]
+    this._syncAuditModel        = null; // SyncAuditModel
+    this._syncCommentModel      = null; // SyncCommentModel
   }
 
-  async getStatus() {
-    try {
-      const countOldQuery = `
-        SELECT COUNT(*) AS total
-        FROM ${this.oldDbSchema}.${this.oldDbTable}
-      `;
-      const oldResult = await this.queryOldDb(countOldQuery);
-      const totalInOldDb = oldResult[0]?.total || 0;
+  /**
+   * Khởi tạo model và tất cả các related model.
+   * Phải được gọi trước khi sử dụng.
+   */
+  async initialize() {
+    await super.initialize();
 
-      const countNewQuery = `
-        SELECT COUNT(*) AS total
-        FROM camunda.${this.newDbSchema}.${this.newDbTable}
-        WHERE table_backup = 'stream_migration'
-      `;
-      const newResult = await this.queryNewDbTx(countNewQuery);
-      const totalInNewDb = newResult[0]?.total || 0;
+    // Khởi tạo apply models (sync → main)
+    this._syncAuditModel = new SyncAuditModel();
+    await this._syncAuditModel.initialize();
 
-      const lastIdQuery = `
-        SELECT TOP 1 id_outgoing_bak
-        FROM camunda.${this.newDbSchema}.${this.newDbTable}
-        WHERE table_backup = 'stream_migration'
-        ORDER BY createdAt DESC
-      `;
-      const lastIdResult = await this.queryNewDbTx(lastIdQuery);
-      const lastMigratedId = lastIdResult[0]?.id_outgoing_bak || null;
+    this._syncCommentModel = new SyncCommentModel();
+    await this._syncCommentModel.initialize();
 
+    // Khởi tạo migrate models (old DB → sync)
+    for (const table of AUDIT_MIGRATION_TABLES) {
+      const model = new StreamOutgoingAuditSyncModel(table);
+      await model.initialize();
+      this._auditMigrationModels.push(model);
+    }
+
+    for (const table of COMMENT_MIGRATION_TABLES) {
+      const model = new StreamCommentMigrationModel(table);
+      await model.initialize();
+      this._commentMigrationModels.push(model);
+    }
+
+    logger.info(`[StreamOutgoingMigrationModel] Initialized: ${this._auditMigrationModels.length} audit tables, ${this._commentMigrationModels.length} comment tables`);
+  }
+
+  // ── Fetch ─────────────────────────────────────────────────────
+
+  /**
+   * Lấy một batch văn bản đi từ DB cũ.
+   * @param {object} opts
+   * @param {number} opts.batch   - Số bản ghi mỗi batch
+   * @param {*}      opts.lastId  - Con trỏ phân trang (ID cuối cùng đã xử lý)
+   */
+  async fetchBatch({ batch, lastId }) {
+    const query = `
+      SELECT TOP (@batch) *
+      FROM ${this.oldDbSchema}.${this.oldDbTable}
+      WHERE (@lastId IS NULL OR ID > @lastId)
+      ORDER BY ID ASC
+    `;
+    return this.queryOldDb(query, { batch, lastId: lastId || null });
+  }
+
+  // ── Core: per-document sync ───────────────────────────────────
+
+  /**
+   * Đồng bộ một văn bản cùng toàn bộ audit và comment liên quan.
+   *
+   * LUỒNG ĐÚNG — thứ tự quan trọng:
+   * ─────────────────────────────────────────────────────────────
+   *  Bước 1: Migrate document → outgoing_documents_sync  (trung gian, document_id = NULL)
+   *  Bước 2: Apply document   → outgoing_documents       (main, tạo newId)
+   *          + cập nhật document_id vào outgoing_documents_sync
+   *          ↑ SAU bước này mới có document_id hợp lệ trong sync table
+   *
+   *  Bước 3: Sync audit liên quan
+   *          auditModel._getNewDocumentId() truy vấn outgoing_documents_sync
+   *          → lúc này document_id đã được điền → resolve thành công ✅
+   *
+   *  Bước 4: Sync comment liên quan  (tương tự)
+   *
+   * KHÔNG thể đảo ngược: nếu audit/comment chạy trước bước 2,
+   * _getNewDocumentId() trả về NULL → toàn bộ audit/comment bị skip.
+   * ─────────────────────────────────────────────────────────────
+   *
+   * @param {object} rawDocument - Bản ghi văn bản thô từ DB cũ
+   * @returns {Promise<{
+   *   document: { inserted: number, updated: number },
+   *   audit:    { inserted: number, updated: number, skipped: number },
+   *   comment:  { inserted: number, updated: number, skipped: number },
+   * }>}
+   */
+  async processSingleDocument(rawDocument) {
+    if (!rawDocument?.ID) {
       return {
-        totalInOldDb,
-        totalInNewDb,
-        remaining: totalInOldDb - totalInNewDb,
-        lastMigratedId,
+        document: { inserted: 0, updated: 0 },
+        audit:    { inserted: 0, updated: 0, skipped: 0 },
+        comment:  { inserted: 0, updated: 0, skipped: 0 },
       };
-    } catch (error) {
-      logger.error("[StreamOutgoingMigrationModel.getStatus] Error:", error);
-      throw error;
     }
-  }
 
-  async fetchBatchFromOldDb({ batch, lastId = null }) {
+    const oldDocumentId = String(rawDocument.ID);
+    const stats = {
+      document: { inserted: 0, updated: 0 },
+      audit:    { inserted: 0, updated: 0, skipped: 0 },
+      comment:  { inserted: 0, updated: 0, skipped: 0 },
+    };
+
+    // ── Bước 1: Migrate document → outgoing_documents_sync ─────
+    // Ghi vào bảng trung gian. document_id vẫn là NULL ở bước này.
     try {
-      let query = `
-        SELECT TOP (@batch)
-            ID, Title, BanLanhDao, ChenSo, TrangThai, IsLibrary,
-            DoKhan, DoMat, DonVi, Files, ChucVu, DocNum,
-            NguoiSoanThaoText, FolderLocation, HoSoXuLyLink,
-            InfoVBDi, ItemVBPH, LoaiBanHanh, LoaiVanBan,
-            NoiLuuTru, NoiNhan, NgayBanHanh, NgayHieuLuc,
-            NgayHoanTat, NguoiKyVanBan, NguoiKyVanBanText,
-            PhanCong, TraLoiVBDen, SoBan, SoTrang,
-            SoVanBan, SoVanBanText, TrichYeu,
-            BanLanhDaoTCT, YKien, YKienChiHuy,
-            ModuleId, SiteName, ListName, ItemId,
-            YearMonth, Modified, Created, ModifiedBy, CreatedBy,
-            LoaiMoc, KySoFiles, DGPId, Workflow,
-            IsKyQuyChe, DocSignType, IsConverting,
-            TrangThai
-        FROM ${this.oldDbSchema}.${this.oldDbTable}
-        WHERE 1=1
-      `;
-
-      const params = { batch };
-
-      if (lastId !== null && lastId !== undefined) {
-        query += ` AND CAST(ID AS BIGINT) > @lastId`;
-        params.lastId = lastId;
-      }
-
-      query += ` ORDER BY CAST(ID AS BIGINT) ASC`;
-
-      const records = await this.queryOldDb(query, params);
-
-      logger.debug(`[fetchBatchFromOldDb] lastId=${lastId} → fetched ${records.length}`);
-
-      return records;
-    } catch (error) {
-      logger.error("[fetchBatchFromOldDb] Error:", error);
-      throw error;
+      await this._migrateDocumentToSync(rawDocument);
+    } catch (err) {
+      logger.error(`[processSingleDocument] Migrate to sync ID=${oldDocumentId} failed: ${err.message}`);
+      // Vẫn tiếp tục: nếu đã có record từ lần trước thì bước 2 vẫn resolve được
     }
-  }
 
-  async mapAndCleanBatch(records) {
+    // ── Bước 2: Apply document → outgoing_documents (main) ─────
+    // INSERT / UPDATE vào bảng chính, đồng thời cập nhật document_id
+    // vào outgoing_documents_sync → bước này mới "kích hoạt" document_id.
+    // Audit/comment phải đợi sau bước này mới có document_id để resolve.
+    let documentApplied = false;
     try {
-      const mappedRecords = [];
-
-      for (const record of records) {
-        try {
-          const mapped = await this._mapSingleRecord(record);
-          mappedRecords.push(mapped);
-        } catch (error) {
-          logger.warn(`[mapAndCleanBatch] Skip record ID=${record.ID}:`, error.message);
-        }
-      }
-
-      logger.debug(`[mapAndCleanBatch] Mapped ${mappedRecords.length}/${records.length} records`);
-
-      return mappedRecords;
-    } catch (error) {
-      logger.error("[StreamOutgoingMigrationModel.mapAndCleanBatch] Error:", error);
-      throw error;
-    }
-  }
-
-  async _mapSingleRecord(oldRecord) {
-    try {
-      if (!oldRecord?.ID) {
-        throw new Error("Old record ID is required");
-      }
-
-      const now = new Date();
-
-      const promulgationDate = this.helper.parseDate(oldRecord.NgayBanHanh);
-      const effectiveDate = this.helper.parseDate(oldRecord.NgayHieuLuc);
-
-      const documentType = await this.helper.processDocumentType(
-        oldRecord.LoaiVanBan || oldRecord.LoaiBanHanh
-      );
-
-      const urgencyLevel = await this.helper.processUrgencyLevel(oldRecord.DoKhan);
-      const privateLevel = await this.helper.processPrivateLevel(oldRecord.DoMat);
-
-      const senderUnit = await this.helper.mapSenderUnitId(oldRecord.DonVi);
-      const drafter = await this.helper.mapUserName(oldRecord.CreatedBy || oldRecord.NguoiSoanThaoText);
-      const reportSigner = await this.helper.mapUserName(oldRecord.NguoiKyVanBanText);
-
-      const year = promulgationDate ? new Date(promulgationDate).getFullYear() : null;
-
-      const bookDocumentObj = await this.helper.mapBookDocument(
-        oldRecord.SoVanBan || oldRecord.SoVanBanText,
-        { drafter, senderUnit, privateLevel, year }
-      );
-      const bookDocumentId = bookDocumentObj ? bookDocumentObj.id : null;
-      const toBook = bookDocumentObj ? bookDocumentObj.count : null;
-
-      let workflow = null;
-      if (
-        typeof oldRecord.Workflow === "string" &&
-        oldRecord.Workflow.trim() !== "" &&
-        oldRecord.Workflow.trim().toUpperCase() !== "NULL"
-      ) {
-        const cleaned = this.helper.cleanText(oldRecord.Workflow);
-        if (cleaned) {
-          workflow = cleaned;
-        }
-      }
-
-      const mapped = {
-        document_id: `${Date.now()}${Math.floor(Math.random() * 10000)}`,
-        id_outgoing_bak: String(oldRecord.ID),
-        code: this.helper.cleanText(oldRecord.SoKyHieu || oldRecord.SoVanBanText),
-        abstract_note: this.helper.cleanText(oldRecord.TrichYeu),
-        promulgation_date: promulgationDate,
-        effective_date: effectiveDate,
-        status_code: this.helper.mapStatus(oldRecord.TrangThai),
-        document_type: documentType,
-        urgency_level: urgencyLevel,
-        private_level: privateLevel,
-        sender_unit: senderUnit,
-        to_book: toBook,
-        drafter,
-        report_signer: reportSigner,
-        release_no: this.helper.cleanText(oldRecord.Title),
-        to_book_text_symbols: this.helper.cleanText(oldRecord.Title),
-        release_date: promulgationDate || null,
-        bpmn_version: "VAN_BAN_DI",
-        type_of_process: "VAN_BAN_DI",
-        book_document_id: bookDocumentId,
-        status: "1",
-        replaced: 0,
-        tb_bak: 0,
-        table_backup: "stream_migration",
-        created_at: now,
-        updated_at: now,
-      };
-
-      return mapped;
-    } catch (error) {
-      logger.error(`[_mapSingleRecord] Error ID=${oldRecord?.ID}: ${error.message}`);
-      throw error;
-    }
-  }
-
-  async insertBatchToNewDb(records) {
-    if (!records || records.length === 0) {
-      return { inserted: 0, updated: 0 };
+      const applyResult = await this._applyDocumentToMain(rawDocument);
+      stats.document.inserted = applyResult.inserted;
+      stats.document.updated  = applyResult.updated;
+      documentApplied = true;
+    } catch (err) {
+      logger.error(`[processSingleDocument] Apply document to main ID=${oldDocumentId} failed: ${err.message}`);
+      // Không tiếp tục sync audit/comment nếu document chưa tồn tại trong main
+      // vì document_id sẽ không resolve được
+      return stats;
     }
 
-    let transaction = null;
-    let inserted = 0;
-    let updated = 0;
+    if (!documentApplied) return stats;
 
-    try {
-      transaction = await this.beginTransaction();
+    // ── Bước 3: Sync audit liên quan ───────────────────────────
+    // Chỉ chạy SAU khi document đã có document_id trong outgoing_documents_sync.
+    // auditModel._getNewDocumentId() sẽ truy vấn outgoing_documents_sync
+    // và tìm thấy document_id hợp lệ.
+    for (const auditModel of this._auditMigrationModels) {
+      try {
+        const auditRecords = await auditModel.fetchByDocumentId(oldDocumentId);
+        if (!auditRecords?.length) continue;
 
-      for (const record of records) {
-        try {
-          const mapped = await this._mapSingleRecord(record);
-          const existingQuery = `
-            SELECT id FROM camunda.${this.newDbSchema}.${this.newDbTable}
-            WHERE id_outgoing_bak = @oldId AND table_backup = 'stream_migration'
-          `;
-          const existing = await this.queryNewDbTx(existingQuery, { oldId: mapped.id_outgoing_bak }, transaction);
+        for (const raw of auditRecords) {
+          try {
+            // migrate raw → audit_sync
+            const syncedAudits = await auditModel.processSingleRecord(raw);
+            if (!syncedAudits?.length) { stats.audit.skipped++; continue; }
 
-          if (existing && existing.length > 0) {
-            await this._updateRecord(mapped, transaction);
-            updated++;
-          } else {
-            await this._insertRecord(mapped, transaction);
-            inserted++;
+            // apply audit_sync → audit (main)
+            for (const syncRecord of syncedAudits) {
+              const applyResult = await this._syncAuditModel.applySingleRecord(
+                this._toAuditMainRecord(syncRecord)
+              );
+              stats.audit.inserted += applyResult.inserted;
+              stats.audit.updated  += applyResult.updated;
+            }
+          } catch (auditErr) {
+            stats.audit.skipped++;
+            logger.warn(
+              `[processSingleDocument] Skip audit table=${auditModel.oldDbTable} docId=${oldDocumentId}: ${auditErr.message}`
+            );
           }
-
-          await this._syncRelatedData(mapped.id_outgoing_bak, mapped.document_id, transaction);
-
-        } catch (recordError) {
-          logger.warn(`[insertBatchToNewDb] Skip record id_outgoing_bak=${record?.id_outgoing_bak}:`, recordError.message);
         }
+      } catch (tableErr) {
+        logger.warn(`[processSingleDocument] Audit table=${auditModel.oldDbTable} error: ${tableErr.message}`);
       }
-
-      await this.commitTransaction(transaction);
-
-      logger.debug(`[insertBatchToNewDb] Inserted: ${inserted}, Updated: ${updated}`);
-
-      return { inserted, updated };
-    } catch (error) {
-      if (transaction) {
-        await this.rollbackTransaction(transaction);
-        logger.error("[insertBatchToNewDb] Transaction rolled back");
-      }
-
-      logger.error("[StreamOutgoingMigrationModel.insertBatchToNewDb] Error:", error);
-      throw error;
     }
+
+    // ── Bước 4: Sync comment liên quan ──────────────────────────
+    // Tương tự: chạy SAU khi document đã có document_id.
+    for (const commentModel of this._commentMigrationModels) {
+      try {
+        const commentRecords = await commentModel.fetchByDocumentId(oldDocumentId);
+        if (!commentRecords?.length) continue;
+
+        for (const raw of commentRecords) {
+          try {
+            // migrate raw → document_comments_sync
+            const syncRecord = await commentModel.processSingleRecord(raw);
+            if (!syncRecord) { stats.comment.skipped++; continue; }
+
+            // apply document_comments_sync → document_comments (main)
+            const applyResult = await this._syncCommentModel.applySingleRecord(
+              this._toCommentMainRecord(syncRecord)
+            );
+            stats.comment.inserted += applyResult.inserted;
+            stats.comment.updated  += applyResult.updated;
+          } catch (commentErr) {
+            stats.comment.skipped++;
+            logger.warn(
+              `[processSingleDocument] Skip comment table=${commentModel.oldDbTable} docId=${oldDocumentId}: ${commentErr.message}`
+            );
+          }
+        }
+      } catch (tableErr) {
+        logger.warn(`[processSingleDocument] Comment table=${commentModel.oldDbTable} error: ${tableErr.message}`);
+      }
+    }
+
+    return stats;
   }
 
-  async _syncRelatedData(oldId, newDocumentId, transaction) {
-    try {
-      // 1. Fetch and Insert Audits
-      const audits = await this._fetchRelatedFromOldDb(oldId, AUDIT_TABLES);
-      if (audits.length > 0) {
-        await this._insertAudits(audits, newDocumentId, transaction);
-      }
-
-      // 2. Fetch and Insert Comments
-      const comments = await this._fetchRelatedFromOldDb(oldId, COMMENT_TABLES);
-      if (comments.length > 0) {
-        await this._insertComments(comments, newDocumentId, transaction);
-      }
-    } catch (error) {
-      logger.error(`[_syncRelatedData] Error for oldId=${oldId}: ${error.message}`);
-      throw error;
-    }
-  }
-
-  async _fetchRelatedFromOldDb(oldId, tableList) {
-    const queries = tableList.map(table => 
-      `SELECT *, '${table}' as SourceTable FROM ${this.oldDbSchema}.${table} WHERE VanBanId = @oldId`
-    );
-    
-    const fullQuery = queries.join(' UNION ALL ');
-    
-    try {
-      const result = await this.queryOldDb(fullQuery, { oldId });
-      return result;
-    } catch (error) {
-      logger.warn(`[_fetchRelatedFromOldDb] Error fetching related data: ${error.message}`);
-      return [];
-    }
-  }
-
-  async _insertAudits(audits, newDocumentId, transaction) {
-    for (const audit of audits) {
-      const query = `
-        INSERT INTO camunda.dbo.audit_sync (
-          document_id, sender, receiver, action, created_at, 
-          table_backup, id_key
-        ) VALUES (
-          @documentId, @sender, @receiver, @action, @createdAt,
-          @tableBackup, @idKey
-        )
-      `;
-      
-      const params = {
-        documentId: newDocumentId,
-        sender: audit.NguoiGui || null,
-        receiver: audit.NguoiNhan || null,
-        action: audit.NoiDung || audit.Action || null,
-        createdAt: audit.NgayGui || audit.Created || new Date(),
-        tableBackup: audit.SourceTable || 'LuanChuyenVanBan',
-        idKey: audit.ID
+  /**
+   * Đồng bộ một batch văn bản.
+   * Gọi processSingleDocument() cho từng văn bản trong batch.
+   *
+   * @param {object[]} records - Mảng các bản ghi văn bản thô từ DB cũ
+   * @returns {Promise<{
+   *   inserted: number, updated: number, skipped: number,
+   *   auditInserted: number, auditUpdated: number, auditSkipped: number,
+   *   commentInserted: number, commentUpdated: number, commentSkipped: number,
+   * }>}
+   */
+  async insertBatchToNewDb(records) {
+    if (!records?.length) {
+      return {
+        inserted: 0, updated: 0, skipped: 0,
+        auditInserted: 0, auditUpdated: 0, auditSkipped: 0,
+        commentInserted: 0, commentUpdated: 0, commentSkipped: 0,
       };
-
-      await this.queryNewDbTx(query, params, transaction);
     }
-  }
 
-  async _insertComments(comments, newDocumentId, transaction) {
-    for (const comment of comments) {
-      const query = `
-        INSERT INTO camunda.dbo.document_comments_sync (
-          document_id, creator, content, created_at, 
-          table_backup, id_key
-        ) VALUES (
-          @documentId, @creator, @content, @createdAt,
-          @tableBackup, @idKey
-        )
-      `;
-      
-      const params = {
-        documentId: newDocumentId,
-        creator: comment.NguoiTao || comment.CreatedBy || null,
-        content: comment.NoiDung || null,
-        createdAt: comment.NgayTao || comment.Created || new Date(),
-        tableBackup: comment.SourceTable || 'Comments',
-        idKey: comment.ID
-      };
-
-      await this.queryNewDbTx(query, params, transaction);
-    }
-  }
-
-  async _insertRecord(record, transaction) {
-    if (!record?.document_id || record.document_id.trim() === "") {
-      throw new Error("document_id is required");
-    }
-    console.log(`Inserting record id_outgoing_bak=${record.id_outgoing_bak}...`);
-
-    const now = new Date();
-
-    const query = `
-      INSERT INTO ${this.newDbSchema}.${this.newDbTable} (
-        document_id, status_code, sender_unit, abstract_note, drafter, document_type,
-        urgency_level, private_level, report_signer, report_document_symbol, deadline_reply,
-        book_document_id, status, release_no, release_date, to_book_text_symbols, to_book, text_symbols, type_doc,
-        bpmn_version, type_of_process, id_outgoing_bak, created_at, updated_at,
-        replaced, table_backup, tb_bak
-      )
-      VALUES (
-        @documentId, @statusCode, @senderUnit, @abstractNote, @drafter, @documentType,
-        @urgencyLevel, @privateLevel, @reportSigner, @reportDocumentSymbol, @deadlineReply,
-        @bookDocumentId, @status, @releaseNo, @releaseDate, @toBookTextSymbols, @toBook, @textSymbols, @typeDoc,
-        @bpmnVersion, @typeOfProcess, @idOutgoingBak, @createdAt, @updatedAt,
-        @replaced, @tableBackup, @tbBak
-      )
-    `;
-
-    const params = {
-      documentId: record.document_id,
-      statusCode: record.status_code ?? "1",
-      senderUnit: record.sender_unit ?? null,
-      drafter: record.drafter ?? null,
-      documentType: record.document_type ?? null,
-      urgencyLevel: record.urgency_level ?? null,
-      privateLevel: record.private_level ?? null,
-      reportSigner: record.report_signer ?? null,
-      reportDocumentSymbol: record.report_document_symbol ?? null,
-      deadlineReply: record.deadline_reply ?? null,
-      bookDocumentId: record.book_document_id ?? null,
-      status: record.status ?? 1,
-      releaseNo: record.release_no ?? null,
-      toBookTextSymbols: record.to_book_text_symbols ?? null,
-      toBook: record.to_book ?? null,
-      releaseDate: record.release_date ?? null,
-      textSymbols: record.text_symbols ?? null,
-      typeDoc: record.type_doc ?? 1,
-      bpmnVersion: record.bpmn_version ?? null,
-      typeOfProcess: record.type_of_process ?? null,
-      idOutgoingBak: record.id_outgoing_bak ?? null,
-      createdAt: record.created_at ?? now,
-      abstractNote: record.abstract_note ?? null,
-      updatedAt: now,
-      replaced: record.replaced ?? 0,
-      tableBackup: record.table_backup ?? "stream_migration",
-      tbBak: record.tb_bak ?? 0,
+    const totals = {
+      inserted: 0, updated: 0, skipped: 0,
+      auditInserted: 0, auditUpdated: 0, auditSkipped: 0,
+      commentInserted: 0, commentUpdated: 0, commentSkipped: 0,
     };
 
-    await this.queryNewDbTx(query, params, transaction);
+    for (const raw of records) {
+      try {
+        const result = await this.processSingleDocument(raw);
+
+        totals.inserted        += result.document.inserted;
+        totals.updated         += result.document.updated;
+        totals.auditInserted   += result.audit.inserted;
+        totals.auditUpdated    += result.audit.updated;
+        totals.auditSkipped    += result.audit.skipped;
+        totals.commentInserted += result.comment.inserted;
+        totals.commentUpdated  += result.comment.updated;
+        totals.commentSkipped  += result.comment.skipped;
+      } catch (err) {
+        totals.skipped++;
+        logger.warn(`[StreamOutgoingMigrationModel] Skip document ID=${raw?.ID}: ${err.message}`);
+      }
+    }
+
+    return totals;
   }
 
-  async _updateRecord(record, transaction) {
-    if (!record?.id_outgoing_bak) {
-      throw new Error("document_id is required for update");
-    }
-    console.log(`Updating record id_outgoing_bak=${record.id_outgoing_bak}...`);
+  // ── Private helpers ───────────────────────────────────────────
 
+  /**
+   * Migrate bản ghi văn bản vào outgoing_documents_sync.
+   * Thực hiện upsert: nếu đã tồn tại (theo id_outgoing_bak) thì UPDATE, ngược lại INSERT.
+   *
+   * @private
+   */
+  async _migrateDocumentToSync(raw) {
+    if (!raw?.ID) return { inserted: 0, updated: 0 };
+
+    const mapped = await this._mapDocumentRecord(raw);
+    if (!mapped) return { inserted: 0, updated: 0 };
+
+    const transaction = await this.beginTransaction();
+    try {
+      const existing = await this.queryNewDbTx(
+        `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable}
+         WHERE id_outgoing_bak = @bakId`,
+        { bakId: mapped.id_outgoing_bak },
+        transaction
+      );
+
+      if (existing?.length) {
+        await this._updateDocumentSync(mapped, transaction);
+        await this.commitTransaction(transaction);
+        return { inserted: 0, updated: 1 };
+      } else {
+        await this._insertDocumentSync(mapped, transaction);
+        await this.commitTransaction(transaction);
+        return { inserted: 1, updated: 0 };
+      }
+    } catch (error) {
+      await this.rollbackTransaction(transaction);
+      throw error;
+    }
+  }
+
+  /**
+   * Apply bản ghi document từ sync sang main (outgoing_documents).
+   *
+   * @private
+   */
+  async _applyDocumentToMain(raw) {
+    if (!raw?.ID) return { inserted: 0, updated: 0 };
+
+    const oldId = String(raw.ID);
+    const transaction = await this.beginTransaction();
+    try {
+      // Lấy bản ghi từ sync table theo id_outgoing_bak
+      const syncRecords = await this.queryNewDbTx(
+        `SELECT TOP 1 * FROM ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable}
+         WHERE id_outgoing_bak = @bakId`,
+        { bakId: oldId },
+        transaction
+      );
+
+      if (!syncRecords?.length) {
+        await this.commitTransaction(transaction);
+        return { inserted: 0, updated: 0 };
+      }
+
+      const syncRecord = syncRecords[0];
+
+      const existing = await this.queryNewDbTx(
+        `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.${this.newDbSchema}.outgoing_documents
+         WHERE id_outgoing_bak = @bakId`,
+        { bakId: oldId },
+        transaction
+      );
+
+      if (existing?.length) {
+        await this._updateDocumentMain(syncRecord, transaction);
+        await this.commitTransaction(transaction);
+        return { inserted: 0, updated: 1 };
+      } else {
+        await this._insertDocumentMain(syncRecord, transaction);
+        await this.commitTransaction(transaction);
+        return { inserted: 1, updated: 0 };
+      }
+    } catch (error) {
+      await this.rollbackTransaction(transaction);
+      throw error;
+    }
+  }
+
+  /**
+   * Chuyển đổi bản ghi từ audit_sync về format phù hợp với bảng audit chính.
+   * Map các field từ audit_sync sang audit main table format.
+   *
+   * @private
+   */
+  _toAuditMainRecord(syncRecord) {
+    return {
+      document_id:   syncRecord.document_id?.document_id || syncRecord.document_id,
+      time:          syncRecord.time,
+      user_id:       syncRecord.user_id,
+      display_name:  syncRecord.display_name,
+      role:          syncRecord.role           || null,
+      action_code:   syncRecord.action_code,
+      from_node_id:  syncRecord.from_node_id   || null,
+      to_node_id:    syncRecord.to_node_id     || null,
+      details:       syncRecord.details        || null,
+      origin_id:     syncRecord.origin_id      || null,
+      created_by:    syncRecord.user_id,
+      receiver:      Array.isArray(syncRecord.receiver)
+                       ? syncRecord.receiver.join(',')
+                       : (syncRecord.receiver || null),
+      receiver_unit: Array.isArray(syncRecord.receiver_unit)
+                       ? syncRecord.receiver_unit.join(',')
+                       : (syncRecord.receiver_unit || null),
+      group_:        syncRecord.group_         || null,
+      roleProcess:   syncRecord.roleProcess,
+      action:        syncRecord.action         || null,
+      deadline:      syncRecord.deadline       || null,
+      stage_status:  syncRecord.stage_status,
+      curStatusCode: syncRecord.curStatusCode  || null,
+      created_at:    syncRecord.created_at     || syncRecord.time,
+      updated_at:    syncRecord.updated_at     || null,
+      type_document: syncRecord.document_id?.type_document || syncRecord.type_document || null,
+      processed_by:  syncRecord.processed_by   || null,
+      table_backup:  syncRecord.table_backup   || syncRecord.table_backups,
+      acting_as:     syncRecord.acting_as      || null,
+    };
+  }
+
+  /**
+   * Chuyển đổi bản ghi từ document_comments_sync về format phù hợp với bảng comment chính.
+   *
+   * @private
+   */
+  _toCommentMainRecord(syncRecord) {
+    return {
+      document_id:    syncRecord.document_id,
+      parent_id:      syncRecord.parent_id    || null,
+      user_id:        syncRecord.user_id,
+      user_name:      syncRecord.user_name,
+      content:        syncRecord.content      || "",
+      type:           syncRecord.type,
+      created_at:     syncRecord.created_at,
+      file_id:        syncRecord.file_id,
+      likes:          syncRecord.likes,
+      id_comments_bak: syncRecord.id_comments_bak,
+      type_bak:       syncRecord.type_bak,
+      table_backup:   syncRecord.table_backup,
+      parent_id_bak:  syncRecord.parent_id_bak,
+      user_id_bak:    syncRecord.user_id_bak,
+    };
+  }
+
+  /**
+   * Map bản ghi văn bản thô từ DB cũ → format cho outgoing_documents_sync.
+   * Ghi đè phương thức này để tùy chỉnh mapping theo cấu trúc DB cũ thực tế.
+   *
+   * @private
+   */
+  async _mapDocumentRecord(raw) {
+    if (!raw?.ID) return null;
+
+    const userId     = await this.helper.mapUserName(raw.NguoiSoan || raw.NguoiTao, null);
+    const senderUnit = await this.helper.mapSenderUnitId(raw.DonViGui || raw.CoQuanBanHanh, null);
+
+    return {
+      id_outgoing_bak:   String(raw.ID),
+      document_id:       null,                             // sẽ được tạo khi apply vào main
+      document_number:   raw.SoHieuVanBan   || null,
+      document_date:     this.helper.parseDate(raw.NgayBanHanh),
+      subject:           raw.TrichYeu       || null,
+      sender_user_id:    userId             || null,
+      sender_unit_id:    senderUnit         || null,
+      created_at:        this.helper.parseDate(raw.NgayTao || raw.Created),
+      updated_at:        null,
+    };
+  }
+
+  async _insertDocumentSync(data, transaction) {
     const query = `
-      UPDATE ${this.newDbSchema}.${this.newDbTable}
+      INSERT INTO ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} (
+        id_outgoing_bak, document_number, document_date, subject,
+        sender_user_id, sender_unit_id, created_at, updated_at
+      ) VALUES (
+        @idOutgoingBak, @documentNumber, @documentDate, @subject,
+        @senderUserId, @senderUnitId, @createdAt, GETDATE()
+      )
+    `;
+    await this.queryNewDbTx(query, {
+      idOutgoingBak:  data.id_outgoing_bak,
+      documentNumber: data.document_number,
+      documentDate:   data.document_date,
+      subject:        data.subject,
+      senderUserId:   data.sender_user_id,
+      senderUnitId:   data.sender_unit_id,
+      createdAt:      data.created_at,
+    }, transaction);
+  }
+
+  async _updateDocumentSync(data, transaction) {
+    const query = `
+      UPDATE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable}
       SET
-        status_code = @statusCode, sender_unit = @senderUnit, drafter = @drafter,
-        document_type = @documentType, urgency_level = @urgencyLevel, private_level = @privateLevel,
-        report_signer = @reportSigner, report_document_symbol = @reportDocumentSymbol,
-        deadline_reply = @deadlineReply, book_document_id = @bookDocumentId, status = @status,
-        release_no = @releaseNo, to_book_text_symbols = @toBookTextSymbols, release_date = @releaseDate, text_symbols = @textSymbols,
-        type_doc = @typeDoc, bpmn_version = @bpmnVersion, type_of_process = @typeOfProcess,
-        replaced = @replaced, abstract_note = @abstractNote, updated_at = GETDATE()
-      WHERE id_outgoing_bak = @idOutgoingBak AND table_backup = 'stream_migration'
+        document_number = @documentNumber,
+        document_date   = @documentDate,
+        subject         = @subject,
+        sender_user_id  = @senderUserId,
+        sender_unit_id  = @senderUnitId,
+        updated_at      = GETDATE()
+      WHERE id_outgoing_bak = @idOutgoingBak
     `;
-
-    const params = {
-      statusCode: record.status_code ?? "1",
-      senderUnit: record.sender_unit ?? null,
-      drafter: record.drafter ?? null,
-      documentType: record.document_type ?? null,
-      urgencyLevel: record.urgency_level ?? null,
-      privateLevel: record.private_level ?? null,
-      reportSigner: record.report_signer ?? null,
-      reportDocumentSymbol: record.report_document_symbol ?? null,
-      deadlineReply: record.deadline_reply ?? null,
-      bookDocumentId: record.book_document_id ?? null,
-      status: record.status ?? 1,
-      releaseNo: record.release_no ?? null,
-      toBookTextSymbols: record.to_book_text_symbols ?? null,
-      releaseDate: record.release_date ?? null,
-      textSymbols: record.text_symbols ?? null,
-      typeDoc: record.type_doc ?? 1,
-      bpmnVersion: record.bpmn_version ?? null,
-      typeOfProcess: record.type_of_process ?? null,
-      idOutgoingBak: record.id_outgoing_bak ?? null,
-      abstractNote: record.abstract_note ?? null,
-      replaced: record.replaced ?? 0,
-    };
-
-    await this.queryNewDbTx(query, params, transaction);
+    await this.queryNewDbTx(query, {
+      idOutgoingBak:  data.id_outgoing_bak,
+      documentNumber: data.document_number,
+      documentDate:   data.document_date,
+      subject:        data.subject,
+      senderUserId:   data.sender_user_id,
+      senderUnitId:   data.sender_unit_id,
+    }, transaction);
   }
 
-  async rollback(options = {}) {
-    try {
-      const query = `
-        DELETE FROM camunda.${this.newDbSchema}.${this.newDbTable}
-        WHERE table_backup = 'stream_migration'
-      `;
+  async _insertDocumentMain(syncRecord, transaction) {
+    const newId = `${Date.now()}${Math.random().toString(36).substring(2, 10)}`;
+    const query = `
+      INSERT INTO ${process.env.NEW_DB_NAME}.${this.newDbSchema}.outgoing_documents (
+        id, document_number, document_date, subject,
+        sender_user_id, sender_unit_id,
+        id_outgoing_bak, created_at, updated_at
+      ) VALUES (
+        @id, @documentNumber, @documentDate, @subject,
+        @senderUserId, @senderUnitId,
+        @idOutgoingBak, @createdAt, GETDATE()
+      )
+    `;
+    await this.queryNewDbTx(query, {
+      id:             newId,
+      documentNumber: syncRecord.document_number,
+      documentDate:   syncRecord.document_date,
+      subject:        syncRecord.subject,
+      senderUserId:   syncRecord.sender_user_id,
+      senderUnitId:   syncRecord.sender_unit_id,
+      idOutgoingBak:  syncRecord.id_outgoing_bak,
+      createdAt:      syncRecord.created_at,
+    }, transaction);
 
-      const result = await this.queryNewDbTx(query);
-      const deleted = result.rowsAffected || 0;
-
-      logger.info(`[StreamOutgoingMigrationModel.rollback] Deleted ${deleted} records`);
-
-      return { deleted };
-    } catch (error) {
-      logger.error("[StreamOutgoingMigrationModel.rollback] Error:", error);
-      throw error;
-    }
+    // Cập nhật document_id trong sync table để audit/comment lookup có thể resolve
+    await this.queryNewDbTx(
+      `UPDATE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable}
+       SET document_id = @newId
+       WHERE id_outgoing_bak = @bakId`,
+      { newId, bakId: syncRecord.id_outgoing_bak },
+      transaction
+    );
   }
+
+  async _updateDocumentMain(syncRecord, transaction) {
+    const query = `
+      UPDATE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.outgoing_documents
+      SET
+        document_number = @documentNumber,
+        document_date   = @documentDate,
+        subject         = @subject,
+        sender_user_id  = @senderUserId,
+        sender_unit_id  = @senderUnitId,
+        updated_at      = GETDATE()
+      WHERE id_outgoing_bak = @idOutgoingBak
+    `;
+    await this.queryNewDbTx(query, {
+      documentNumber: syncRecord.document_number,
+      documentDate:   syncRecord.document_date,
+      subject:        syncRecord.subject,
+      senderUserId:   syncRecord.sender_user_id,
+      senderUnitId:   syncRecord.sender_unit_id,
+      idOutgoingBak:  syncRecord.id_outgoing_bak,
+    }, transaction);
+  }
+
+  // ── Transaction helpers ───────────────────────────────────────
 
   async beginTransaction() {
-    try {
-      const transaction = new sql.Transaction(this.newPool);
-      await transaction.begin();
-      logger.debug("[beginTransaction] Started");
-      return transaction;
-    } catch (error) {
-      logger.error("[beginTransaction] Error:", error);
-      throw error;
-    }
+    const transaction = new sql.Transaction(this.newPool);
+    await transaction.begin();
+    return transaction;
   }
 
   async commitTransaction(transaction) {
-    try {
-      if (!transaction) return;
-      await transaction.commit();
-      logger.debug("[commitTransaction] Committed");
-    } catch (error) {
-      logger.error("[commitTransaction] Error:", error);
-      throw error;
-    }
+    if (!transaction) return;
+    await transaction.commit();
   }
 
   async rollbackTransaction(transaction) {
     try {
       if (!transaction) return;
       await transaction.rollback();
-      logger.debug("[rollbackTransaction] Rolled back");
-    } catch (error) {
-      logger.error("[rollbackTransaction] Error:", error);
-    }
+    } catch {}
   }
 }
 

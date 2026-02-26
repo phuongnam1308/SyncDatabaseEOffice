@@ -66,6 +66,62 @@ class SyncAuditModel extends BaseModel {
     }
   }
 
+  /**
+   * Áp dụng một bản ghi đơn lẻ từ bảng sync vào bảng chính.
+   * Được gọi bởi document model khi sync document kèm related records.
+   *
+   * @param {object} record - Bản ghi từ audit_sync
+   * @param {object} [externalTransaction] - Transaction bên ngoài (tùy chọn, nếu muốn dùng chung transaction)
+   * @returns {{ inserted: number, updated: number }}
+   */
+  async applySingleRecord(record, externalTransaction = null) {
+    if (!record) return { inserted: 0, updated: 0 };
+
+    const transaction = externalTransaction || await this.beginTransaction();
+    const ownsTransaction = !externalTransaction;
+    let inserted = 0;
+    let updated = 0;
+
+    try {
+      let existingQuery = `
+        SELECT TOP 1 id
+        FROM ${process.env.NEW_DB_NAME}.${this.mainSchema}.${this.mainTable}
+        WHERE document_id = @documentId
+          AND [time] = @time
+      `;
+
+      const params = {
+        documentId: record.document_id,
+        time: record.time,
+      };
+
+      if (record.user_id !== undefined && record.user_id !== null) {
+        existingQuery += ` AND user_id = @userId`;
+        params.userId = record.user_id;
+      } else {
+        existingQuery += ` AND user_id IS NULL`;
+      }
+
+      const existing = await this.queryNewDbTx(existingQuery, params, transaction);
+
+      if (existing && existing.length > 0) {
+        await this._updateRecord(record, transaction);
+        updated++;
+      } else {
+        await this._insertRecord(record, transaction);
+        inserted++;
+      }
+
+      if (ownsTransaction) await this.commitTransaction(transaction);
+
+      return { inserted, updated };
+    } catch (error) {
+      if (ownsTransaction) await this.rollbackTransaction(transaction);
+      logger.error(`[SyncAuditModel.applySingleRecord] Error record id=${record?.id}:`, error);
+      throw error;
+    }
+  }
+
   async insertBatchToMain(records) {
     if (!records || records.length === 0) {
       return { inserted: 0, updated: 0 };

@@ -38,6 +38,48 @@ class SyncCommentModel extends BaseModel {
     return this.queryNewDbTx(query, params);
   }
 
+  /**
+   * Áp dụng một bản ghi đơn lẻ từ bảng sync vào bảng chính.
+   * Được gọi bởi document model khi sync document kèm related records.
+   *
+   * @param {object} record - Bản ghi từ document_comments_sync
+   * @param {object} [externalTransaction] - Transaction bên ngoài (tùy chọn)
+   * @returns {{ inserted: number, updated: number }}
+   */
+  async applySingleRecord(record, externalTransaction = null) {
+    if (!record) return { inserted: 0, updated: 0 };
+
+    const transaction = externalTransaction || await this.beginTransaction();
+    const ownsTransaction = !externalTransaction;
+    let inserted = 0;
+    let updated = 0;
+
+    try {
+      const existing = await this.queryNewDbTx(
+        `SELECT id FROM ${process.env.NEW_DB_NAME}.${this.mainSchema}.${this.mainTable}
+         WHERE id_comments_bak = @bak AND table_bak = @table`,
+        { bak: record.id_comments_bak, table: record.table_backup },
+        transaction
+      );
+
+      if (existing?.length) {
+        await this._updateRecord(record, transaction);
+        updated++;
+      } else {
+        await this._insertRecord(record, transaction);
+        inserted++;
+      }
+
+      if (ownsTransaction) await this.commitTransaction(transaction);
+
+      return { inserted, updated };
+    } catch (error) {
+      if (ownsTransaction) await this.rollbackTransaction(transaction);
+      logger.error(`[SyncCommentModel.applySingleRecord] Error record id=${record?.id}:`, error);
+      throw error;
+    }
+  }
+
   async insertBatchToMain(records) {
     if (!records?.length) return { inserted: 0, updated: 0 };
 
