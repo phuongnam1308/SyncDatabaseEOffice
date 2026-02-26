@@ -53,7 +53,7 @@ class SyncHandlerModel {
     /**
      * Generate fetch function for fetching records from old DB table
      * @param {string} schemaName - Schema name (e.g., 'dbo')
-     * @param {string} tableName - Table name (e.g., 'VanBanDi')
+     * @param {string} tableName - Table name (e.g., 'VanBanBanHanh')
      * @returns {Function} Fetch function
      */
     createFetchFnOld(schemaName, tableName) {

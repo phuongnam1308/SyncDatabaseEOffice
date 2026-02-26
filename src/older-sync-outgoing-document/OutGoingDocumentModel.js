@@ -1,48 +1,3 @@
-/**
- * OutGoingDocumentModel.js
- *
- * ════════════════════════════════════════════════════════════════
- * LUỒNG XỬ LÝ (3 bước chính):
- * ────────────────────────────────────────────────────────────────
- *
- *  BƯỚC 1 — fetchBatch()
- *    Kéo raw records từ DB cũ (VanBanDi) → trả về mảng để gọi bên ngoài
- *
- *  BƯỚC 2 — insertBatchToTemp(records)
- *    Ghi raw records vào bảng trung gian (VanBanDi_temp).
- *    Bảng temp có cùng cấu trúc cột với bảng cũ, chỉ khác tên.
- *    Dùng để tách biệt giai đoạn pull data và giai đoạn map/apply.
- *
- *  BƯỚC 3 — mapDocumentById(oldRecordId)
- *    Nhận ID của bản ghi trong bảng temp, thực hiện toàn bộ pipeline:
- *
- *    3a. Đọc raw record từ temp table theo ID
- *    3b. Map document → outgoing_documents_sync (upsert)
- *    3c. Apply document → outgoing_documents (main), cập nhật document_id trong sync
- *        ↑ Phải xong trước khi audit/comment chạy, vì chúng cần document_id
- *    3d. Với MỖI bảng LuanChuyenVanBan_*:
- *          - fetchByDocumentId(oldRecordId) → lấy raw audit records
- *          - Với mỗi raw: auditModel.processSingleRecord(raw)
- *              → map + upsert vào audit_sync (logic đã có trong model, KHÔNG được sửa)
- *          - Với mỗi syncedAudit: syncAuditModel.applySingleRecord(...)
- *              → apply vào bảng audit chính
- *    3e. Với MỖI bảng Comments_*:
- *          - fetchByDocumentId(oldRecordId) → lấy raw comment records
- *          - Với mỗi raw: commentModel.processSingleRecord(raw)
- *              → map + upsert vào document_comments_sync
- *          - Với mỗi syncedComment: syncCommentModel.applySingleRecord(...)
- *              → apply vào bảng document_comments chính
- *
- * ════════════════════════════════════════════════════════════════
- * RÀNG BUỘC QUAN TRỌNG:
- *   - processSingleRecord() của audit/comment: CHỈ ĐƯỢC GỌI, KHÔNG ĐƯỢC SỬA
- *   - _mapSingleRecord() bên trong các model: KHÔNG ĐƯỢC ĐỤNG VÀO
- *   - Tất cả hàm apply/insert vào bảng chính: dùng model sẵn có
- * ════════════════════════════════════════════════════════════════
- */
-
-'use strict';
-
 const BaseModel    = require('../../models/BaseModel');
 const logger       = require('../../utils/logger');
 const sql          = require('mssql');
@@ -161,7 +116,7 @@ class OutGoingDocumentModel extends BaseModel {
 
     // ── Nguồn DB cũ ──────────────────────────────────────────
     this.oldDbSchema = 'dbo';
-    this.oldDbTable  = 'VanBanDi';
+    this.oldDbTable  = 'VanBanBanHanh';
     this.syncSchema = 'dbo';
 
     // ── Bảng trung gian (temp) — cùng cột, tên khác ──────────
@@ -229,12 +184,12 @@ class OutGoingDocumentModel extends BaseModel {
    * Kéo một batch văn bản đi từ DB cũ theo con trỏ ID tăng dần.
    *
    * @param {{ batch: number, lastId: number|null }} opts
-   * @returns {Promise<object[]>} Mảng raw records từ VanBanDi
+   * @returns {Promise<object[]>} Mảng raw records từ VanBanBanHanh
    */
   async fetchBatch({ batch, lastId }) {
     const query = `
       SELECT TOP (@batch) *
-      FROM ${this.oldDbSchema}.${this.oldDbTable}
+      FROM ${process.env.OLD_DB_NAME}.${this.oldDbSchema}.${this.oldDbTable}
       WHERE (@lastId IS NULL OR ID > @lastId)
       ORDER BY ID ASC
     `;
@@ -246,8 +201,8 @@ class OutGoingDocumentModel extends BaseModel {
   // ══════════════════════════════════════════════════════════
 
   /**
-   * Upsert một batch raw records vào bảng VanBanDi_temp trong NEW DB.
-   * Bảng temp có cùng cấu trúc cột với VanBanDi, chỉ khác tên.
+   * Upsert một batch raw records vào bảng VanBanBanHanh_temp trong NEW DB.
+   * Bảng temp có cùng cấu trúc cột với VanBanBanHanh, chỉ khác tên.
    * Nếu bản ghi đã tồn tại (theo ID) thì UPDATE, chưa có thì INSERT.
    *
    * @param {object[]} records — raw records từ fetchBatch()
@@ -316,7 +271,7 @@ class OutGoingDocumentModel extends BaseModel {
    * ⚠️ Thứ tự 3b → 3c PHẢI chạy trước 3d và 3e, vì audit/comment
    *    cần document_id đã được ghi vào outgoing_documents_sync.
    *
-   * @param {number|string} oldRecordId — ID bản ghi trong bảng temp (= ID trong VanBanDi)
+   * @param {number|string} oldRecordId — ID bản ghi trong bảng temp (= ID trong VanBanBanHanh)
    * @returns {Promise<{
    *   document: { inserted: number, updated: number },
    *   audit:    { inserted: number, updated: number, skipped: number },
@@ -451,10 +406,10 @@ class OutGoingDocumentModel extends BaseModel {
   }
 
   /**
-   * INSERT một raw record vào bảng VanBanDi_temp.
-   * Cột của bảng temp giống hệt VanBanDi — map 1-1.
+   * INSERT một raw record vào bảng VanBanBanHanh_temp.
+   * Cột của bảng temp giống hệt VanBanBanHanh — map 1-1.
    *
-   * ⚠️ Nếu cấu trúc VanBanDi thay đổi, chỉ cần cập nhật danh sách cột ở đây.
+   * ⚠️ Nếu cấu trúc VanBanBanHanh thay đổi, chỉ cần cập nhật danh sách cột ở đây.
    * @private
    */
   async _insertTempRecord(raw, transaction) {
@@ -479,7 +434,7 @@ class OutGoingDocumentModel extends BaseModel {
   }
 
   /**
-   * UPDATE raw record trong bảng VanBanDi_temp theo ID.
+   * UPDATE raw record trong bảng VanBanBanHanh_temp theo ID.
    * @private
    */
   async _updateTempRecord(raw, transaction) {
