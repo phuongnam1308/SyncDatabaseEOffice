@@ -330,6 +330,9 @@ router.use('/audit', AuditRoutes);
 const UserRoutes = require('../src/sync-user/route');
 router.use('/user', UserRoutes);
 
+const UserCopyRoutes = require('../src/sync-user-copy/route');
+router.use('/user-copy', UserCopyRoutes);
+
 const FileRoutes = require('../src/sync-file/route');
 router.use('/file', FileRoutes);
 

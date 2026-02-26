@@ -321,6 +321,8 @@ class SyncManagerService {
     modelState.activeJobId = jobId;
 
     this.saveState(); // ghi JSON (giữ nguyên)
+    // make sure model exists in sync_models (FK constraint) before inserting job
+    this._dbEnsureModel(modelName);
     this._dbInsertJob(job); // ghi DB (thêm mới, fire-and-forget)
     this._dbUpdateModel(modelName, modelState); // ghi DB model state
 
@@ -703,6 +705,17 @@ class SyncManagerService {
   _dbInsertJob(job) {
     SyncStateRepository.createJob(job).catch((err) =>
       logger.warn(`[SyncManagerService] DB insertJob(${job.jobId}) failed:`, err.message)
+    );
+  }
+
+  /**
+   * Ensure the model row exists in sync_models table.
+   * This prevents FK violations when inserting a job for a new model.
+   * @private
+   */
+  _dbEnsureModel(modelName) {
+    SyncStateRepository.ensureModel(modelName).catch((err) =>
+      logger.warn(`[SyncManagerService] DB ensureModel(${modelName}) failed:`, err.message)
     );
   }
 
