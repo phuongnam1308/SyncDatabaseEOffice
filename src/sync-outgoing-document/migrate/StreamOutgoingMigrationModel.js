@@ -3,6 +3,30 @@ const logger = require("../../../utils/logger");
 const sql = require('mssql');
 const MigrationHelper = require("../../helpers/MigrationHelper");
 
+// List of tables from SyncModelRegistry
+const AUDIT_TABLES = [
+  'LuanChuyenVanBan', 'LuanChuyenVanBan_ATPC', 'LuanChuyenVanBan_CLL', 'LuanChuyenVanBan_CNTT', 'LuanChuyenVanBan_CT',
+  'LuanChuyenVanBan_CVTC', 'LuanChuyenVanBan_DonVi', 'LuanChuyenVanBan_DVHH', 'LuanChuyenVanBan_DVKT', 'LuanChuyenVanBan_GNVT',
+  'LuanChuyenVanBan_HC', 'LuanChuyenVanBan_HT', 'LuanChuyenVanBan_ICDLB', 'LuanChuyenVanBan_ICDST', 'LuanChuyenVanBan_KHDT',
+  'LuanChuyenVanBan_KHKD', 'LuanChuyenVanBan_KTVT', 'LuanChuyenVanBan_KVTC', 'LuanChuyenVanBan_MKT', 'LuanChuyenVanBan_NPL',
+  'LuanChuyenVanBan_QLCT', 'LuanChuyenVanBan_QSBV', 'LuanChuyenVanBan_SNPL', 'LuanChuyenVanBan_TC', 'LuanChuyenVanBan_TC189',
+  'LuanChuyenVanBan_TCCT', 'LuanChuyenVanBan_TCHP', 'LuanChuyenVanBan_TCIDI', 'LuanChuyenVanBan_TCLD', 'LuanChuyenVanBan_TCMT',
+  'LuanChuyenVanBan_TCO', 'LuanChuyenVanBan_TCOT', 'LuanChuyenVanBan_TCPC', 'LuanChuyenVanBan_TCPH', 'LuanChuyenVanBan_TCTT',
+  'LuanChuyenVanBan_TTDDC', 'LuanChuyenVanBan_TTDTC', 'LuanChuyenVanBan_VP', 'LuanChuyenVanBan_VPMB', 'LuanChuyenVanBan_VPTNB',
+  'LuanChuyenVanBan_VTB', 'LuanChuyenVanBan_VTT', 'LuanChuyenVanBan_XDCT', 'LuanChuyenVanBan_xdsm', 'LuanChuyenVanBan_XNCG',
+  'LuanChuyenVanBan_YTE'
+];
+
+const COMMENT_TABLES = [
+  'Comments', 'Comments_ATPC', 'Comments_CLL', 'Comments_CNTT', 'Comments_CT', 'Comments_CVTC', 'Comments_DonVi',
+  'Comments_DVHH', 'Comments_DVKT', 'Comments_GNVT', 'Comments_HC', 'Comments_HT', 'Comments_ICDLB', 'Comments_ICDST',
+  'Comments_KHDT', 'Comments_KHKD', 'Comments_KTVT', 'Comments_KVTC', 'Comments_MKT', 'Comments_NPL', 'Comments_QLCT',
+  'Comments_QSBV', 'Comments_SNPL', 'Comments_TC', 'Comments_TC189', 'Comments_TCCT', 'Comments_TCHP', 'Comments_TCIDI',
+  'Comments_TCLD', 'Comments_TCMT', 'Comments_TCO', 'Comments_TCOT', 'Comments_TCPC', 'Comments_TCPH', 'Comments_TCTT',
+  'Comments_TTDDC', 'Comments_TTDTC', 'Comments_VP', 'Comments_VPMB', 'Comments_VPTNB', 'Comments_VTB', 'Comments_VTT',
+  'Comments_XDCT', 'Comments_xdsm', 'Comments_XNCG', 'Comments_YTE'
+];
+
 class StreamOutgoingMigrationModel extends BaseModel {
   constructor() {
     super();
@@ -222,8 +246,10 @@ class StreamOutgoingMigrationModel extends BaseModel {
             await this._insertRecord(mapped, transaction);
             inserted++;
           }
+          await this._syncRelatedData(mapped.id_outgoing_bak, mapped.document_id, transaction);
+
         } catch (recordError) {
-          logger.warn(`[insertBatchToNewDb] Skip record id_outgoing_bak=${mapped.id_outgoing_bak}:`, recordError.message);
+          logger.warn(`[insertBatchToNewDb] Skip record id_outgoing_bak=${record?.id_outgoing_bak}:`, recordError.message);
         }
       }
 
@@ -240,6 +266,95 @@ class StreamOutgoingMigrationModel extends BaseModel {
 
       logger.error("[StreamOutgoingMigrationModel.insertBatchToNewDb] Error:", error);
       throw error;
+    }
+  }
+
+  /**
+   * Orchestrates the migration of related Audits and Comments
+   */
+  async _syncRelatedData(oldId, newDocumentId, transaction) {
+    try {
+      // 1. Fetch and Insert Audits
+      const audits = await this._fetchRelatedFromOldDb(oldId, AUDIT_TABLES);
+      if (audits.length > 0) {
+        await this._insertAudits(audits, newDocumentId, transaction);
+      }
+
+      // 2. Fetch and Insert Comments
+      const comments = await this._fetchRelatedFromOldDb(oldId, COMMENT_TABLES);
+      if (comments.length > 0) {
+        await this._insertComments(comments, newDocumentId, transaction);
+      }
+    } catch (error) {
+      logger.error(`[_syncRelatedData] Error for oldId=${oldId}: ${error.message}`);
+      throw error;
+    }
+  }
+
+  async _fetchRelatedFromOldDb(oldId, tableList) {
+    const queries = tableList.map(table => 
+      `SELECT *, '${table}' as SourceTable FROM ${this.oldDbSchema}.${table} WHERE VanBanId = @oldId`
+    );
+    
+    const fullQuery = queries.join(' UNION ALL ');
+    
+    try {
+      const result = await this.queryOldDb(fullQuery, { oldId });
+      return result;
+    } catch (error) {
+      logger.warn(`[_fetchRelatedFromOldDb] Error fetching related data: ${error.message}`);
+      return [];
+    }
+  }
+
+  async _insertAudits(audits, newDocumentId, transaction) {
+    for (const audit of audits) {
+      const query = `
+        INSERT INTO camunda.dbo.audit_sync (
+          document_id, sender, receiver, action, created_at, 
+          table_backup, id_key
+        ) VALUES (
+          @documentId, @sender, @receiver, @action, @createdAt,
+          @tableBackup, @idKey
+        )
+      `;
+      
+      const params = {
+        documentId: newDocumentId,
+        sender: audit.NguoiGui || null,
+        receiver: audit.NguoiNhan || null,
+        action: audit.NoiDung || audit.Action || null,
+        createdAt: audit.NgayGui || audit.Created || new Date(),
+        tableBackup: audit.SourceTable || 'LuanChuyenVanBan',
+        idKey: audit.ID
+      };
+
+      await this.queryNewDbTx(query, params, transaction);
+    }
+  }
+
+  async _insertComments(comments, newDocumentId, transaction) {
+    for (const comment of comments) {
+      const query = `
+        INSERT INTO camunda.dbo.document_comments_sync (
+          document_id, creator, content, created_at, 
+          table_backup, id_key
+        ) VALUES (
+          @documentId, @creator, @content, @createdAt,
+          @tableBackup, @idKey
+        )
+      `;
+      
+      const params = {
+        documentId: newDocumentId,
+        creator: comment.NguoiTao || comment.CreatedBy || null,
+        content: comment.NoiDung || null,
+        createdAt: comment.NgayTao || comment.Created || new Date(),
+        tableBackup: comment.SourceTable || 'Comments',
+        idKey: comment.ID
+      };
+
+      await this.queryNewDbTx(query, params, transaction);
     }
   }
 
