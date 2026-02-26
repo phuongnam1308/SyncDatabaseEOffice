@@ -5,7 +5,7 @@ class SyncStateRepository extends BaseModel {
   constructor() {
     super();
     this.tblModels = 'sync_models';
-    this.tblJobs   = 'sync_jobs';
+    this.tblJobs = 'sync_jobs';
     this.tblErrors = 'sync_job_errors';
   }
 
@@ -44,7 +44,7 @@ class SyncStateRepository extends BaseModel {
     try {
       // 1. Lấy danh sách Models
       const models = await this.queryNewDb(`SELECT * FROM ${this.tblModels}`);
-      
+
       // 2. Lấy danh sách Jobs gần đây (50 job mới nhất)
       const jobs = await this.queryNewDb(`
         SELECT TOP 50 * 
@@ -185,12 +185,12 @@ class SyncStateRepository extends BaseModel {
     await this.queryNewDb(query, {
       modelName,
       lastSyncTime: state.lastSyncTime || null,
-      lastSyncId:   Number(state.lastSyncId || 0),
-      totalSynced:  Number(state.totalSynced || 0),
-      status:       state.status || 'IDLE',
-      lastRun:      state.lastRun || null,
-      activeJobId:  state.activeJobId || null,
-      lastError:    state.error || null
+      lastSyncId: Number(state.lastSyncId || 0),
+      totalSynced: Number(state.totalSynced || 0),
+      status: state.status || 'IDLE',
+      lastRun: state.lastRun || null,
+      activeJobId: state.activeJobId || null,
+      lastError: state.error || null
     });
   }
 
@@ -211,24 +211,35 @@ class SyncStateRepository extends BaseModel {
 
   _mapJobToParams(job) {
     return {
-      jobId:          job.jobId,
-      modelName:      job.modelName,
-      status:         job.status,
-      startedAt:      job.startedAt,
-      updatedAt:      job.updatedAt,
-      endedAt:        job.endedAt      || null,
-      heartbeatAt:    job.heartbeatAt,
+      jobId: job.jobId,
+      modelName: job.modelName,
+      status: job.status,
+      startedAt: job.startedAt,
+      updatedAt: job.updatedAt,
+      endedAt: job.endedAt || null,
+      heartbeatAt: job.heartbeatAt,
       pauseRequested: job.pauseRequested ? 1 : 0,
-      isReset:        job.reset          ? 1 : 0,
-      batchSize:      job.batchSize,
-      lastSyncTime:   job.lastSyncTime   || null,
-      lastSyncId:     Number(job.lastSyncId   || 0),
-      totalToSync:    job.totalToSync    ?? null,
+      isReset: job.reset ? 1 : 0,
+      batchSize: job.batchSize,
+      lastSyncTime: job.lastSyncTime || null,
+      lastSyncId: Number(job.lastSyncId || 0),
+      totalToSync: job.totalToSync ?? null,
       totalProcessed: Number(job.totalProcessed || 0),
-      totalSuccess:   Number(job.totalSuccess   || 0),
-      totalErrors:    Number(job.totalErrors    || 0),
-      errorMessage:   job.error          || null
+      totalSuccess: Number(job.totalSuccess || 0),
+      totalErrors: Number(job.totalErrors || 0),
+      errorMessage: job.error || null
     };
+  }
+
+  /**
+   * Cập nhật trạng thái Job
+   */
+  async findOneJobById(jobId) {
+    const query = `
+      SELECT * FROM ${this.tblJobs} WHERE job_id = @jobId
+    `;
+    const params = { jobId };
+    return this.queryNewDb(query, params);
   }
 }
 

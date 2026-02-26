@@ -227,6 +227,98 @@ class SyncHandlerModel {
     }
 
     /**
+     * Generate count function for incremental staging models.
+     * Count is based on source old DB records after lastTime.
+     * @returns {Function}
+     */
+    createCountFnIncremental() {
+        return async (lastTime, lastSyncId = 0) => {
+            const records = await this.syncModel.fetchListFromOldDb(lastTime, lastSyncId);
+            return Array.isArray(records) ? records.length : 0;
+        };
+    }
+
+    /**
+     * Generate fetch function for incremental staging models.
+     * First call for a job stages records via getList(); subsequent calls
+     * return lightweight tokens representing remaining items to process.
+     * @returns {Function}
+     */
+    createFetchFnIncremental() {
+        const preparedJobs = new Map();
+
+        return async (lastTime, limit, _offset, cursor = {}) => {
+            const jobId = cursor.jobId;
+            const lastSyncId = Number(cursor.lastSyncId || 0);
+            if (!jobId) {
+                throw new Error('[SyncHandlerModel] cursor.jobId is required for incremental model');
+            }
+
+            if (!preparedJobs.has(jobId)) {
+                const listResult = await this.syncModel.getList(lastTime, jobId, lastSyncId);
+                preparedJobs.set(jobId, {
+                    totalCount: Number(listResult?.totalCount || 0),
+                    syncTime: listResult?.lastSyncTime || lastTime,
+                    syncId: Number(listResult?.lastSyncId || lastSyncId || 0),
+                    sourceTime: listResult?.sourceLastSyncTime || lastTime,
+                    sourceId: Number(listResult?.sourceLastSyncId || lastSyncId || 0),
+                    nextIndex: 0
+                });
+            }
+
+            const state = preparedJobs.get(jobId);
+            const total = Number(state?.totalCount || 0);
+            const processed = Number(state?.nextIndex || 0);
+            const remaining = Math.max(0, total - processed);
+            const take = Math.min(Number(limit || 1), remaining);
+
+            if (take <= 0) {
+                preparedJobs.delete(jobId);
+                return [];
+            }
+
+            const syncTime = state?.syncTime || lastTime;
+            const startIndex = processed;
+            state.nextIndex += take;
+
+            return Array.from({ length: take }, (_, idx) => ({
+                id: startIndex + idx + 1,
+                __item_index: startIndex + idx,
+                __sync_id: Number(state?.syncId || 0),
+                __sync_time: syncTime,
+                __source_sync_time: state?.sourceTime || lastTime,
+                __source_sync_id: Number(state?.sourceId || 0),
+                updated_at: syncTime
+            }));
+        };
+    }
+
+    /**
+     * Generate process function for incremental staging models.
+     * Each token means: process one staged record for the current jobId.
+     * @returns {Function}
+     */
+    createProcessFnIncremental() {
+        return async (record, context = {}) => {
+            const jobId = context.jobId;
+            if (!jobId) {
+                throw new Error('[SyncHandlerModel] jobId is required for incremental process');
+            }
+
+            const itemIndex = Math.max(
+                0,
+                Number((record && (record.__item_index ?? (record.id ? record.id - 1 : 0))) || 0)
+            );
+
+            return this.syncModel.processOne(jobId, {
+                itemIndex,
+                sourceLastSyncTime: record?.__source_sync_time || context.lastSyncTime || null,
+                sourceLastSyncId: Number(record?.__source_sync_id || context.lastSyncId || 0)
+            });
+        };
+    }
+
+    /**
      * Register model handlers with SyncManagerService
      * @param {SyncManagerService} syncManagerService - Sync manager service instance
      * @param {string} modelName - Name for registration (e.g., 'SYNC_OUTGOING_DOCUMENT')
@@ -237,7 +329,16 @@ class SyncHandlerModel {
             const tableName = this.syncModel.syncTable || this.syncModel.oldDbTable;
             let fetchFn, countFn, processFn;
 
-            if (this.syncModel.syncSchema) {
+            const isIncrementalModel =
+                typeof this.syncModel.getList === 'function' &&
+                typeof this.syncModel.processOne === 'function' &&
+                typeof this.syncModel.fetchListFromOldDb === 'function';
+
+            if (isIncrementalModel) {
+                countFn = this.createCountFnIncremental();
+                fetchFn = this.createFetchFnIncremental();
+                processFn = this.createProcessFnIncremental();
+            } else if (this.syncModel.syncSchema) {
                 // Flow: sync table → main (apply)
                 countFn = this.createCountFn(schemaName, tableName);
                 fetchFn = this.createFetchFn(schemaName, tableName);

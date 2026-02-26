@@ -379,6 +379,7 @@ const path = require('path');
 const routes = require('./routes');
 const logger = require('./utils/logger');
 const MigrationService = require('./services/MigrationOrganizationUnitsService');
+const CronSyncScheduler = require('./src/sync-manager/CronSyncScheduler');
 
 const PORT = process.env.PORT || 3020;
 const isMigrationMode = process.argv.includes('--migrate');
@@ -447,4 +448,8 @@ app.get('/health', (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Server: http://localhost:${PORT}`);
   console.log(`📘 Swagger: http://localhost:${PORT}/swagger`);
+
+  CronSyncScheduler.start().catch((error) => {
+    logger.error('[index] Cannot start CronSyncScheduler:', error);
+  });
 });

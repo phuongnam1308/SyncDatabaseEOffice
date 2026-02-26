@@ -49,6 +49,7 @@ class StreamUserMigrationService {
   async _buildOrReuseJob(syncJobId = null) {
     if (syncJobId) return syncJobId;
 
+    await SyncManagerService.ensureStateLoaded();
     const created = SyncManagerService.createJob(UNIT_TEST_MODEL_NAME, {
       reset: false,
       batchSize: 1
@@ -73,8 +74,7 @@ class StreamUserMigrationService {
 
     const jobId = await this._buildOrReuseJob(syncJobId);
     const listResult = await this.model.getList(lastSyncTime, jobId);
-    
-    const bufferState = await this.model.getBufferState(jobId);
+    const jobState = await this.model.getSyncJobState(jobId);
     const newCount = await this.model.countNewUsers();
     // const foundRows = Array.isArray(listResult.rows) ? listResult.rows : [];
 
@@ -84,9 +84,9 @@ class StreamUserMigrationService {
       oldCount: listResult.totalCount,
       stagedCount: Number(listResult.stagedCount || listResult.totalCount || 0),
       newCount,
-      totalCount: Number(bufferState?.total_count || listResult.totalCount || 0),
-      processingItem: Number(bufferState?.processing_item || 0),
-      isCountMatch: Number(bufferState?.total_count || 0) === Number(listResult.totalCount || 0),
+      totalCount: Number(jobState?.total_to_sync || listResult.totalCount || 0),
+      processingItem: Number(jobState?.total_processed || 0),
+      isCountMatch: Number(jobState?.total_to_sync || listResult.totalCount || 0) === Number(listResult.totalCount || 0),
       // foundRows
     };
   }

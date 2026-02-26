@@ -1,14 +1,7 @@
 const BaseController = require('../../controllers/BaseController');
 const SyncManagerService = require('./SyncManagerService');
-const SyncOutgoingModel = require('../sync-outgoing-document/apply/SyncOutgoingModel');
-const StreamOutgoingMigrationModel = require('../sync-outgoing-document/migrate/StreamOutgoingMigrationModel');
-const SyncAuditModel = require('../sync-audit/apply/SyncAuditModel');
-const SyncHandlerModel = require('./SyncHandlerModel');
 const SyncStateRepository = require('./SyncStateRepository');
 const logger = require('../../utils/logger');
-const StreamCommentMigrationModel = require('../sync-document-comment/migration/StreamCommentMigrationModel');
-const SyncCommentModel = require('../sync-document-comment/apply/SyncCommentModel');
-const StreamOutgoingAuditSyncModel = require('../sync-audit/migrate/StreamAuditMigrationModel');
 const SyncModelRegistry = require('./SyncModelRegistry');
 
 class SyncManagerController extends BaseController {
@@ -23,6 +16,8 @@ class SyncManagerController extends BaseController {
     if (this.initialized) return;
 
     try {
+      await SyncManagerService.ensureStateLoaded();
+
       await this.modelRegistry.initializeAll(
         SyncManagerService,
         SyncStateRepository

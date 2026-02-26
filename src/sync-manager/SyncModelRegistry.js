@@ -4,6 +4,7 @@ const SyncHandlerModel = require('./SyncHandlerModel');
 const SyncOutgoingModel = require('../sync-outgoing-document/apply/SyncOutgoingModel');
 const SyncFileModel     = require('../sync-file/apply/SyncFileModel');
 const OutGoingDocumentModel = require('../sync-outgoing-document/OutGoingDocumentModel');
+const StreamUserMigrationModel = require('../sync-user-copy/migrate/StreamUserMigrationModel');
 
 const MODEL_DEFINITIONS = [
   {
@@ -17,6 +18,12 @@ const MODEL_DEFINITIONS = [
     label:   'Đồng bộ file tài liệu',
     section: 'realtime',
     ModelClass: SyncFileModel,
+  },
+  {
+    key:     'UNIT_TEST_STREAM_USER_COPY_MIGRATION1',
+    label:   'Đồng bộ cơ sở dữ liệu cũ: người dùng (user copy)',
+    section: 'realtime',
+    ModelClass: StreamUserMigrationModel,
   },
 ];
 

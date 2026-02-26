@@ -1,5 +1,7 @@
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 
+const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
+
 class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
   constructor() {
     super({ modelName: 'STREAM_USER_COPY_MIGRATION' });
@@ -25,24 +27,72 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
     return `[${column}]`;
   }
 
+  normalizeSyncTime(value) {
+    if (!value) return DEFAULT_SYNC_TIME;
+    const dateValue = new Date(value);
+    if (Number.isNaN(dateValue.getTime())) return DEFAULT_SYNC_TIME;
+    return dateValue.toISOString();
+  }
+
+  extractRowSyncTime(row) {
+    const raw = row?.__sync_time || row?.Modified || row?.NgayTao || row?.updated_at || null;
+    if (!raw) return null;
+    const dateValue = new Date(raw);
+    if (Number.isNaN(dateValue.getTime())) return null;
+    return dateValue.toISOString();
+  }
+
+  extractRowSyncId(row) {
+    return Number(row?.__sync_id || row?.ID || 0);
+  }
+
+  isCursorAhead(aTime, aId, bTime, bId) {
+    const ta = new Date(aTime || DEFAULT_SYNC_TIME).getTime();
+    const tb = new Date(bTime || DEFAULT_SYNC_TIME).getTime();
+    if (ta > tb) return true;
+    if (ta < tb) return false;
+    return Number(aId || 0) > Number(bId || 0);
+  }
+
   /**
    * Lấy danh sách user từ CSDL cũ sau `lastSyncTime`.
    * Trả về mảng bản ghi (ID, AccountName, FullName, Modified, NgayTao) đã sắp xếp theo thời gian sửa/tao.
    * @param {string} lastSyncTime - ISO datetime hoặc giá trị mặc định để lấy từ thời điểm đó về sau
    * @returns {Promise<Array>} danh sách bản ghi từ CSDL cũ
    */
-  async fetchListFromOldDb(lastSyncTime) {
+  async fetchListFromOldDb(lastSyncTime, lastSyncId = 0) {
     const query = `
+      ;WITH source_rows AS (
+        SELECT
+          *,
+          COALESCE(TRY_CONVERT(datetime2, Modified), TRY_CONVERT(datetime2, NgayTao)) AS __sync_time,
+          TRY_CONVERT(
+            BIGINT,
+            NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
+          ) AS __sync_id_num
+        FROM ${this.oldDbSchema}.${this.oldDbTable}
+      )
       SELECT
-        *
-      FROM ${this.oldDbSchema}.${this.oldDbTable}
-      WHERE COALESCE(TRY_CONVERT(datetime2, Modified), TRY_CONVERT(datetime2, NgayTao)) > @lastSyncTime
+        *,
+        ISNULL(__sync_id_num, 0) AS __sync_id
+      FROM source_rows
+      WHERE (
+        __sync_time > @lastSyncTime
+        OR (
+          __sync_time = @lastSyncTime
+          AND ISNULL(__sync_id_num, -9223372036854775808) > @lastSyncId
+        )
+      )
       ORDER BY
-        COALESCE(TRY_CONVERT(datetime2, Modified), TRY_CONVERT(datetime2, NgayTao)) ASC,
+        __sync_time ASC,
+        ISNULL(__sync_id_num, -9223372036854775808) ASC,
         ID ASC
     `;
 
-    return this.queryOldDb(query, { lastSyncTime });
+    return this.queryOldDb(query, {
+      lastSyncTime,
+      lastSyncId: Number(lastSyncId || 0)
+    });
   }
 
   async syncOldToStaging(rows, { transaction } = {}) {
@@ -50,7 +100,8 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
       return { stagedCount: 0 };
     }
 
-    const columns = Object.keys(rows[0] || {});
+    const internalColumns = new Set(['__sync_time', '__sync_id', '__sync_id_num']);
+    const columns = Object.keys(rows[0] || {}).filter((column) => !internalColumns.has(column));
     if (!columns.length) {
       return { stagedCount: 0 };
     }
@@ -65,6 +116,11 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
     const stagingTableRef = this.getStagingTableRef();
 
     for (const row of rows) {
+      const params = {};
+      for (const column of columns) {
+        params[column] = row[column];
+      }
+
       const updateClause = safeNonIdColumns
         .map((columnName, idx) => `${columnName} = @${nonIdColumns[idx]}`)
         .join(', ');
@@ -85,26 +141,149 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
         END
       `;
 
-      await this.queryNewDbTx(query, row, transaction);
+      await this.queryNewDbTx(query, params, transaction);
     }
 
     return { stagedCount: rows.length };
   }
 
-  async fetchOneFromStaging({ lastSyncTime, itemIndex, transaction } = {}) {
+  async getList(lastSyncTime, syncJobId, lastSyncId = 0) {
+    if (!syncJobId) {
+      throw new Error('syncJobId is required');
+    }
+
+    const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
+    const normalizedLastSyncId = Number(lastSyncId || 0);
+    const rows = await this.fetchListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId);
+    const stageResult = await this.syncOldToStaging(rows);
+
+    let nextSyncTime = normalizedLastSyncTime;
+    let nextSyncId = normalizedLastSyncId;
+
+    for (const row of rows) {
+      const rowTime = this.extractRowSyncTime(row);
+      const rowId = this.extractRowSyncId(row);
+      if (!rowTime) continue;
+      if (this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId)) {
+        nextSyncTime = rowTime;
+        nextSyncId = rowId;
+      }
+    }
+
+    return {
+      syncJobId,
+      rows,
+      totalCount: rows.length,
+      stagedCount: Number(stageResult?.stagedCount || 0),
+      sourceLastSyncTime: normalizedLastSyncTime,
+      sourceLastSyncId: normalizedLastSyncId,
+      lastSyncTime: nextSyncTime,
+      lastSyncId: nextSyncId
+    };
+  }
+
+  async getSyncJobState(syncJobId) {
+    if (!syncJobId) {
+      throw new Error('syncJobId is required');
+    }
+
+    const rows = await this.queryNewDb(
+      `
+      SELECT TOP 1
+        job_id,
+        total_to_sync,
+        total_processed,
+        total_success,
+        total_errors,
+        last_sync_time,
+        last_sync_id
+      FROM sync_jobs
+      WHERE job_id = @syncJobId
+      `,
+      { syncJobId }
+    );
+
+    return rows?.[0] || null;
+  }
+
+  async processOne(syncJobId, options = {}) {
+    if (!syncJobId) {
+      throw new Error('syncJobId is required');
+    }
+
+    const jobState = await this.getSyncJobState(syncJobId);
+    const itemIndex = Number(
+      options.itemIndex != null
+        ? options.itemIndex
+        : (jobState?.total_processed || 0)
+    );
+
+    const sourceLastSyncTime = this.normalizeSyncTime(
+      options.sourceLastSyncTime || options.lastSyncTime || jobState?.last_sync_time || DEFAULT_SYNC_TIME
+    );
+    const sourceLastSyncId = Number(
+      options.sourceLastSyncId != null
+        ? options.sourceLastSyncId
+        : (jobState?.last_sync_id || 0)
+    );
+
+    const rowData = await this.fetchOneFromStaging({
+      lastSyncTime: sourceLastSyncTime,
+      lastSyncId: sourceLastSyncId,
+      itemIndex,
+    });
+
+    if (!rowData) {
+      return {
+        syncJobId,
+        itemIndex,
+        processed: false,
+        done: true
+      };
+    }
+
+    const result = await this.processRowData(rowData);
+    return {
+      syncJobId,
+      itemIndex,
+      processed: true,
+      done: false,
+      rowId: rowData.ID || null,
+      result
+    };
+  }
+
+  async fetchOneFromStaging({ lastSyncTime, lastSyncId = 0, itemIndex, transaction } = {}) {
     const rowNumber = Number(itemIndex || 0) + 1;
     const stagingTableRef = this.getStagingTableRef();
     const query = `
-      ;WITH staged AS (
+      ;WITH source_rows AS (
+        SELECT
+          *,
+          COALESCE(TRY_CONVERT(datetime2, Modified), TRY_CONVERT(datetime2, NgayTao)) AS __sync_time,
+          TRY_CONVERT(
+            BIGINT,
+            NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
+          ) AS __sync_id_num
+        FROM ${stagingTableRef}
+      ),
+      staged AS (
         SELECT
           *,
           ROW_NUMBER() OVER (
             ORDER BY
-              COALESCE(TRY_CONVERT(datetime2, Modified), TRY_CONVERT(datetime2, NgayTao)) ASC,
+              __sync_time ASC,
+              ISNULL(__sync_id_num, -9223372036854775808) ASC,
               ID ASC
           ) AS rn
-        FROM ${stagingTableRef}
-        WHERE COALESCE(TRY_CONVERT(datetime2, Modified), TRY_CONVERT(datetime2, NgayTao)) > @lastSyncTime
+        FROM source_rows
+        WHERE (
+          __sync_time > @lastSyncTime
+          OR (
+            __sync_time = @lastSyncTime
+            AND ISNULL(__sync_id_num, -9223372036854775808) > @lastSyncId
+          )
+        )
       )
       SELECT TOP 1 *
       FROM staged
@@ -115,6 +294,7 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
       query,
       {
         lastSyncTime,
+        lastSyncId: Number(lastSyncId || 0),
         rowNumber
       },
       transaction
