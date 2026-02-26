@@ -3,13 +3,14 @@ const SyncHandlerModel = require('./SyncHandlerModel');
 
 const SyncOutgoingModel = require('../sync-outgoing-document/apply/SyncOutgoingModel');
 const SyncFileModel     = require('../sync-file/apply/SyncFileModel');
+const OutGoingDocumentModel = require('../sync-outgoing-document/OutGoingDocumentModel');
 
 const MODEL_DEFINITIONS = [
   {
     key:     '1_outgoing',
     label:   'Đồng bộ văn bản đi',
     section: 'realtime',
-    ModelClass: SyncOutgoingModel,
+    ModelClass: OutGoingDocumentModel,
   },
   {
     key:     '2_file',
