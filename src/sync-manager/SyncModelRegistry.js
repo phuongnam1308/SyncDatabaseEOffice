@@ -1,29 +1,36 @@
-const logger           = require('../../utils/logger');
+const logger = require('../../utils/logger');
 const SyncHandlerModel = require('./SyncHandlerModel');
 
 const SyncOutgoingModel = require('../sync-outgoing-document/apply/SyncOutgoingModel');
-const SyncFileModel     = require('../sync-file/apply/SyncFileModel');
+const SyncFileModel = require('../sync-file/apply/SyncFileModel');
 const OutGoingDocumentModel = require('../sync-outgoing-document/OutGoingDocumentModel');
 const StreamUserMigrationModel = require('../sync-user-copy/migrate/StreamUserMigrationModel');
+const StreamSocialMigrationModel = require('../sync-social-resource/migrate/StreamSocialMigrationModel');
 
 const MODEL_DEFINITIONS = [
   {
-    key:     '1_outgoing',
-    label:   'Đồng bộ văn bản đi',
+    key: '1_outgoing',
+    label: 'Đồng bộ văn bản đi',
     section: 'realtime',
     ModelClass: OutGoingDocumentModel,
   },
   {
-    key:     '2_file',
-    label:   'Đồng bộ file tài liệu',
+    key: '2_file',
+    label: 'Đồng bộ file tài liệu',
     section: 'realtime',
     ModelClass: SyncFileModel,
   },
   {
-    key:     'UNIT_TEST_STREAM_USER_COPY_MIGRATION1',
-    label:   'Đồng bộ cơ sở dữ liệu cũ: người dùng (user copy)',
+    key: 'UNIT_TEST_STREAM_USER_COPY_MIGRATION1',
+    label: 'Đồng bộ cơ sở dữ liệu cũ: người dùng (user copy)',
     section: 'realtime',
     ModelClass: StreamUserMigrationModel,
+  },
+  {
+    key: 'UNIT_TEST_STREAM_SOCIAL_RESOURCE_MIGRATION1',
+    label: 'Đồng bộ cơ sở dữ liệu cũ: tin tức (social resource)',
+    section: 'realtime',
+    ModelClass: StreamSocialMigrationModel,
   },
 ];
 
@@ -47,7 +54,7 @@ class SyncModelRegistry {
       ),
     );
 
-    const ok  = results.filter(r => r.status === 'fulfilled').length;
+    const ok = results.filter(r => r.status === 'fulfilled').length;
     const err = results.filter(r => r.status === 'rejected').length;
 
     if (err > 0) {
