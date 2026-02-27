@@ -12,7 +12,7 @@ const MODEL_DEFINITIONS = [
     ModelClass: OutGoingDocumentModel
   },
   {
-    key: 'UNIT_TEST_STREAM_USER_COPY_MIGRATION',
+    key: 'UNIT_TEST_STREAM_USER_COPY_MIGRATION111',
     label: 'Đồng bộ cơ sở dữ liệu cũ: người dùng (user copy)',
     section: 'realtime',
     ModelClass: StreamUserMigrationModel

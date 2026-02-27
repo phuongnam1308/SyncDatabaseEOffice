@@ -346,6 +346,10 @@ router.post('/sync-manager-src/jobs/:jobId/resume', SrcSyncManagerController.res
 router.get('/sync-manager-src/jobs/:jobId', SrcSyncManagerController.getJobSyncStatus);
 router.get('/sync-manager-src/events', SrcSyncManagerController.sseEvents); // ← THÊM DÒNG NÀY
 
+
+const SyncOutgoingRoutes = require('../src/sync-outgoing-document/route');
+router.use('/sync-outgoing', SyncOutgoingRoutes);
+
 const CommentRoutes = require('../src/older-sync-document-comment/route');
 router.use('/document-comments', CommentRoutes);
 
