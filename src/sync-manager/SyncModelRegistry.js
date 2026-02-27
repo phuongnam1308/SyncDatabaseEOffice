@@ -1,9 +1,8 @@
 const logger           = require('../../utils/logger');
 const SyncHandlerModel = require('./SyncHandlerModel');
 
-const SyncOutgoingModel = require('../sync-outgoing-document/apply/SyncOutgoingModel');
 const SyncFileModel     = require('../sync-file/apply/SyncFileModel');
-const OutGoingDocumentModel = require('../sync-outgoing-document/OutGoingDocumentModel');
+const OutGoingDocumentModel = require('../sync-outgoing-document/models/StreamOutgoingIncrementalModel');
 const StreamUserMigrationModel = require('../sync-user-copy/migrate/StreamUserMigrationModel');
 
 const MODEL_DEFINITIONS = [

@@ -53,7 +53,7 @@ class SyncHandlerModel {
     /**
      * Generate fetch function for fetching records from old DB table
      * @param {string} schemaName - Schema name (e.g., 'dbo')
-     * @param {string} tableName - Table name (e.g., 'VanBanDi')
+     * @param {string} tableName - Table name (e.g., 'VanBanBanHanh')
      * @returns {Function} Fetch function
      */
     createFetchFnOld(schemaName, tableName) {
@@ -104,7 +104,7 @@ class SyncHandlerModel {
      */
     createProcessFn() {
         return async (record) => {
-            await this.syncModel.insertBatchToMain([record]);
+            await this.syncModel.syncOldToStaging(record);
         };
     }
 
@@ -124,7 +124,7 @@ class SyncHandlerModel {
      */
     createProcessFnOld() {
         return async (record) => {
-            const result = await this.syncModel.insertBatchToNewDb([record]);
+            const result = await this.syncModel.syncOldToStaging(record);
 
             // Log thêm thống kê audit/comment nếu có (document-centric model)
             if (result && (result.auditInserted !== undefined || result.commentInserted !== undefined)) {
@@ -338,7 +338,7 @@ class SyncHandlerModel {
                 countFn = this.createCountFnIncremental();
                 fetchFn = this.createFetchFnIncremental();
                 processFn = this.createProcessFnIncremental();
-            } else if (this.syncModel.syncSchema) {
+            } else if (this.syncModel.syncTable?.includes('audit') || this.syncModel.syncTable?.includes('document')) {
                 // Flow: sync table → main (apply)
                 countFn = this.createCountFn(schemaName, tableName);
                 fetchFn = this.createFetchFn(schemaName, tableName);
