@@ -390,7 +390,8 @@ class SyncAuditModel extends BaseModel {
       
     const rawAction = this._normalizeTextField(record.HanhDong);
     const actionStr = JSON.stringify({
-      note: rawAction || null,
+      note: rawAction,
+      isTransferOption: true
     });
 
     return {

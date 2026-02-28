@@ -280,12 +280,12 @@ class StreamOutgoingMigrationModel extends BaseModel {
       abstract_note: this.helper.cleanText(oldRecord.TrichYeu),
       to_book: bookDocumentObj?.count ?? null,
       type_doc: 1,
-      bpmn_version: "VAN_BAN_DI",
-      type_of_process: "VAN_BAN_DI",
+      bpmn_version: "SOANTHAO_PHATHANH_VBD",
+      type_of_process: "SOANTHAO_PHATHANH_VBD",
       created_at: this.helper.parseDate(oldRecord.Created),
       updated_at: this.helper.parseDate(oldRecord.Modified),
       replaced: 0,
-      tb_bak: 0
+      tb_bak: 1
     };
   }
 
