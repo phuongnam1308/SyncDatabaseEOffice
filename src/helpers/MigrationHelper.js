@@ -569,14 +569,14 @@ class MigrationHelper {
 
         const insertQuery = `
         INSERT INTO ${process.env.NEW_DB_NAME}.dbo.users (
-            id, name, username, password, parent, status, created_at, updated_at
+            id, name, username, password, parent, status, table_backups, created_at, updated_at
         )
-        VALUES (@id, @name, @username, @password, @parent, 1, GETDATE(), GETDATE())
+        VALUES (@id, @name, @username, @password, @parent, 1, tableBackups, GETDATE(), GETDATE())
         `;
 
         try {
         await this.queryNewDbTx(insertQuery, {
-            id, name: displayName, username, password, parent: '68afb3a1cb36081f0bba5dd6'
+            id, name: displayName, username, password, parent: '68afb3a1cb36081f0bba5dd6', tableBackups: 'stream_migration'
         }, transaction);
 
         logger.warn(`[mapUserName] Created new user: ${displayName} (${username})`);
