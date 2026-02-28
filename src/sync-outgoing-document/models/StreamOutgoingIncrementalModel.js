@@ -7,7 +7,7 @@ const StreamOutgoingMigrationModel = require('./StreamOutgoingMigrationModel');
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
-const TEST_FETCH_LIMIT = 30;
+const TEST_FETCH_LIMIT = 100;
 
 const AUDIT_TABLES = [
   'LuanChuyenVanBan',
@@ -620,7 +620,10 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
 
     for (const auditModel of this._syncAuditModel || []) {
       try {
-        const rawAudits = await auditModel.fetchByDocumentId(id);
+        const rawAudits =
+          await auditModel.fetchByOutgoingDocumentId(
+            id
+          );
 
         if (!Array.isArray(rawAudits) || !rawAudits.length) {
           continue;

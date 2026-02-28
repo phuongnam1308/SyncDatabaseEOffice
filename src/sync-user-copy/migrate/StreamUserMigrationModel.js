@@ -10,7 +10,8 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
     this.oldDbTable = 'PersonalProfile';
     this.newDbSchema = 'dbo';
     this.newTableSync = 'user_sync'; //Bảng trung gian lưu data raw dùng để sync dần vào bảng chính `user_clone_for_sync`
-    this.newDbTable = 'users_clone_for_sync';
+    this.newDbTable = 'users';
+    //_clone_for_sync';
   }
 
   getStagingTableRef() {
