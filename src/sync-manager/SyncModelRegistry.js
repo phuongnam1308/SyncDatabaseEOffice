@@ -12,12 +12,12 @@ const MODEL_DEFINITIONS = [
     section: 'realtime',
     ModelClass: OutGoingDocumentModel
   },
-  {
-    key: '2_file',
-    label: 'Đồng bộ file tài liệu',
-    section: 'realtime',
-    ModelClass: SyncFileModel,
-  },
+  // {
+  //   key: '2_file',
+  //   label: 'Đồng bộ file tài liệu',
+  //   section: 'realtime',
+  //   ModelClass: SyncFileModel,
+  // },
   {
     key: 'UNIT_TEST_STREAM_USER_COPY_MIGRATION',
     label: 'Đồng bộ cơ sở dữ liệu cũ: người dùng (user copy)',
