@@ -339,6 +339,10 @@ router.use('/sync-social-resource', SocialResourceRoutes);
 const FileRoutes = require('../src/sync-file/route');
 router.use('/file', FileRoutes);
 
+const incommingRoutes = require('../src/sync-incoming-document/route');
+router.use('/incoming', incommingRoutes);
+
+
 module.exports = router;
 const SrcSyncManagerController = require('../src/sync-manager/SyncManagerController');
 router.get('/sync-manager-src/dashboard', SrcSyncManagerController.getDashboard);
