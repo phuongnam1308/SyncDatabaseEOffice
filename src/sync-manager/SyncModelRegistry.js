@@ -27,10 +27,9 @@ const MODEL_DEFINITIONS = [
   },
   {
     key:     'UNIT_TEST_STREAM_TASK_MIGRATION',
-    label:   'Đồng bộ công việc Văn bản đến',
+    label:   'Đồng bộ công việc từ văn bản đến',
     section: 'realtime',
     ModelClass: StreamTaskMigrationModel,
-    ModelClass: StreamUserMigrationModel,
   },
   {
     key: 'UNIT_TEST_STREAM_SOCIAL_RESOURCE_MIGRATION1',
