@@ -34,14 +34,14 @@ class StreamOutgoingMigrationModel extends BaseModel {
 
       // 2. Check tồn tại
       const existingQuery = `
-        SELECT document_id
+        SELECT TOP 1 document_id
         FROM ${this.dbName}.${this.mainSchema}.${this.mainTable}
-        WHERE document_id = @documentId
+        WHERE id_outgoing_bak = @idOutgoingBak
       `;
 
       const existing = await this.queryNewDbTx(
         existingQuery,
-        { documentId: mapped.document_id },
+        { idOutgoingBak: mapped.id_outgoing_bak },
         transaction
       );
 
@@ -50,7 +50,8 @@ class StreamOutgoingMigrationModel extends BaseModel {
 
         return {
           action: "updated",
-          affected: 1
+          affected: 1,
+          documentId: existing[0].document_id
         };
       }
 
@@ -213,7 +214,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
         from_create_draf = @from_create_draf,
         replaced = @replaced,
         tb_bak = @tbBak
-      WHERE document_id = @document_id
+      WHERE id_outgoing_bak = @id_outgoing_bak
     `;
 
     const params = this._mapRecordParams(record);
@@ -366,7 +367,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
       sign_type: record.sign_type ?? null,
       from_create_draf: record.from_create_draf ?? null,
       replaced: record.replaced ?? null,
-      tbBak: true ?? null,
+      tbBak: record.tbBak ?? record.tb_bak ?? null,
     };
   }
 }
