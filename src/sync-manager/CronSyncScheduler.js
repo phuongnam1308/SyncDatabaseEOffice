@@ -252,8 +252,11 @@ class CronSyncScheduler extends BaseModel {
         return;
       }
 
-      const result = SyncManagerService.startModel(modelLabel, { reset: false });
-      logger.info(`[CronSyncScheduler] started module=${moduleKey} jobId=${result.jobId}`);
+      const result = SyncManagerService.startModel(modelLabel, { reset: false, resumeIfPaused: true });
+      const action = result.status === 'RESUMING' ? 'resumed' : 'started';
+      logger.info(
+        `[CronSyncScheduler] ${action} module=${moduleKey} jobId=${result.jobId} status=${result.status}`
+      );
     } catch (error) {
       logger.error(`[CronSyncScheduler] start failed module=${moduleKey}:`, error.message);
     } finally {
