@@ -257,12 +257,131 @@ class MigrationHelper {
           AND status = 1
       `;
 
-      let result = await this.queryNewDbTx(selectQuery, { name: normalizedName }, transaction);
+      let result = await this.queryNewDbTx(
+        selectQuery,
+        { name: normalizedName },
+        transaction,
+      );
 
       if (result?.length) {
         return result[0].id;
       }
 
+      // ===== SYNC FULL FROM OLD DEPARTMENT =====
+      const oldDeptQuery = `
+        SELECT TOP 1 *
+        FROM ${this.dbOldName}.dbo.Department
+        WHERE LTRIM(RTRIM(Title)) = @name
+          AND (Status = 1 OR Status IS NULL)
+      `;
+
+      const oldDept = await this.queryOldDb(oldDeptQuery, { name: normalizedName });
+
+      if (oldDept?.length) {
+        const dept = oldDept[0];
+        const oldId = dept.ID;
+
+        const existedQuery = `
+          SELECT TOP 1 id
+          FROM ${process.env.NEW_DB_NAME}.dbo.organization_units
+          WHERE Id_backups = @oldId
+        `;
+
+        const existed = await this.queryNewDbTx(
+          existedQuery,
+          { oldId },
+          transaction,
+        );
+
+        if (existed?.length) {
+          return existed[0].id;
+        }
+
+        let parentId = null;
+
+        if (dept.ParentID) {
+          const parentBackupQuery = `
+            SELECT TOP 1 id
+            FROM ${process.env.NEW_DB_NAME}.dbo.organization_units
+            WHERE Id_backups = @parentOldId
+          `;
+
+          const parentExisted = await this.queryNewDbTx(
+            parentBackupQuery,
+            { parentOldId: dept.ParentID },
+            transaction,
+          );
+
+          parentId = parentExisted?.length ? parentExisted[0].id : null;
+        }
+
+        const newId = `${Date.now()}${Math.floor(Math.random() * 10000)}`;
+
+        const insertFromOldQuery = `
+          INSERT INTO ${process.env.NEW_DB_NAME}.dbo.organization_units (
+            id,
+            name,
+            code,
+            phone_number,
+            address,
+            display_order,
+            status,
+            parentId,
+            created_at,
+            updated_at,
+            Id_backups,
+            table_backups
+          )
+          VALUES (
+            @id,
+            @name,
+            @code,
+            @phone,
+            @address,
+            @displayOrder,
+            1,
+            @parentId,
+            @createdAt,
+            @updatedAt,
+            @oldId,
+            'stream_migration'
+          )
+        `;
+
+        try {
+          await this.queryNewDbTx(
+            insertFromOldQuery,
+            {
+              id: newId,
+              name: dept.Title?.trim(),
+              code: dept.Code || dept.Title?.trim(),
+              phone: dept.PhoneNumber || null,
+              address: dept.Address || null,
+              displayOrder: dept.Order ?? null,
+              parentId,
+              createdAt: this.parseDate(dept.Created) ?? new Date(),
+              updatedAt: this.parseDate(dept.Modified) ?? this.parseDate(dept.Created) ?? new Date(),
+              oldId,
+            },
+            transaction,
+          );
+
+          logger.warn(
+            `[mapSenderUnitId] Synced Department: ${dept.Title}, newId=${newId}, oldId=${oldId}`,
+          );
+
+          return newId;
+        } catch (insertError) {
+          // race condition fallback
+          const retry = await this.queryNewDbTx(
+            existedQuery,
+            { oldId },
+            transaction,
+          );
+          return retry?.length ? retry[0].id : null;
+        }
+      }
+      // ===== END SYNC BLOCK =====
       const id = `${Date.now()}${Math.floor(Math.random() * 10000)}`;
       const code = normalizedName;
 
@@ -274,12 +393,24 @@ class MigrationHelper {
       `;
 
       try {
-        await this.queryNewDbTx(insertQuery, { id, name: normalizedName, code }, transaction);
-        logger.warn(`[mapSenderUnitId] Created new organization: ${normalizedName}`);
+        await this.queryNewDbTx(
+          insertQuery,
+          { id, name: normalizedName, code },
+          transaction,
+        );
+        logger.warn(
+          `[mapSenderUnitId] Created new organization: ${normalizedName}, id: ${id}`,
+        );
         return id;
       } catch (insertError) {
-        logger.warn(`[mapSenderUnitId] Insert fail, retry select: ${insertError.message}`);
-        const retry = await this.queryNewDbTx(selectQuery, { name: normalizedName }, transaction);
+        logger.warn(
+          `[mapSenderUnitId] Insert fail, retry select: ${insertError.message}`,
+        );
+        const retry = await this.queryNewDbTx(
+          selectQuery,
+          { name: normalizedName },
+          transaction,
+        );
         return retry?.length ? retry[0].id : null;
       }
     } catch (error) {
@@ -533,6 +664,7 @@ class MigrationHelper {
           name: normalized, year, sender_unit: senderUnit, private_level: privateLevel, created_by: drafter
         });
 
+        logger.warn(`[mapBookDocument] Insert new book document: ${insertResult[0].book_document_id}`);
         return insertResult?.length > 0 ? insertResult[0].book_document_id : null;
       } catch (insertError) {
         logger.warn(`[mapBookDocument] Insert failed, retry select: ${insertError.message}`);

@@ -26,7 +26,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
 
     try {
       // 1. Map raw -> main structure
-      const mapped = await this._mapSingleRecord(rowData);
+      const mapped = await this._mapSingleRecord(rowData, transaction);
 
       if (!mapped?.document_id) {
         throw new Error("Mapped document_id is required");
@@ -221,7 +221,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
     await this.queryNewDbTx(query, params, transaction);
   }
 
-  async _mapSingleRecord(oldRecord) {
+  async _mapSingleRecord(oldRecord, transaction) {
     if (!oldRecord?.ID) {
       throw new Error("Old record ID is required");
     }
@@ -261,13 +261,14 @@ class StreamOutgoingMigrationModel extends BaseModel {
         internalReceivingDeptIds.push(id);
       }
     }
+    const internalReceivingDeptIdsStr = JSON.stringify(internalReceivingDeptIds);
 
     return {
       document_id: `${Date.now()}${Math.floor(Math.random() * 10000)}`,
       id_outgoing_bak: String(oldRecord.ID),
       status_code: this.helper.mapStatus(oldRecord.TrangThai),
       sender_unit: senderUnit,
-      internal_receiving_dept: internalReceivingDeptIds,
+      internal_receiving_dept: internalReceivingDeptIdsStr,
       drafter,
       document_type: documentType,
       urgency_level: urgencyLevel,
