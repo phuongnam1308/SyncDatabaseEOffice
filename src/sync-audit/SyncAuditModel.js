@@ -134,7 +134,7 @@ class SyncAuditModel extends BaseModel {
           const existed = await this._getExistingAudit(audit, transaction);
 
           if (existed) {
-            await this._update(audit, transaction);
+            await this._update(audit, existed.id, transaction);
             updated++;
           } else {
             await this._insert(audit, transaction);
@@ -225,7 +225,6 @@ class SyncAuditModel extends BaseModel {
         document_id,
         [time],
         user_id,
-        created_by,
         display_name,
         action_code,
         details,
@@ -246,7 +245,6 @@ class SyncAuditModel extends BaseModel {
         @document_id,
         @time,
         @user_id,
-        @created_by,
         @display_name,
         @action_code,
         @details,
@@ -272,7 +270,6 @@ class SyncAuditModel extends BaseModel {
         time: data.time,
         user_id: data.user_id ?? null,
         display_name: data.display_name ?? null,
-        created_by : data.created_by ?? null,
         action_code: data.action_code ?? null,
         details: data.details ?? null,
         origin_id: data.origin_id ?? null,
@@ -390,16 +387,17 @@ class SyncAuditModel extends BaseModel {
         actionParsed.receiver_unit,
         transaction
       );
-    const rawAction =
-      this._normalizeTextField(
-        record.HanhDong
-      );
+      
+    const rawAction = this._normalizeTextField(record.HanhDong);
+    const actionStr = JSON.stringify({
+      note: rawAction || null,
+    });
 
     return {
       document_id: documentId,
       time,
       action_code: actionParsed.action_code ?? null,
-      details: rawAction ?? null,
+      details: actionStr ?? null,
       origin_id: this._normalizeTextField(
         record.ID,
         100
@@ -415,7 +413,7 @@ class SyncAuditModel extends BaseModel {
       user_id: user_id ?? null,
       roleProcess:
         actionParsed.roleProcess ?? null,
-      action: this._normalizeTextField(
+      action: actionParsed.action || this._normalizeTextField(
         rawAction,
         255
       ),
@@ -553,32 +551,6 @@ class SyncAuditModel extends BaseModel {
           .filter(Boolean)
       ),
     ];
-  }
-
-  async beginTransaction() {
-    const transaction = new sql.Transaction(
-      this.newPool
-    );
-    await transaction.begin();
-    return transaction;
-  }
-
-  async commitTransaction(transaction) {
-    if (!transaction) return;
-    await transaction.commit();
-  }
-
-  async rollbackTransaction(transaction) {
-    if (!transaction) return;
-
-    try {
-      await transaction.rollback();
-    } catch (error) {
-      logger.error(
-        "[SyncAuditModel.rollbackTransaction] failed:",
-        error
-      );
-    }
   }
 }
 

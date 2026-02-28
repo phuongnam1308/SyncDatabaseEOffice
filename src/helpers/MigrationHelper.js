@@ -332,7 +332,7 @@ class MigrationHelper {
       // ===== SYNC FULL FROM OLD DEPARTMENT =====
       const oldDeptQuery = `
         SELECT TOP 1 *
-        FROM ${this.dbOldName}.dbo.Department
+        FROM ${process.env.OLD_DB_NAME}.dbo.Department
         WHERE LTRIM(RTRIM(Title)) = @name
           AND (Status = 1 OR Status IS NULL)
       `;
@@ -792,6 +792,7 @@ class MigrationHelper {
       if (!value || typeof value !== 'string') {
         return {
           action_code: null,
+          action: null,
           receiver: create_by ? [create_by] : [],
           receiver_unit: [],
           roleProcess: 'VANTHU',
@@ -807,6 +808,7 @@ class MigrationHelper {
       if (!clean) {
         return {
           action_code: null,
+          action: null,
           receiver: create_by ? [create_by] : [],
           receiver_unit: [],
           roleProcess: 'VANTHU',
@@ -818,6 +820,7 @@ class MigrationHelper {
       let insideText = null;
 
       let actionCode = null;
+      let action = null;
       let receiver = [];
       let roleProcess = 'VANTHU';
       let stageStatus = 'DA_XU_LY';
@@ -897,7 +900,7 @@ class MigrationHelper {
         parsedBlocks = [];
       }
 
-      // ===== STEP 4: Build receiver / receiver_unit / actionCode =====
+      // ===== STEP 4: Build receiver / receiver_unit / actionCode / action=====
       try {
         let blocksToProcess = [];
         if (!insideText) {
@@ -917,7 +920,7 @@ class MigrationHelper {
         
         if (actionCode && typeof actionCode === 'string') {
           const acNormalized = actionCode.toLowerCase().trim();
-
+          action = acNormalized;
           if (acNormalized.includes('trình')) {
             actionCode = 'TRINH_KY';
           } else if (
@@ -1045,6 +1048,7 @@ class MigrationHelper {
 
       return {
         action_code: actionCode || null,
+        action: action || null,
         receiver,
         receiver_unit: receiverUnit,
         roleProcess: roleProcess || 'VANTHU',
@@ -1055,6 +1059,7 @@ class MigrationHelper {
       logger.warn(`[parseActionString] Error: ${error.message}`);
       return {
         action_code: null,
+        action: null,
         receiver: create_by ? [create_by] : [],
         receiver_unit: [],
         roleProcess: 'VANTHU',
