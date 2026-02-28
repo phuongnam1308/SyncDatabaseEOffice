@@ -23,14 +23,14 @@ const UpdateIncomingBookDocumentIdController =
   require('../controllers/updates/UpdateIncomingBookDocumentIdController');
 const UpdateIncomingStatusCodeController =
   require('../controllers/updates/UpdateIncomingStatusCodeController');
-  const migrateIncomingDocs =
+const migrateIncomingDocs =
   require('../controllers/updates/MigrateIncomingDocumentsController');
 
 const UpdateIncomingSenderUnitController =
   require('../controllers/UpdateIncomingSenderUnitController');
 const MigrationTaskController = require('../controllers/MigrationTaskController');
 const MigrationTaskDeleteController = require('../controllers/MigrationTaskDeleteController');
-  // Lấy thống kê migration
+// Lấy thống kê migration
 const MigrationTaskVBDiController = require('../controllers/MigrationTaskVBDiController');
 const MigrationTaskUsers2Controller = require('../controllers/MigrationTaskUsers2Controller');
 
@@ -46,9 +46,9 @@ const MigrationTaskUsers2ProcessGroupController =
   require('../controllers/MigrationTaskUsers2ProcessGroupController');
 const FileMigrationController =
   require('../controllers/FileMigrationController');
- const IncomingFileMigrationController =
+const IncomingFileMigrationController =
   require('../controllers/IncomingFileMigrationController');
-  router.get('/statistics', MigrationController.getStatistics);
+router.get('/statistics', MigrationController.getStatistics);
 
 // Thực hiện migration phòng ban - ĐỔI SANG GET ĐỂ DỄ TEST
 router.get('/migrate/phongban', MigrationController.migratePhongBan);
@@ -147,7 +147,7 @@ router.get('/migrate/sender-unit/batch/:limit', SenderUnitController.updateSende
 router.get('/sender-unit/update/:id', SenderUnitController.updateSingleSenderUnit);
 router.get('/statistics/drafter-preview', DrafterMigrationController.preview);
 router.get('/migrate/drafter', DrafterMigrationController.migrate);
-router.get('/update/incoming-book-document-id',UpdateIncomingBookDocumentIdController.update);
+router.get('/update/incoming-book-document-id', UpdateIncomingBookDocumentIdController.update);
 router.get(
   '/update/incoming-status-code',
   UpdateIncomingStatusCodeController.update
@@ -188,7 +188,7 @@ router.get('/statistics/task-users-taskid', TaskUsersTaskIdController.statistics
 router.get('/update/task-users-taskid', TaskUsersTaskIdController.update);
 
 // (Tùy chọn) Nếu bạn muốn dùng POST để an toàn hơn, có thể thay bằng:
-router.get('/update/task-users-taskid', TaskUsersTaskIdController.update);router.get('/update/task-users-taskid', MigrationTaskUsersMappingController.updateMapping);
+router.get('/update/task-users-taskid', TaskUsersTaskIdController.update); router.get('/update/task-users-taskid', MigrationTaskUsersMappingController.updateMapping);
 router.get(
   '/mapping/task-users2-process',
   MigrationTaskUsers2ProcessController.mapProcess
@@ -332,6 +332,9 @@ router.use('/user', UserRoutes);
 
 const UserCopyRoutes = require('../src/sync-user-copy/route');
 router.use('/user-copy', UserCopyRoutes);
+
+const SocialResourceRoutes = require('../src/sync-social-resource/route');
+router.use('/sync-social-resource', SocialResourceRoutes);
 
 const FileRoutes = require('../src/sync-file/route');
 router.use('/file', FileRoutes);
