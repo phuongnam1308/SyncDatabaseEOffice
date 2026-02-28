@@ -7,7 +7,6 @@ const StreamOutgoingMigrationModel = require('./StreamOutgoingMigrationModel');
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
-const TEST_FETCH_LIMIT = 100;
 
 const AUDIT_TABLES = [
   'LuanChuyenVanBan',
@@ -260,7 +259,6 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         FROM ${this.oldDbSchema}.${this.oldDbTable}
       )
       SELECT
-        TOP (${TEST_FETCH_LIMIT})
         *,
         ISNULL(__sync_id_num, 0) AS __sync_id
       FROM source_rows

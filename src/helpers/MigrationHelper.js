@@ -571,7 +571,7 @@ class MigrationHelper {
         INSERT INTO ${process.env.NEW_DB_NAME}.dbo.users (
             id, name, username, password, parent, status, table_backups, created_at, updated_at
         )
-        VALUES (@id, @name, @username, @password, @parent, 1, tableBackups, GETDATE(), GETDATE())
+        VALUES (@id, @name, @username, @password, @parent, 1, @tableBackups, GETDATE(), GETDATE())
         `;
 
         try {
