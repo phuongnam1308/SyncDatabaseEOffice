@@ -6,6 +6,7 @@ const SyncFileModel = require('../sync-file/apply/SyncFileModel');
 const OutGoingDocumentModel = require('../sync-outgoing-document/OutGoingDocumentModel');
 const StreamUserMigrationModel = require('../sync-user-copy/migrate/StreamUserMigrationModel');
 const StreamSocialMigrationModel = require('../sync-social-resource/migrate/StreamSocialMigrationModel');
+const StreamMeetingMigrationModel = require('../sync-meeting/migrate/StreamMeetingMigrationModel');
 
 const MODEL_DEFINITIONS = [
   {
@@ -31,6 +32,12 @@ const MODEL_DEFINITIONS = [
     label: 'Đồng bộ cơ sở dữ liệu cũ: tin tức (social resource)',
     section: 'realtime',
     ModelClass: StreamSocialMigrationModel,
+  },
+  {
+    key: 'UNIT_TEST_STREAM_MEETING_MIGRATION',
+    label: 'Đồng bộ cơ sở dữ liệu cũ: Lịch họp (meeting)',
+    section: 'realtime',
+    ModelClass: StreamMeetingMigrationModel,
   },
 ];
 

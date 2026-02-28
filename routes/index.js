@@ -336,6 +336,9 @@ router.use('/user-copy', UserCopyRoutes);
 const SocialResourceRoutes = require('../src/sync-social-resource/route');
 router.use('/sync-social-resource', SocialResourceRoutes);
 
+const StreamMeetingMigrationController = require('../src/sync-meeting/route');
+router.use('/sync-meeting', StreamMeetingMigrationController);
+
 const FileRoutes = require('../src/sync-file/route');
 router.use('/file', FileRoutes);
 
