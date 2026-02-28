@@ -349,4 +349,7 @@ router.get('/sync-manager-src/events', SrcSyncManagerController.sseEvents); // â
 const CommentRoutes = require('../src/sync-document-comment/route');
 router.use('/document-comments', CommentRoutes);
 
+const TaskCopyRoutes = require('../src/sync-tasks/route');
+router.use('/sync-tasks', TaskCopyRoutes);
+
 module.exports = router;
