@@ -4,6 +4,7 @@ const SyncHandlerModel = require('./SyncHandlerModel');
 const OutGoingDocumentModel = require('../sync-outgoing-document/models/StreamOutgoingIncrementalModel');
 const StreamUserMigrationModel = require('../sync-user-copy/migrate/StreamUserMigrationModel');
 const StreamTaskMigrationModel = require('../sync-tasks/migrate/StreamTaskMigrationModel');
+const StreamSocialMigrationModel = require('../sync-social-resource/migrate/StreamSocialMigrationModel');
 
 const MODEL_DEFINITIONS = [
   {
@@ -12,17 +13,30 @@ const MODEL_DEFINITIONS = [
     section: 'realtime',
     ModelClass: OutGoingDocumentModel
   },
+  // {
+  //   key: '2_file',
+  //   label: 'Đồng bộ file tài liệu',
+  //   section: 'realtime',
+  //   ModelClass: SyncFileModel,
+  // },
   {
-    key: 'UNIT_TEST_STREAM_USER_COPY_MIGRATION',
+    key: 'UNIT_TEST_STREAM_USER_COPY_MIGRATION111',
     label: 'Đồng bộ cơ sở dữ liệu cũ: người dùng (user copy)',
     section: 'realtime',
     ModelClass: StreamUserMigrationModel
   },
   {
     key:     'UNIT_TEST_STREAM_TASK_MIGRATION',
-    label:   'Đồng bộ công việc 1',
+    label:   'Đồng bộ công việc Văn bản đến',
     section: 'realtime',
     ModelClass: StreamTaskMigrationModel,
+    ModelClass: StreamUserMigrationModel,
+  },
+  {
+    key: 'UNIT_TEST_STREAM_SOCIAL_RESOURCE_MIGRATION1',
+    label: 'Đồng bộ cơ sở dữ liệu cũ: tin tức (social resource)',
+    section: 'realtime',
+    ModelClass: StreamSocialMigrationModel,
   },
 ];
 
