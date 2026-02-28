@@ -63,7 +63,7 @@ class StreamTaskMigrationModel extends BaseIncrementalSyncInterface {
   async fetchListFromOldDb(lastSyncTime, lastSyncId = 0) {
     const query = `
       ;WITH source_rows AS (
-        SELECT TOP 5
+        SELECT TOP 20
           *,
           COALESCE(TRY_CONVERT(datetime2, Modified), TRY_CONVERT(datetime2, Created)) AS __sync_time,
           TRY_CONVERT(
@@ -324,6 +324,29 @@ class StreamTaskMigrationModel extends BaseIncrementalSyncInterface {
       throw new Error('ID from old record is required');
     }
 
+    // map dữu liệu từ db cũ sang db mới
+    // map process_status
+    let status = '';
+    let priority = '';
+    if (rowData.TrangThai === 'Chưa bắt đầu') {
+      status = 1;
+    } else if (rowData.TrangThai === 'Đang thực hiện') {
+      status = 2;
+    } else if (rowData.TrangThai === 'Hủy') {
+      status = 8;
+    } else if (rowData.TrangThai === 'Hoàn tất') {
+      status = 4;
+    } else {
+      status = '';
+    }
+
+    // map priority
+    if (rowData.Priority === '0') {
+      priority = 'binhthuong';
+    } else {
+      priority = 'gap';
+    }
+
     const obj = {
       'id': String(rowData.ID),
       'doc_id': rowData.VBId,
@@ -331,8 +354,8 @@ class StreamTaskMigrationModel extends BaseIncrementalSyncInterface {
       'start_date': rowData.StartDate,
       'end_date': rowData.DueDate,
       'progress': rowData.Percent,
-      'process_status': rowData.TrangThai,
-      'priority': rowData.Priority,
+      'process_status': status,
+      'priority': priority,
       'note': rowData.YKienChiDao,
       'created_at': rowData.Created,
       'updated_at': rowData.Modified,
@@ -386,13 +409,13 @@ class StreamTaskMigrationModel extends BaseIncrementalSyncInterface {
       ELSE
       BEGIN
         INSERT INTO ${this.newDbName}.${this.newDbSchema}.${this.newDbTable} 
-        (doc_id, name, start_date, end_date, progress, process_status, priority, note, created_at, update_at, updated_by, created_by, id_sync)
+        (doc_id, name, start_date, end_date, progress, process_status, priority, note, created_at, update_at, updated_by, created_by, id_sync, status, type_task)
         VALUES (@doc_id, UPPER(NULLIF(@name, '')), 
         TRY_CONVERT(datetime2, NULLIF(@start_date, '')), 
         TRY_CONVERT(datetime2, NULLIF(@end_date, '')),
         @progress, @process_status, @priority, @note, 
         TRY_CONVERT(datetime2, NULLIF(@created_at, '')),
-        GETDATE(), @updated_by, @created_by, @id);
+        GETDATE(), @updated_by, @created_by, @id, 1, 'form_doc');
         SELECT @@ROWCOUNT AS affected, 'inserted' AS action;
       END
     `;

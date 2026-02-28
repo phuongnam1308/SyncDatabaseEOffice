@@ -3,6 +3,7 @@ const SyncHandlerModel = require('./SyncHandlerModel');
 
 const OutGoingDocumentModel = require('../sync-outgoing-document/models/StreamOutgoingIncrementalModel');
 const StreamUserMigrationModel = require('../sync-user-copy/migrate/StreamUserMigrationModel');
+const StreamTaskMigrationModel = require('../sync-tasks/migrate/StreamTaskMigrationModel');
 
 const MODEL_DEFINITIONS = [
   {
@@ -16,7 +17,13 @@ const MODEL_DEFINITIONS = [
     label: 'Đồng bộ cơ sở dữ liệu cũ: người dùng (user copy)',
     section: 'realtime',
     ModelClass: StreamUserMigrationModel
-  }
+  },
+  {
+    key:     'UNIT_TEST_STREAM_TASK_MIGRATION',
+    label:   'Đồng bộ công việc 1',
+    section: 'realtime',
+    ModelClass: StreamTaskMigrationModel,
+  },
 ];
 
 class SyncModelRegistry {
