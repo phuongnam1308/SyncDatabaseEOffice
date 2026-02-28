@@ -42,17 +42,27 @@ class SyncStateRepository extends BaseModel {
    */
   async getDashboardData() {
     try {
-      // 1. Lấy danh sách Models
-      const models = await this.queryNewDb(`SELECT * FROM ${this.tblModels}`);
+      // 1. Lấy thông tin Sync Models
+      const modelsQuery = `SELECT * FROM ${this.tblModels}`;
+      const models = await this.queryNewDb(modelsQuery);
 
-      // 2. Lấy danh sách Jobs gần đây (50 job mới nhất)
-      const jobs = await this.queryNewDb(`
-        SELECT TOP 50 * 
-        FROM ${this.tblJobs} 
+      // 2. Lấy danh sách 10 Job gần nhất
+      const jobsQuery = `
+        SELECT TOP 10 *
+        FROM ${this.tblJobs}
         ORDER BY updated_at DESC
-      `);
+      `;
+      const jobs = await this.queryNewDb(jobsQuery);
 
-      // 3. Format dữ liệu giống cấu trúc JSON cũ để Dashboard HTML hoạt động không cần sửa
+      // 3. Lấy 50 lỗi mới nhất
+      const errorsQuery = `
+        SELECT TOP 50 *
+        FROM ${this.tblErrors}
+        ORDER BY occurred_at DESC
+      `;
+      const errors = await this.queryNewDb(errorsQuery);
+
+      // 4. Format dữ liệu giống cấu trúc JSON cũ để Dashboard HTML hoạt động không cần sửa
       const entities = {};
       let isRunning = false;
 

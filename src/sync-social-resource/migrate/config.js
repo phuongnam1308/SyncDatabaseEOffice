@@ -4,6 +4,11 @@ const parseDateString = (val) => {
     if (!val || val.length < 4) return null; // Quá ngắn, không phải là dạng cấu trúc date
     const d = new Date(val);
     if (isNaN(d.getTime())) return null;
+
+    // Validate bounds for SQL Server (prevent out of range or junk dates like year 6065)
+    const year = d.getFullYear();
+    if (year < 1970 || year > 2099) return null;
+
     return d;
 };
 
@@ -18,18 +23,18 @@ const tableMappings = {
         fieldMapping: {
             'Title': 'title',
             'ResourceUrl': 'slug',
-            'Description': 'summary',
-            'ResourceData': 'content',
             'Author': 'authorId'
         },
         defaultValues: {
             'status': 1, // Default status
+            'content': (record) => { const raw = (record.ResourceData || '').trim(); return raw === 'NULL' || !raw ? '<p></p>' : raw; },
+            'summary': (record) => { const raw = (record.Description || '').trim(); return raw === 'NULL' || !raw ? '' : raw; },
             'viewCount': (record) => parseInt(record.ViewCount || 0, 10) || 0,
             // Giả lập authorName tạm thời, hệ thống có thể cần map hoặc query từ user
             'authorName': 'Unknown',
             // Có thể thêm một cột lưu old_id nếu table news hỗ trợ, hiện map tạm vào topic hoặc bỏ qua
             'topic': (record) => record?.ID || '',
-            'publishedAt': (record) => parseDateString(record.PostTime),
+            'publishedAt': (record) => parseDateString(record.PostTime) || parseDateString(record.Created) || new Date(),
             'createdAt': (record) => parseDateString(record.Created) || new Date(),
             'updatedAt': (record) => parseDateString(record.Modified) || new Date()
         }

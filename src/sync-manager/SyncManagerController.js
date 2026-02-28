@@ -5,13 +5,19 @@ const logger = require('../../utils/logger');
 const SyncModelRegistry = require('./SyncModelRegistry');
 
 class SyncManagerController extends BaseController {
+  /**
+   * Creates controller instance and in-memory model registry.
+   */
   constructor() {
     super();
     this.initialized = false;
     this.modelRegistry = new SyncModelRegistry();
   }
 
-  // Đăng ký models
+  /**
+   * Ensures all sync models are initialized and registered once.
+   * @returns {Promise<void>}
+   */
   async ensureInitialized() {
     if (this.initialized) return;
 
@@ -33,6 +39,9 @@ class SyncManagerController extends BaseController {
 
   // ── Routes ─────────────────────
 
+  /**
+   * Starts synchronization for all registered models.
+   */
   startSync = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
     const { reset } = req.body;
@@ -40,6 +49,9 @@ class SyncManagerController extends BaseController {
     return this.success(res, { message: 'Đã kích hoạt tiến trình đồng bộ' });
   });
 
+  /**
+   * Starts synchronization for one model.
+   */
   startModelSync = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
     const { modelName } = req.params;
@@ -52,6 +64,9 @@ class SyncManagerController extends BaseController {
     return this.success(res, result, 'Đã kích hoạt đồng bộ đối tượng');
   });
 
+  /**
+   * Requests pause for a running job.
+   */
   pauseJobSync = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
     const { jobId } = req.params;
@@ -59,6 +74,9 @@ class SyncManagerController extends BaseController {
     return this.success(res, result, 'Đồng chí đã yêu cầu dừng lại tiến trình');
   });
 
+  /**
+   * Resumes a paused job.
+   */
   resumeJobSync = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
     const { jobId } = req.params;
@@ -66,10 +84,13 @@ class SyncManagerController extends BaseController {
     return this.success(res, result, 'Đã tiếp tục tiến trình phần mềm');
   });
 
+  /**
+   * Returns detail status for a specific sync job.
+   */
   getJobSyncStatus = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
     const { jobId } = req.params;
-    const job = SyncManagerService.getJob(jobId);
+    const job = await SyncManagerService.getJob(jobId);
     if (!job) return this.notFound(res, `Không tìm thấy bản ghi với số mã : ${jobId}`);
     return this.success(res, job);
   });
@@ -95,6 +116,9 @@ class SyncManagerController extends BaseController {
 
   // ── Dashboard — giống bản gốc, bỏ meta refresh, thêm SSE JS
 
+  /**
+   * Renders dashboard HTML and injects realtime SSE client script.
+   */
   getDashboard = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
 
@@ -344,6 +368,12 @@ if (cur && ['RUNNING','RESUMING','PAUSE_REQUESTED'].includes(cur.status)) {
   });
 
   // ── Helper server-side render (load lần đầu) ──────────────
+  /**
+   * Builds initial table rows on server side for first dashboard render.
+   * @param {object} entities
+   * @param {object} jobs
+   * @returns {string}
+   */
   _renderRows(entities, jobs) {
     return Object.entries(entities).map(([name, info]) => {
       const rel = Object.values(jobs || {})
