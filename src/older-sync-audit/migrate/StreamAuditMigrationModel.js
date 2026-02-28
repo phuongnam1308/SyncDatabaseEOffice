@@ -59,7 +59,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
     this.oldDbTable = oldDbTable;
     this.newDbSchema = "dbo";
     this.newDbTable = "audit_sync";
-    this.helper = new MigrationHelper(this.queryNewDbTx.bind(this));
+    this.helper = new MigrationHelper(this.queryNewDbTx.bind(this), this.queryOldDb.bind(this));
   }
 
   // Hàm fetch batch từ DB cũ, vẫn giữ nguyên để chạy theo batch nếu cần, nhưng ưu tiên dùng fetchByDocumentId cho từng văn bản cụ thể

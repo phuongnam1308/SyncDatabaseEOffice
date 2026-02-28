@@ -10,7 +10,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
     this.oldDbTable = "VanBanBanHanh";
     this.newDbSchema = "dbo";
     this.newDbTable = "outgoing_documents_sync";
-    this.helper = new MigrationHelper(this.queryNewDbTx.bind(this));
+    this.helper = new MigrationHelper(this.queryNewDbTx.bind(this), this.queryOldDb.bind(this));
   }
 
   async getStatus() {
@@ -247,7 +247,6 @@ class StreamOutgoingMigrationModel extends BaseModel {
     if (!record?.document_id || record.document_id.trim() === "") {
       throw new Error("document_id is required");
     }
-    console.log(`Inserting record id_outgoing_bak=${record.id_outgoing_bak}...`);
 
     const now = new Date();
 
@@ -305,7 +304,6 @@ class StreamOutgoingMigrationModel extends BaseModel {
     if (!record?.id_outgoing_bak) {
       throw new Error("document_id is required for update");
     }
-    console.log(`Updating record id_outgoing_bak=${record.id_outgoing_bak}...`);
 
     const query = `
       UPDATE ${this.newDbSchema}.${this.newDbTable}

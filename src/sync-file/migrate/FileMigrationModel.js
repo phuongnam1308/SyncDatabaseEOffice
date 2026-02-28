@@ -10,7 +10,7 @@ class FileMigrationModel extends BaseModel {
     this.oldDbTable = "VanBanBanHanh";
     this.newDbSchema = "dbo";
     this.newDbTable = "outgoing_documents_sync";
-    this.helper = new MigrationHelper(this.queryNewDbTx.bind(this));
+    this.helper = new MigrationHelper(this.queryNewDbTx.bind(this), this.queryOldDb.bind(this));
   }
 
   async getStatus() {

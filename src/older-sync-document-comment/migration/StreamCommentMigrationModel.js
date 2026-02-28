@@ -59,7 +59,7 @@ class StreamCommentMigrationModel extends BaseModel {
     this.oldDbTable = oldDbTable;
     this.newDbSchema = "dbo";
     this.newDbTable = "document_comments_sync";
-    this.helper = new MigrationHelper(this.queryNewDbTx.bind(this));
+    this.helper = new MigrationHelper(this.queryNewDbTx.bind(this), this.queryOldDb.bind(this));
   }
 
   async fetchBatch({ batch, lastId }) {

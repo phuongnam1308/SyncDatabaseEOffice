@@ -604,6 +604,9 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     if (!documentResult || documentResult.affected === 0) {
       return { action: 'none', affected: 0 };
     }
+    logger.info(
+      `[AggregateSync][Document] documentId=${id} action=${documentResult?.action} affected=${documentResult?.affected}`
+    );
 
     totalAffected += Number(documentResult.affected || 0);
     const documentId = documentResult.documentId;
@@ -627,6 +630,9 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
           try {
             const result = await auditModel.processSingleRecord(rawAudit, documentId, transaction);
             if (!result) continue;
+            logger.debug(
+              `[AggregateSync][Audit] table=${auditModel?.oldDbTable} documentId=${id} inserted=${result?.inserted || 0} updated=${result?.updated || 0}`
+            );
             totalAffected += Number(result.inserted || 0);
             totalAffected += Number(result.updated || 0);
           } catch (auditErr) {
@@ -645,7 +651,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     for (const commentModel of this._syncCommentModel || []) {
       try {
         const rawComments = await commentModel.fetchByDocumentId(id);
-
+        
         if (!Array.isArray(rawComments) || !rawComments.length) {
           continue;
         }
@@ -654,6 +660,9 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
           try {
             const result = await commentModel.processSingleRecord(rawComment, documentId, transaction);
             if (!result) continue;
+            logger.debug(
+              `[AggregateSync][Comment] table=${commentModel?.oldDbTable} documentId=${id} inserted=${result?.inserted || 0} updated=${result?.updated || 0}`
+            );
             totalAffected += Number(result.inserted || 0);
             totalAffected += Number(result.updated || 0);
           } catch (error) {

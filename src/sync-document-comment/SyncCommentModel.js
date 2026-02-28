@@ -9,7 +9,7 @@ class StreamCommentMigrationModel extends BaseModel {
     this.oldDbTable = oldDbTable;
     this.newDbSchema = "dbo";
     this.newDbTable = "document_comments";
-    this.helper = new MigrationHelper(this.queryNewDbTx.bind(this));
+    this.helper = new MigrationHelper(this.queryNewDbTx.bind(this), this.queryOldDb.bind(this));
   }
 
   async fetchByDocumentId(oldDocumentId) {
@@ -28,8 +28,8 @@ class StreamCommentMigrationModel extends BaseModel {
     }
   }
 
-  async processSingleRecord(rawRecord, documentId, externalTransaction) {
-    if (!externalTransaction) {
+  async processSingleRecord(rawRecord, documentId, transaction) {
+    if (!transaction) {
       throw new Error("Transaction is required from parent");
     }
 
@@ -44,23 +44,22 @@ class StreamCommentMigrationModel extends BaseModel {
       const mapped = await this._mapRecord(
         rawRecord,
         documentId,
-        externalTransaction
+        transaction
       );
 
       if (!mapped) {
         return { inserted: 0, updated: 0 };
       }
-
       const existed = await this._getExistingInMain(
         mapped,
-        externalTransaction
+        transaction
       );
 
       if (existed) {
-        await this._updateMain(mapped, externalTransaction);
+        await this._update(mapped, transaction);
         updated = 1;
       } else {
-        await this._insertMain(mapped, externalTransaction);
+        await this._insert(mapped, transaction);
         inserted = 1;
       }
 

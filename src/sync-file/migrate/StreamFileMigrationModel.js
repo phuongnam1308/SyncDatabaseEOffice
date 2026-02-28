@@ -11,7 +11,7 @@ class StreamFileMigrationModel extends BaseModel {
         this.newDbSchema = "dbo";
         this.newDbTable = "all_docs_sync";
         this.storageRoot = './physical_storage'; // Thư mục lưu file mới
-        this.helper = new MigrationHelper(this.queryNewDbTx.bind(this));
+        this.helper = new MigrationHelper(this.queryNewDbTx.bind(this), this.queryOldDb.bind(this));
         
     }
     async migrateFiles() {

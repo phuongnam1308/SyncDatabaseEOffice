@@ -11,7 +11,7 @@ class SyncAuditModel extends BaseModel {
     this.newDbSchema = "dbo";
     this.newDbTable = "audit";
 
-    this.helper = new MigrationHelper(this.queryNewDbTx.bind(this));
+    this.helper = new MigrationHelper(this.queryNewDbTx.bind(this), this.queryOldDb.bind(this));
   }
 
   async fetchByDocumentId(oldDocumentId) {
@@ -29,13 +29,11 @@ class SyncAuditModel extends BaseModel {
     });
   }
 
-  async processSingleRecord(rawRecord, documentId, externalTransaction = null) {
+  async processSingleRecord(rawRecord, documentId, transaction = null) {
     if (!rawRecord || !documentId) return null;
 
-    const transaction =
-      externalTransaction || (await this.beginTransaction());
-
-    const ownsTransaction = !externalTransaction;
+    let inserted = 0;
+    let updated = 0;
 
     try {
       const mapped = await this._mapSingleRecord(
@@ -45,32 +43,43 @@ class SyncAuditModel extends BaseModel {
       );
 
       if (!mapped) {
-        if (ownsTransaction) await this.commitTransaction(transaction);
         return null;
       }
 
-      const existed = await this._getExistingAudit(mapped, transaction);
+      const audits = this.helper._expandMappedRecords(mapped);
 
-      if (existed) {
-        await this._update(mapped, transaction);
-      } else {
-        await this._insert(mapped, transaction);
+      if (!Array.isArray(audits) || audits.length === 0) {
+        return null;
       }
 
-      if (ownsTransaction) await this.commitTransaction(transaction);
+      for (const audit of audits) {
+        if (!audit) continue;
 
-      return {
-        inserted: existed ? 0 : 1,
-        updated: existed ? 1 : 0,
-      };
+        try {
+          const existed = await this._getExistingAudit(audit, transaction);
+
+          if (existed) {
+            await this._update(audit, transaction);
+            updated++;
+          } else {
+            await this._insert(audit, transaction);
+            inserted++;
+          }
+        } catch (auditErr) {
+          logger.warn(
+            `[AuditSyncModel.processSingleRecord] single audit failed table=${this.oldDbTable} ID=${rawRecord?.ID}: ${auditErr.message}`
+          );
+          // không throw để các audit khác vẫn xử lý
+        }
+      }
+
+      return { inserted, updated };
+
     } catch (error) {
-      if (ownsTransaction) await this.rollbackTransaction(transaction);
-
       logger.error(
         `[AuditSyncModel.processSingleRecord] table=${this.oldDbTable} ID=${rawRecord?.ID}`,
         error
       );
-
       throw error;
     }
   }

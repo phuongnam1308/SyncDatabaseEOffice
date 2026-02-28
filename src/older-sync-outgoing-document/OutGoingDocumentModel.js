@@ -126,7 +126,7 @@ class OutGoingDocumentModel extends BaseModel {
     // ── Bảng sync cuối cùng của document ─────────────────────
     this.syncTable   = 'outgoing_documents_sync';
 
-    this.helper = new MigrationHelper(this.queryNewDbTx.bind(this));
+    this.helper = new MigrationHelper(this.queryNewDbTx.bind(this), this.queryOldDb.bind(this));
 
     // Lazy-init: khởi tạo trong initialize()
     this._auditMigrationModels    = [];

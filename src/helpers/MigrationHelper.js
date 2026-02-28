@@ -6,8 +6,9 @@ const DEFAULT_PASSWORD = process.env.MIGRATION_DEFAULT_PASSWORD || '12345678';
 const SALT_ROUNDS = parseInt(process.env.BCRYPT_SALT_ROUNDS || '10', 10);
 
 class MigrationHelper {
-  constructor(dbQueryFn) {
+  constructor(dbQueryFn, queryOldDbFn = null) {
     this.queryNewDbTx = dbQueryFn;
+    this.queryOldDb = queryOldDbFn;
   }
 
   cleanText(text) {
@@ -184,6 +185,17 @@ class MigrationHelper {
     }
   }
 
+  splitStringSplitBySemicolon(input) {
+    if (!input || typeof input !== 'string') {
+      return [];
+    }
+
+    return input
+      .split(';')
+      .map(item => item.trim())
+      .filter(Boolean);
+  }
+
   processSenderUnit(value, maxLength = 255) {
     try {
       if (!value) return null;
@@ -276,35 +288,87 @@ class MigrationHelper {
     }
   }
 
-  async mapUserName(Name, transaction = null) {
+  async mapUserName(userIdOrName, transaction = null) {
     try {
-        if (
-          !Name ||
-          typeof Name !== 'string' ||
-          !Name.trim() ||
-          /^\d+$/.test(Name) ||
-          /^[0-9a-f-]{32,}$/i.test(Name) ||
-          !/[a-zA-ZÀ-ỹ]/.test(Name)
-        ) {
-          return Name;
+      if (!userIdOrName || typeof userIdOrName !== 'string') {
+        return userIdOrName;
+      }
+      const trimmed = userIdOrName.trim();
+      if (!trimmed) return userIdOrName;
+      const isIdFormat =
+        /^\d+$/.test(trimmed) ||
+        /^[0-9a-f-]{32,}$/i.test(trimmed);
+      if (isIdFormat) {
+        const checkNewQuery = `
+          SELECT TOP 1 id
+          FROM ${process.env.NEW_DB_NAME}.dbo.users
+          WHERE id = @id
+        `;
+        const existedNew = await this.queryNewDbTx(
+          checkNewQuery,
+          { id: trimmed },
+          transaction
+        );
+        if (existedNew?.length) {
+          return existedNew[0].id;
         }
-        const displayName = this.extractDisplayName(Name);
-        if (!displayName) return Name;
+        const checkOldQuery = `
+          SELECT TOP 1 *
+          FROM dbo.PersonalProfile
+          WHERE ID = @id
+        `;
 
-        const usernameBase = this.buildUsernameFromName(displayName);
-        if (!usernameBase) return Name;
+        const existedOld = await this.queryOldDb(
+          checkOldQuery,
+          { id: trimmed }
+        );
+        if (!existedOld?.length) {
+          return trimmed;
+        }
+        if (!this._streamUserMigrationModel) {
+          const StreamUserMigrationModel = require('../sync-user-copy/migrate/StreamUserMigrationModel');
+          this._streamUserMigrationModel = new StreamUserMigrationModel();
+          await this._streamUserMigrationModel.initialize();
+        }
+        const syncResult =
+          await this._streamUserMigrationModel.upsertUserById(
+            existedOld[0],
+            transaction
+          );
+        if (!syncResult?.affected) {
+          logger.warn(`[mapUserName] Sync user failed ID = ${trimmed}`);
+        } else if (syncResult.action === 'inserted') {
+          logger.warn(`[mapUserName] Created new userID = ${trimmed}`);
+        }
 
-        const selectQuery = `
+        return trimmed;
+      }
+
+      if (!/[a-zA-ZÀ-ỹ]/.test(trimmed)) {
+        return userIdOrName;
+      }
+
+      const displayName = this.extractDisplayName(trimmed);
+      if (!displayName) return userIdOrName;
+
+      const usernameBase = this.buildUsernameFromName(displayName);
+      if (!usernameBase) return userIdOrName;
+
+      const selectQuery = `
         SELECT TOP 1 id
         FROM ${process.env.NEW_DB_NAME}.dbo.users
         WHERE name = @name OR id = @name
-        `;
+      `;
 
-        const existing = await this.queryNewDbTx(selectQuery, { name: displayName }, transaction);
+      const existing = await this.queryNewDbTx(
+        selectQuery,
+        { name: displayName },
+        transaction
+      );
 
-        if (existing?.length) {
+      if (existing?.length) {
         return existing[0].id;
-        }
+      }
 
         const id = uuidv4();
         const username = `${usernameBase}${Math.floor(1000 + Math.random() * 9000)}`;
@@ -329,10 +393,10 @@ class MigrationHelper {
         return retry?.length ? retry[0].id : null;
         }
     } catch (error) {
-        logger.warn("[mapUserName] Error:", error);
-        return null;
+      logger.warn("[mapUserName] Error:", error);
+      return null;
     }
-    }
+  }
 
   extractDisplayName(value) {
     try {
@@ -638,8 +702,6 @@ class MigrationHelper {
         logger.warn(`[parseActionString][STEP3] HTML split error: ${err.message}`);
         parsedBlocks = [];
       }
-      console.log('Parsed blocks:', parsedBlocks);
-      console.log('Outside text:', outsideText);
 
       // ===== STEP 4: Build receiver / receiver_unit / actionCode =====
       try {
@@ -808,7 +870,7 @@ class MigrationHelper {
   }
 
   _expandMappedRecords(mapped) {
-    if (!mapped?.id_van_ban) return [];
+    if (!mapped?.document_id) return [];
 
     const results = [];
 

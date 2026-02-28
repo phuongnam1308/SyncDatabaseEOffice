@@ -8,7 +8,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
     this.dbName = process.env.NEW_DB_NAME;
     this.mainSchema = "dbo";
     this.mainTable = "outgoing_documents";
-    this.helper = new MigrationHelper(this.queryNewDbTx.bind(this));
+    this.helper = new MigrationHelper(this.queryNewDbTx.bind(this), this.queryOldDb.bind(this));
   }
 
   async processSingleRecord(rowData, transaction) {
@@ -226,8 +226,6 @@ class StreamOutgoingMigrationModel extends BaseModel {
       throw new Error("Old record ID is required");
     }
 
-    const now = new Date();
-
     const promulgationDate = this.helper.parseDate(oldRecord.NgayBanHanh);
 
     const documentType = await this.helper.processDocumentType(
@@ -237,25 +235,39 @@ class StreamOutgoingMigrationModel extends BaseModel {
     const urgencyLevel = await this.helper.processUrgencyLevel(oldRecord.DoKhan);
     const privateLevel = await this.helper.processPrivateLevel(oldRecord.DoMat);
 
-    const senderUnit = await this.helper.mapSenderUnitId(oldRecord.DonVi);
+    const senderUnit = await this.helper.mapSenderUnitId(
+      oldRecord.DonVi,
+      transaction);
     const drafter = await this.helper.mapUserName(
-      oldRecord.CreatedBy || oldRecord.NguoiSoanThaoText
+      oldRecord.CreatedBy || oldRecord.NguoiSoanThaoText,
+      transaction
     );
 
     const reportSigner = await this.helper.mapUserName(
-      oldRecord.NguoiKyVanBanText
+      oldRecord.NguoiKyVanBanText,
+      transaction
     );
 
     const bookDocumentObj = await this.helper.mapBookDocument(
       oldRecord.SoVanBan || oldRecord.SoVanBanText,
       { drafter, senderUnit, privateLevel }
     );
+    // Map đơn vị nhận internalReceivingDeptIds
+    const units = this.helper.splitStringSplitBySemicolon(oldRecord.NoiNhan);
+    const internalReceivingDeptIds = [];
+    for (const unit of units) {
+      const id = await this.helper.mapSenderUnitId(unit, transaction);
+      if (id) {
+        internalReceivingDeptIds.push(id);
+      }
+    }
 
     return {
       document_id: `${Date.now()}${Math.floor(Math.random() * 10000)}`,
       id_outgoing_bak: String(oldRecord.ID),
       status_code: this.helper.mapStatus(oldRecord.TrangThai),
       sender_unit: senderUnit,
+      internal_receiving_dept: internalReceivingDeptIds,
       drafter,
       document_type: documentType,
       urgency_level: urgencyLevel,
@@ -269,8 +281,8 @@ class StreamOutgoingMigrationModel extends BaseModel {
       type_doc: 1,
       bpmn_version: "VAN_BAN_DI",
       type_of_process: "VAN_BAN_DI",
-      created_at: now,
-      updated_at: now,
+      created_at: this.helper.parseDate(oldRecord.Created),
+      updated_at: this.helper.parseDate(oldRecord.Modified),
       replaced: 0,
       tb_bak: 0
     };
