@@ -321,10 +321,10 @@ router.post(
 );
 
 
-const OutgoingRoutes = require('../src/sync-outgoing-document/route');
+const OutgoingRoutes = require('../src/older-sync-outgoing-document/route');
 router.use('/outgoing', OutgoingRoutes);
 
-const AuditRoutes = require('../src/sync-audit/route');
+const AuditRoutes = require('../src/older-sync-audit/route');
 router.use('/audit', AuditRoutes);
 
 const UserRoutes = require('../src/sync-user/route');
@@ -349,7 +349,7 @@ router.post('/sync-manager-src/jobs/:jobId/resume', SrcSyncManagerController.res
 router.get('/sync-manager-src/jobs/:jobId', SrcSyncManagerController.getJobSyncStatus);
 router.get('/sync-manager-src/events', SrcSyncManagerController.sseEvents); // ← THÊM DÒNG NÀY
 
-const CommentRoutes = require('../src/sync-document-comment/route');
+const CommentRoutes = require('../src/older-sync-document-comment/route');
 router.use('/document-comments', CommentRoutes);
 
 module.exports = router;

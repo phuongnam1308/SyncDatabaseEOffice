@@ -82,16 +82,29 @@ class SyncManagerService {
   // PHẦN 1 — JSON STATE (giữ nguyên 100%)
   // ══════════════════════════════════════════════════════════════
 
+  /**
+   * Legacy no-op kept for compatibility after filesystem state was removed.
+   */
   ensureStateDir() {
     // no-op: filesystem persistence removed
   }
 
+  /**
+   * Converts datetime-like input to ISO string or null.
+   * @param {any} value
+   * @returns {string|null}
+   */
   toIsoOrNull(value) {
     if (!value) return null;
     const dateValue = new Date(value);
     return Number.isNaN(dateValue.getTime()) ? null : dateValue.toISOString();
   }
 
+  /**
+   * Maps one sync_models row into in-memory model state.
+   * @param {object} row
+   * @returns {object}
+   */
   mapDbModelState(row) {
     return {
       lastSyncTime: this.toIsoOrNull(row?.last_sync_time),
@@ -104,6 +117,11 @@ class SyncManagerService {
     };
   }
 
+  /**
+   * Maps one sync_jobs row into in-memory job state.
+   * @param {object} row
+   * @returns {object}
+   */
   mapDbJobState(row) {
     return {
       jobId: row?.job_id,
@@ -127,6 +145,10 @@ class SyncManagerService {
     };
   }
 
+  /**
+   * Loads state snapshot from DB tables and rebuilds memory shape.
+   * @returns {Promise<object|null>}
+   */
   async loadRawState() {
     try {
       const [models, jobs] = await Promise.all([
@@ -190,6 +212,10 @@ class SyncManagerService {
     return null;
   }
 
+  /**
+   * Ensures state hydration runs once and marks interrupted jobs after boot.
+   * @returns {Promise<void>}
+   */
   async ensureStateLoaded() {
     if (this._stateLoaded) return;
 
@@ -207,6 +233,11 @@ class SyncManagerService {
     await this._stateLoadingPromise;
   }
 
+  /**
+   * Normalizes raw state from DB/legacy format into canonical structure.
+   * @param {object|null} raw
+   * @returns {{models:object,jobs:object,syncLogs:object}}
+   */
   normalizeState(raw) {
     const base = { models: {}, jobs: {}, syncLogs: {} };
     if (!raw) return base;
@@ -234,20 +265,41 @@ class SyncManagerService {
     );
   }
 
+  /**
+   * Returns current UTC timestamp in ISO format.
+   * @returns {string}
+   */
   now() { return new Date().toISOString(); }
 
+  /**
+   * Generates unique id for one sync job.
+   * @param {string} modelName
+   * @returns {string}
+   */
   generateJobId(modelName) {
     return `${modelName}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   }
 
+  /**
+   * Checks whether model state is in running-like status.
+   * @param {object} modelState
+   * @returns {boolean}
+   */
   isModelBusy(modelState) {
     return modelState && RUNNING_STATUSES.has(modelState.status);
   }
 
+  /**
+   * Indicates if at least one model is running.
+   * @returns {boolean}
+   */
   get isRunning() {
     return Object.values(this.state.models).some((m) => RUNNING_STATUSES.has(m.status));
   }
 
+  /**
+   * Registers SIGINT/SIGTERM handlers to persist interrupted job states.
+   */
   setupShutdownHandlers() {
     const markInterrupted = () => {
       try {
@@ -269,6 +321,9 @@ class SyncManagerService {
     process.on('SIGTERM', () => { markInterrupted(); process.exit(0); });
   }
 
+  /**
+   * Converts unfinished jobs from previous run to CRASHED on startup.
+   */
   recoverInterruptedJobs() {
     const now = this.now();
     let changed = false;
@@ -284,6 +339,12 @@ class SyncManagerService {
     }
   }
 
+  /**
+   * Marks one job as crashed and syncs status back to its model state.
+   * @param {object} job
+   * @param {string} reason
+   * @param {string} [at]
+   */
   markJobAsCrashed(job, reason, at = this.now()) {
     job.status = 'CRASHED';
     job.error = reason;
@@ -306,6 +367,10 @@ class SyncManagerService {
     if (modelState) this._dbUpdateModel(job.modelName, modelState);
   }
 
+  /**
+   * Creates default model state object.
+   * @returns {object}
+   */
   defaultModelState() {
     return {
       lastSyncTime: null,
@@ -318,6 +383,11 @@ class SyncManagerService {
     };
   }
 
+  /**
+   * Gets model state by name and lazily initializes missing state.
+   * @param {string} modelName
+   * @returns {object}
+   */
   getModelState(modelName) {
     if (!this.state.models[modelName]) {
       this.state.models[modelName] = this.defaultModelState();
@@ -375,6 +445,12 @@ class SyncManagerService {
   // PHẦN 3 — JOB LIFECYCLE (giữ nguyên logic, thêm ghi DB)
   // ══════════════════════════════════════════════════════════════
 
+  /**
+   * Creates and persists a new running job for one model.
+   * @param {string} modelName
+   * @param {{reset?:boolean,batchSize?:number}} [options]
+   * @returns {object}
+   */
   createJob(modelName, options = {}) {
     const modelState = this.getModelState(modelName);
     const now = this.now();
@@ -439,6 +515,10 @@ class SyncManagerService {
     return job;
   }
 
+  /**
+   * Mirrors current job snapshot into syncLogs state.
+   * @param {object} job
+   */
   updateSyncLogFromJob(job) {
     this.state.syncLogs[job.jobId] = {
       jobId: job.jobId,
@@ -458,6 +538,12 @@ class SyncManagerService {
     };
   }
 
+  /**
+   * Appends one processing error to job state and persists error record.
+   * @param {object} job
+   * @param {object} record
+   * @param {Error} error
+   */
   pushJobError(job, record, error) {
     job.totalErrors += 1;
     job.error = error.message;
@@ -472,16 +558,30 @@ class SyncManagerService {
     this._dbInsertJobError(job.jobId, this.extractRecordId(record), error.message);
   }
 
+  /**
+   * Extracts normalized record time from common timestamp fields.
+   * @param {object} record
+   * @returns {string|null}
+   */
   extractRecordTime(record) {
     return record.updated_at || record.UpdatedAt || record.ModifiedDate || record.__sync_time || null;
   }
 
+  /**
+   * Extracts numeric record id from common identifier fields.
+   * @param {object} record
+   * @returns {number}
+   */
   extractRecordId(record) {
     const raw = record.__sync_id || record.id || record.ID || record.document_id || 0;
     const parsed = Number(raw);
     return Number.isFinite(parsed) ? parsed : 0;
   }
 
+  /**
+   * Compares two cursors and returns 1/0/-1.
+   * @returns {number}
+   */
   compareCursor(aTime, aId, bTime, bId) {
     const ta = new Date(aTime || DEFAULT_SYNC_TIME).getTime();
     const tb = new Date(bTime || DEFAULT_SYNC_TIME).getTime();
@@ -496,6 +596,11 @@ class SyncManagerService {
   // PHẦN 4 — START / PAUSE / RESUME (giữ nguyên hoàn toàn)
   // ══════════════════════════════════════════════════════════════
 
+  /**
+   * Starts all registered models sequentially.
+   * @param {boolean} [reset=false]
+   * @returns {Promise<void>}
+   */
   async start(reset = false) {
     for (const modelName of this.registry.keys()) {
       const started = this.startModel(modelName, { reset });
@@ -503,12 +608,31 @@ class SyncManagerService {
     }
   }
 
+  /**
+   * Starts one model, or auto-resumes paused job when option is enabled.
+   * @param {string} modelName
+   * @param {{reset?:boolean,batchSize?:number,resumeIfPaused?:boolean}} [options]
+   * @returns {{jobId:string,modelName:string,status:string}}
+   */
   startModel(modelName, options = {}) {
     if (!this.registry.has(modelName)) throw new Error(`Model ${modelName} is not registered`);
 
     const modelState = this.getModelState(modelName);
+    const resumeIfPaused = options.resumeIfPaused === true && !Boolean(options.reset);
     if (this.isModelBusy(modelState)) throw new Error(`Model ${modelName} is already running`);
     if (modelState.status === 'PAUSED' && modelState.activeJobId) {
+      if (resumeIfPaused) {
+        const pausedJob = this.state.jobs[modelState.activeJobId];
+        if (!pausedJob) {
+          throw new Error(`Model ${modelName} has paused active job ${modelState.activeJobId}, but job state is missing`);
+        }
+        if (pausedJob.status !== 'PAUSED') {
+          throw new Error(
+            `Model ${modelName} has active job ${pausedJob.jobId} with status ${pausedJob.status}, cannot auto-resume`
+          );
+        }
+        return this.resumeJob(pausedJob.jobId);
+      }
       throw new Error(`Model ${modelName} is paused. Resume the paused job first.`);
     }
 
@@ -519,11 +643,21 @@ class SyncManagerService {
     return { jobId: job.jobId, modelName: job.modelName, status: job.status };
   }
 
+  /**
+   * Awaits completion of one active job promise.
+   * @param {string} jobId
+   * @returns {Promise<void>}
+   */
   async waitForJobCompletion(jobId) {
     const running = this.activeJobPromises.get(jobId);
     if (running) await running;
   }
 
+  /**
+   * Sets pause request flag for one running job.
+   * @param {string} jobId
+   * @returns {object}
+   */
   pauseJob(jobId) {
     const job = this.state.jobs[jobId];
     if (!job) throw new Error(`Job ${jobId} not found`);
@@ -544,6 +678,11 @@ class SyncManagerService {
     return job;
   }
 
+  /**
+   * Resumes one paused job from its current cursor.
+   * @param {string} jobId
+   * @returns {{jobId:string,modelName:string,status:string}}
+   */
   resumeJob(jobId) {
     const job = this.state.jobs[jobId];
     if (!job) throw new Error(`Job ${jobId} not found`);
@@ -573,21 +712,41 @@ class SyncManagerService {
     return { jobId: job.jobId, modelName: job.modelName, status: job.status };
   }
 
+  /**
+   * Gets one job snapshot from memory first, then DB fallback.
+   * @param {string} jobId
+   * @returns {Promise<object|null>}
+   */
   async getJob(jobId) {
-    const job = await this._dbFindJobById(jobId);
+    const inMemoryJob = this.state.jobs[jobId];
+    if (inMemoryJob) return inMemoryJob;
 
-    if (!job) return null;
+    const dbRows = await this._dbFindJobById(jobId);
+    if (!Array.isArray(dbRows) || dbRows.length === 0) return null;
 
-    const formattedJob = this.keysToCamel(job);
+    const mappedJob = this.mapDbJobState(dbRows[0]);
+    if (!mappedJob?.jobId) return null;
 
-    return formattedJob[0];
+    this.state.jobs[mappedJob.jobId] = mappedJob;
+    this.updateSyncLogFromJob(mappedJob);
+    return mappedJob;
   }
 
 
+  /**
+   * Converts snake_case string to camelCase.
+   * @param {string} str
+   * @returns {string}
+   */
   toCamel(str) {
     return str.replace(/_([a-z])/g, (_, char) => char.toUpperCase());
   }
 
+  /**
+   * Recursively converts object keys to camelCase.
+   * @param {any} obj
+   * @returns {any}
+   */
   keysToCamel(obj) {
     if (Array.isArray(obj)) {
       return obj.map(v => this.keysToCamel(v));
@@ -601,6 +760,11 @@ class SyncManagerService {
     return obj;
   }
 
+  /**
+   * Finds latest updated job for given model from in-memory state.
+   * @param {string} modelName
+   * @returns {object|null}
+   */
   findLatestJobByModel(modelName) {
     return Object.values(this.state.jobs)
       .filter((j) => j.modelName === modelName)
@@ -615,6 +779,11 @@ class SyncManagerService {
   // PHẦN 5 — runJob (giữ nguyên hoàn toàn, thêm _dbUpdateJob)
   // ══════════════════════════════════════════════════════════════
 
+  /**
+   * Main processing loop for one job: count, fetch, process, persist, terminal status.
+   * @param {string} jobId
+   * @returns {Promise<void>}
+   */
   async runJob(jobId) {
     const job = await this.getJob(jobId);
     if (!job) return;
@@ -721,6 +890,10 @@ class SyncManagerService {
   // PHẦN 6 — TERMINAL STATES (giữ nguyên, thêm _dbUpdateJob)
   // ══════════════════════════════════════════════════════════════
 
+  /**
+   * Finalizes a job into PAUSED state.
+   * @param {object} job
+   */
   markJobPaused(job) {
     const now = this.now(); const modelState = this.getModelState(job.modelName);
     job.status = 'PAUSED'; job.updatedAt = now; job.heartbeatAt = now; job.endedAt = now;
@@ -730,6 +903,10 @@ class SyncManagerService {
     this.updateSyncLogFromJob(job); this.saveState(); this._dbUpdateJob(job); this._dbUpdateModel(job.modelName, modelState);
   }
 
+  /**
+   * Finalizes a job into COMPLETED state.
+   * @param {object} job
+   */
   completeJob(job) {
     const now = this.now(); const modelState = this.getModelState(job.modelName);
     job.status = 'COMPLETED'; job.error = null; job.updatedAt = now; job.heartbeatAt = now; job.endedAt = now;
@@ -739,6 +916,12 @@ class SyncManagerService {
     this.updateSyncLogFromJob(job); this.saveState(); this._dbUpdateJob(job); this._dbUpdateModel(job.modelName, modelState);
   }
 
+  /**
+   * Finalizes a job into failed-like status with error message.
+   * @param {object} job
+   * @param {Error} error
+   * @param {string} [status='FAILED']
+   */
   failJob(job, error, status = 'FAILED') {
     const now = this.now(); const modelState = this.getModelState(job.modelName);
     job.status = status; job.error = error.message; job.updatedAt = now; job.heartbeatAt = now; job.endedAt = now;
@@ -752,6 +935,10 @@ class SyncManagerService {
   // PHẦN 7 — DASHBOARD DATA (giữ nguyên hoàn toàn)
   // ══════════════════════════════════════════════════════════════
 
+  /**
+   * Builds dashboard payload from current in-memory state.
+   * @returns {Promise<object>}
+   */
   async getDashboardData() {
     const entities = {};
     for (const [modelName, modelState] of Object.entries(this.state.models)) {
