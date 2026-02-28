@@ -70,7 +70,13 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
       ;WITH source_rows AS (
         SELECT
           *,
-          COALESCE(TRY_CONVERT(datetime2, Modified), TRY_CONVERT(datetime2, Created), TRY_CONVERT(datetime2, PostTime)) AS __sync_time,
+          -- Loại bỏ các date rác (vd PostTime = 6065), chỉ lấy chuỗi dài hơn 4 ký tự và valid
+          COALESCE(
+             CASE WHEN LEN(Modified) > 4 AND TRY_CONVERT(datetime2, Modified) IS NOT NULL AND YEAR(TRY_CONVERT(datetime2, Modified)) BETWEEN 1970 AND 2099 THEN TRY_CONVERT(datetime2, Modified) ELSE NULL END,
+             CASE WHEN LEN(Created) > 4 AND TRY_CONVERT(datetime2, Created) IS NOT NULL AND YEAR(TRY_CONVERT(datetime2, Created)) BETWEEN 1970 AND 2099 THEN TRY_CONVERT(datetime2, Created) ELSE NULL END,
+             CASE WHEN LEN(PostTime) > 4 AND TRY_CONVERT(datetime2, PostTime) IS NOT NULL AND YEAR(TRY_CONVERT(datetime2, PostTime)) BETWEEN 1970 AND 2099 THEN TRY_CONVERT(datetime2, PostTime) ELSE NULL END,
+             '1970-01-01T00:00:00.000Z'
+          ) AS __sync_time,
           CHECKSUM(ID) AS __sync_id_num
         FROM ${this.oldDbName}.${this.oldDbSchema}.${this.oldDbTable}
       )
@@ -270,6 +276,36 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
         totalAffected += resultNews.affected;
         actionLogs.push({ table: 'news', action: resultNews.action });
 
+        // 1.5 Sync Audit table để xác nhận news này đã xuất bản
+        if (resultNews.newsId) {
+            const author = rowData.Author || '6915f2387e39c2ba33cef79a'; // Fallback admin
+            let publishTime = rowData.__sync_time || new Date().toISOString();
+            let publishDate = new Date(publishTime);
+            if (Number.isNaN(publishDate.getTime())) {
+                publishDate = new Date();
+            }
+
+            const auditQuery = `
+            IF NOT EXISTS (SELECT 1 FROM ${process.env.NEW_DB_NAME}.dbo.audit WHERE document_id = @newsId AND type_document = 'NEWS' AND action_code = 'DUYET')
+            BEGIN
+                INSERT INTO ${process.env.NEW_DB_NAME}.dbo.audit (
+                    document_id, time, user_id, display_name, role, action_code,
+                    details, created_by, receiver, stage_status, curStatusCode,
+                    created_at, updated_at, type_document
+                ) VALUES (
+                    @newsId, @publishTime, @author, N'Hệ thống Migrator', 'ADMIN_NEWS', 'DUYET',
+                    N'{"autoApproved":true,"reason":"Migrate từ hệ thống cũ"}', @author, @author, 'HOAN_THANH', 'PUBLISHED',
+                    @publishTime, @publishTime, 'NEWS'
+                )
+            END
+            `;
+            await this.queryNewDbTx(auditQuery, {
+                newsId: String(resultNews.newsId),
+                publishTime: publishDate,
+                author: String(author)
+            }, transaction);
+        }
+
         return {
             backupId: recordId,
             affected: totalAffected,
@@ -307,26 +343,43 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
         params._externalKeyValue = externalKeyValue;
 
         const query = `
+      DECLARE @CurrentId int;
+      
       IF EXISTS (SELECT 1 FROM ${newDatabase}.${newSchema}.${newTable} WHERE ${this.sanitizeColumnName(externalKeyField)} = @_externalKeyValue)
       BEGIN
         UPDATE ${newDatabase}.${newSchema}.${newTable}
         SET ${updateClauses.join(', ')}
         WHERE ${this.sanitizeColumnName(externalKeyField)} = @_externalKeyValue;
-        SELECT @@ROWCOUNT AS affected, 'updated' AS action;
+        
+        SELECT @CurrentId = id FROM ${newDatabase}.${newSchema}.${newTable} WHERE ${this.sanitizeColumnName(externalKeyField)} = @_externalKeyValue;
+        SELECT @@ROWCOUNT AS affected, 'updated' AS action, @CurrentId AS newsId;
       END
       ELSE
       BEGIN
         INSERT INTO ${newDatabase}.${newSchema}.${newTable} (${cols.join(', ')})
         VALUES (${vals.join(', ')});
-        SELECT @@ROWCOUNT AS affected, 'inserted' AS action;
+        
+        SELECT SCOPE_IDENTITY() AS newsId;
+        SELECT @@ROWCOUNT AS affected, 'inserted' AS action, SCOPE_IDENTITY() AS newsId;
       END
     `;
 
         const result = await this.queryNewDbTx(query, params, transaction);
-        const row = Array.isArray(result) && result[0] ? result[0] : result;
+
+        // mssql nodejs sometimes returns multiple recordsets for multiple SELECTs
+        let row = null;
+        if (Array.isArray(result) && result.length > 0) {
+            if (Array.isArray(result[result.length - 1])) {
+                row = result[result.length - 1][0];
+            } else {
+                row = result[0]; // If options.multiple is false, the format might be simple array
+            }
+        }
+
         return {
             action: row?.action || (row?.affected ? 'updated' : 'none'),
-            affected: Number(row?.affected || 0)
+            affected: Number(row?.affected || 0),
+            newsId: row?.newsId || null
         };
     }
 
