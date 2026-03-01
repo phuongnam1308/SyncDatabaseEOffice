@@ -1,5 +1,6 @@
 
 const SyncManagerService = require('../../sync-manager/SyncManagerService');
+const InCommingDocumentModel = require('./StreamIncomingIncrementalModel');
 const SyncIncomingDocumentModel = require('./SyncIncomingDocumentModel');
 
 const UNIT_TEST_MODEL_NAME = '3_incoming';
@@ -17,7 +18,9 @@ class SyncIncomingDocumentService {
     async initialize() {
         if (this.model) return;
         this.model = new SyncIncomingDocumentModel();
+        this.modelv2 = new InCommingDocumentModel();
         await this.model.initialize();
+        await this.modelv2.initialize();
     }
 
     /**
@@ -102,7 +105,7 @@ class SyncIncomingDocumentService {
         if (!syncJobId) {
             throw new Error('syncJobId is required');
         }
-        return this.model.processOne(syncJobId);
+        return this.modelv2.processOne(syncJobId);
     }
 }
 

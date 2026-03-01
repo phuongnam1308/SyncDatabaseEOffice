@@ -16,7 +16,11 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         this.newDbSchema = 'dbo';
         this.newTableSync = 'incomming_documents_sync'; //Bảng trung gian lưu data raw dùng để sync dần vào bảng chính `user_clone_for_sync`
         this.newDbTable = 'incomming_documents2';
-        this.helper = new MigrationHelper(this.queryNewDbTx.bind(this));
+        // Properties for INSERT/UPDATE queries
+        this.dbName = this.newDbName;
+        this.mainSchema = this.newDbSchema;
+        this.mainTable = this.newDbTable;
+        this.helper = new MigrationHelper(this.queryNewDbTx.bind(this), this.queryOldDb.bind(this));
 
     }
     getStagingTableRef() {
@@ -24,6 +28,13 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
             return `${this.newDbName}.${this.newDbSchema}.${this.newTableSync}`;
         }
         return `${this.newDbSchema}.${this.newTableSync}`;
+    }
+    
+    getMainTableRef() {
+        if (this.newDbName) {
+            return `${this.newDbName}.${this.mainSchema}.${this.mainTable}`;
+        }
+        return `${this.mainSchema}.${this.mainTable}`;
     }
     /**
      * Override queryNewDbTx để hỗ trợ explicit type cho NVARCHAR(MAX) fields.
@@ -41,14 +52,14 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
                 : this.newPool.request();
 
             // Danh sách các fields cần explicit declare là NVARCHAR(MAX)
-            const maxFields = ['CoQuanGui2', 'CoQuanGuiText', 'DonVi', 'abstract_note', 
-                               'to_book_code', 'urgency_level', 'private_level', 'document_type',
-                               'SoVanBan', 'TrichYeu', 'VanBanTraLoi', 'YKienLanhDao', 'YKienLanhDaoTCT',
-                               'YKienLanhDaoVPDN', 'YKienCuaLDVPChoVanThu', 'ForwardType', 'MigrateErrMess'];
+            const maxFields = ['CoQuanGui2', 'CoQuanGuiText', 'DonVi', 'abstract_note',
+                'to_book_code', 'urgency_level', 'private_level', 'document_type',
+                'SoVanBan', 'TrichYeu', 'VanBanTraLoi', 'YKienLanhDao', 'YKienLanhDaoTCT',
+                'YKienLanhDaoVPDN', 'YKienCuaLDVPChoVanThu', 'ForwardType', 'MigrateErrMess'];
 
             Object.keys(params || {}).forEach(key => {
                 const value = params[key];
-                
+
                 // Explicit declare NVARCHAR(MAX) cho các fields dài
                 if (maxFields.includes(key)) {
                     request.input(key, sql.NVarChar(sql.MAX), value);
@@ -160,6 +171,18 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         return str;
     }
     /**
+     * Truncate string to max length to prevent SQL truncation errors
+     * @param {*} value - value to truncate
+     * @param {number} maxLength - maximum length
+     * @returns {string|null}
+     */
+    safeTruncate(value, maxLength) {
+        const str = this.safeString(value);
+        if (!str) return null;
+        if (str.length <= maxLength) return str;
+        return str.substring(0, maxLength);
+    }
+    /**
    * Lấy danh sách user từ CSDL cũ sau `lastSyncTime`.
    * Trả về mảng bản ghi (ID, AccountName, FullName, Modified, NgayTao) đã sắp xếp theo thời gian sửa/tao.
    * @param {string} lastSyncTime - ISO datetime hoặc giá trị mặc định để lấy từ thời điểm đó về sau
@@ -261,12 +284,13 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
         const normalizedLastSyncId = Number(lastSyncId || 0);
         const rows = await this.fetchListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId);
-        const stageResult = await this.syncOldToStaging(rows);
+        const limitRows = rows.slice(0, 200); // Giới hạn số bản ghi lấy về để tránh quá tải
+        const stageResult = await this.syncOldToStaging(limitRows);
 
         let nextSyncTime = normalizedLastSyncTime;
         let nextSyncId = normalizedLastSyncId;
 
-        for (const row of rows) {
+        for (const row of limitRows) {
             const rowTime = this.extractRowSyncTime(row);
             const rowId = this.extractRowSyncId(row);
             if (!rowTime) continue;
@@ -456,205 +480,281 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         delete row.rn;
         return row;
     }
-    /**
-   * Xử lý một bản ghi user từ CSDL cũ.
-   * - Chuẩn bị `backupId` và `fallbackName`.
-   * - Gọi `upsertUserById` để chèn hoặc cập nhật vào `user_clone_for_sync` trong schema `camunda`.
-   * @param {Object} rowData - bản ghi đầu vào từ CSDL cũ
-   * @param {{transaction?: Object}} [options]
-   * @returns {Promise<{action:string,backupId:string,affected:number}>}
-   */
-    async processRowData(rowData, { transaction } = {}) {
-        if (!rowData) {
-            throw new Error('rowData is required');
+    async processSingleRecord(rowData, transaction) {
+        if (!rowData || typeof rowData !== "object") {
+            throw new Error("rowData is required");
         }
 
-        const backupId = String(rowData.ID || '').trim();
-        if (!backupId) {
-            throw new Error('Invalid document ID from staging');
+        if (!rowData.ID) {
+            throw new Error("rowData.ID is required");
         }
 
-        const res = await this.upsertUserById(rowData, { transaction });
-        const affected = Number(res?.affected || 0);
-
-        if (affected === 0) {
-            throw new Error(`Document was not inserted or updated for ID=${backupId}`);
+        if (!transaction) {
+            throw new Error("Transaction is required");
         }
 
-        return {
-            action: res?.action || 'upsert',
-            backupId,
-            affected
-        };
-    }
-    /**
-  * Chèn hoặc cập nhật văn bản đến theo `document_id` trong `{newDbName}.{schema}.incomming_documents2`.
-  * - Nếu tồn tại: cập nhật các trường từ VanBanDen.
-  * - Nếu chưa có: chèn hàng mới.
-  * @param {Object} rowData - bản ghi từ VanBanDen
-  * @param {Object} [transaction] - transaction của kết nối mới (nếu có)
-  * @returns {Promise<{action:string,affected:number}>}
-  */
-    async upsertUserById(rowDataOrBackupId, fallbackNameOrTransaction, maybeTransaction) {
-        const isRowDataInput = rowDataOrBackupId && typeof rowDataOrBackupId === 'object' && !Array.isArray(rowDataOrBackupId);
-        const rowData = isRowDataInput
-            ? rowDataOrBackupId
-            : {
-                ID: rowDataOrBackupId,
-                TrichYeu: String(fallbackNameOrTransaction || '')
+        try {
+            // 1. Map raw -> main structure
+            const mapped = await this._mapSingleRecord(rowData, transaction);
+
+            if (!mapped?.document_id) {
+                throw new Error("Mapped document_id is required");
+            }
+
+            // 2. Check tồn tại
+            const mainTableRef = this.getMainTableRef();
+            const existingQuery = `
+        SELECT TOP 1 document_id
+        FROM ${mainTableRef}
+        WHERE id_incoming_bak = @idIncomingBak
+      `;
+
+            const existing = await this.queryNewDbTx(
+                existingQuery,
+                { idIncomingBak: mapped.id_incoming_bak },
+                transaction
+            );
+
+            if (existing && existing.length > 0) {
+                await this._updateRecord(mapped, transaction);
+
+                return {
+                    action: "updated",
+                    affected: 1,
+                    documentId: existing[0].document_id
+                };
+            }
+
+            await this._insertRecord(mapped, transaction);
+
+            return {
+                action: "inserted",
+                affected: 1,
+                documentId: mapped.document_id
             };
-        const transaction = isRowDataInput ? fallbackNameOrTransaction : maybeTransaction;
 
-        const mapped = this.mapRecordForUpsert(rowData);
-        if (!mapped.document_id) throw new Error('document_id is required');
+        } catch (error) {
+            logger.error(
+                `[processSingleRecord] Error ID=${rowData?.ID}: ${error.message}`
+            );
+            throw error;
+        }
+    }
 
-        const tableRef = this.newDbName
-            ? `${this.newDbName}.${this.newDbSchema}.${this.newDbTable}`
-            : `${this.newDbSchema}.${this.newDbTable}`;
-
+    async _insertRecord(record, transaction) {
+        const mainTableRef = this.getMainTableRef();
         const query = `
-      IF EXISTS (SELECT 1 FROM ${tableRef} WHERE id_incoming_bak = @id_incoming_bak)
-      BEGIN
-        UPDATE ${tableRef}
-        SET to_book_code = @to_book_code,
-            to_book = @to_book,
-            to_book_date = @to_book_date,
-            abstract_note = @abstract_note,
-            receive_date = @receive_date,
-            urgency_level = @urgency_level,
-            private_level = @private_level,
-            deadline_reply = @deadline_reply,
-            document_type = @document_type,
-            status = @status,
-            status_code = @status_code,
-            book_document_id = @book_document_id,
-            CoQuanGui2 = @CoQuanGui2,
-            CoQuanGuiText = @CoQuanGuiText,
-            DonVi = @DonVi,
-            IsLibrary = @IsLibrary,
-            SoBan = @SoBan,
-            SoTrang = @SoTrang,
-            TrangThai = @TrangThai,
-            SoVanBan = @SoVanBan,
-            TrichYeu = @TrichYeu,
-            ItemVBDTCT = @ItemVBDTCT,
-            ItemVBPH = @ItemVBPH,
-            ItemVBPHOld = @ItemVBPHOld,
-            BanLanhDao = @BanLanhDao,
-            LanhDaoTCT = @LanhDaoTCT,
-            LanhDaoTCTDaXuLy = @LanhDaoTCTDaXuLy,
-            LanhDaoTCTDeBiet = @LanhDaoTCTDeBiet,
-            LanhDaoVPDN = @LanhDaoVPDN,
-            LinhVuc = @LinhVuc,
-            VanBanTraLoi = @VanBanTraLoi,
-            ChenSo = @ChenSo,
-            YKienLanhDao = @YKienLanhDao,
-            YKienLanhDaoTCT = @YKienLanhDaoTCT,
-            YKienLanhDaoVPDN = @YKienLanhDaoVPDN,
-            YKienCuaLDVPChoVanThu = @YKienCuaLDVPChoVanThu,
-            ForwardType = @ForwardType,
-            ModuleId = @ModuleId,
-            SiteName = @SiteName,
-            ListName = @ListName,
-            ItemId = @ItemId,
-            MigrateFlg = @MigrateFlg,
-            YearMonth = @YearMonth,
-            MigrateErrFlg = @MigrateErrFlg,
-            MigrateErrMess = @MigrateErrMess,
-            ModifiedBy = @ModifiedBy,
-            CreatedBy = @CreatedBy,
-            DGPId = @DGPId,
-            updated_at = @updated_at
-        WHERE id_incoming_bak = @id_incoming_bak;
-        SELECT @@ROWCOUNT AS affected, 'updated' AS action;
-      END
-      ELSE
-      BEGIN
-        INSERT INTO ${tableRef} (
-          document_id, id_incoming_bak, to_book_code, to_book, to_book_date,
-          abstract_note, receive_date, urgency_level, private_level, deadline_reply,
-          document_type, status, status_code, book_document_id,
-          CoQuanGui2, CoQuanGuiText, DonVi, IsLibrary, SoBan, SoTrang, TrangThai,
-          SoVanBan, TrichYeu, ItemVBDTCT, ItemVBPH, ItemVBPHOld, BanLanhDao,
-          LanhDaoTCT, LanhDaoTCTDaXuLy, LanhDaoTCTDeBiet, LanhDaoVPDN, LinhVuc,
-          VanBanTraLoi, ChenSo, YKienLanhDao, YKienLanhDaoTCT, YKienLanhDaoVPDN,
-          YKienCuaLDVPChoVanThu, ForwardType, ModuleId, SiteName, ListName, ItemId,
-          MigrateFlg, YearMonth, MigrateErrFlg, MigrateErrMess, ModifiedBy, CreatedBy,
-          DGPId, created_at, updated_at
-        )
-        VALUES (
-          @document_id, @id_incoming_bak, @to_book_code, @to_book, @to_book_date,
-          @abstract_note, @receive_date, @urgency_level, @private_level, @deadline_reply,
-          @document_type, @status, @status_code, @book_document_id,
-          @CoQuanGui2, @CoQuanGuiText, @DonVi, @IsLibrary, @SoBan, @SoTrang, @TrangThai,
-          @SoVanBan, @TrichYeu, @ItemVBDTCT, @ItemVBPH, @ItemVBPHOld, @BanLanhDao,
-          @LanhDaoTCT, @LanhDaoTCTDaXuLy, @LanhDaoTCTDeBiet, @LanhDaoVPDN, @LinhVuc,
-          @VanBanTraLoi, @ChenSo, @YKienLanhDao, @YKienLanhDaoTCT, @YKienLanhDaoVPDN,
-          @YKienCuaLDVPChoVanThu, @ForwardType, @ModuleId, @SiteName, @ListName, @ItemId,
-          @MigrateFlg, @YearMonth, @MigrateErrFlg, @MigrateErrMess, @ModifiedBy, @CreatedBy,
-          @DGPId, @created_at, @updated_at
-        );
-        SELECT @@ROWCOUNT AS affected, 'inserted' AS action;
-      END
+      INSERT INTO ${mainTableRef} (
+        document_id, status_code, created_at, updated_at, book_document_id,
+        abstract_note, to_book, sender_unit, receiver_unit,
+        document_date, receive_date, to_book_date, deadline, second_book, receive_method,
+        private_level, urgency_level, document_type, document_field,
+        signer, to_book_code, fileids, status, isStar,
+        parent_doc, type_process_doc, bpmn_version, copy_to_internal,
+        resolution_deadline, copy_count, page_count, view_group, directive_comment,
+        SoVanBan, id_incoming_bak,
+        DonVi, IsLibrary, ItemVBDTCT, ItemVBPH, ItemVBPHOld,
+        BanLanhDao, LanhDaoTCT, LanhDaoTCTDaXuLy, LanhDaoTCTDeBiet, LanhDaoVPDN,
+        LinhVuc, SoBan, SoTrang, TrichYeu, VanBanTraLoi, ChenSo,
+        YKienLanhDao, YKienLanhDaoTCT, YKienLanhDaoVPDN, YKienCuaLDVPChoVanThu,
+        ForwardType, ModuleId, SiteName, ListName, ItemId,
+        MigrateFlg, YearMonth, MigrateErrFlg, MigrateErrMess,
+        TrangThai, ModifiedBy, CreatedBy, DGPId, deadline_reply
+      )
+      VALUES (
+        @document_id, @status_code, @created_at, @updated_at, @book_document_id,
+        @abstract_note, @to_book, @sender_unit, @receiver_unit,
+        @document_date, @receive_date, @to_book_date, @deadline, @second_book, @receive_method,
+        @private_level, @urgency_level, @document_type, @document_field,
+        @signer, @to_book_code, @fileids, @status, @isStar,
+        @parent_doc, @type_process_doc, @bpmn_version, @copy_to_internal,
+        @resolution_deadline, @copy_count, @page_count, @view_group, @directive_comment,
+        @SoVanBan, @id_incoming_bak,
+        @DonVi, @IsLibrary, @ItemVBDTCT, @ItemVBPH, @ItemVBPHOld,
+        @BanLanhDao, @LanhDaoTCT, @LanhDaoTCTDaXuLy, @LanhDaoTCTDeBiet, @LanhDaoVPDN,
+        @LinhVuc, @SoBan, @SoTrang, @TrichYeu, @VanBanTraLoi, @ChenSo,
+        @YKienLanhDao, @YKienLanhDaoTCT, @YKienLanhDaoVPDN, @YKienCuaLDVPChoVanThu,
+        @ForwardType, @ModuleId, @SiteName, @ListName, @ItemId,
+        @MigrateFlg, @YearMonth, @MigrateErrFlg, @MigrateErrMess,
+        @TrangThai, @ModifiedBy, @CreatedBy, @DGPId, @deadline_reply
+      )
     `;
 
-        const params = { ...mapped };
-        const result = await this.queryNewDbTx(query, params, transaction);
-        const row = Array.isArray(result) && result[0] ? result[0] : result;
-        return {
-            action: row?.action || (row?.affected ? 'updated' : 'none'),
-            affected: Number(row?.affected || 0)
-        };
+        const params = this._mapRecordParams(record);
+        await this.queryNewDbTx(query, params, transaction);
     }
 
-    async mapRecordForUpsert(oldRecord) {
-        const uuid = require('uuid');
+    async _updateRecord(record, transaction) {
+        const mainTableRef = this.getMainTableRef();
+        const query = `
+      UPDATE ${mainTableRef}
+      SET
+        status_code = @status_code,
+        updated_at = GETDATE(),
+        book_document_id = @book_document_id,
+        abstract_note = @abstract_note,
+        to_book = @to_book,
+        sender_unit = @sender_unit,
+        receiver_unit = @receiver_unit,
+        document_date = @document_date,
+        receive_date = @receive_date,
+        to_book_date = @to_book_date,
+        deadline = @deadline,
+        second_book = @second_book,
+        receive_method = @receive_method,
+        private_level = @private_level,
+        urgency_level = @urgency_level,
+        document_type = @document_type,
+        document_field = @document_field,
+        signer = @signer,
+        to_book_code = @to_book_code,
+        fileids = @fileids,
+        status = @status,
+        isStar = @isStar,
+        parent_doc = @parent_doc,
+        type_process_doc = @type_process_doc,
+        bpmn_version = @bpmn_version,
+        copy_to_internal = @copy_to_internal,
+        resolution_deadline = @resolution_deadline,
+        copy_count = @copy_count,
+        page_count = @page_count,
+        view_group = @view_group,
+        directive_comment = @directive_comment,
+        SoVanBan = @SoVanBan,
+        DonVi = @DonVi,
+        IsLibrary = @IsLibrary,
+        ItemVBDTCT = @ItemVBDTCT,
+        ItemVBPH = @ItemVBPH,
+        ItemVBPHOld = @ItemVBPHOld,
+        BanLanhDao = @BanLanhDao,
+        LanhDaoTCT = @LanhDaoTCT,
+        LanhDaoTCTDaXuLy = @LanhDaoTCTDaXuLy,
+        LanhDaoTCTDeBiet = @LanhDaoTCTDeBiet,
+        LanhDaoVPDN = @LanhDaoVPDN,
+        LinhVuc = @LinhVuc,
+        SoBan = @SoBan,
+        SoTrang = @SoTrang,
+        TrichYeu = @TrichYeu,
+        VanBanTraLoi = @VanBanTraLoi,
+        ChenSo = @ChenSo,
+        YKienLanhDao = @YKienLanhDao,
+        YKienLanhDaoTCT = @YKienLanhDaoTCT,
+        YKienLanhDaoVPDN = @YKienLanhDaoVPDN,
+        YKienCuaLDVPChoVanThu = @YKienCuaLDVPChoVanThu,
+        ForwardType = @ForwardType,
+        ModuleId = @ModuleId,
+        SiteName = @SiteName,
+        ListName = @ListName,
+        ItemId = @ItemId,
+        MigrateFlg = @MigrateFlg,
+        YearMonth = @YearMonth,
+        MigrateErrFlg = @MigrateErrFlg,
+        MigrateErrMess = @MigrateErrMess,
+        TrangThai = @TrangThai,
+        ModifiedBy = @ModifiedBy,
+        CreatedBy = @CreatedBy,
+        DGPId = @DGPId,
+        deadline_reply = @deadline_reply
+      WHERE id_incoming_bak = @id_incoming_bak
+    `;
 
-        let abstractNote = this.safeString(oldRecord.TrichYeu);;
-        let toBook = this.safeString(oldRecord.SoVanBan);
-        let senderUnit = await this.helper.mapSenderUnitId(oldRecord.DonVi);
-        let urgencyLevel = await this.helper.processUrgencyLevel(oldRecord.DoKhan);
-        let privateLevel = await this.helper.processPrivateLevel(oldRecord.DoMat);
-        let drafter = await this.helper.mapUserName(
-            oldRecord.CreatedBy || oldRecord.NguoiSoanThaoText
-        ); // không có trong db mình
-        let bookDocumentId = await this.helper.mapBookDocument(
-            oldRecord.SoVanBan || oldRecord.SoVanBanText,
-            { drafter, senderUnit, privateLevel}
-        );
+        const params = this._mapRecordParams(record);
+        await this.queryNewDbTx(query, params, transaction);
+    }
+
+    async _mapSingleRecord(oldRecord, transaction) {
+        if (!oldRecord?.ID) {
+            throw new Error("Old record ID is required");
+        }
+
         const documentType = await this.helper.processDocumentType(
             oldRecord.LoaiVanBan || oldRecord.LoaiBanHanh
         );
+
+        const urgencyLevel = await this.helper.processUrgencyLevel(oldRecord.DoKhan);
+        const privateLevel = await this.helper.processPrivateLevel(oldRecord.DoMat);
+
+        const senderUnit = await this.helper.mapSenderUnitId(
+            oldRecord.CoQuanGui || oldRecord.CoQuanGuiText,
+            transaction);
         
-        if (!abstractNote) {
-            throw new Error('abstract_note (TrichYeu) is required');
+        const drafter = await this.helper.mapUserName(
+            oldRecord.CreatedBy || oldRecord.NguoiSoanThaoText,
+            transaction
+        );
+
+        const bookDocumentObj = await this.helper.mapBookDocument(
+            oldRecord.SoVanBan || oldRecord.SoVanBanText,
+            { drafter, senderUnit, privateLevel }
+        );
+
+        // Map đơn vị nhận
+        const units = this.helper.splitStringSplitBySemicolon(oldRecord.NoiNhan);
+        const internalReceivingDeptIds = [];
+        for (const unit of units) {
+            const id = await this.helper.mapSenderUnitId(unit, transaction);
+            if (id) {
+                internalReceivingDeptIds.push(id);
+            }
         }
+        const receiverUnitStr = JSON.stringify(internalReceivingDeptIds);
+
+        const statusCode = '100';
+        const createdAt = this.safeDate(oldRecord.Created);
+        const updatedAt = this.safeDate(oldRecord.Modified || oldRecord.modifiedBy);
+        const abstractNote = this.safeString(oldRecord.TrichYeu);
+        const toBook = bookDocumentObj?.count ?? null;
+        const documentDate = this.safeDate(oldRecord.NgayTrenVB);
+        const receiveDate = this.safeDate(oldRecord.NgayDen);
+        const deadline = this.safeDate(oldRecord.ThoiHanGQ);
+        const documentField = await this.helper.documentField(oldRecord.LinhVuc);
+        const status = this.helper.parseStatus(oldRecord.TrangThai);
+        const pageCount = this.safeNumber(oldRecord.SoTrang, null);
+        const soBan = this.safeNumber(oldRecord.SoBan, null);
 
         return {
-            document_id: uuid.v4().toUpperCase(),
-            id_incoming_bak: this.safeStringOrNumber(oldRecord.ID),
-            to_book_code: this.safeString(oldRecord.TrangThai), // TrangThai chứa số đến thực tế
-            to_book: toBook,
-            to_book_date: this.safeDate(oldRecord.NgayTrenVB),
+            // Core fields
+            document_id: `${Date.now()}${Math.floor(Math.random() * 10000)}`,
+            status_code: statusCode,
+            created_at: createdAt,
+            updated_at: updatedAt,
+            book_document_id: bookDocumentObj?.id ?? null,
             abstract_note: abstractNote,
-            receive_date: this.safeDate(oldRecord.NgayDen),
-            urgency_level: this.stripHtml(oldRecord.DoKhan), // Loại bỏ HTML
-            private_level: this.stripHtml(oldRecord.DoMat), // Loại bỏ HTML
-            deadline_reply: this.safeDate(oldRecord.ThoiHanGQ),
-            document_type: this.safeString(oldRecord.LoaiVanBan),
-            status: 1,
-            status_code: '100',
-            book_document_id: null, // Sẽ được update sau
+            to_book: toBook,
+            sender_unit: senderUnit,
+            receiver_unit: receiverUnitStr,
+            document_date: documentDate,
+            receive_date: receiveDate,
+            to_book_date: null,
+            deadline: deadline,
+            second_book: null,
+            receive_method: null,
+            private_level: privateLevel,
+            urgency_level: urgencyLevel,
+            document_type: documentType,
+            document_field: documentField,
+            signer: null,
+            to_book_code: null,
+            fileids: this.safeString(oldRecord.Files),
+            status: status,
+            isStar: 0,
+            parent_doc: null,
+            type_process_doc: null,
+            bpmn_version: 'PHUC_DAP_DV',
+            copy_to_internal: null,
+            resolution_deadline: null,
+            copy_count: null,
+            page_count: pageCount,
+            view_group: null,
+            directive_comment: null,
+
+            // Legacy/backup columns from old database
+            SoVanBan: this.safeString(oldRecord.SoVanBan),
+            id_incoming_bak: String(oldRecord.ID),
             CoQuanGui2: this.safeString(oldRecord.CoQuanGui2),
             CoQuanGuiText: this.safeString(oldRecord.CoQuanGuiText),
             DonVi: this.safeString(oldRecord.DonVi),
             IsLibrary: this.parseBit(oldRecord.IsLibrary),
-            SoBan: this.safeNumber(oldRecord.SoBan, 0),
-            SoTrang: this.safeNumber(oldRecord.SoTrang, 0),
-            TrangThai: this.safeString(oldRecord.LanhDaoVPDN), // Status text từ LanhDaoVPDN
-            // Các field bổ sung từ DB cũ
-            SoVanBan: this.safeString(oldRecord.SoVanBan),
-            TrichYeu: this.safeString(oldRecord.TrichYeu),
             ItemVBDTCT: this.safeString(oldRecord.ItemVBDTCT),
             ItemVBPH: this.safeString(oldRecord.ItemVBPH),
             ItemVBPHOld: this.safeString(oldRecord.ItemVBPHOld),
@@ -664,13 +764,16 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
             LanhDaoTCTDeBiet: this.safeString(oldRecord.LanhDaoTCTDeBiet),
             LanhDaoVPDN: this.safeString(oldRecord.LanhDaoVPDN),
             LinhVuc: this.safeString(oldRecord.LinhVuc),
+            SoBan: soBan,
+            SoTrang: pageCount,
+            TrichYeu: abstractNote,
             VanBanTraLoi: this.safeString(oldRecord.VanBanTraLoi),
-            ChenSo: this.safeString(oldRecord.ChenSo),
+            ChenSo: this.parseBit(oldRecord.ChenSo),
             YKienLanhDao: this.safeString(oldRecord.YKienLanhDao),
             YKienLanhDaoTCT: this.safeString(oldRecord.YKienLanhDaoTCT),
             YKienLanhDaoVPDN: this.safeString(oldRecord.YKienLanhDaoVPDN),
             YKienCuaLDVPChoVanThu: this.safeString(oldRecord.YKienCuaLDVPChoVanThu),
-            ForwardType: this.safeString(oldRecord.ForwardType),
+            ForwardType: this.safeNumber(oldRecord.ForwardType || oldRecord.Files, null),
             ModuleId: this.safeNumber(oldRecord.ModuleId, null),
             SiteName: this.safeString(oldRecord.SiteName),
             ListName: this.safeString(oldRecord.ListName),
@@ -679,19 +782,92 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
             YearMonth: this.safeString(oldRecord.YearMonth),
             MigrateErrFlg: this.safeNumber(oldRecord.MigrateErrFlg, null),
             MigrateErrMess: this.safeString(oldRecord.MigrateErrMess),
+            TrangThai: this.safeString(oldRecord.TrangThai),
             ModifiedBy: this.safeString(oldRecord.ModifiedBy),
             CreatedBy: this.safeString(oldRecord.CreatedBy),
             DGPId: this.safeNumber(oldRecord.DGPId, null),
-            created_at: this.safeDate(oldRecord.Created) || new Date(),
-            updated_at: this.safeDate(oldRecord.Modified) || new Date()
-        };
+            deadline_reply: this.safeString(oldRecord.ThoiHanGQ),
+        }
     }
 
-    parseGender(value) {
-        const genderStr = String(value || '').trim();
-        if (genderStr === '1') return 'nam';
-        if (genderStr === '0') return 'nu';
-        return null;
+    _mapRecordParams(record) {
+        return {
+            // Core fields
+            document_id: record.document_id ?? null,
+            status_code: record.status_code ?? null,
+            created_at: record.created_at ?? null,
+            updated_at: record.updated_at ?? null,
+            book_document_id: record.book_document_id ?? null,
+            abstract_note: record.abstract_note ?? null,
+            to_book: record.to_book ?? null,
+            sender_unit: record.sender_unit ?? null,
+            receiver_unit: record.receiver_unit ?? null,
+            document_date: record.document_date ?? null,
+            receive_date: record.receive_date ?? null,
+            to_book_date: record.to_book_date ?? null,
+            deadline: record.deadline ?? null,
+            second_book: record.second_book ?? null,
+            receive_method: record.receive_method ?? null,
+            private_level: record.private_level ?? null,
+            urgency_level: record.urgency_level ?? null,
+            document_type: record.document_type ?? null,
+            document_field: record.document_field ?? null,
+            signer: record.signer ?? null,
+            to_book_code: record.to_book_code ?? null,
+            fileids: record.fileids ?? null,
+            status: record.status ?? 1,
+            isStar: record.isStar ?? 0,
+            parent_doc: record.parent_doc ?? null,
+            type_process_doc: record.type_process_doc ?? null,
+            bpmn_version: record.bpmn_version ?? null,
+            copy_to_internal: record.copy_to_internal ?? null,
+            resolution_deadline: record.resolution_deadline ?? null,
+            copy_count: record.copy_count ?? null,
+            page_count: record.page_count ?? null,
+            view_group: record.view_group ?? null,
+            directive_comment: record.directive_comment ?? null,
+
+            // Legacy/backup columns
+            SoVanBan: record.SoVanBan ?? null,
+            id_incoming_bak: record.id_incoming_bak ?? null,
+            CoQuanGui2: record.CoQuanGui2 ?? null,
+            CoQuanGuiText: record.CoQuanGuiText ?? null,
+            DonVi: record.DonVi ?? null,
+            IsLibrary: record.IsLibrary ?? null,
+            ItemVBDTCT: record.ItemVBDTCT ?? null,
+            ItemVBPH: record.ItemVBPH ?? null,
+            ItemVBPHOld: record.ItemVBPHOld ?? null,
+            BanLanhDao: record.BanLanhDao ?? null,
+            LanhDaoTCT: record.LanhDaoTCT ?? null,
+            LanhDaoTCTDaXuLy: record.LanhDaoTCTDaXuLy ?? null,
+            LanhDaoTCTDeBiet: record.LanhDaoTCTDeBiet ?? null,
+            LanhDaoVPDN: record.LanhDaoVPDN ?? null,
+            LinhVuc: record.LinhVuc ?? null,
+            SoBan: record.SoBan ?? null,
+            SoTrang: record.SoTrang ?? null,
+            TrichYeu: record.TrichYeu ?? null,
+            VanBanTraLoi: record.VanBanTraLoi ?? null,
+            ChenSo: record.ChenSo ?? null,
+            YKienLanhDao: record.YKienLanhDao ?? null,
+            YKienLanhDaoTCT: record.YKienLanhDaoTCT ?? null,
+            YKienLanhDaoVPDN: record.YKienLanhDaoVPDN ?? null,
+            YKienCuaLDVPChoVanThu: record.YKienCuaLDVPChoVanThu ?? null,
+            ForwardType: record.ForwardType ?? null,
+            ModuleId: record.ModuleId ?? null,
+            SiteName: record.SiteName ?? null,
+            ListName: record.ListName ?? null,
+            ItemId: record.ItemId ?? null,
+            MigrateFlg: record.MigrateFlg ?? null,
+            YearMonth: record.YearMonth ?? null,
+            MigrateErrFlg: record.MigrateErrFlg ?? null,
+            MigrateErrMess: record.MigrateErrMess ?? null,
+            TrangThai: record.TrangThai ?? null,
+            ModifiedBy: record.ModifiedBy ?? null,
+            CreatedBy: record.CreatedBy ?? null,
+            DGPId: record.DGPId ?? null,
+            deadline_reply: record.deadline_reply ?? null,
+        }
     }
+    
 }
 module.exports = SyncIncomingDocumentModel;

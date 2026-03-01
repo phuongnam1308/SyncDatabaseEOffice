@@ -3,7 +3,7 @@ const sql = require('mssql');
 
 const SyncCommentModel = require('../../sync-document-comment/SyncCommentModel');
 const SyncAuditModel = require('../../sync-audit/SyncAuditModel');
-const StreamInCommingMigrationModel = require('./StreamInCommingMigrationModel');
+const StreamInCommingMigrationModel = require('./SyncIncomingDocumentModel');
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
