@@ -1105,6 +1105,46 @@ class MigrationHelper {
 
     return results;
   }
+  async documentField(value) {
+    try {
+      if (typeof value !== "string") return null;
+
+      let raw = value.trim();
+      if (!raw || raw.toUpperCase() === "NULL") {
+        return null;
+      }
+
+      const hashIndex = raw.indexOf("#");
+      if (hashIndex !== -1 && hashIndex < raw.length - 1) {
+        raw = raw.substring(hashIndex + 1);
+      }
+
+      raw = raw.trim();
+      if (!raw) return null;
+
+      const title = raw;
+      const normalizedValue = this.removeVietnameseTones(raw).replace(/\s+/g, "");
+
+      if (!normalizedValue) return null;
+
+      const sourceId = await this.getSourceId("S21");
+      if (!sourceId) {
+        logger.warn("[processDocumentField] source_id S21 not found");
+        return normalizedValue;
+      }
+
+      const result = await this.checkOrInsertSourceData(sourceId, normalizedValue, title);
+      return result;
+    } catch (error) {
+      logger.error("[processDocumentType] Error:", error);
+      return null;
+    }
+  }
+  parseStatus(value) {
+    const statusStr = String(value || '');
+    if (statusStr === '-1') return 3;
+    return 1;
+  }
 }
 
 module.exports = MigrationHelper;

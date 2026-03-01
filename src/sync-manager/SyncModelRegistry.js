@@ -4,6 +4,7 @@ const SyncHandlerModel = require('./SyncHandlerModel');
 const OutGoingDocumentModel = require('../sync-outgoing-document/models/StreamOutgoingIncrementalModel');
 const StreamUserMigrationModel = require('../sync-user-copy/migrate/StreamUserMigrationModel');
 const StreamSocialMigrationModel = require('../sync-social-resource/migrate/StreamSocialMigrationModel');
+const SyncIncomingDocumentModel = require('../sync-incoming-document/migrate/SyncIncomingDocumentModel');
 
 const MODEL_DEFINITIONS = [
   {
@@ -29,7 +30,14 @@ const MODEL_DEFINITIONS = [
     label: 'Đồng bộ cơ sở dữ liệu cũ: tin tức (social resource)',
     section: 'realtime',
     ModelClass: StreamSocialMigrationModel,
+    ModelClass: StreamUserMigrationModel
   },
+  {
+    key:     '3_incoming',
+    label:   'Đồng bộ văn bản đến',
+    section: 'realtime',
+    ModelClass: SyncIncomingDocumentModel,
+  }
 ];
 
 class SyncModelRegistry {

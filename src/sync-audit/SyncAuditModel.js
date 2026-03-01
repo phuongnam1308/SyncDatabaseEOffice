@@ -103,6 +103,17 @@ class SyncAuditModel extends BaseModel {
 
     return this.queryOldDb(query, params);
   }
+  async fetchByInCommingDocumentId(
+    oldDocumentId
+  ) {
+    return this._fetchByDocumentIdInternal(
+      oldDocumentId,
+      [
+        CATEGORY_RELEASE_DV,
+        CATEGORY_RELEASE_TCT,
+      ]
+    );
+  }
 
   async processSingleRecord(rawRecord, documentId, transaction = null) {
     if (!rawRecord || !documentId) return null;

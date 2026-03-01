@@ -1,0 +1,873 @@
+// sync-outgoing.model.js
+const BaseModel = require("../../../models/BaseModel");
+const logger = require("../../../utils/logger");
+const sql = require('mssql');
+const BaseIncrementalSyncInterface = require("../../sync-manager/BaseIncrementalSyncInterface");
+const MigrationHelper = require("../../helpers/MigrationHelper");
+
+const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
+
+class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
+    constructor() {
+        super({ modelName: '3_incoming' });
+        this.newDbName = process.env.NEW_DB_NAME;
+        this.oldDbSchema = 'dbo';
+        this.oldDbTable = 'VanBanDen';
+        this.newDbSchema = 'dbo';
+        this.newTableSync = 'incomming_documents_sync'; //Bảng trung gian lưu data raw dùng để sync dần vào bảng chính `user_clone_for_sync`
+        this.newDbTable = 'incomming_documents2';
+        // Properties for INSERT/UPDATE queries
+        this.dbName = this.newDbName;
+        this.mainSchema = this.newDbSchema;
+        this.mainTable = this.newDbTable;
+        this.helper = new MigrationHelper(this.queryNewDbTx.bind(this), this.queryOldDb.bind(this));
+
+    }
+    getStagingTableRef() {
+        if (this.newDbName) {
+            return `${this.newDbName}.${this.newDbSchema}.${this.newTableSync}`;
+        }
+        return `${this.newDbSchema}.${this.newTableSync}`;
+    }
+    
+    getMainTableRef() {
+        if (this.newDbName) {
+            return `${this.newDbName}.${this.mainSchema}.${this.mainTable}`;
+        }
+        return `${this.mainSchema}.${this.mainTable}`;
+    }
+    /**
+     * Override queryNewDbTx để hỗ trợ explicit type cho NVARCHAR(MAX) fields.
+     * Giải quyết vấn đề mssql driver tự động infer NVARCHAR(4000) thay vì MAX.
+     */
+    async queryNewDbTx(query, params = {}, transaction = null) {
+        try {
+            // Ensure pool is initialized
+            if (!transaction && !this.newPool) {
+                throw new Error('Database pool not initialized. Call initialize() first.');
+            }
+
+            const request = transaction
+                ? new sql.Request(transaction)
+                : this.newPool.request();
+
+            // Danh sách các fields cần explicit declare là NVARCHAR(MAX)
+            const maxFields = ['CoQuanGui2', 'CoQuanGuiText', 'DonVi', 'abstract_note',
+                'to_book_code', 'urgency_level', 'private_level', 'document_type',
+                'SoVanBan', 'TrichYeu', 'VanBanTraLoi', 'YKienLanhDao', 'YKienLanhDaoTCT',
+                'YKienLanhDaoVPDN', 'YKienCuaLDVPChoVanThu', 'ForwardType', 'MigrateErrMess'];
+
+            Object.keys(params || {}).forEach(key => {
+                const value = params[key];
+
+                // Explicit declare NVARCHAR(MAX) cho các fields dài
+                if (maxFields.includes(key)) {
+                    request.input(key, sql.NVarChar(sql.MAX), value);
+                }
+                // Các field khác để driver tự infer
+                else {
+                    request.input(key, value);
+                }
+            });
+
+            const result = await request.query(query);
+            return result.recordset;
+        } catch (error) {
+            logger.error(`Lỗi query database mới: ${error.message}`);
+            throw error;
+        }
+    }
+    sanitizeColumnName(column) {
+        if (!/^[A-Za-z0-9_]+$/.test(column)) {
+            throw new Error(`Invalid column name from source: ${column}`);
+        }
+        return `[${column}]`;
+    }
+    extractRowSyncTime(row) {
+        const raw = row?.__sync_time || row?.Modified || row?.NgayTao || row?.updated_at || null;
+        if (!raw) return null;
+        const dateValue = new Date(raw);
+        if (Number.isNaN(dateValue.getTime())) return null;
+        return dateValue.toISOString();
+    }
+
+    extractRowSyncId(row) {
+        return Number(row?.__sync_id || row?.ID || 0);
+    }
+
+    isCursorAhead(aTime, aId, bTime, bId) {
+        const ta = new Date(aTime || DEFAULT_SYNC_TIME).getTime();
+        const tb = new Date(bTime || DEFAULT_SYNC_TIME).getTime();
+        if (ta > tb) return true;
+        if (ta < tb) return false;
+        return Number(aId || 0) > Number(bId || 0);
+    }
+    normalizeSyncTime(value) {
+        if (!value) return DEFAULT_SYNC_TIME;
+        const dateValue = new Date(value);
+        if (Number.isNaN(dateValue.getTime())) return DEFAULT_SYNC_TIME;
+        return dateValue.toISOString();
+    }
+    parseStatus(value) {
+        const statusStr = String(value || '');
+        if (statusStr === '-1') return 3;
+        return 1;
+    }
+
+    parseBit(value) {
+        if (value === '1' || value === 1 || value === true) return 1;
+        if (value === '0' || value === 0 || value === false) return 0;
+        return 0;
+    }
+    safeDate(value) {
+        if (value === 'NULL' || value === 'null' || value === null || value === undefined) {
+            return null;
+        }
+        try {
+            const dateStr = String(value).trim();
+            if (!dateStr) return null;
+            const date = new Date(dateStr);
+            return Number.isNaN(date.getTime()) ? null : date;
+        } catch (error) {
+            return null;
+        }
+    }
+    safeNumber(value, defaultValue = 0) {
+        if (value === 'NULL' || value === 'null' || value === null || value === undefined) {
+            return defaultValue;
+        }
+        const num = Number(value);
+        return Number.isNaN(num) ? defaultValue : num;
+    }
+    safeString(value) {
+        if (value === 'NULL' || value === 'null' || value === null || value === undefined) {
+            return null;
+        }
+        const strValue = String(value).trim();
+        if (strValue === '' || strValue === 'NULL' || strValue === 'null') {
+            return null;
+        }
+        return strValue;
+    }
+    /**
+     * Strip HTML tags from string
+     * @param {*} value - value to clean
+     * @returns {string|null}
+     */
+    stripHtml(value) {
+        const str = this.safeString(value);
+        if (!str) return null;
+        return str.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+    /**
+     * Safe string cho các field chứa số (có thể là số hoặc chuỗi)
+     */
+    safeStringOrNumber(value) {
+        const str = this.safeString(value);
+        if (!str) return null;
+        // Nếu là số thuần túy, giữ nguyên
+        if (/^\d+$/.test(str)) return str;
+        // Nếu là format số văn bản, giữ nguyên
+        return str;
+    }
+    /**
+     * Truncate string to max length to prevent SQL truncation errors
+     * @param {*} value - value to truncate
+     * @param {number} maxLength - maximum length
+     * @returns {string|null}
+     */
+    safeTruncate(value, maxLength) {
+        const str = this.safeString(value);
+        if (!str) return null;
+        if (str.length <= maxLength) return str;
+        return str.substring(0, maxLength);
+    }
+    /**
+   * Lấy danh sách user từ CSDL cũ sau `lastSyncTime`.
+   * Trả về mảng bản ghi (ID, AccountName, FullName, Modified, NgayTao) đã sắp xếp theo thời gian sửa/tao.
+   * @param {string} lastSyncTime - ISO datetime hoặc giá trị mặc định để lấy từ thời điểm đó về sau
+   * @returns {Promise<Array>} danh sách bản ghi từ CSDL cũ
+   */
+    async fetchListFromOldDb(lastSyncTime, lastSyncId = 0) {
+        const query = `
+      ;WITH source_rows AS (
+        SELECT
+          *,
+          COALESCE(TRY_CONVERT(datetime2, Modified), TRY_CONVERT(datetime2, Created)) AS __sync_time,
+          TRY_CONVERT(
+            BIGINT,
+            NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
+          ) AS __sync_id_num
+        FROM ${this.oldDbSchema}.${this.oldDbTable}
+      )
+      SELECT
+        *,
+        ISNULL(__sync_id_num, 0) AS __sync_id
+      FROM source_rows
+      WHERE (
+        __sync_time > @lastSyncTime
+        OR (
+          __sync_time = @lastSyncTime
+          AND ISNULL(__sync_id_num, -9223372036854775808) > @lastSyncId
+        )
+      )
+      ORDER BY
+        __sync_time ASC,
+        ISNULL(__sync_id_num, -9223372036854775808) ASC,
+        ID ASC
+    `;
+
+        return this.queryOldDb(query, {
+            lastSyncTime,
+            lastSyncId: Number(lastSyncId || 0)
+        });
+    }
+
+    async syncOldToStaging(rows, { transaction } = {}) {
+        if (!Array.isArray(rows) || rows.length === 0) {
+            return { stagedCount: 0 };
+        }
+
+        const internalColumns = new Set(['__sync_time', '__sync_id', '__sync_id_num']);
+        const columns = Object.keys(rows[0] || {}).filter((column) => !internalColumns.has(column));
+        if (!columns.length) {
+            return { stagedCount: 0 };
+        }
+
+        if (!columns.includes('ID')) {
+            throw new Error('Staging sync requires source column "ID"');
+        }
+
+        const safeColumns = columns.map((column) => this.sanitizeColumnName(column));
+        const nonIdColumns = columns.filter((column) => column !== 'ID');
+        const safeNonIdColumns = nonIdColumns.map((column) => this.sanitizeColumnName(column));
+        const stagingTableRef = this.getStagingTableRef();
+
+        for (const row of rows) {
+            const params = {};
+            for (const column of columns) {
+                params[column] = row[column];
+            }
+
+            const updateClause = safeNonIdColumns
+                .map((columnName, idx) => `${columnName} = @${nonIdColumns[idx]}`)
+                .join(', ');
+
+            const query = `
+        IF EXISTS (SELECT 1 FROM ${stagingTableRef} WHERE ID = @ID)
+        BEGIN
+          ${nonIdColumns.length > 0 ? `
+          UPDATE ${stagingTableRef}
+          SET ${updateClause}
+          WHERE ID = @ID;` : `
+          SELECT 1 AS noop;`}
+        END
+        ELSE
+        BEGIN
+          INSERT INTO ${stagingTableRef} (${safeColumns.join(', ')})
+          VALUES (${columns.map((column) => `@${column}`).join(', ')});
+        END
+      `;
+
+            await this.queryNewDbTx(query, params, transaction);
+        }
+
+        return { stagedCount: rows.length };
+    }
+
+
+    async getList(lastSyncTime, syncJobId, lastSyncId = 0) {
+        if (!syncJobId) {
+            throw new Error('syncJobId is required');
+        }
+
+        const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
+        const normalizedLastSyncId = Number(lastSyncId || 0);
+        const rows = await this.fetchListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId);
+        const limitRows = rows.slice(0, 200); // Giới hạn số bản ghi lấy về để tránh quá tải
+        const stageResult = await this.syncOldToStaging(limitRows);
+
+        let nextSyncTime = normalizedLastSyncTime;
+        let nextSyncId = normalizedLastSyncId;
+
+        for (const row of limitRows) {
+            const rowTime = this.extractRowSyncTime(row);
+            const rowId = this.extractRowSyncId(row);
+            if (!rowTime) continue;
+            if (this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId)) {
+                nextSyncTime = rowTime;
+                nextSyncId = rowId;
+            }
+        }
+
+        return {
+            syncJobId,
+            rows,
+            totalCount: rows.length,
+            stagedCount: Number(stageResult?.stagedCount || 0),
+            sourceLastSyncTime: normalizedLastSyncTime,
+            sourceLastSyncId: normalizedLastSyncId,
+            lastSyncTime: nextSyncTime,
+            lastSyncId: nextSyncId
+        };
+    }
+    /**
+   * Đếm số user hiện có trong bảng `user_clone_for_sync` (schema mặc định của service).
+   * @returns {Promise<number>} tổng số bản ghi
+   */
+    async countNewIncommingDocument() {
+        const rows = await this.queryNewDb(
+            `
+      SELECT COUNT(1) AS total
+      FROM ${this.newDbSchema}.${this.newDbTable}
+      `
+        );
+        return Number(rows?.[0]?.total || 0);
+    }
+    async getSyncJobState(syncJobId) {
+        if (!syncJobId) {
+            throw new Error('syncJobId is required');
+        }
+
+        const rows = await this.queryNewDb(
+            `
+      SELECT TOP 1
+        job_id,
+        total_to_sync,
+        total_processed,
+        total_success,
+        total_errors,
+        last_sync_time,
+        last_sync_id
+      FROM sync_jobs
+      WHERE job_id = @syncJobId
+      `,
+            { syncJobId }
+        );
+
+        return rows?.[0] || null;
+    }
+    /**
+   * Returns SQL expression that normalizes source sync time across supported columns.
+   * @returns {string}
+   */
+    getSyncTimeExpression() {
+        return `
+      COALESCE(
+        TRY_CONVERT(datetime2, Modified),
+        TRY_CONVERT(datetime2, Created)
+      )
+    `;
+    }
+
+    async processOne(syncJobId, options = {}) {
+        if (!syncJobId) {
+            throw new Error('syncJobId is required');
+        }
+
+        const jobState = await this.getSyncJobState(syncJobId);
+        const itemIndex = Number(
+            options.itemIndex != null
+                ? options.itemIndex
+                : (jobState?.total_processed || 0)
+        );
+
+        const sourceLastSyncTime = this.normalizeSyncTime(
+            options.sourceLastSyncTime || options.lastSyncTime || jobState?.last_sync_time || DEFAULT_SYNC_TIME
+        );
+        const sourceLastSyncId = Number(
+            options.sourceLastSyncId != null
+                ? options.sourceLastSyncId
+                : (jobState?.last_sync_id || 0)
+        );
+
+        const transaction = new sql.Transaction(this.newPool);
+        await transaction.begin();
+
+        try {
+            const rowData = await this.fetchOneFromStaging({
+                lastSyncTime: sourceLastSyncTime,
+                lastSyncId: sourceLastSyncId,
+                itemIndex,
+                transaction
+            });
+
+            if (!rowData) {
+                await transaction.commit();
+                return {
+                    syncJobId,
+                    itemIndex,
+                    processed: false,
+                    done: true
+                };
+            }
+
+            const result = await this.processRowData(rowData, { transaction });
+            await transaction.commit();
+
+            return {
+                syncJobId,
+                itemIndex,
+                processed: true,
+                done: false,
+                rowId: rowData.ID || null,
+                result
+            };
+        } catch (error) {
+            try {
+                await transaction.rollback();
+            } catch (rollbackError) {
+                logger.error('[OutGoingDocumentModel.processOne] rollback failed:', rollbackError);
+            }
+            throw error;
+        }
+    }
+
+
+    async fetchOneFromStaging({ lastSyncTime, lastSyncId = 0, itemIndex, transaction } = {}) {
+        const rowNumber = Number(itemIndex || 0) + 1;
+        const stagingTableRef = this.getStagingTableRef();
+        const syncTimeExpr = this.getSyncTimeExpression();
+        const query = `
+      ;WITH source_rows AS (
+        SELECT
+          *,
+          ${syncTimeExpr} AS __sync_time,
+          TRY_CONVERT(
+            BIGINT,
+            NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
+          ) AS __sync_id_num
+        FROM ${stagingTableRef}
+      ),
+      staged AS (
+        SELECT
+          *,
+          ROW_NUMBER() OVER (
+            ORDER BY
+              __sync_time ASC,
+              ISNULL(__sync_id_num, -9223372036854775808) ASC,
+              ID ASC
+          ) AS rn
+        FROM source_rows
+        WHERE (
+          __sync_time > @lastSyncTime
+          OR (
+            __sync_time = @lastSyncTime
+            AND ISNULL(__sync_id_num, -9223372036854775808) > @lastSyncId
+          )
+        )
+      )
+      SELECT TOP 1 *
+      FROM staged
+      WHERE rn = @rowNumber
+    `;
+
+        const rows = await this.queryNewDbTx(
+            query,
+            {
+                lastSyncTime,
+                lastSyncId: Number(lastSyncId || 0),
+                rowNumber
+            },
+            transaction
+        );
+
+        if (!rows?.length) {
+            return null;
+        }
+
+        const row = { ...rows[0] };
+        delete row.rn;
+        return row;
+    }
+    async processSingleRecord(rowData, transaction) {
+        if (!rowData || typeof rowData !== "object") {
+            throw new Error("rowData is required");
+        }
+
+        if (!rowData.ID) {
+            throw new Error("rowData.ID is required");
+        }
+
+        if (!transaction) {
+            throw new Error("Transaction is required");
+        }
+
+        try {
+            // 1. Map raw -> main structure
+            const mapped = await this._mapSingleRecord(rowData, transaction);
+
+            if (!mapped?.document_id) {
+                throw new Error("Mapped document_id is required");
+            }
+
+            // 2. Check tồn tại
+            const mainTableRef = this.getMainTableRef();
+            const existingQuery = `
+        SELECT TOP 1 document_id
+        FROM ${mainTableRef}
+        WHERE id_incoming_bak = @idIncomingBak
+      `;
+
+            const existing = await this.queryNewDbTx(
+                existingQuery,
+                { idIncomingBak: mapped.id_incoming_bak },
+                transaction
+            );
+
+            if (existing && existing.length > 0) {
+                await this._updateRecord(mapped, transaction);
+
+                return {
+                    action: "updated",
+                    affected: 1,
+                    documentId: existing[0].document_id
+                };
+            }
+
+            await this._insertRecord(mapped, transaction);
+
+            return {
+                action: "inserted",
+                affected: 1,
+                documentId: mapped.document_id
+            };
+
+        } catch (error) {
+            logger.error(
+                `[processSingleRecord] Error ID=${rowData?.ID}: ${error.message}`
+            );
+            throw error;
+        }
+    }
+
+    async _insertRecord(record, transaction) {
+        const mainTableRef = this.getMainTableRef();
+        const query = `
+      INSERT INTO ${mainTableRef} (
+        document_id, status_code, created_at, updated_at, book_document_id,
+        abstract_note, to_book, sender_unit, receiver_unit,
+        document_date, receive_date, to_book_date, deadline, second_book, receive_method,
+        private_level, urgency_level, document_type, document_field,
+        signer, to_book_code, fileids, status, isStar,
+        parent_doc, type_process_doc, bpmn_version, copy_to_internal,
+        resolution_deadline, copy_count, page_count, view_group, directive_comment,
+        SoVanBan, id_incoming_bak,
+        DonVi, IsLibrary, ItemVBDTCT, ItemVBPH, ItemVBPHOld,
+        BanLanhDao, LanhDaoTCT, LanhDaoTCTDaXuLy, LanhDaoTCTDeBiet, LanhDaoVPDN,
+        LinhVuc, SoBan, SoTrang, TrichYeu, VanBanTraLoi, ChenSo,
+        YKienLanhDao, YKienLanhDaoTCT, YKienLanhDaoVPDN, YKienCuaLDVPChoVanThu,
+        ForwardType, ModuleId, SiteName, ListName, ItemId,
+        MigrateFlg, YearMonth, MigrateErrFlg, MigrateErrMess,
+        TrangThai, ModifiedBy, CreatedBy, DGPId, deadline_reply
+      )
+      VALUES (
+        @document_id, @status_code, @created_at, @updated_at, @book_document_id,
+        @abstract_note, @to_book, @sender_unit, @receiver_unit,
+        @document_date, @receive_date, @to_book_date, @deadline, @second_book, @receive_method,
+        @private_level, @urgency_level, @document_type, @document_field,
+        @signer, @to_book_code, @fileids, @status, @isStar,
+        @parent_doc, @type_process_doc, @bpmn_version, @copy_to_internal,
+        @resolution_deadline, @copy_count, @page_count, @view_group, @directive_comment,
+        @SoVanBan, @id_incoming_bak,
+        @DonVi, @IsLibrary, @ItemVBDTCT, @ItemVBPH, @ItemVBPHOld,
+        @BanLanhDao, @LanhDaoTCT, @LanhDaoTCTDaXuLy, @LanhDaoTCTDeBiet, @LanhDaoVPDN,
+        @LinhVuc, @SoBan, @SoTrang, @TrichYeu, @VanBanTraLoi, @ChenSo,
+        @YKienLanhDao, @YKienLanhDaoTCT, @YKienLanhDaoVPDN, @YKienCuaLDVPChoVanThu,
+        @ForwardType, @ModuleId, @SiteName, @ListName, @ItemId,
+        @MigrateFlg, @YearMonth, @MigrateErrFlg, @MigrateErrMess,
+        @TrangThai, @ModifiedBy, @CreatedBy, @DGPId, @deadline_reply
+      )
+    `;
+
+        const params = this._mapRecordParams(record);
+        await this.queryNewDbTx(query, params, transaction);
+    }
+
+    async _updateRecord(record, transaction) {
+        const mainTableRef = this.getMainTableRef();
+        const query = `
+      UPDATE ${mainTableRef}
+      SET
+        status_code = @status_code,
+        updated_at = GETDATE(),
+        book_document_id = @book_document_id,
+        abstract_note = @abstract_note,
+        to_book = @to_book,
+        sender_unit = @sender_unit,
+        receiver_unit = @receiver_unit,
+        document_date = @document_date,
+        receive_date = @receive_date,
+        to_book_date = @to_book_date,
+        deadline = @deadline,
+        second_book = @second_book,
+        receive_method = @receive_method,
+        private_level = @private_level,
+        urgency_level = @urgency_level,
+        document_type = @document_type,
+        document_field = @document_field,
+        signer = @signer,
+        to_book_code = @to_book_code,
+        fileids = @fileids,
+        status = @status,
+        isStar = @isStar,
+        parent_doc = @parent_doc,
+        type_process_doc = @type_process_doc,
+        bpmn_version = @bpmn_version,
+        copy_to_internal = @copy_to_internal,
+        resolution_deadline = @resolution_deadline,
+        copy_count = @copy_count,
+        page_count = @page_count,
+        view_group = @view_group,
+        directive_comment = @directive_comment,
+        SoVanBan = @SoVanBan,
+        DonVi = @DonVi,
+        IsLibrary = @IsLibrary,
+        ItemVBDTCT = @ItemVBDTCT,
+        ItemVBPH = @ItemVBPH,
+        ItemVBPHOld = @ItemVBPHOld,
+        BanLanhDao = @BanLanhDao,
+        LanhDaoTCT = @LanhDaoTCT,
+        LanhDaoTCTDaXuLy = @LanhDaoTCTDaXuLy,
+        LanhDaoTCTDeBiet = @LanhDaoTCTDeBiet,
+        LanhDaoVPDN = @LanhDaoVPDN,
+        LinhVuc = @LinhVuc,
+        SoBan = @SoBan,
+        SoTrang = @SoTrang,
+        TrichYeu = @TrichYeu,
+        VanBanTraLoi = @VanBanTraLoi,
+        ChenSo = @ChenSo,
+        YKienLanhDao = @YKienLanhDao,
+        YKienLanhDaoTCT = @YKienLanhDaoTCT,
+        YKienLanhDaoVPDN = @YKienLanhDaoVPDN,
+        YKienCuaLDVPChoVanThu = @YKienCuaLDVPChoVanThu,
+        ForwardType = @ForwardType,
+        ModuleId = @ModuleId,
+        SiteName = @SiteName,
+        ListName = @ListName,
+        ItemId = @ItemId,
+        MigrateFlg = @MigrateFlg,
+        YearMonth = @YearMonth,
+        MigrateErrFlg = @MigrateErrFlg,
+        MigrateErrMess = @MigrateErrMess,
+        TrangThai = @TrangThai,
+        ModifiedBy = @ModifiedBy,
+        CreatedBy = @CreatedBy,
+        DGPId = @DGPId,
+        deadline_reply = @deadline_reply
+      WHERE id_incoming_bak = @id_incoming_bak
+    `;
+
+        const params = this._mapRecordParams(record);
+        await this.queryNewDbTx(query, params, transaction);
+    }
+
+    async _mapSingleRecord(oldRecord, transaction) {
+        if (!oldRecord?.ID) {
+            throw new Error("Old record ID is required");
+        }
+
+        const documentType = await this.helper.processDocumentType(
+            oldRecord.LoaiVanBan || oldRecord.LoaiBanHanh
+        );
+
+        const urgencyLevel = await this.helper.processUrgencyLevel(oldRecord.DoKhan);
+        const privateLevel = await this.helper.processPrivateLevel(oldRecord.DoMat);
+
+        const senderUnit = await this.helper.mapSenderUnitId(
+            oldRecord.CoQuanGui || oldRecord.CoQuanGuiText,
+            transaction);
+        
+        const drafter = await this.helper.mapUserName(
+            oldRecord.CreatedBy || oldRecord.NguoiSoanThaoText,
+            transaction
+        );
+
+        const bookDocumentObj = await this.helper.mapBookDocument(
+            oldRecord.SoVanBan || oldRecord.SoVanBanText,
+            { drafter, senderUnit, privateLevel }
+        );
+
+        // Map đơn vị nhận
+        const units = this.helper.splitStringSplitBySemicolon(oldRecord.NoiNhan);
+        const internalReceivingDeptIds = [];
+        for (const unit of units) {
+            const id = await this.helper.mapSenderUnitId(unit, transaction);
+            if (id) {
+                internalReceivingDeptIds.push(id);
+            }
+        }
+        const receiverUnitStr = JSON.stringify(internalReceivingDeptIds);
+
+        const statusCode = '100';
+        const createdAt = this.safeDate(oldRecord.Created);
+        const updatedAt = this.safeDate(oldRecord.Modified || oldRecord.modifiedBy);
+        const abstractNote = this.safeString(oldRecord.TrichYeu);
+        const toBook = bookDocumentObj?.count ?? null;
+        const documentDate = this.safeDate(oldRecord.NgayTrenVB);
+        const receiveDate = this.safeDate(oldRecord.NgayDen);
+        const deadline = this.safeDate(oldRecord.ThoiHanGQ);
+        const documentField = await this.helper.documentField(oldRecord.LinhVuc);
+        const status = this.helper.parseStatus(oldRecord.TrangThai);
+        const pageCount = this.safeNumber(oldRecord.SoTrang, null);
+        const soBan = this.safeNumber(oldRecord.SoBan, null);
+
+        return {
+            // Core fields
+            document_id: `${Date.now()}${Math.floor(Math.random() * 10000)}`,
+            status_code: statusCode,
+            created_at: createdAt,
+            updated_at: updatedAt,
+            book_document_id: bookDocumentObj?.id ?? null,
+            abstract_note: abstractNote,
+            to_book: toBook,
+            sender_unit: senderUnit,
+            receiver_unit: receiverUnitStr,
+            document_date: documentDate,
+            receive_date: receiveDate,
+            to_book_date: null,
+            deadline: deadline,
+            second_book: null,
+            receive_method: null,
+            private_level: privateLevel,
+            urgency_level: urgencyLevel,
+            document_type: documentType,
+            document_field: documentField,
+            signer: null,
+            to_book_code: null,
+            fileids: this.safeString(oldRecord.Files),
+            status: status,
+            isStar: 0,
+            parent_doc: null,
+            type_process_doc: null,
+            bpmn_version: 'PHUC_DAP_DV',
+            copy_to_internal: null,
+            resolution_deadline: null,
+            copy_count: null,
+            page_count: pageCount,
+            view_group: null,
+            directive_comment: null,
+
+            // Legacy/backup columns from old database
+            SoVanBan: this.safeString(oldRecord.SoVanBan),
+            id_incoming_bak: String(oldRecord.ID),
+            CoQuanGui2: this.safeString(oldRecord.CoQuanGui2),
+            CoQuanGuiText: this.safeString(oldRecord.CoQuanGuiText),
+            DonVi: this.safeString(oldRecord.DonVi),
+            IsLibrary: this.parseBit(oldRecord.IsLibrary),
+            ItemVBDTCT: this.safeString(oldRecord.ItemVBDTCT),
+            ItemVBPH: this.safeString(oldRecord.ItemVBPH),
+            ItemVBPHOld: this.safeString(oldRecord.ItemVBPHOld),
+            BanLanhDao: this.safeString(oldRecord.BanLanhDao),
+            LanhDaoTCT: this.safeString(oldRecord.LanhDaoTCT),
+            LanhDaoTCTDaXuLy: this.safeString(oldRecord.LanhDaoTCTDaXuLy),
+            LanhDaoTCTDeBiet: this.safeString(oldRecord.LanhDaoTCTDeBiet),
+            LanhDaoVPDN: this.safeString(oldRecord.LanhDaoVPDN),
+            LinhVuc: this.safeString(oldRecord.LinhVuc),
+            SoBan: soBan,
+            SoTrang: pageCount,
+            TrichYeu: abstractNote,
+            VanBanTraLoi: this.safeString(oldRecord.VanBanTraLoi),
+            ChenSo: this.parseBit(oldRecord.ChenSo),
+            YKienLanhDao: this.safeString(oldRecord.YKienLanhDao),
+            YKienLanhDaoTCT: this.safeString(oldRecord.YKienLanhDaoTCT),
+            YKienLanhDaoVPDN: this.safeString(oldRecord.YKienLanhDaoVPDN),
+            YKienCuaLDVPChoVanThu: this.safeString(oldRecord.YKienCuaLDVPChoVanThu),
+            ForwardType: this.safeNumber(oldRecord.ForwardType || oldRecord.Files, null),
+            ModuleId: this.safeNumber(oldRecord.ModuleId, null),
+            SiteName: this.safeString(oldRecord.SiteName),
+            ListName: this.safeString(oldRecord.ListName),
+            ItemId: this.safeNumber(oldRecord.ItemId, null),
+            MigrateFlg: this.safeNumber(oldRecord.MigrateFlg, null),
+            YearMonth: this.safeString(oldRecord.YearMonth),
+            MigrateErrFlg: this.safeNumber(oldRecord.MigrateErrFlg, null),
+            MigrateErrMess: this.safeString(oldRecord.MigrateErrMess),
+            TrangThai: this.safeString(oldRecord.TrangThai),
+            ModifiedBy: this.safeString(oldRecord.ModifiedBy),
+            CreatedBy: this.safeString(oldRecord.CreatedBy),
+            DGPId: this.safeNumber(oldRecord.DGPId, null),
+            deadline_reply: this.safeString(oldRecord.ThoiHanGQ),
+        }
+    }
+
+    _mapRecordParams(record) {
+        return {
+            // Core fields
+            document_id: record.document_id ?? null,
+            status_code: record.status_code ?? null,
+            created_at: record.created_at ?? null,
+            updated_at: record.updated_at ?? null,
+            book_document_id: record.book_document_id ?? null,
+            abstract_note: record.abstract_note ?? null,
+            to_book: record.to_book ?? null,
+            sender_unit: record.sender_unit ?? null,
+            receiver_unit: record.receiver_unit ?? null,
+            document_date: record.document_date ?? null,
+            receive_date: record.receive_date ?? null,
+            to_book_date: record.to_book_date ?? null,
+            deadline: record.deadline ?? null,
+            second_book: record.second_book ?? null,
+            receive_method: record.receive_method ?? null,
+            private_level: record.private_level ?? null,
+            urgency_level: record.urgency_level ?? null,
+            document_type: record.document_type ?? null,
+            document_field: record.document_field ?? null,
+            signer: record.signer ?? null,
+            to_book_code: record.to_book_code ?? null,
+            fileids: record.fileids ?? null,
+            status: record.status ?? 1,
+            isStar: record.isStar ?? 0,
+            parent_doc: record.parent_doc ?? null,
+            type_process_doc: record.type_process_doc ?? null,
+            bpmn_version: record.bpmn_version ?? null,
+            copy_to_internal: record.copy_to_internal ?? null,
+            resolution_deadline: record.resolution_deadline ?? null,
+            copy_count: record.copy_count ?? null,
+            page_count: record.page_count ?? null,
+            view_group: record.view_group ?? null,
+            directive_comment: record.directive_comment ?? null,
+
+            // Legacy/backup columns
+            SoVanBan: record.SoVanBan ?? null,
+            id_incoming_bak: record.id_incoming_bak ?? null,
+            CoQuanGui2: record.CoQuanGui2 ?? null,
+            CoQuanGuiText: record.CoQuanGuiText ?? null,
+            DonVi: record.DonVi ?? null,
+            IsLibrary: record.IsLibrary ?? null,
+            ItemVBDTCT: record.ItemVBDTCT ?? null,
+            ItemVBPH: record.ItemVBPH ?? null,
+            ItemVBPHOld: record.ItemVBPHOld ?? null,
+            BanLanhDao: record.BanLanhDao ?? null,
+            LanhDaoTCT: record.LanhDaoTCT ?? null,
+            LanhDaoTCTDaXuLy: record.LanhDaoTCTDaXuLy ?? null,
+            LanhDaoTCTDeBiet: record.LanhDaoTCTDeBiet ?? null,
+            LanhDaoVPDN: record.LanhDaoVPDN ?? null,
+            LinhVuc: record.LinhVuc ?? null,
+            SoBan: record.SoBan ?? null,
+            SoTrang: record.SoTrang ?? null,
+            TrichYeu: record.TrichYeu ?? null,
+            VanBanTraLoi: record.VanBanTraLoi ?? null,
+            ChenSo: record.ChenSo ?? null,
+            YKienLanhDao: record.YKienLanhDao ?? null,
+            YKienLanhDaoTCT: record.YKienLanhDaoTCT ?? null,
+            YKienLanhDaoVPDN: record.YKienLanhDaoVPDN ?? null,
+            YKienCuaLDVPChoVanThu: record.YKienCuaLDVPChoVanThu ?? null,
+            ForwardType: record.ForwardType ?? null,
+            ModuleId: record.ModuleId ?? null,
+            SiteName: record.SiteName ?? null,
+            ListName: record.ListName ?? null,
+            ItemId: record.ItemId ?? null,
+            MigrateFlg: record.MigrateFlg ?? null,
+            YearMonth: record.YearMonth ?? null,
+            MigrateErrFlg: record.MigrateErrFlg ?? null,
+            MigrateErrMess: record.MigrateErrMess ?? null,
+            TrangThai: record.TrangThai ?? null,
+            ModifiedBy: record.ModifiedBy ?? null,
+            CreatedBy: record.CreatedBy ?? null,
+            DGPId: record.DGPId ?? null,
+            deadline_reply: record.deadline_reply ?? null,
+        }
+    }
+    
+}
+module.exports = SyncIncomingDocumentModel;
