@@ -360,4 +360,7 @@ router.use('/sync-outgoing', SyncOutgoingRoutes);
 const CommentRoutes = require('../src/older-sync-document-comment/route');
 router.use('/document-comments', CommentRoutes);
 
+const TaskCopyRoutes = require('../src/sync-tasks/route');
+router.use('/sync-tasks', TaskCopyRoutes);
+
 module.exports = router;
