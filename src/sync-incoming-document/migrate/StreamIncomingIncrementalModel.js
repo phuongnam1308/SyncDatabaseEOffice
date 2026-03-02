@@ -258,7 +258,7 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
           ) AS __sync_id_num
         FROM ${this.oldDbSchema}.${this.oldDbTable}
       )
-      SELECT
+      SELECT TOP (1000)
         *,
         ISNULL(__sync_id_num, 0) AS __sync_id
       FROM source_rows
