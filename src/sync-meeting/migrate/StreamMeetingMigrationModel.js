@@ -1,3 +1,4 @@
+const MigrationHelper = require('../../helpers/MigrationHelper');
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 const { tableMappings } = require('./config');
 
@@ -18,6 +19,7 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     this.newDbName = this.oldConfig.newDatabase;
     this.newDbSchema = this.oldConfig.newSchema;
     this.newTableSync = 'meeting_sync_staging';
+    this.helper = new MigrationHelper(this.queryNewDbTx.bind(this), this.queryOldDb.bind(this));
   }
   log(level, message, meta = {}) {
     const payload = {
@@ -95,6 +97,8 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
             CAST(U.tp_ColumnSet AS XML).value('(nvarchar6)[1]', 'nvarchar(255)')  AS LoaiHop,
             CAST(U.tp_ColumnSet AS XML).value('(ntext7)[1]', 'nvarchar(max)')     AS NoiDung,
             CAST(U.tp_ColumnSet AS XML).value('(int2)[1]', 'int')                 AS ThoiLuongGiay,
+            CAST(U.tp_ColumnSet AS XML).value('(nvarchar10)[1]', 'nvarchar(255)') AS ChuTri,
+            CAST(U.tp_ColumnSet AS XML).value('(nvarchar14)[1]', 'nvarchar(255)') AS ThuKy,
 
             U.tp_Created,
             U.tp_Modified,
@@ -230,8 +234,6 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
 
     const rows = await this.fetchListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId);
 
-    console.log('[STREAM_MEETING_MIGRATION] FETCHED FROM OLD DB:', rows);
-
     const stageResult = await this.syncOldToStaging(rows);
 
     console.log('[STREAM_MEETING_MIGRATION] STAGED:', stageResult?.stagedCount);
@@ -289,7 +291,8 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
                 CAST(U.tp_ColumnSet AS XML).value('(nvarchar6)[1]', 'nvarchar(255)')  AS LoaiHop,
                 CAST(U.tp_ColumnSet AS XML).value('(ntext7)[1]', 'nvarchar(max)')     AS NoiDung,
                 CAST(U.tp_ColumnSet AS XML).value('(int2)[1]', 'int')                 AS ThoiLuongGiay,
-
+                CAST(U.tp_ColumnSet AS XML).value('(nvarchar10)[1]', 'nvarchar(255)') AS ChuTri,
+                CAST(U.tp_ColumnSet AS XML).value('(nvarchar14)[1]', 'nvarchar(255)') AS ThuKy,
                 U.tp_Created,
                 U.tp_Modified,
                 U.tp_Version,
@@ -383,7 +386,23 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     const recordId = String(rowData.ID);
 
     const { externalKey } = tableMappings.meeting;
+    const isOnlineZoom = typeof rowData.DiaDiem === 'string' &&  rowData.DiaDiem.toLowerCase().includes('zoom');
+    
 
+    if (rowData.ChuTri) {
+      rowData.ChuTri = await this.helper.mapUserName(rowData.ChuTri, transaction);
+    }
+
+    if (rowData.ThuKy) {
+      rowData.ThuKy = await this.helper.mapUserName(rowData.ThuKy, transaction);
+    }
+
+    if (rowData.DiaDiem) {
+      rowData.DiaDiem = await this.helper.mapMeetingRoom(
+        rowData.DiaDiem,
+        transaction
+      );
+    }
     const result = await this.upsertDataToNewDB(
       rowData,
       tableMappings.meeting,
@@ -392,11 +411,126 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
       transaction
     );
 
+    const meetingId = result.id;
+    if (isOnlineZoom && meetingId) {
+      await this.helper.createOnlineMeeting(meetingId, 'ZOOM', transaction);
+    }
+    await this.helper.createRecurrenceKhong(
+      meetingId,
+      rowData.BatDau,
+      transaction
+    );
+
+    await this.helper.createChairmanAndSecretary(
+      meetingId,
+      rowData.ChuTri,
+      rowData.ThuKy,
+      transaction
+    );
+    await this.createDefaultAuditForMigration(meetingId, rowData.created_by, transaction);
+
     return {
       backupId: recordId,
       affected: result.affected,
       logs: [{ table: 'meetings', action: result.action }]
     };
+  }
+
+  async createDefaultAuditForMigration(meetingId, creatorUserId, transaction = null) {
+    const query = `
+      INSERT INTO ${this.newDbName}.${this.newDbSchema}.audit
+      (
+        document_id,
+        time,
+        user_id,
+        display_name,
+        role,
+        action_code,
+        from_node_id,
+        to_node_id,
+        details,
+        origin_id,
+        created_by,
+        receiver,
+        roleProcess,
+        action,
+        stage_status,
+        curStatusCode,
+        type_document,
+        created_at,
+        updated_at
+      )
+      VALUES
+      (
+        @meetingId,
+        SYSUTCDATETIME(),
+        'SYSTEM_MIGRATION',
+        NULL,
+        'NGUOI_SOAN_LICH',
+        'CREATE',
+        'Activity_1rl80cg',
+        'Activity_1rl80cg',
+        '{"transferType":"to_person"}',
+        NULL,
+        'SYSTEM_MIGRATION',
+        'SYSTEM_MIGRATION',
+        'processor',
+        N'Tạo văn bản',
+        'DA_XU_LY',
+        '1',
+        'Meeting',
+        SYSUTCDATETIME(),
+        SYSUTCDATETIME()
+      ),
+      (
+        @meetingId,
+        SYSUTCDATETIME(),
+        'SYSTEM_MIGRATION',
+        'System Migration',
+        'NGUOI_SOAN_LICH',
+        'TRINH_LICH',
+        'Activity_1rl80cg',
+        'Gateway_16pjuoq',
+        '{"note":""}',
+        'migration_origin',
+        'SYSTEM_MIGRATION',
+        'BAN_QUAN_LY_PHONG',
+        'processor',
+        N'Chuyển Ban quản lý phòng',
+        'DONG_Y_PHE_DUYET',
+        '2',
+        'Meeting',
+        SYSUTCDATETIME(),
+        SYSUTCDATETIME()
+      ),
+      (
+        @meetingId,
+        SYSUTCDATETIME(),
+        'SYSTEM_MIGRATION',
+        'Quản lý phòng',
+        'BAN_QUAN_LY_PHONG_HOP',
+        'PHE_DUYET_LICH',
+        'Gateway_16pjuoq',
+        'Activity_18dmg6c',
+        NULL,
+        'migration_origin',
+        'SYSTEM_MIGRATION',
+        'SYSTEM_MIGRATION',
+        'seat',
+        N'Gán vị trí chỗ ngồi',
+        'CHUA_XU_LY',
+        '3',
+        'Meeting',
+        SYSUTCDATETIME(),
+        SYSUTCDATETIME()
+      )
+    `;
+    console.log('[StreamMeetingMigrationModel] createDefaultAuditForMigration', { meetingId });
+    await this.helper.queryNewDbTx(
+      query,
+      { meetingId },
+      transaction
+    );
   }
 
   async getExistingColumns(tableName, schema = 'dbo') {
@@ -465,31 +599,33 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     const tableRef = `[${newSchema}].[${newTable}]`;
 
     const query = `
-        IF EXISTS (
-            SELECT 1 FROM ${tableRef}
-            WHERE [${externalKeyField}] = @_externalKeyValue
-        )
-        BEGIN
-            UPDATE ${tableRef}
-            SET ${updateSet.length ? updateSet.join(', ') : `${externalKeyField} = ${externalKeyField}`}
-            WHERE [${externalKeyField}] = @_externalKeyValue;
+      IF EXISTS (
+          SELECT 1 FROM ${tableRef}
+          WHERE [${externalKeyField}] = @_externalKeyValue
+      )
+      BEGIN
+          UPDATE ${tableRef}
+          SET ${updateSet.length ? updateSet.join(', ') : `${externalKeyField} = ${externalKeyField}`}
+          OUTPUT INSERTED.id AS id
+          WHERE [${externalKeyField}] = @_externalKeyValue;
 
-            SELECT @@ROWCOUNT AS affected, 'updated' AS action;
-        END
-        ELSE
-        BEGIN
-            INSERT INTO ${tableRef}
-            (${insertCols.join(', ')})
-            VALUES (${insertVals.join(', ')});
+          SELECT @@ROWCOUNT AS affected, 'updated' AS action;
+      END
+      ELSE
+      BEGIN
+          INSERT INTO ${tableRef}
+          (${insertCols.join(', ')})
+          OUTPUT INSERTED.id AS id
+          VALUES (${insertVals.join(', ')});
 
-            SELECT @@ROWCOUNT AS affected, 'inserted' AS action;
-        END
-        `;
-
+          SELECT @@ROWCOUNT AS affected, 'inserted' AS action;
+      END
+      `;
     const result = await this.queryNewDbTx(query, params, transaction);
     const row = Array.isArray(result) ? result[0] : result;
 
     return {
+      id: row?.id || null,
       action: row?.action || 'none',
       affected: Number(row?.affected || 0)
     };

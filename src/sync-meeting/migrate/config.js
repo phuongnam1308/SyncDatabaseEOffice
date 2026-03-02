@@ -40,9 +40,9 @@ const buildMeetingState = (r) => {
   const started = parseDate(r?.BatDau);
   const ended = buildEndedAt(r);
 
-  if (ended && ended < now) return 'DA_KET_THUC';
-  if (started && started <= now) return 'DANG_DIEN_RA';
-  return 'CHUAN_BI';
+  if (ended && ended < now) return 'KET_THUC';
+  if (started && started <= now) return 'DU_KIEN';
+  return 'DU_KIEN';
 };
 
 /* ===================== TABLE MAPPING ===================== */
@@ -77,7 +77,9 @@ const tableMappings = {
       duration_seconds: 'duration_seconds',
       tp_Created: 'created_at',
       tp_Modified: 'updated_at',
-      tp_Version: 'sharepoint_version'
+      tp_Version: 'sharepoint_version',
+      ChuTri: 'chairman_id',
+      ThuKy: 'secretary_id',
     },
 
     requiredFields: ['TieuDe', 'BatDau'],
@@ -92,7 +94,7 @@ const tableMappings = {
 
       meeting_type: (r) => r?.LoaiHop || 'NB',
 
-      priority: (r) => (r?.isImportant ? 'cao' : null),
+      priority: (r) => (r?.isImportant ? 'cao' : 'tb'),
 
       meeting_date: (r) => {
         const d = parseDate(r?.BatDau);
@@ -111,20 +113,18 @@ const tableMappings = {
 
       bpmn_version: process.env.DEFAULT_BPMN_VERSION || 'QUY_TRINH_LICH_HOP',
 
-      content: (r) => r?.NoiDung || null,
+      content: (r) => r?.NoiDung || r?.TieuDe || 'Không nội dung',
 
-      chairman_id: null,
-      secretary_id: null,
+      chairman_id: (r) => r?.ChuTri || null,
+      secretary_id: (r) => r?.ThuKy || null,  
       online_meeting_id: null,
 
       /* ===== 3. AUDIT ===== */
-      created_at: (r) =>
-        parseDate(r?.tp_Created) || new Date(),
+      created_at: (r) => parseDate(r?.tp_Created) || new Date(),
 
-      updated_at: (r) =>
-        parseDate(r?.tp_Modified) || new Date(),
+      updated_at: (r) => parseDate(r?.tp_Modified) || new Date(),
 
-      status_code:1,
+      status_code: 3, // Đã duyệt
 
       direct_command: '',
       conclusion: null,
