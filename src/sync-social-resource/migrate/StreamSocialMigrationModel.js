@@ -30,8 +30,13 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
             const rows = await this.queryNewDb(`SELECT id FROM ${this.newDbName}.dbo.topics`);
             this.topicIds = rows.map(r => String(r.id));
             console.log(`[StreamSocialMigrationModel] Loaded ${this.topicIds.length} topic IDs for random assignment.`);
+
+            // Lấy thêm adminId fallback (admin-tancang)
+            const adminRows = await this.queryNewDb(`SELECT id FROM ${this.newDbName}.dbo.users WHERE username = 'admin-tancang'`);
+            this.adminId = adminRows?.[0]?.id || '6926bd32994b706c8b25118a';
+            console.log(`[StreamSocialMigrationModel] Fallback Admin ID: ${this.adminId}`);
         } catch (error) {
-            console.error('[StreamSocialMigrationModel] Failed to load topics:', error.message);
+            console.error('[StreamSocialMigrationModel] Failed to load initial data:', error.message);
         }
     }
 
@@ -320,16 +325,22 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
             ? this.topicIds[Math.floor(Math.random() * this.topicIds.length)]
             : (rowData.topic || null);
 
+        // Fallback author if missing
+        const authorId = rowData.Author && rowData.Author !== 'NULL' ? rowData.Author : this.adminId;
+
         const resultNews = await this.upsertDataToNewDB(rowData, {
             ...tableMappings.news,
-            fixedValues: { topic: randomTopicId }
+            fixedValues: {
+                topic: randomTopicId,
+                authorId: authorId
+            }
         }, 'topic', recordId, transaction);
         totalAffected += resultNews.affected;
         actionLogs.push({ table: 'news', action: resultNews.action });
 
         // 1.5 Sync Audit table để xác nhận news này đã xuất bản
         if (resultNews.newsId) {
-            const author = rowData.Author || '6915f2387e39c2ba33cef79a'; // Fallback admin
+            const author = authorId; // Đồng bộ authorId giữa news và audit
             let publishTime = rowData.__sync_time || new Date().toISOString();
             let publishDate = new Date(publishTime);
             if (Number.isNaN(publishDate.getTime())) {
