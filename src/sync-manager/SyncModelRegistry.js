@@ -7,6 +7,7 @@ const StreamTaskMigrationModel = require('../sync-tasks/migrate/StreamTaskMigrat
 const StreamSocialMigrationModel = require('../sync-social-resource/migrate/StreamSocialMigrationModel');
 const SyncIncomingDocumentModel = require('../sync-incoming-document/migrate/SyncIncomingDocumentModel');
 const StreamMeetingMigrationModel = require('../sync-meeting/migrate/StreamMeetingMigrationModel');
+const InCommingDocumentModel = require('../sync-incoming-document/migrate/StreamIncomingIncrementalModel');
 
 const MODEL_DEFINITIONS = [
   {
@@ -44,7 +45,7 @@ const MODEL_DEFINITIONS = [
     key: '3_incoming',
     label: 'Đồng bộ văn bản đến',
     section: 'realtime',
-    ModelClass: SyncIncomingDocumentModel,
+    ModelClass: InCommingDocumentModel,
   },
   {
     key: 'UNIT_TEST_STREAM_MEETING_MIGRATION',

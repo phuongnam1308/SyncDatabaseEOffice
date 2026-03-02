@@ -231,7 +231,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
 
         FROM ${this.oldDbSchema}.${this.oldDbTable}
     )
-    SELECT
+    SELECT TOP (1000)
         *,
         ISNULL(__sync_id_num, 0) AS __sync_id
     FROM source_rows
@@ -463,7 +463,29 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         }
     }
 
+    async processRowData(rowData, { transaction } = {}) {
+        if (!rowData) {
+            throw new Error('rowData is required');
+        }
 
+        const backupId = String(rowData.ID || '').trim();
+        if (!backupId) {
+            throw new Error('Invalid document ID from staging');
+        }
+
+        const res = await this.upsertDocumentAggregateById(rowData, { transaction });
+        const affected = Number(res?.affected || 0);
+
+        if (affected === 0) {
+            throw new Error(`Document was not inserted or updated for ID=${backupId}`);
+        }
+
+        return {
+            action: res?.action || 'upsert',
+            backupId,
+            affected
+        };
+    }
     async fetchOneFromStaging({ lastSyncTime, lastSyncId = 0, itemIndex, transaction } = {}) {
         const rowNumber = Number(itemIndex || 0) + 1;
         const stagingTableRef = this.getStagingTableRef();
