@@ -13,10 +13,9 @@ class StreamFileMigrationController extends BaseController {
 
     const limit = parseInt(req.body?.limit || req.query?.limit || 0, 10);
     const batch = parseInt(req.body?.batch || req.query?.batch || 100, 10);
-    const lastProcessedId = parseInt(
-      req.body?.lastProcessedId || req.query?.lastProcessedId || 0,
-      10
-    );
+    const lastProcessedId = String(
+      req.body?.lastProcessedId || req.query?.lastProcessedId || ''
+    ).trim();
 
     if (batch <= 0) {
       return this.error(res, 'Batch size phai lon hon 0', 400);

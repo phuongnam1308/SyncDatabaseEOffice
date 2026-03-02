@@ -279,6 +279,8 @@ class StreamOutgoingMigrationModel extends BaseModel {
       release_date: promulgationDate ?? null,
       abstract_note: this.helper.cleanText(oldRecord.TrichYeu),
       to_book: bookDocumentObj?.count ?? null,
+      // Luu nguyen chuoi Files de buoc processOne co the tai/upload tep dinh kem
+      files: typeof oldRecord.Files === 'string' ? oldRecord.Files.trim() : null,
       type_doc: 1,
       bpmn_version: "SOANTHAO_PHATHANH_VBD",
       type_of_process: "SOANTHAO_PHATHANH_VBD",

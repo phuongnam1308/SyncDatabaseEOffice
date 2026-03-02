@@ -4,6 +4,7 @@ const sql = require('mssql');
 const SyncCommentModel = require('../../sync-document-comment/SyncCommentModel');
 const SyncAuditModel = require('../../sync-audit/SyncAuditModel');
 const StreamOutgoingMigrationModel = require('./StreamOutgoingMigrationModel');
+const OutgoingFileSyncService = require('../services/OutgoingFileSyncService');
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
@@ -121,6 +122,8 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     this._syncAuditModel = [];
     this._syncCommentModel = [];
     this._outGoingMigrationModels = null;
+    // Service xu ly file outgoing (download SharePoint + upload he thong moi)
+    this._outgoingFileSyncService = null;
   }
 
   /**
@@ -135,6 +138,8 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
 
     this._outGoingMigrationModels = new StreamOutgoingMigrationModel();
     await this._outGoingMigrationModels.initialize();
+    // Khoi tao rieng de dung lai phien dang nhap/cau hinh upload
+    this._outgoingFileSyncService = new OutgoingFileSyncService();
 
     for (const table of AUDIT_TABLES) {
       const model = new SyncAuditModel(table);
@@ -443,6 +448,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     );
 
     const transaction = new sql.Transaction(this.newPool);
+    let committed = false;
     await transaction.begin();
 
     try {
@@ -465,6 +471,17 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
 
       const result = await this.processRowData(rowData, { transaction });
       await transaction.commit();
+      committed = true;
+
+      let fileSync = null;
+      // Chi dong bo file sau khi transaction outgoing da commit thanh cong
+      // de dam bao object_id moi (documentId) da on dinh.
+      if (this._outgoingFileSyncService && result?.documentId) {
+        fileSync = await this._outgoingFileSyncService.syncFilesForOutgoing(
+          rowData,
+          result.documentId
+        );
+      }
 
       return {
         syncJobId,
@@ -472,13 +489,18 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         processed: true,
         done: false,
         rowId: rowData.ID || null,
-        result
+        result: {
+          ...result,
+          fileSync
+        }
       };
     } catch (error) {
-      try {
-        await transaction.rollback();
-      } catch (rollbackError) {
-        logger.error('[OutGoingDocumentModel.processOne] rollback failed:', rollbackError);
+      if (!committed) {
+        try {
+          await transaction.rollback();
+        } catch (rollbackError) {
+          logger.error('[OutGoingDocumentModel.processOne] rollback failed:', rollbackError);
+        }
       }
       throw error;
     }
@@ -550,7 +572,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
    * Validates and applies one outgoing row into destination aggregates.
    * @param {object} rowData
    * @param {{transaction?: object}} [context]
-   * @returns {Promise<{action:string,backupId:string,affected:number}>}
+   * @returns {Promise<{action:string,backupId:string,affected:number,documentId:string|null}>}
    */
   async processRowData(rowData, { transaction } = {}) {
     if (!rowData) {
@@ -572,7 +594,8 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     return {
       action: res?.action || 'upsert',
       backupId,
-      affected
+      affected,
+      documentId: res?.documentId || null
     };
   }
 
@@ -580,11 +603,11 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
    * Upserts one outgoing document and its related audit/comment entities.
    * @param {object} oldRecord
    * @param {{transaction?: object}} [context]
-   * @returns {Promise<{action:string,affected:number}>}
+   * @returns {Promise<{action:string,affected:number,documentId:string|null}>}
    */
   async upsertDocumentAggregateById(oldRecord, { transaction } = {}) {
     if (!oldRecord) {
-      return { action: 'none', affected: 0 };
+      return { action: 'none', affected: 0, documentId: null };
     }
     const id = String(oldRecord.ID || '').trim();
 
@@ -600,7 +623,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     );
 
     if (!documentResult || documentResult.affected === 0) {
-      return { action: 'none', affected: 0 };
+      return { action: 'none', affected: 0, documentId: null };
     }
     logger.info(
       `[AggregateSync][Document] documentId=${documentResult.documentId} action=${documentResult?.action} affected=${documentResult?.affected}`
@@ -612,7 +635,8 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     if (!documentId) {
       return {
         action: documentResult.action || 'upsert',
-        affected: Number(totalAffected || 0)
+        affected: Number(totalAffected || 0),
+        documentId: null
       };
     }
 
@@ -681,7 +705,8 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
 
     return {
       action: documentResult.action || 'upsert',
-      affected: Number(totalAffected || 0)
+      affected: Number(totalAffected || 0),
+      documentId
     };
   }
 }

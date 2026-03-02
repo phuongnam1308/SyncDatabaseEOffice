@@ -38,7 +38,7 @@ class StreamFileMigrationService {
     }
   }
 
-  async migrate({ limit = 0, batch = this.defaultBatchSize, lastProcessedId = 0 } = {}) {
+  async migrate({ limit = 0, batch = this.defaultBatchSize, lastProcessedId = '' } = {}) {
     const startTime = Date.now();
 
     if (!this.model) {
@@ -87,7 +87,7 @@ class StreamFileMigrationService {
         totalProcessed += oldRecords.length;
 
         if (oldRecords.length > 0) {
-          lastProcessedId = oldRecords[oldRecords.length - 1].ID;
+          lastProcessedId = String(oldRecords[oldRecords.length - 1].ID || '').trim();
         }
 
         if (limit > 0 && totalProcessed >= limit) {
