@@ -284,13 +284,13 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
         const normalizedLastSyncId = Number(lastSyncId || 0);
         const rows = await this.fetchListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId);
-        const limitRows = rows.slice(0, 200); // Giới hạn số bản ghi lấy về để tránh quá tải
-        const stageResult = await this.syncOldToStaging(limitRows);
+        // const limitRows = rows.slice(0, 200); // Giới hạn số bản ghi lấy về để tránh quá tải
+        const stageResult = await this.syncOldToStaging(rows);
 
         let nextSyncTime = normalizedLastSyncTime;
         let nextSyncId = normalizedLastSyncId;
 
-        for (const row of limitRows) {
+        for (const row of rows) {
             const rowTime = this.extractRowSyncTime(row);
             const rowId = this.extractRowSyncId(row);
             if (!rowTime) continue;
