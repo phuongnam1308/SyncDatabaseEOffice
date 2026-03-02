@@ -6,6 +6,7 @@ const StreamUserMigrationModel = require('../sync-user-copy/migrate/StreamUserMi
 const StreamTaskMigrationModel = require('../sync-tasks/migrate/StreamTaskMigrationModel');
 const StreamSocialMigrationModel = require('../sync-social-resource/migrate/StreamSocialMigrationModel');
 const SyncIncomingDocumentModel = require('../sync-incoming-document/migrate/SyncIncomingDocumentModel');
+const StreamMeetingMigrationModel = require('../sync-meeting/migrate/StreamMeetingMigrationModel');
 
 const MODEL_DEFINITIONS = [
   {
@@ -20,12 +21,12 @@ const MODEL_DEFINITIONS = [
   //   section: 'realtime',
   //   ModelClass: SyncFileModel,
   // },
-  {
-    key: 'UNIT_TEST_STREAM_USER_COPY_MIGRATION111',
-    label: 'Đồng bộ cơ sở dữ liệu cũ: người dùng (user copy)',
-    section: 'realtime',
-    ModelClass: StreamUserMigrationModel
-  },
+  // {
+  //   key: 'UNIT_TEST_STREAM_USER_COPY_MIGRATION111',
+  //   label: 'Đồng bộ cơ sở dữ liệu cũ: người dùng (user copy)',
+  //   section: 'realtime',
+  //   ModelClass: StreamUserMigrationModel
+  // },
   {
     key:     'UNIT_TEST_STREAM_TASK_MIGRATION',
     label:   'Đồng bộ công việc từ văn bản đến',
@@ -44,7 +45,13 @@ const MODEL_DEFINITIONS = [
     label:   'Đồng bộ văn bản đến',
     section: 'realtime',
     ModelClass: SyncIncomingDocumentModel,
-  }
+  },
+  {
+    key: 'UNIT_TEST_STREAM_MEETING_MIGRATION',
+    label: 'Đồng bộ cơ sở dữ liệu cũ: Lịch họp (meeting)',
+    section: 'realtime',
+    ModelClass: StreamMeetingMigrationModel,
+  },
 ];
 
 class SyncModelRegistry {
