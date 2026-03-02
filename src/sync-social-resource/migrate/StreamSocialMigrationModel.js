@@ -19,6 +19,20 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
         this.newDbName = this.oldConfig.newDatabase;
         this.newDbSchema = this.oldConfig.newSchema;
         this.newTableSync = 'social_resource_sync';
+
+        this.topicIds = [];
+    }
+
+    async initialize() {
+        await super.initialize();
+        // Lấy danh sách topicId từ DB mới để random
+        try {
+            const rows = await this.queryNewDb(`SELECT id FROM ${this.newDbName}.dbo.topics`);
+            this.topicIds = rows.map(r => String(r.id));
+            console.log(`[StreamSocialMigrationModel] Loaded ${this.topicIds.length} topic IDs for random assignment.`);
+        } catch (error) {
+            console.error('[StreamSocialMigrationModel] Failed to load topics:', error.message);
+        }
     }
 
     getStagingTableRef() {
@@ -66,25 +80,34 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
 
     async fetchListFromOldDb(lastSyncTime, lastSyncId = 0) {
         // Giả định bảng cũ là Social_otherResource (DataEOfficeSNP)
+        // Sử dụng ROW_NUMBER() OVER (PARTITION BY r.ID) để khử trùng bản ghi (thực tế dữ liệu cũ đang bị nhân đôi do lỗi quét/insert)
         const query = `
       ;WITH source_rows AS (
         SELECT
-          *,
+          r.*,
+          ci.Subject,
           -- Loại bỏ các date rác (vd PostTime = 6065), chỉ lấy chuỗi dài hơn 4 ký tự và valid
           COALESCE(
-             CASE WHEN LEN(Modified) > 4 AND TRY_CONVERT(datetime2, Modified) IS NOT NULL AND YEAR(TRY_CONVERT(datetime2, Modified)) BETWEEN 1970 AND 2099 THEN TRY_CONVERT(datetime2, Modified) ELSE NULL END,
-             CASE WHEN LEN(Created) > 4 AND TRY_CONVERT(datetime2, Created) IS NOT NULL AND YEAR(TRY_CONVERT(datetime2, Created)) BETWEEN 1970 AND 2099 THEN TRY_CONVERT(datetime2, Created) ELSE NULL END,
-             CASE WHEN LEN(PostTime) > 4 AND TRY_CONVERT(datetime2, PostTime) IS NOT NULL AND YEAR(TRY_CONVERT(datetime2, PostTime)) BETWEEN 1970 AND 2099 THEN TRY_CONVERT(datetime2, PostTime) ELSE NULL END,
+             CASE WHEN LEN(r.Modified) > 4 AND TRY_CONVERT(datetime2, r.Modified) IS NOT NULL AND YEAR(TRY_CONVERT(datetime2, r.Modified)) BETWEEN 1970 AND 2099 THEN TRY_CONVERT(datetime2, r.Modified) ELSE NULL END,
+             CASE WHEN LEN(r.Created) > 4 AND TRY_CONVERT(datetime2, r.Created) IS NOT NULL AND YEAR(TRY_CONVERT(datetime2, r.Created)) BETWEEN 1970 AND 2099 THEN TRY_CONVERT(datetime2, r.Created) ELSE NULL END,
+             CASE WHEN LEN(r.PostTime) > 4 AND TRY_CONVERT(datetime2, r.PostTime) IS NOT NULL AND YEAR(TRY_CONVERT(datetime2, r.PostTime)) BETWEEN 1970 AND 2099 THEN TRY_CONVERT(datetime2, r.PostTime) ELSE NULL END,
              '1970-01-01T00:00:00.000Z'
           ) AS __sync_time,
-          CHECKSUM(ID) AS __sync_id_num
-        FROM ${this.oldDbName}.${this.oldDbSchema}.${this.oldDbTable}
+          CHECKSUM(r.ID) AS __sync_id_num,
+          ROW_NUMBER() OVER (PARTITION BY r.ID ORDER BY r.PostTime DESC, r.Created DESC) as rn_dedup
+        FROM ${this.oldDbName}.${this.oldDbSchema}.${this.oldDbTable} r
+        OUTER APPLY (
+            SELECT TOP 1 Subject 
+            FROM ${this.oldDbName}.SNP.CodeItem 
+            WHERE SPItemId = r.ItemId
+            ORDER BY ID DESC -- Lấy bản ghi mới nhất nếu có nhiều Subject
+        ) ci
       )
       SELECT
         *,
         ISNULL(__sync_id_num, 0) AS __sync_id
       FROM source_rows
-      WHERE (
+      WHERE rn_dedup = 1 AND (
         __sync_time > @lastSyncTime
         OR (
           __sync_time = @lastSyncTime
@@ -100,6 +123,18 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
             lastSyncTime,
             lastSyncId: Number(lastSyncId || 0)
         });
+    }
+
+    async getCount(lastSyncTime, lastSyncId = 0) {
+        const query = `
+            WITH source_rows AS (
+                SELECT r.ID FROM ${this.oldDbName}.${this.oldDbSchema}.${this.oldDbTable} r
+                GROUP BY r.ID
+            )
+            SELECT COUNT(*) as total FROM source_rows
+        `;
+        const result = await this.queryOldDb(query);
+        return result?.[0]?.total || 0;
     }
 
     async syncOldToStaging(rows, { transaction } = {}) {
@@ -125,6 +160,15 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
           [__sync_id_num] bigint null,
           ${columns.map(c => this.sanitizeColumnName(c) + ' nvarchar(max) null').join(',\n')}
         )
+      END
+      ELSE
+      BEGIN
+        -- Đảm bảo tất cả các cột từ nguồn đều có trong staging (tránh lỗi khi mới thêm JOIN)
+        ${columns.map(c => `
+        IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'${this.newDbName}.${this.newDbSchema}.${this.newTableSync}') AND name = N'${c}')
+        BEGIN
+            ALTER TABLE ${this.newDbName}.${this.newDbSchema}.${this.newTableSync} ADD ${this.sanitizeColumnName(c)} nvarchar(max) null;
+        END`).join('\n')}
       END
     `;
         await this.queryNewDbTx(createStagingTableQuery, {}, transaction);
@@ -272,7 +316,14 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
         const actionLogs = [];
 
         // 1. Sync News table
-        const resultNews = await this.upsertDataToNewDB(rowData, tableMappings.news, 'topic', recordId, transaction);
+        const randomTopicId = this.topicIds.length > 0
+            ? this.topicIds[Math.floor(Math.random() * this.topicIds.length)]
+            : (rowData.topic || null);
+
+        const resultNews = await this.upsertDataToNewDB(rowData, {
+            ...tableMappings.news,
+            fixedValues: { topic: randomTopicId }
+        }, 'topic', recordId, transaction);
         totalAffected += resultNews.affected;
         actionLogs.push({ table: 'news', action: resultNews.action });
 
@@ -314,7 +365,7 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
     }
 
     async upsertDataToNewDB(rawData, config, externalKeyField, externalKeyValue, transaction) {
-        const { newTable, newSchema, newDatabase, fieldMapping, defaultValues } = config;
+        const { newTable, newSchema, newDatabase, fieldMapping, defaultValues, fixedValues } = config;
 
         // Prepare Data
         const params = {};
@@ -322,21 +373,30 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
         const vals = [];
         const updateClauses = [];
 
+        // 1. Map fields from source
         for (const [oldField, newField] of Object.entries(fieldMapping)) {
             if (rawData[oldField] !== undefined) {
                 params[newField] = rawData[oldField];
-                cols.push(this.sanitizeColumnName(newField));
-                vals.push(`@${newField}`);
-                updateClauses.push(`${this.sanitizeColumnName(newField)} = @${newField}`);
             }
         }
 
+        // 2. Add default values (computed or fixed)
         for (const [newField, valueFn] of Object.entries(defaultValues || {})) {
             if (!params.hasOwnProperty(newField)) {
                 params[newField] = typeof valueFn === 'function' ? valueFn(rawData) : valueFn;
-                cols.push(this.sanitizeColumnName(newField));
-                vals.push(`@${newField}`);
             }
+        }
+
+        // 3. Add fixed values (overrides)
+        for (const [newField, value] of Object.entries(fixedValues || {})) {
+            params[newField] = value;
+        }
+
+        // 4. Build SQL fragments
+        for (const [newField, value] of Object.entries(params)) {
+            cols.push(this.sanitizeColumnName(newField));
+            vals.push(`@${newField}`);
+            updateClauses.push(`${this.sanitizeColumnName(newField)} = @${newField}`);
         }
 
         // Upsert query pattern based on external key (vd: topic = ID UUID)

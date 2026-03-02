@@ -16,6 +16,10 @@ class SyncHandlerModel {
    */
   createCountFnIncremental() {
     return async (lastTime, lastSyncId = 0) => {
+      // Nếu model có hàm getCount riêng thì ưu tiên dùng (tối ưu hơn)
+      if (typeof this.syncModel.getCount === 'function') {
+        return this.syncModel.getCount(lastTime, lastSyncId);
+      }
       const records = await this.syncModel.fetchListFromOldDb(lastTime, lastSyncId);
       return Array.isArray(records) ? records.length : 0;
     };
