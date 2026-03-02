@@ -439,6 +439,23 @@ app.use(
 );
 
 /**
+ * Static assets — Bootstrap Icons (local, no CDN)
+ */
+app.use(
+  '/assets/bootstrap-icons',
+  express.static(path.join(__dirname, 'node_modules/bootstrap-icons'))
+);
+
+/**
+ * Static assets — Inter Font (local, no CDN)
+ * Supporting Vietnamese characters
+ */
+app.use(
+  '/assets/inter',
+  express.static(path.join(__dirname, 'node_modules/@fontsource/inter'))
+);
+
+/**
  * Health
  */
 app.get('/health', (req, res) => {
