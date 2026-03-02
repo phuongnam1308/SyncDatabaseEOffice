@@ -787,6 +787,327 @@ class MigrationHelper {
     }
   }
 
+  async createOnlineMeeting(meetingId, platform, transaction = null) {
+    const checkQuery = `
+      SELECT TOP 1 id
+      FROM ${process.env.NEW_DB_NAME}.dbo.online_meetings
+      WHERE meeting_id = @meetingId
+    `;
+
+    const existed = await this.queryNewDbTx(
+      checkQuery,
+      { meetingId },
+      transaction
+    );
+
+    let onlineMeetingId;
+
+    if (existed?.length) {
+      onlineMeetingId = existed[0].id;
+    } else {
+
+      const insertQuery = `
+        INSERT INTO ${process.env.NEW_DB_NAME}.dbo.online_meetings
+          (platform, meeting_link, meeting_id)
+        OUTPUT INSERTED.id
+        VALUES
+          (@platform, @meetingLink, @meetingId)
+      `;
+
+      const insertResult = await this.queryNewDbTx(
+        insertQuery,
+        {
+          platform,
+          meetingLink: 'https://zoom.us/',
+          meetingId
+        },
+        transaction
+      );
+
+      onlineMeetingId = insertResult?.[0]?.id;
+    }
+
+    // 🔥 UPDATE NGƯỢC LẠI MEETINGS
+    if (onlineMeetingId) {
+      const updateMeetingQuery = `
+        UPDATE ${process.env.NEW_DB_NAME}.dbo.meetings
+        SET online_meeting_id = @onlineMeetingId,
+            meeting_mode = 'ONLINE'
+        WHERE id = @meetingId
+      `;
+
+      await this.queryNewDbTx(
+        updateMeetingQuery,
+        { onlineMeetingId, meetingId },
+        transaction
+      );
+    }
+
+    return onlineMeetingId;
+  }
+  
+  async createRecurrenceKhong(meetingId, startDate, transaction = null) {
+
+    const checkQuery = `
+      SELECT TOP 1 id
+      FROM ${process.env.NEW_DB_NAME}.dbo.meeting_recurrences
+      WHERE meeting_id = @meetingId
+    `;
+
+    const existed = await this.queryNewDbTx(
+      checkQuery,
+      { meetingId },
+      transaction
+    );
+
+    let recurrenceId;
+
+    if (existed?.length) {
+
+      recurrenceId = existed[0].id;
+
+    } else {
+
+      const insertQuery = `
+        INSERT INTO ${process.env.NEW_DB_NAME}.dbo.meeting_recurrences
+          (meeting_id, [type], start_date, end_date,
+          days_of_week, day_of_month, day_of_year, interval_value)
+        OUTPUT INSERTED.id
+        VALUES
+          (@meetingId, 'KHONG', @startDate, NULL,
+          NULL, NULL, NULL, NULL)
+      `;
+
+      const insertResult = await this.queryNewDbTx(
+        insertQuery,
+        { meetingId, startDate },
+        transaction
+      );
+
+      recurrenceId = insertResult?.[0]?.id;
+    }
+
+    return recurrenceId;
+  }
+  async mapMeetingRoom(roomName, transaction = null) {
+    try {
+      if (!roomName || typeof roomName !== 'string') {
+        return roomName;
+      }
+
+      // 🔥 Tách nhiều phòng theo ;
+      const roomList = roomName
+        .split(';')
+        .map(r => r.trim())
+        .filter(Boolean);
+
+      if (!roomList.length) return null;
+
+      const ids = [];
+
+      for (const room of roomList) {
+
+        const selectQuery = `
+          SELECT TOP 1 id
+          FROM ${process.env.NEW_DB_NAME}.dbo.meeting_rooms
+          WHERE name = @name
+        `;
+
+        const existing = await this.queryNewDbTx(
+          selectQuery,
+          { name: room },
+          transaction
+        );
+
+        if (existing?.length) {
+          ids.push(existing[0].id);
+          continue;
+        }
+
+        // Chưa có → tạo mới
+        const id = uuidv4();
+
+        const insertQuery = `
+          INSERT INTO ${process.env.NEW_DB_NAME}.dbo.meeting_rooms (
+            id,
+            name,
+            location,
+            capacity,
+            status,
+            stage,
+            available_from,
+            created_at,
+            updated_at,
+            total_seating
+          )
+          VALUES (
+            @id,
+            @name,
+            @location,
+            @capacity,
+            1,
+            1,
+            NULL,
+            SYSUTCDATETIME(),
+            SYSUTCDATETIME(),
+            @capacity
+          )
+        `;
+
+        try {
+          await this.queryNewDbTx(
+            insertQuery,
+            {
+              id,
+              name: room,
+              location: null,
+              capacity: 20
+            },
+            transaction
+          );
+
+          logger.warn(`[mapMeetingRoom] Created new room: ${room}`);
+          ids.push(id);
+
+        } catch (err) {
+          // race condition fallback
+          const retry = await this.queryNewDbTx(
+            selectQuery,
+            { name: room },
+            transaction
+          );
+
+          if (retry?.length) {
+            ids.push(retry[0].id);
+          }
+        }
+      }
+
+      // 🔥 Nếu hệ thống mày lưu 1 cột string
+      return ids.join(',');
+
+      // Nếu muốn trả về array thì dùng:
+      // return ids;
+
+    } catch (error) {
+      logger.warn("[mapMeetingRoom] Error:", error);
+      return null;
+    }
+  }
+
+  async createChairmanAndSecretary(
+    meetingId,
+    chairmanUserId,
+    secretaryUserId,
+    transaction = null
+  ) {
+    // ===== CHAIRMAN =====
+    if (chairmanUserId) {
+
+      // Check đã tồn tại participant chưa
+      const checkChairman = `
+        SELECT TOP 1 p.id
+        FROM ${process.env.NEW_DB_NAME}.dbo.meeting_participants p
+        INNER JOIN ${process.env.NEW_DB_NAME}.dbo.meeting_units u
+          ON p.meeting_unit_id = u.id
+        WHERE u.meeting_id = @meetingId
+          AND p.user_id = @userId
+          AND p.participant_role = 'CHAIRMAN'
+      `;
+
+      const existed = await this.queryNewDbTx(
+        checkChairman,
+        { meetingId, userId: chairmanUserId },
+        transaction
+      );
+
+      if (!existed?.length) {
+
+        // 1️⃣ Tạo unit ảo
+        const insertUnitQuery = `
+          INSERT INTO ${process.env.NEW_DB_NAME}.dbo.meeting_units
+            (meeting_id, unit_id)
+          OUTPUT INSERTED.id
+          VALUES
+            (@meetingId, 'CHAIRMAN_UNIT')
+        `;
+
+        const unitResult = await this.queryNewDbTx(
+          insertUnitQuery,
+          { meetingId },
+          transaction
+        );
+
+        const unitId = unitResult?.[0]?.id;
+
+        // 2️⃣ Tạo participant
+        const insertParticipantQuery = `
+          INSERT INTO ${process.env.NEW_DB_NAME}.dbo.meeting_participants
+            (meeting_unit_id, user_id, participant_role, participant_state)
+          VALUES
+            (@unitId, @userId, 'CHAIRMAN', 'DONE')
+        `;
+
+        await this.queryNewDbTx(
+          insertParticipantQuery,
+          { unitId, userId: chairmanUserId },
+          transaction
+        );
+      }
+    }
+
+    // ===== SECRETARY =====
+    if (secretaryUserId) {
+
+      const checkSecretary = `
+        SELECT TOP 1 p.id
+        FROM ${process.env.NEW_DB_NAME}.dbo.meeting_participants p
+        INNER JOIN ${process.env.NEW_DB_NAME}.dbo.meeting_units u
+          ON p.meeting_unit_id = u.id
+        WHERE u.meeting_id = @meetingId
+          AND p.user_id = @userId
+          AND p.participant_role = 'SECRETARY'
+      `;
+
+      const existed = await this.queryNewDbTx(
+        checkSecretary,
+        { meetingId, userId: secretaryUserId },
+        transaction
+      );
+
+      if (!existed?.length) {
+
+        const insertUnitQuery = `
+          INSERT INTO ${process.env.NEW_DB_NAME}.dbo.meeting_units
+            (meeting_id, unit_id)
+          OUTPUT INSERTED.id
+          VALUES
+            (@meetingId, 'SECRETARY_UNIT')
+        `;
+
+        const unitResult = await this.queryNewDbTx(
+          insertUnitQuery,
+          { meetingId },
+          transaction
+        );
+
+        const unitId = unitResult?.[0]?.id;
+
+        const insertParticipantQuery = `
+          INSERT INTO ${process.env.NEW_DB_NAME}.dbo.meeting_participants
+            (meeting_unit_id, user_id, participant_role, participant_state)
+          VALUES
+            (@unitId, @userId, 'SECRETARY', 'DONE')
+        `;
+
+        await this.queryNewDbTx(
+          insertParticipantQuery,
+          { unitId, userId: secretaryUserId },
+          transaction
+        );
+      }
+    }
+  }
   parseActionString(create_by, value) {
     try {
       if (!value || typeof value !== 'string') {

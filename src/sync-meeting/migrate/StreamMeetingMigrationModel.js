@@ -1,276 +1,286 @@
+const MigrationHelper = require('../../helpers/MigrationHelper');
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 const { tableMappings } = require('./config');
-const { v4: uuidv4 } = require('uuid');
 
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 
 class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
-    constructor() {
-        super({ modelName: 'STREAM_MEETING_MIGRATION' });
+  constructor() {
+    super({ modelName: 'STREAM_MEETING_MIGRATION' });
 
-        // Config bảng cũ
-        this.oldConfig = tableMappings.meeting;
+    // Config bảng cũ
+    this.oldConfig = tableMappings.meeting;
 
-        this.oldDbName = this.oldConfig.oldDatabase;
-        this.oldDbSchema = this.oldConfig.oldSchema;
-        this.oldDbTable = this.oldConfig.oldTable;
+    this.oldDbName = this.oldConfig.oldDatabase;
+    this.oldDbSchema = this.oldConfig.oldSchema;
+    this.oldDbTable = this.oldConfig.oldTable;
 
-        // Bảng staging tạm thời
-        this.newDbName = this.oldConfig.newDatabase;
-        this.newDbSchema = this.oldConfig.newSchema;
-        this.newTableSync = 'meeting_sync';
-    }
-    log(level, message, meta = {}) {
-        const payload = {
-            model: this.modelName,
-            level,
-            message,
-            ...meta,
-            timestamp: new Date().toISOString()
-        };
+    // Bảng staging tạm thời
+    this.newDbName = this.oldConfig.newDatabase;
+    this.newDbSchema = this.oldConfig.newSchema;
+    this.newTableSync = 'meeting_sync_staging';
+    this.helper = new MigrationHelper(this.queryNewDbTx.bind(this), this.queryOldDb.bind(this));
+  }
+  log(level, message, meta = {}) {
+    const payload = {
+      model: this.modelName,
+      level,
+      message,
+      ...meta,
+      timestamp: new Date().toISOString()
+    };
 
-        if (typeof super.log === 'function') {
-            return super.log(level, message, meta);
-        }
-
-        console.log(JSON.stringify(payload));
-    }
-    getStagingTableRef() {
-        const ref = this.newDbName
-            ? `${this.newDbName}.${this.newDbSchema}.${this.newTableSync}`
-            : `${this.newDbSchema}.${this.newTableSync}`;
-
-        this.log('DEBUG', 'getStagingTableRef', { ref });
-        return ref;
+    if (typeof super.log === 'function') {
+      return super.log(level, message, meta);
     }
 
-    sanitizeColumnName(column) {
-        if (!/^[A-Za-z0-9_]+$/.test(column)) {
-            throw new Error(`Invalid column name from source: ${column}`);
-        }
-        return `[${column}]`;
+    console.log(JSON.stringify(payload));
+  }
+  getStagingTableRef() {
+    const ref = this.newDbName
+      ? `${this.newDbName}.${this.newDbSchema}.${this.newTableSync}`
+      : `${this.newDbSchema}.${this.newTableSync}`;
+
+    this.log('DEBUG', 'getStagingTableRef', { ref });
+    return ref;
+  }
+
+  sanitizeColumnName(column) {
+    if (!/^[A-Za-z0-9_]+$/.test(column)) {
+      throw new Error(`Invalid column name from source: ${column}`);
     }
+    return `[${column}]`;
+  }
 
-    normalizeSyncTime(value) {
-        if (!value) {
-            this.log('DEBUG', 'normalizeSyncTime default');
-            return DEFAULT_SYNC_TIME;
-        }
-        const dateValue = new Date(value);
-        if (Number.isNaN(dateValue.getTime())) {
-            this.log('WARN', 'Invalid sync time, fallback default', { value });
-            return DEFAULT_SYNC_TIME;
-        }
-        return dateValue.toISOString();
+  normalizeSyncTime(value) {
+    if (!value) {
+      this.log('DEBUG', 'normalizeSyncTime default');
+      return DEFAULT_SYNC_TIME;
     }
-
-    extractRowSyncTime(row) {
-        const raw = row?.__sync_time || row?.Modified || row?.Created || row?.PostTime || null;
-        if (!raw) return null;
-        const dateValue = new Date(raw);
-        if (Number.isNaN(dateValue.getTime())) return null;
-        return dateValue.toISOString();
+    const dateValue = new Date(value);
+    if (Number.isNaN(dateValue.getTime())) {
+      this.log('WARN', 'Invalid sync time, fallback default', { value });
+      return DEFAULT_SYNC_TIME;
     }
+    return dateValue.toISOString();
+  }
 
-    extractRowSyncId(row) {
-        return Number(row?.__sync_id_num ?? row?.ID ?? 0);
-    }
+  extractRowSyncTime(row) {
+    const raw = row?.__sync_time || row?.Modified || row?.Created || row?.PostTime || null;
+    if (!raw) return null;
+    const dateValue = new Date(raw);
+    if (Number.isNaN(dateValue.getTime())) return null;
+    return dateValue.toISOString();
+  }
 
-    isCursorAhead(aTime, aId, bTime, bId) {
-        const ta = new Date(aTime || DEFAULT_SYNC_TIME).getTime();
-        const tb = new Date(bTime || DEFAULT_SYNC_TIME).getTime();
-        if (ta > tb) return true;
-        if (ta < tb) return false;
-        return Number(aId || 0) > Number(bId || 0);
-    }
+  extractRowSyncId(row) {
+    return Number(row?.__sync_id_num ?? row?.ID ?? 0);
+  }
 
-    async fetchListFromOldDb(lastSyncTime, lastSyncId = 0) {
-        const query = `
-            SELECT
-                U.tp_ID AS ID,
+  isCursorAhead(aTime, aId, bTime, bId) {
+    const ta = new Date(aTime || DEFAULT_SYNC_TIME).getTime();
+    const tb = new Date(bTime || DEFAULT_SYNC_TIME).getTime();
+    if (ta > tb) return true;
+    if (ta < tb) return false;
+    return Number(aId || 0) > Number(bId || 0);
+  }
 
-                CAST(U.tp_ColumnSet AS XML).value('(nvarchar1)[1]', 'nvarchar(255)')  AS TieuDe,
-                CAST(U.tp_ColumnSet AS XML).value('(datetime1)[1]', 'datetime')       AS BatDau,
-                CAST(U.tp_ColumnSet AS XML).value('(datetime2)[1]', 'datetime')       AS KetThuc,
-                CAST(U.tp_ColumnSet AS XML).value('(nvarchar3)[1]', 'nvarchar(255)')  AS DiaDiem,
-                CAST(U.tp_ColumnSet AS XML).value('(nvarchar6)[1]', 'nvarchar(255)')  AS LoaiHop,
-                CAST(U.tp_ColumnSet AS XML).value('(ntext7)[1]', 'nvarchar(max)')     AS NoiDung,
-                CAST(U.tp_ColumnSet AS XML).value('(int2)[1]', 'int')                 AS ThoiLuongGiay,
+  async fetchListFromOldDb(lastSyncTime, lastSyncId = 0) {
+    const query = `
+        SELECT
+            U.tp_ID AS ID,
 
-                U.tp_Created,
-                U.tp_Modified,
-                U.tp_Version,
+            CAST(U.tp_ColumnSet AS XML).value('(nvarchar1)[1]', 'nvarchar(255)')  AS TieuDe,
+            CAST(U.tp_ColumnSet AS XML).value('(datetime1)[1]', 'datetime')       AS BatDau,
+            CAST(U.tp_ColumnSet AS XML).value('(datetime2)[1]', 'datetime')       AS KetThuc,
+            CAST(U.tp_ColumnSet AS XML).value('(nvarchar3)[1]', 'nvarchar(255)')  AS DiaDiem,
+            CAST(U.tp_ColumnSet AS XML).value('(nvarchar6)[1]', 'nvarchar(255)')  AS LoaiHop,
+            CAST(U.tp_ColumnSet AS XML).value('(ntext7)[1]', 'nvarchar(max)')     AS NoiDung,
+            CAST(U.tp_ColumnSet AS XML).value('(int2)[1]', 'int')                 AS ThoiLuongGiay,
+            CAST(U.tp_ColumnSet AS XML).value('(nvarchar10)[1]', 'nvarchar(255)') AS ChuTri,
+            CAST(U.tp_ColumnSet AS XML).value('(nvarchar14)[1]', 'nvarchar(255)') AS ThuKy,
 
-                U.tp_Modified AS __sync_time,
-                U.tp_ID       AS __sync_id_num
+            U.tp_Created,
+            U.tp_Modified,
+            U.tp_Version,
 
-            FROM ${this.oldDbName}.dbo.AllUserData U
-            WHERE
-                U.tp_ListId = 'B0F4D2C4-D65B-42AB-A37A-9D45118A2A2C'
-                AND U.tp_RowOrdinal = 0
-                AND U.tp_IsCurrentVersion = 1
+            U.tp_Modified AS __sync_time,
+            U.tp_ID       AS __sync_id_num
 
-                AND (
-                    U.tp_Modified > @lastSyncTime
-                    OR (
-                        U.tp_Modified = @lastSyncTime
-                        AND U.tp_ID > @lastSyncId
-                    )
+        FROM ${this.oldDbName}.dbo.AllUserData U
+        WHERE
+            U.tp_ListId = 'B0F4D2C4-D65B-42AB-A37A-9D45118A2A2C'
+            AND U.tp_RowOrdinal = 0
+            AND U.tp_IsCurrentVersion = 1
+
+            AND (
+                U.tp_Modified > @lastSyncTime
+                OR (
+                    U.tp_Modified = @lastSyncTime
+                    AND U.tp_ID > @lastSyncId
                 )
+            )
 
-            ORDER BY
-                U.tp_Modified ASC,
-                U.tp_ID ASC
-        `;
+        ORDER BY
+            U.tp_Modified ASC,
+            U.tp_ID ASC
+    `;
 
-        return this.queryOldDb(query, {
-            lastSyncTime,
-            lastSyncId: Number(lastSyncId || 0)
-        });
+    return this.queryOldDb(query, {
+      lastSyncTime,
+      lastSyncId: Number(lastSyncId || 0)
+    });
+  }
+
+  async syncOldToStaging(rows, { transaction } = {}) {
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return { stagedCount: 0 };
     }
-    
-    async syncOldToStaging(rows, { transaction } = {}) {
-        if (!Array.isArray(rows) || rows.length === 0) {
-            return { stagedCount: 0 };
-        }
 
-        const internalColumns = new Set(['__sync_time', '__sync_id_num']);
-        const columns = Object.keys(rows[0]).filter(
-            (c) => !internalColumns.has(c)
-        );
+    const internalColumns = new Set(['__sync_time', '__sync_id_num']);
+    const columns = Object.keys(rows[0]).filter(
+      (c) => !internalColumns.has(c)
+    );
 
-        if (!columns.length) return { stagedCount: 0 };
+    if (!columns.length) return { stagedCount: 0 };
 
-        // ✅ FIX: dùng ID làm khóa chính staging
-        const keyColumn = 'ID';
+    // ✅ FIX: dùng ID làm khóa chính staging
+    const keyColumn = 'ID';
 
-        const createStagingTableQuery = `
+    const createStagingTableQuery = `
         IF NOT EXISTS (
-            SELECT * FROM sys.objects 
-            WHERE object_id = OBJECT_ID(N'${this.newDbName}.${this.newDbSchema}.${this.newTableSync}') 
-            AND type = 'U'
+            SELECT 1
+            FROM sys.tables t
+            JOIN sys.schemas s ON t.schema_id = s.schema_id
+            WHERE t.name = '${this.newTableSync}'
+            AND s.name = '${this.newDbSchema}'
         )
         BEGIN
             CREATE TABLE ${this.newDbName}.${this.newDbSchema}.${this.newTableSync}(
                 [SY_SyncId] int identity(1,1) primary key,
                 [__sync_time] datetime2 null,
                 [__sync_id_num] bigint null,
-                ${columns.map(c => `[${c}] nvarchar(max) null`).join(',')}
-            )
+                [ID] bigint NOT NULL,
+                ${columns
+            .filter(c => c !== 'ID')
+            .map(c => `[${c}] nvarchar(500) null`)
+            .join(',')}
+            );
+
+            CREATE UNIQUE INDEX IX_${this.newTableSync}_ID
+            ON ${this.newDbName}.${this.newDbSchema}.${this.newTableSync}(ID);
         END
         `;
 
-        await this.queryNewDbTx(createStagingTableQuery, {}, transaction);
+    await this.queryNewDbTx(createStagingTableQuery, {}, transaction);
 
-        const stagingTableRef = this.getStagingTableRef();
+    const stagingTableRef = this.getStagingTableRef();
 
-        for (const row of rows) {
-            const params = {};
-            for (const column of columns) {
-                params[column] = row[column] != null ? String(row[column]) : null;
-            }
+    for (const row of rows) {
+      const params = {};
+      for (const column of columns) {
+        params[column] = row[column] != null ? String(row[column]) : null;
+      }
 
-            params.__sync_time = row.__sync_time;
-            params.__sync_id_num = row.__sync_id_num;
+      params.__sync_time = row.__sync_time;
+      params.__sync_id_num = row.__sync_id_num;
 
-            const updateSet = columns
-                .filter(c => c !== keyColumn)
-                .map(c => `[${c}] = @${c}`)
-                .join(', ');
+      const updateSet = columns
+        .filter(c => c !== keyColumn)
+        .map(c => `[${c}] = @${c}`)
+        .join(', ');
 
-            const query = `
-            IF EXISTS (SELECT 1 FROM ${stagingTableRef} WHERE [${keyColumn}] = @${keyColumn})
-            BEGIN
-                UPDATE ${stagingTableRef}
-                SET ${updateSet},
-                    __sync_time = @__sync_time,
-                    __sync_id_num = @__sync_id_num
-                WHERE [${keyColumn}] = @${keyColumn}
-            END
-            ELSE
-            BEGIN
-                INSERT INTO ${stagingTableRef} (
-                    ${columns.map(c => `[${c}]`).join(',')},
-                    __sync_time,
-                    __sync_id_num
-                )
-                VALUES (
-                    ${columns.map(c => `@${c}`).join(',')},
-                    @__sync_time,
-                    @__sync_id_num
-                )
-            END
-            `;
+      const query = `
+      IF EXISTS (SELECT 1 FROM ${stagingTableRef} WHERE [${keyColumn}] = @${keyColumn})
+      BEGIN
+          UPDATE ${stagingTableRef}
+          SET ${updateSet},
+              __sync_time = @__sync_time,
+              __sync_id_num = @__sync_id_num
+          WHERE [${keyColumn}] = @${keyColumn}
+      END
+      ELSE
+      BEGIN
+          INSERT INTO ${stagingTableRef} (
+              ${columns.map(c => `[${c}]`).join(',')},
+              __sync_time,
+              __sync_id_num
+          )
+          VALUES (
+              ${columns.map(c => `@${c}`).join(',')},
+              @__sync_time,
+              @__sync_id_num
+          )
+      END
+      `;
 
-            await this.queryNewDbTx(query, params, transaction);
-        }
-
-        return { stagedCount: rows.length };
+      await this.queryNewDbTx(query, params, transaction);
     }
 
-    async getList(lastSyncTime, syncJobId, lastSyncId = 0) {
-        if (!syncJobId) throw new Error('syncJobId is required');
+    return { stagedCount: rows.length };
+  }
 
-        const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
-        const normalizedLastSyncId = Number(lastSyncId || 0);
+  async getList(lastSyncTime, syncJobId, lastSyncId = 0) {
+    if (!syncJobId) throw new Error('syncJobId is required');
 
-        console.log('[STREAM_MEETING_MIGRATION] START SYNC', {
-            syncJobId,
-            sourceLastSyncTime: normalizedLastSyncTime,
-            sourceLastSyncId: normalizedLastSyncId
-        });
+    const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
+    const normalizedLastSyncId = Number(lastSyncId || 0);
 
-        const rows = await this.fetchListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId);
+    console.log('[STREAM_MEETING_MIGRATION] START SYNC', {
+      syncJobId,
+      sourceLastSyncTime: normalizedLastSyncTime,
+      sourceLastSyncId: normalizedLastSyncId
+    });
 
-        console.log('[STREAM_MEETING_MIGRATION] FETCHED FROM OLD DB:', rows);
+    const rows = await this.fetchListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId);
 
-        const stageResult = await this.syncOldToStaging(rows);
+    const stageResult = await this.syncOldToStaging(rows);
 
-        console.log('[STREAM_MEETING_MIGRATION] STAGED:', stageResult?.stagedCount);
+    console.log('[STREAM_MEETING_MIGRATION] STAGED:', stageResult?.stagedCount);
 
-        let nextSyncTime = normalizedLastSyncTime;
-        let nextSyncId = normalizedLastSyncId;
+    let nextSyncTime = normalizedLastSyncTime;
+    let nextSyncId = normalizedLastSyncId;
 
-        for (const row of rows) {
-            const rowTime = this.extractRowSyncTime(row);
-            const rowId = this.extractRowSyncId(row);
-            if (!rowTime) continue;
+    for (const row of rows) {
+      const rowTime = this.extractRowSyncTime(row);
+      const rowId = this.extractRowSyncId(row);
+      if (!rowTime) continue;
 
-            if (this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId)) {
-                nextSyncTime = rowTime;
-                nextSyncId = rowId;
-            }
-        }
-
-        console.log('[STREAM_MEETING_MIGRATION] NEXT CURSOR:', {
-            lastSyncTime: nextSyncTime,
-            lastSyncId: nextSyncId
-        });
-
-        return {
-            syncJobId,
-            rows,
-            totalCount: rows.length,
-            stagedCount: Number(stageResult?.stagedCount || 0),
-            sourceLastSyncTime: normalizedLastSyncTime,
-            sourceLastSyncId: normalizedLastSyncId,
-            lastSyncTime: nextSyncTime,
-            lastSyncId: nextSyncId
-        };
+      if (this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId)) {
+        nextSyncTime = rowTime;
+        nextSyncId = rowId;
+      }
     }
 
-    async getSyncJobState(syncJobId) {
-        if (!syncJobId) throw new Error('syncJobId is required');
-        const rows = await this.queryNewDb(
-            `SELECT TOP 1 job_id, total_to_sync, total_processed, total_success, total_errors, last_sync_time, last_sync_id
+    console.log('[STREAM_MEETING_MIGRATION] NEXT CURSOR:', {
+      lastSyncTime: nextSyncTime,
+      lastSyncId: nextSyncId
+    });
+
+    return {
+      syncJobId,
+      rows,
+      totalCount: rows.length,
+      stagedCount: Number(stageResult?.stagedCount || 0),
+      sourceLastSyncTime: normalizedLastSyncTime,
+      sourceLastSyncId: normalizedLastSyncId,
+      lastSyncTime: nextSyncTime,
+      lastSyncId: nextSyncId
+    };
+  }
+
+  async getSyncJobState(syncJobId) {
+    if (!syncJobId) throw new Error('syncJobId is required');
+    const rows = await this.queryNewDb(
+      `SELECT TOP 1 job_id, total_to_sync, total_processed, total_success, total_errors, last_sync_time, last_sync_id
        FROM sync_jobs WHERE job_id = @syncJobId`,
-            { syncJobId }
-        );
-        return rows?.[0] || null;
-    }
+      { syncJobId }
+    );
+    return rows?.[0] || null;
+  }
 
-    async fetchOneFromSource({ lastSyncTime, lastSyncId }) {
-        const query = `
+  async fetchOneFromSource({ lastSyncTime, lastSyncId }) {
+    const query = `
             SELECT TOP 1
                 U.tp_ID AS ID,
 
@@ -281,7 +291,8 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
                 CAST(U.tp_ColumnSet AS XML).value('(nvarchar6)[1]', 'nvarchar(255)')  AS LoaiHop,
                 CAST(U.tp_ColumnSet AS XML).value('(ntext7)[1]', 'nvarchar(max)')     AS NoiDung,
                 CAST(U.tp_ColumnSet AS XML).value('(int2)[1]', 'int')                 AS ThoiLuongGiay,
-
+                CAST(U.tp_ColumnSet AS XML).value('(nvarchar10)[1]', 'nvarchar(255)') AS ChuTri,
+                CAST(U.tp_ColumnSet AS XML).value('(nvarchar14)[1]', 'nvarchar(255)') AS ThuKy,
                 U.tp_Created,
                 U.tp_Modified,
                 U.tp_Version,
@@ -307,190 +318,318 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
             ORDER BY U.tp_Modified ASC, U.tp_ID ASC
         `;
 
-        const rows = await this.queryOldDb(query, {
-            lastSyncTime,
-            lastSyncId
-        });
+    const rows = await this.queryOldDb(query, {
+      lastSyncTime,
+      lastSyncId
+    });
 
-        return rows?.[0] || null;
+    return rows?.[0] || null;
+  }
+  
+  async processOne(syncJobId) {
+    if (!syncJobId) throw new Error('syncJobId is required');
+
+    const jobState = await this.getSyncJobState(syncJobId);
+    if (!jobState) throw new Error(`Job state not found: ${syncJobId}`);
+
+    // 🔥 Chỉ đọc từ DB
+    const sourceLastSyncTime = this.normalizeSyncTime(
+      jobState.last_sync_time || DEFAULT_SYNC_TIME
+    );
+
+    const sourceLastSyncId = Number(
+      jobState.last_sync_id || 0
+    );
+
+    const rowData = await this.fetchOneFromSource({
+      lastSyncTime: sourceLastSyncTime,
+      lastSyncId: sourceLastSyncId
+    });
+
+    if (!rowData) {
+      return { syncJobId, processed: false, done: true };
     }
+
+    const result = await this.processRowData(rowData);
+
+    const newSyncTime = this.extractRowSyncTime(rowData);
+    const newSyncId = this.extractRowSyncId(rowData);
+
+    await this.queryNewDb(
+      `UPDATE sync_jobs
+      SET total_processed = ISNULL(total_processed,0) + 1,
+          total_success   = ISNULL(total_success,0) + 1,
+          last_sync_time  = @lastSyncTime,
+          last_sync_id    = @lastSyncId
+      WHERE job_id = @syncJobId`,
+      {
+        syncJobId,
+        lastSyncTime: newSyncTime,
+        lastSyncId: newSyncId
+      }
+    );
+
+    return {
+      syncJobId,
+      processed: true,
+      done: false
+    };
+  }
+  /**
+   * processFn cốt lõi để transform và nạp vào 4 bảng mới
+   */
+  async processRowData(rowData, { transaction } = {}) {
+    if (!rowData?.ID) {
+      throw new Error('ID from old record is required');
+    }
+
+    const recordId = String(rowData.ID);
+
+    const { externalKey } = tableMappings.meeting;
+    const isOnlineZoom = typeof rowData.DiaDiem === 'string' &&  rowData.DiaDiem.toLowerCase().includes('zoom');
     
-    async processOne(syncJobId, options = {}) {
-        if (!syncJobId) throw new Error('syncJobId is required');
 
-        const jobState = await this.getSyncJobState(syncJobId);
-        if (!jobState) throw new Error(`Job state not found: ${syncJobId}`);
-
-        const sourceLastSyncTime = this.normalizeSyncTime(
-            options.sourceLastSyncTime ??
-            jobState.last_sync_time ??
-            DEFAULT_SYNC_TIME
-        );
-
-        const sourceLastSyncId = Number(
-            options.sourceLastSyncId ??
-            jobState.last_sync_id ??
-            0
-        );
-
-        const rowData = await this.fetchOneFromSource({
-            lastSyncTime: sourceLastSyncTime,
-            lastSyncId: sourceLastSyncId
-        });
-
-        if (!rowData) {
-            return { syncJobId, processed: false, done: true };
-        }
-
-        const result = await this.processRowData(rowData);
-
-        const newSyncTime = this.extractRowSyncTime(rowData);
-        const newSyncId = this.extractRowSyncId(rowData);
-
-        await this.queryNewDb(
-            `UPDATE sync_jobs
-            SET total_processed = ISNULL(total_processed,0) + 1,
-                total_success   = ISNULL(total_success,0) + 1,
-                last_sync_time  = @lastSyncTime,
-                last_sync_id    = @lastSyncId
-            WHERE job_id = @syncJobId`,
-            {
-                syncJobId,
-                lastSyncTime: newSyncTime,
-                lastSyncId: newSyncId
-            }
-        );
-
-        return {
-            syncJobId,
-            processed: true,
-            done: false,
-            rowId: rowData.ID,
-            result
-        };
-    }
-    /**
-     * processFn cốt lõi để transform và nạp vào 4 bảng mới
-     */
-    async processRowData(rowData, { transaction } = {}) {
-        if (!rowData?.ID) {
-            throw new Error('ID from old record is required');
-        }
-
-        const recordId = String(rowData.ID);
-
-        const { externalKey } = tableMappings.meeting;
-
-        const result = await this.upsertDataToNewDB(
-            rowData,
-            tableMappings.meeting,
-            externalKey,
-            recordId,
-            transaction
-        );
-
-        return {
-            backupId: recordId,
-            affected: result.affected,
-            logs: [{ table: 'meetings', action: result.action }]
-        };
+    if (rowData.ChuTri) {
+      rowData.ChuTri = await this.helper.mapUserName(rowData.ChuTri, transaction);
     }
 
-    async getExistingColumns(tableName, schema = 'dbo') {
-        const result = await this.queryNewDb(
-            `
+    if (rowData.ThuKy) {
+      rowData.ThuKy = await this.helper.mapUserName(rowData.ThuKy, transaction);
+    }
+
+    if (rowData.DiaDiem) {
+      rowData.DiaDiem = await this.helper.mapMeetingRoom(
+        rowData.DiaDiem,
+        transaction
+      );
+    }
+    const result = await this.upsertDataToNewDB(
+      rowData,
+      tableMappings.meeting,
+      externalKey,
+      recordId,
+      transaction
+    );
+
+    const meetingId = result.id;
+    if (isOnlineZoom && meetingId) {
+      await this.helper.createOnlineMeeting(meetingId, 'ZOOM', transaction);
+    }
+    await this.helper.createRecurrenceKhong(
+      meetingId,
+      rowData.BatDau,
+      transaction
+    );
+
+    await this.helper.createChairmanAndSecretary(
+      meetingId,
+      rowData.ChuTri,
+      rowData.ThuKy,
+      transaction
+    );
+    await this.createDefaultAuditForMigration(meetingId, rowData.created_by, transaction);
+
+    return {
+      backupId: recordId,
+      affected: result.affected,
+      logs: [{ table: 'meetings', action: result.action }]
+    };
+  }
+
+  async createDefaultAuditForMigration(meetingId, creatorUserId, transaction = null) {
+    const query = `
+      INSERT INTO ${this.newDbName}.${this.newDbSchema}.audit
+      (
+        document_id,
+        time,
+        user_id,
+        display_name,
+        role,
+        action_code,
+        from_node_id,
+        to_node_id,
+        details,
+        origin_id,
+        created_by,
+        receiver,
+        roleProcess,
+        action,
+        stage_status,
+        curStatusCode,
+        type_document,
+        created_at,
+        updated_at
+      )
+      VALUES
+      (
+        @meetingId,
+        SYSUTCDATETIME(),
+        'SYSTEM_MIGRATION',
+        NULL,
+        'NGUOI_SOAN_LICH',
+        'CREATE',
+        'Activity_1rl80cg',
+        'Activity_1rl80cg',
+        '{"transferType":"to_person"}',
+        NULL,
+        'SYSTEM_MIGRATION',
+        'SYSTEM_MIGRATION',
+        'processor',
+        N'Tạo văn bản',
+        'DA_XU_LY',
+        '1',
+        'Meeting',
+        SYSUTCDATETIME(),
+        SYSUTCDATETIME()
+      ),
+      (
+        @meetingId,
+        SYSUTCDATETIME(),
+        'SYSTEM_MIGRATION',
+        'System Migration',
+        'NGUOI_SOAN_LICH',
+        'TRINH_LICH',
+        'Activity_1rl80cg',
+        'Gateway_16pjuoq',
+        '{"note":""}',
+        'migration_origin',
+        'SYSTEM_MIGRATION',
+        'BAN_QUAN_LY_PHONG',
+        'processor',
+        N'Chuyển Ban quản lý phòng',
+        'DONG_Y_PHE_DUYET',
+        '2',
+        'Meeting',
+        SYSUTCDATETIME(),
+        SYSUTCDATETIME()
+      ),
+      (
+        @meetingId,
+        SYSUTCDATETIME(),
+        'SYSTEM_MIGRATION',
+        'Quản lý phòng',
+        'BAN_QUAN_LY_PHONG_HOP',
+        'PHE_DUYET_LICH',
+        'Gateway_16pjuoq',
+        'Activity_18dmg6c',
+        NULL,
+        'migration_origin',
+        'SYSTEM_MIGRATION',
+        'SYSTEM_MIGRATION',
+        'seat',
+        N'Gán vị trí chỗ ngồi',
+        'CHUA_XU_LY',
+        '3',
+        'Meeting',
+        SYSUTCDATETIME(),
+        SYSUTCDATETIME()
+      )
+    `;
+    console.log('[StreamMeetingMigrationModel] createDefaultAuditForMigration', { meetingId });
+    await this.helper.queryNewDbTx(
+      query,
+      { meetingId },
+      transaction
+    );
+  }
+
+  async getExistingColumns(tableName, schema = 'dbo') {
+    const result = await this.queryNewDb(
+      `
             SELECT COLUMN_NAME
             FROM INFORMATION_SCHEMA.COLUMNS
             WHERE TABLE_NAME = @tableName
             AND TABLE_SCHEMA = @schema
             `,
-            { tableName, schema }
-        );
+      { tableName, schema }
+    );
 
-        return new Set(result.map(r => r.COLUMN_NAME));
+    return new Set(result.map(r => r.COLUMN_NAME));
+  }
+
+
+  async upsertDataToNewDB(rawData, config, externalKeyField, externalKeyValue, transaction) {
+    const { newTable, newSchema, fieldMapping, defaultValues } = config;
+
+    // ✅ Lấy column tồn tại thực tế trong DB
+    const existingCols = await this.getExistingColumns(newTable, newSchema);
+
+    const params = {};
+    const insertCols = [];
+    const insertVals = [];
+    const updateSet = [];
+
+    /* ================= MAP FIELD ================= */
+    for (const [oldField, newField] of Object.entries(fieldMapping)) {
+
+      if (!existingCols.has(newField)) continue;
+
+      const value = rawData[oldField];
+
+      // BỎ nếu null hoặc undefined
+      if (value === undefined || value === null) continue;
+
+      params[newField] = value;
+
+      insertCols.push(`[${newField}]`);
+      insertVals.push(`@${newField}`);
+      updateSet.push(`[${newField}] = @${newField}`);
     }
-    
-    
-    async upsertDataToNewDB(rawData, config, externalKeyField, externalKeyValue, transaction) {
-        const { newTable, newSchema, fieldMapping, defaultValues } = config;
+    /* ================= DEFAULT VALUES ================= */
+    for (const [newField, valueFn] of Object.entries(defaultValues || {})) {
+      if (!existingCols.has(newField)) continue; // 🔥 BỎ column không tồn tại
 
-        // ✅ Lấy column tồn tại thực tế trong DB
-        const existingCols = await this.getExistingColumns(newTable, newSchema);
+      if (!params.hasOwnProperty(newField)) {
+        params[newField] =
+          typeof valueFn === 'function'
+            ? valueFn(rawData)
+            : valueFn;
 
-        const params = {};
-        const insertCols = [];
-        const insertVals = [];
-        const updateSet = [];
-
-        /* ================= MAP FIELD ================= */
-        for (const [oldField, newField] of Object.entries(fieldMapping)) {
-
-            if (!existingCols.has(newField)) continue;
-
-            const value = rawData[oldField];
-
-            // BỎ nếu null hoặc undefined
-            if (value === undefined || value === null) continue;
-
-            params[newField] = value;
-
-            insertCols.push(`[${newField}]`);
-            insertVals.push(`@${newField}`);
-            updateSet.push(`[${newField}] = @${newField}`);
-        }
-        /* ================= DEFAULT VALUES ================= */
-        for (const [newField, valueFn] of Object.entries(defaultValues || {})) {
-            if (!existingCols.has(newField)) continue; // 🔥 BỎ column không tồn tại
-
-            if (!params.hasOwnProperty(newField)) {
-                params[newField] =
-                    typeof valueFn === 'function'
-                        ? valueFn(rawData)
-                        : valueFn;
-
-                insertCols.push(`[${newField}]`);
-                insertVals.push(`@${newField}`);
-            }
-        }
-
-        if (!existingCols.has(externalKeyField)) {
-            throw new Error(`External key column '${externalKeyField}' does not exist in ${newTable}`);
-        }
-
-        params._externalKeyValue = externalKeyValue;
-
-        const tableRef = `[${newSchema}].[${newTable}]`;
-
-        const query = `
-        IF EXISTS (
-            SELECT 1 FROM ${tableRef}
-            WHERE [${externalKeyField}] = @_externalKeyValue
-        )
-        BEGIN
-            UPDATE ${tableRef}
-            SET ${updateSet.length ? updateSet.join(', ') : `${externalKeyField} = ${externalKeyField}`}
-            WHERE [${externalKeyField}] = @_externalKeyValue;
-
-            SELECT @@ROWCOUNT AS affected, 'updated' AS action;
-        END
-        ELSE
-        BEGIN
-            INSERT INTO ${tableRef}
-            (${insertCols.join(', ')})
-            VALUES (${insertVals.join(', ')});
-
-            SELECT @@ROWCOUNT AS affected, 'inserted' AS action;
-        END
-        `;
-
-        const result = await this.queryNewDbTx(query, params, transaction);
-        const row = Array.isArray(result) ? result[0] : result;
-
-        return {
-            action: row?.action || 'none',
-            affected: Number(row?.affected || 0)
-        };
+        insertCols.push(`[${newField}]`);
+        insertVals.push(`@${newField}`);
+      }
     }
+
+    if (!existingCols.has(externalKeyField)) {
+      throw new Error(`External key column '${externalKeyField}' does not exist in ${newTable}`);
+    }
+
+    params._externalKeyValue = externalKeyValue;
+
+    const tableRef = `[${newSchema}].[${newTable}]`;
+
+    const query = `
+      IF EXISTS (
+          SELECT 1 FROM ${tableRef}
+          WHERE [${externalKeyField}] = @_externalKeyValue
+      )
+      BEGIN
+          UPDATE ${tableRef}
+          SET ${updateSet.length ? updateSet.join(', ') : `${externalKeyField} = ${externalKeyField}`}
+          OUTPUT INSERTED.id AS id
+          WHERE [${externalKeyField}] = @_externalKeyValue;
+
+          SELECT @@ROWCOUNT AS affected, 'updated' AS action;
+      END
+      ELSE
+      BEGIN
+          INSERT INTO ${tableRef}
+          (${insertCols.join(', ')})
+          OUTPUT INSERTED.id AS id
+          VALUES (${insertVals.join(', ')});
+
+          SELECT @@ROWCOUNT AS affected, 'inserted' AS action;
+      END
+      `;
+    const result = await this.queryNewDbTx(query, params, transaction);
+    const row = Array.isArray(result) ? result[0] : result;
+
+    return {
+      id: row?.id || null,
+      action: row?.action || 'none',
+      affected: Number(row?.affected || 0)
+    };
+  }
 }
 
 module.exports = StreamMeetingMigrationModel;
