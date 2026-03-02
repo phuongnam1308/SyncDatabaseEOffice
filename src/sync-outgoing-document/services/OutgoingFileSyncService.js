@@ -13,6 +13,8 @@ class OutgoingFileSyncService {
   constructor() {
     this.enabled = this.toBoolean(process.env.OUTGOING_FILE_SYNC_ENABLED, true);
     this.strictMode = this.toBoolean(process.env.OUTGOING_FILE_SYNC_STRICT, false);
+    this.fileRetryCount = Math.max(1, Number(process.env.OUTGOING_FILE_RETRY_COUNT || 5));
+    this.fileRetryDelayMs = Math.max(0, Number(process.env.OUTGOING_FILE_RETRY_DELAY_MS || 800));
 
     this.sharePointBaseUrl = String(process.env.SHAREPOINT_BASE_URL || '').trim();
     this.uploadUrl = String(process.env.NEW_APP_FILE_UPLOAD_URL || '').trim();
@@ -24,7 +26,6 @@ class OutgoingFileSyncService {
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36'
     ).trim();
 
-    this._uploadedKeySet = new Set();
     this.sharePointClient = null;
 
     if (this.enabled) {
@@ -85,21 +86,15 @@ class OutgoingFileSyncService {
   }
 
   /**
-   * Tach cot Files thanh danh sach path file duy nhat.
+   * Tach cot Files thanh danh sach path file.
    * Du lieu thuong co dinh dang: /a/b/file1.pdf|/a/b/file2.docx
    */
   parseFilesField(filesValue) {
     if (!filesValue || typeof filesValue !== 'string') return [];
-    const unique = new Set();
-    const items = filesValue
+    return filesValue
       .split('|')
       .map((item) => item.trim())
       .filter(Boolean);
-
-    for (const filePath of items) {
-      unique.add(filePath);
-    }
-    return [...unique];
   }
 
   /**
@@ -148,6 +143,43 @@ class OutgoingFileSyncService {
   }
 
   /**
+   * Delay util cho retry backoff.
+   */
+  async sleep(ms) {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Phan loai loi download de quyet dinh bo qua file:
+   * - DOWNLOAD_NOT_FOUND/404: bo qua ngay
+   * - DOWNLOAD_* khac: bo qua va log canh bao
+   */
+  classifyDownloadError(error) {
+    const code = String(error?.code || '').toUpperCase();
+    const status = Number(error?.httpStatus || 0);
+    const message = String(error?.message || '').toLowerCase();
+
+    if (code === 'DOWNLOAD_NOT_FOUND' || status === 404) {
+      return {
+        shouldSkip: true,
+        reason: 'FILE_NOT_FOUND'
+      };
+    }
+
+    if (code.startsWith('DOWNLOAD_') || error?.isDownloadError || message.includes('download')) {
+      return {
+        shouldSkip: true,
+        reason: 'DOWNLOAD_ERROR'
+      };
+    }
+
+    return {
+      shouldSkip: false,
+      reason: null
+    };
+  }
+
+  /**
    * Upload binary file len phan mem moi theo multipart/form-data.
    * object_type va object_id duoc gui dung theo yeu cau nghiep vu.
    */
@@ -193,9 +225,9 @@ class OutgoingFileSyncService {
   /**
    * Ham tong: dong bo tat ca file cua 1 ban ghi outgoing.
    * - Khong throw neu strictMode=false (chi ghi log loi tung file)
-   * - Co co che de-dup trong runtime de tranh upload lap
+   * - Xu ly tuan tu tung file, co retry theo tung file
    */
-  async syncFilesForOutgoing(oldRecord, newOutgoingId) {
+  async syncFilesForOutgoing(oldRecord, newOutgoingId, context = {}) {
     if (!this.enabled) {
       return {
         enabled: false,
@@ -229,52 +261,86 @@ class OutgoingFileSyncService {
     const results = [];
     let successCount = 0;
     let failedCount = 0;
+    let skippedCount = 0;
+    const syncJobId = context?.syncJobId || null;
+    const backupId = String(oldRecord?.ID || oldRecord?.id || '').trim() || null;
 
     for (const sourcePath of filePaths) {
-      const dedupeKey = `${newOutgoingId}::${sourcePath}`;
-      if (this._uploadedKeySet.has(dedupeKey)) {
-        results.push({
-          sourcePath,
-          status: 'SKIPPED',
-          reason: 'Already synced in current runtime'
-        });
-        continue;
+      const fileName = this.getFileNameFromPath(sourcePath);
+      let fileResult = {
+        sourcePath,
+        downloadUrl: null,
+        fileName,
+        size: 0,
+        attempts: 0,
+        status: 'ERROR'
+      };
+
+      for (let attempt = 1; attempt <= this.fileRetryCount; attempt += 1) {
+        fileResult.attempts = attempt;
+        try {
+          const downloadUrl = this.buildSharePointFileUrl(sourcePath);
+          fileResult.downloadUrl = downloadUrl;
+          const downloaded = await this.sharePointClient.downloadFileBuffer({ downloadUrl });
+          const mimeType = this.guessMimeType(fileName, downloaded?.contentType);
+          const uploadResult = await this.uploadBinaryToNewSystem({
+            fileBuffer: downloaded.bytes,
+            fileName,
+            mimeType,
+            objectId: newOutgoingId
+          });
+
+          fileResult = {
+            sourcePath,
+            downloadUrl,
+            fileName,
+            size: Number(downloaded?.bytes?.length || 0),
+            attempts: attempt,
+            status: 'SUCCESS',
+            uploadResult
+          };
+          successCount += 1;
+          break;
+        } catch (error) {
+          const downloadError = this.classifyDownloadError(error);
+          if (downloadError.shouldSkip) {
+            skippedCount += 1;
+            fileResult = {
+              ...fileResult,
+              status: 'SKIPPED',
+              reason: downloadError.reason,
+              error: error.message
+            };
+            logger.warn(
+              `[OutgoingFileSyncService] Skip file syncJobId=${syncJobId || '-'} backupId=${backupId || '-'} documentId=${newOutgoingId} source=${sourcePath} reason=${downloadError.reason}: ${error.message}`
+            );
+            break;
+          }
+
+          fileResult = {
+            ...fileResult,
+            status: 'ERROR',
+            error: error.message
+          };
+
+          const isLastAttempt = attempt >= this.fileRetryCount;
+          if (isLastAttempt) {
+            failedCount += 1;
+            logger.warn(
+              `[OutgoingFileSyncService] File sync failed syncJobId=${syncJobId || '-'} backupId=${backupId || '-'} documentId=${newOutgoingId} source=${sourcePath} attempt=${attempt}/${this.fileRetryCount}: ${error.message}`
+            );
+            break;
+          }
+
+          const waitMs = this.fileRetryDelayMs * attempt;
+          logger.warn(
+            `[OutgoingFileSyncService] File sync retry syncJobId=${syncJobId || '-'} backupId=${backupId || '-'} documentId=${newOutgoingId} source=${sourcePath} attempt=${attempt}/${this.fileRetryCount} waitMs=${waitMs}: ${error.message}`
+          );
+          await this.sleep(waitMs);
+        }
       }
 
-      try {
-        const downloadUrl = this.buildSharePointFileUrl(sourcePath);
-        const downloaded = await this.sharePointClient.downloadFileBuffer({ downloadUrl });
-        const fileName = this.getFileNameFromPath(sourcePath);
-        const mimeType = this.guessMimeType(fileName, downloaded?.contentType);
-
-        const uploadResult = await this.uploadBinaryToNewSystem({
-          fileBuffer: downloaded.bytes,
-          fileName,
-          mimeType,
-          objectId: newOutgoingId
-        });
-
-        this._uploadedKeySet.add(dedupeKey);
-        successCount += 1;
-        results.push({
-          sourcePath,
-          downloadUrl,
-          fileName,
-          size: Number(downloaded?.bytes?.length || 0),
-          status: 'SUCCESS',
-          uploadResult
-        });
-      } catch (error) {
-        failedCount += 1;
-        results.push({
-          sourcePath,
-          status: 'ERROR',
-          error: error.message
-        });
-        logger.warn(
-          `[OutgoingFileSyncService] File sync failed source=${sourcePath} outgoingId=${newOutgoingId}: ${error.message}`
-        );
-      }
+      results.push(fileResult);
     }
 
     if (failedCount > 0 && this.strictMode) {
@@ -288,6 +354,7 @@ class OutgoingFileSyncService {
       skipped: false,
       total: filePaths.length,
       success: successCount,
+      skipped: skippedCount,
       failed: failedCount,
       details: results
     };

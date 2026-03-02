@@ -477,10 +477,28 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       // Chi dong bo file sau khi transaction outgoing da commit thanh cong
       // de dam bao object_id moi (documentId) da on dinh.
       if (this._outgoingFileSyncService && result?.documentId) {
-        fileSync = await this._outgoingFileSyncService.syncFilesForOutgoing(
-          rowData,
-          result.documentId
-        );
+        try {
+          fileSync = await this._outgoingFileSyncService.syncFilesForOutgoing(
+            rowData,
+            result.documentId,
+            {
+              syncJobId,
+              itemIndex
+            }
+          );
+        } catch (fileSyncError) {
+          logger.warn(
+            `[OutGoingDocumentModel.processOne] File sync failed but process continues syncJobId=${syncJobId} backupId=${String(rowData?.ID || '').trim() || '-'} documentId=${result.documentId}: ${fileSyncError.message}`
+          );
+          fileSync = {
+            enabled: true,
+            skipped: false,
+            failed: 1,
+            total: 1,
+            success: 0,
+            error: fileSyncError.message
+          };
+        }
       }
 
       return {

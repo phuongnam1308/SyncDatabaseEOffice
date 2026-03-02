@@ -41,7 +41,10 @@ class StreamFileMigrationModel extends BaseModel {
       initialCookies: process.env.SHAREPOINT_INITIAL_COOKIES || '',
       extraHeaders: this.parseExtraFormFields(process.env.SHAREPOINT_EXTRA_HEADERS),
       timeoutMs: Number(process.env.SHAREPOINT_TIMEOUT_MS || 30000),
+      requestRetries: Number(process.env.SHAREPOINT_REQUEST_RETRIES || 2),
+      retryDelayMs: Number(process.env.SHAREPOINT_RETRY_DELAY_MS || 800),
       authCookieNames: this.parseCsvEnv(process.env.SHAREPOINT_AUTH_COOKIE_NAMES) || ['FedAuth', 'rtFa'],
+      authCookieMode: process.env.SHAREPOINT_AUTH_COOKIE_MODE || 'any',
       extraFormFields: this.parseExtraFormFields(process.env.SHAREPOINT_EXTRA_FORM_FIELDS)
     });
 

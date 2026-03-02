@@ -17,6 +17,7 @@ const LOGIN_PAGE_MARKERS = [
 class SharePointFbaClient {
   constructor(options = {}) {
     this.loginUrl = String(options.loginUrl || '').trim();
+    this.baseUrl = String(options.baseUrl || '').trim();
     this.username = String(options.username || '').trim();
     this.password = String(options.password || '');
 
@@ -27,10 +28,13 @@ class SharePointFbaClient {
     this.acceptLanguage = options.acceptLanguage || 'en-US,en;q=0.9';
     this.initialCookies = String(options.initialCookies || '').trim();
     this.extraHeaders = options.extraHeaders || {};
+    this.authCookieMode = String(options.authCookieMode || 'any').trim().toLowerCase();
     this.userAgent =
       options.userAgent ||
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
     this.timeoutMs = Number(options.timeoutMs || DEFAULT_TIMEOUT_MS);
+    this.requestRetries = Math.max(0, Number(options.requestRetries ?? 2));
+    this.retryDelayMs = Math.max(0, Number(options.retryDelayMs ?? 800));
     this.extraFormFields = options.extraFormFields || {};
     this.authCookieNames = Array.isArray(options.authCookieNames) && options.authCookieNames.length
       ? options.authCookieNames
@@ -152,7 +156,32 @@ class SharePointFbaClient {
   }
 
   hasAuthCookies() {
-    return this.authCookieNames.every((cookieName) => this.cookieJar.has(cookieName));
+    const names = this.authCookieNames || [];
+    if (!names.length) return false;
+
+    if (this.authCookieMode === 'all') {
+      return names.every((cookieName) => this.cookieJar.has(cookieName));
+    }
+    return names.some((cookieName) => this.cookieJar.has(cookieName));
+  }
+
+  sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  isRetryableNetworkError(error) {
+    if (!error) return false;
+    const name = String(error?.name || '');
+    const code = String(error?.code || error?.cause?.code || '');
+    const message = String(error?.message || '').toLowerCase();
+
+    return (
+      name === 'AbortError' ||
+      code === 'UND_ERR_CONNECT_TIMEOUT' ||
+      code === 'ETIMEDOUT' ||
+      message.includes('aborted') ||
+      message.includes('timeout')
+    );
   }
 
   extractHiddenFields(html) {
@@ -180,17 +209,38 @@ class SharePointFbaClient {
   }
 
   async fetchWithTimeout(url, init = {}) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    let lastError = null;
+    const maxAttempt = this.requestRetries + 1;
 
-    try {
-      return await fetch(url, {
-        ...init,
-        signal: controller.signal
-      });
-    } finally {
-      clearTimeout(timer);
+    for (let attempt = 1; attempt <= maxAttempt; attempt += 1) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+
+      try {
+        return await fetch(url, {
+          ...init,
+          signal: controller.signal
+        });
+      } catch (error) {
+        lastError = error;
+        const canRetry = this.isRetryableNetworkError(error) && attempt < maxAttempt;
+        if (!canRetry) {
+          break;
+        }
+
+        logger.warn(
+          `[SharePointFbaClient] Request timeout/network issue, retry ${attempt}/${maxAttempt - 1}: ${url}`
+        );
+        await this.sleep(this.retryDelayMs * attempt);
+      } finally {
+        clearTimeout(timer);
+      }
     }
+
+    const detail = lastError?.message || 'unknown network error';
+    throw new Error(
+      `[SharePointFbaClient] Request failed after ${maxAttempt} attempt(s), timeout=${this.timeoutMs}ms, url=${url}, error=${detail}`
+    );
   }
 
   async followRedirectChain(response) {
@@ -269,7 +319,7 @@ class SharePointFbaClient {
     if (!this.hasAuthCookies()) {
       const availableCookies = [...this.cookieJar.keys()].join(', ');
       throw new Error(
-        `[SharePointFbaClient] Login failed: missing auth cookies (${this.authCookieNames.join(', ')}). Current cookies: ${availableCookies || 'none'}`
+        `[SharePointFbaClient] Login failed: auth cookies check mode=${this.authCookieMode}, expected=${this.authCookieNames.join(', ')}. Current cookies: ${availableCookies || 'none'}`
       );
     }
   }
@@ -337,6 +387,24 @@ class SharePointFbaClient {
     };
   }
 
+  normalizeDownloadUrl(downloadUrlOrPath) {
+    const raw = String(downloadUrlOrPath || '').trim();
+    if (!raw) {
+      throw new Error('[SharePointFbaClient] downloadUrl/downloadPath is required');
+    }
+
+    if (/^https?:\/\//i.test(raw)) {
+      return raw;
+    }
+
+    if (!this.baseUrl) {
+      throw new Error('[SharePointFbaClient] baseUrl is required for relative download path');
+    }
+
+    const normalizedPath = raw.startsWith('/') ? raw : `/${raw}`;
+    return new URL(normalizedPath, this.baseUrl).toString();
+  }
+
   isLikelyLoginPageHtml(html, responseUrl = '') {
     const text = String(html || '').toLowerCase();
     const url = String(responseUrl || '').toLowerCase();
@@ -346,52 +414,117 @@ class SharePointFbaClient {
     return LOGIN_PAGE_MARKERS.every((marker) => text.includes(marker.toLowerCase()));
   }
 
+  /**
+   * Tao loi download co metadata de layer tren phan loai:
+   * - code/httpStatus/isDownloadError
+   * - responseUrl/downloadUrl de log de truy vet.
+   */
+  createDownloadError(message, {
+    code = 'DOWNLOAD_REQUEST_ERROR',
+    httpStatus = null,
+    responseUrl = null,
+    downloadUrl = null
+  } = {}) {
+    const error = new Error(message);
+    error.code = code;
+    if (httpStatus != null) {
+      error.httpStatus = Number(httpStatus);
+    }
+    if (responseUrl) {
+      error.responseUrl = responseUrl;
+    }
+    if (downloadUrl) {
+      error.downloadUrl = downloadUrl;
+    }
+    error.isDownloadError = true;
+    return error;
+  }
+
   async _attemptDownloadBuffer(downloadUrl) {
-    let response = await this.fetchWithAuth(downloadUrl, {
-      method: 'GET',
-      redirect: 'manual',
-      headers: {
-        Accept: '*/*'
+    try {
+      let response = await this.fetchWithAuth(downloadUrl, {
+        method: 'GET',
+        redirect: 'manual',
+        headers: {
+          Accept: '*/*'
+        }
+      });
+
+      if (response.status >= 300 && response.status < 400) {
+        response = await this.followRedirectChain(response);
       }
-    });
 
-    if (response.status >= 300 && response.status < 400) {
-      response = await this.followRedirectChain(response);
-    }
-
-    if (!response.ok) {
-      throw new Error(`[SharePointFbaClient] Download failed: HTTP ${response.status}`);
-    }
-
-    const contentType = String(response.headers.get('content-type') || '').toLowerCase();
-    if (contentType.includes('text/html') || contentType.includes('application/xhtml+xml')) {
-      const html = await response.text();
-      if (this.isLikelyLoginPageHtml(html, response.url || '')) {
-        const err = new Error('[SharePointFbaClient] Download redirected to login page');
-        err.code = 'LOGIN_PAGE_DETECTED';
-        throw err;
+      if (!response.ok) {
+        const httpStatus = Number(response.status || 0);
+        const code = httpStatus === 404 ? 'DOWNLOAD_NOT_FOUND' : 'DOWNLOAD_HTTP_ERROR';
+        throw this.createDownloadError(
+          `[SharePointFbaClient] Download failed: HTTP ${httpStatus}`,
+          {
+            code,
+            httpStatus,
+            responseUrl: response.url || null,
+            downloadUrl
+          }
+        );
       }
-      throw new Error('[SharePointFbaClient] Download returned HTML content');
-    }
 
-    const bytes = Buffer.from(await response.arrayBuffer());
-    return {
-      bytes,
-      contentType: response.headers.get('content-type') || null
-    };
+      const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+      if (contentType.includes('text/html') || contentType.includes('application/xhtml+xml')) {
+        const html = await response.text();
+        if (this.isLikelyLoginPageHtml(html, response.url || '')) {
+          const err = this.createDownloadError(
+            '[SharePointFbaClient] Download redirected to login page',
+            {
+              code: 'LOGIN_PAGE_DETECTED',
+              responseUrl: response.url || null,
+              downloadUrl
+            }
+          );
+          throw err;
+        }
+        throw this.createDownloadError(
+          '[SharePointFbaClient] Download returned HTML content',
+          {
+            code: 'DOWNLOAD_INVALID_CONTENT',
+            responseUrl: response.url || null,
+            downloadUrl
+          }
+        );
+      }
+
+      const bytes = Buffer.from(await response.arrayBuffer());
+      return {
+        bytes,
+        contentType: response.headers.get('content-type') || null,
+        responseUrl: response.url || null
+      };
+    } catch (error) {
+      if (error?.isDownloadError) {
+        throw error;
+      }
+      throw this.createDownloadError(
+        error?.message || '[SharePointFbaClient] Download request failed',
+        {
+          code: error?.code || 'DOWNLOAD_REQUEST_ERROR',
+          downloadUrl
+        }
+      );
+    }
   }
 
   /**
    * Tai file ve dang buffer de xu ly tiep (vd: upload API moi).
    * Neu phat hien bi da ve trang login thi tu dong relogin va thu lai 1 lan.
    */
-  async downloadFileBuffer({ downloadUrl }) {
-    if (!downloadUrl) {
-      throw new Error('[SharePointFbaClient] downloadUrl is required');
-    }
+  async downloadFileBuffer({ downloadUrl, downloadPathOrUrl }) {
+    const normalizedDownloadUrl = this.normalizeDownloadUrl(downloadUrl || downloadPathOrUrl);
 
     try {
-      return await this._attemptDownloadBuffer(downloadUrl);
+      const result = await this._attemptDownloadBuffer(normalizedDownloadUrl);
+      return {
+        ...result,
+        downloadUrl: normalizedDownloadUrl
+      };
     } catch (error) {
       if (error?.code !== 'LOGIN_PAGE_DETECTED') {
         throw error;
@@ -399,8 +532,33 @@ class SharePointFbaClient {
 
       logger.warn('[SharePointFbaClient] Login page detected while downloading, relogin and retry once');
       await this.ensureAuthenticated(true);
-      return this._attemptDownloadBuffer(downloadUrl);
+      const retryResult = await this._attemptDownloadBuffer(normalizedDownloadUrl);
+      return {
+        ...retryResult,
+        downloadUrl: normalizedDownloadUrl
+      };
     }
+  }
+
+  async downloadToFile({ downloadPathOrUrl, downloadUrl, outputPath }) {
+    if (!outputPath) {
+      throw new Error('[SharePointFbaClient] outputPath is required');
+    }
+
+    const result = await this.downloadFileBuffer({
+      downloadUrl: downloadUrl || null,
+      downloadPathOrUrl: downloadPathOrUrl || null
+    });
+
+    const finalOutputPath = path.resolve(outputPath);
+    await fs.promises.mkdir(path.dirname(finalOutputPath), { recursive: true });
+    await fs.promises.writeFile(finalOutputPath, result.bytes);
+
+    return {
+      ...result,
+      savedPath: finalOutputPath,
+      size: Number(result?.bytes?.length || 0)
+    };
   }
 }
 
