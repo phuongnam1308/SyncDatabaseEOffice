@@ -28,27 +28,27 @@ const MODEL_DEFINITIONS = [
   //   ModelClass: StreamUserMigrationModel
   // },
   {
-    key:     'UNIT_TEST_STREAM_TASK_MIGRATION',
-    label:   'Đồng bộ công việc từ văn bản đến',
+    key: 'UNIT_TEST_STREAM_TASK_MIGRATION',
+    label: 'Đồng bộ công việc từ văn bản đến',
     section: 'realtime',
     ModelClass: StreamTaskMigrationModel,
   },
   {
     key: 'UNIT_TEST_STREAM_SOCIAL_RESOURCE_MIGRATION1',
-    label: 'Đồng bộ cơ sở dữ liệu cũ: tin tức (social resource)',
+    label: 'Đồng bộ tin tức ',
     section: 'realtime',
     ModelClass: StreamSocialMigrationModel,
     ModelClass: StreamUserMigrationModel
   },
   {
-    key:     '3_incoming',
-    label:   'Đồng bộ văn bản đến',
+    key: '3_incoming',
+    label: 'Đồng bộ văn bản đến',
     section: 'realtime',
     ModelClass: SyncIncomingDocumentModel,
   },
   {
     key: 'UNIT_TEST_STREAM_MEETING_MIGRATION',
-    label: 'Đồng bộ cơ sở dữ liệu cũ: Lịch họp (meeting)',
+    label: 'Đồng bộ Lịch họp ',
     section: 'realtime',
     ModelClass: StreamMeetingMigrationModel,
   },
