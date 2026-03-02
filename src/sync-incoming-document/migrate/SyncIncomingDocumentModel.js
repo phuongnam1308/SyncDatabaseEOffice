@@ -15,7 +15,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         this.oldDbTable = 'VanBanDen';
         this.newDbSchema = 'dbo';
         this.newTableSync = 'incomming_documents_sync'; //Bảng trung gian lưu data raw dùng để sync dần vào bảng chính `user_clone_for_sync`
-        this.newDbTable = 'incomming_documents2';
+        this.newDbTable = 'incomming_documents';
         // Properties for INSERT/UPDATE queries
         this.dbName = this.newDbName;
         this.mainSchema = this.newDbSchema;
@@ -51,17 +51,31 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
                 ? new sql.Request(transaction)
                 : this.newPool.request();
 
-            // Danh sách các fields cần explicit declare là NVARCHAR(MAX)
+            // Danh sách UUID fields
+            const uuidFields = [];
+
+            // Danh sách NVARCHAR(MAX) fields
             const maxFields = ['CoQuanGui2', 'CoQuanGuiText', 'DonVi', 'abstract_note',
                 'to_book_code', 'urgency_level', 'private_level', 'document_type',
                 'SoVanBan', 'TrichYeu', 'VanBanTraLoi', 'YKienLanhDao', 'YKienLanhDaoTCT',
-                'YKienLanhDaoVPDN', 'YKienCuaLDVPChoVanThu', 'ForwardType', 'MigrateErrMess'];
+                'YKienLanhDaoVPDN', 'YKienCuaLDVPChoVanThu', 'ForwardType', 'MigrateErrMess',
+                'receiver_unit', 'copy_to_internal', 'view_group', 'directive_comment',
+                'fileids', 'LanhDaoTCT', 'LanhDaoTCTDaXuLy', 'LanhDaoTCTDeBiet'];
 
             Object.keys(params || {}).forEach(key => {
                 const value = params[key];
 
-                // Explicit declare NVARCHAR(MAX) cho các fields dài
-                if (maxFields.includes(key)) {
+                // UUID fields - chỉ set type khi value là GUID hợp lệ
+                if (uuidFields && uuidFields.includes(key)) {
+                    if (value && this.isValidUUID(value)) {
+                        request.input(key, sql.UniqueIdentifier, value);
+                    } else {
+                        // Nếu null hoặc không phải GUID, để driver tự infer (sẽ là NULL)
+                        request.input(key, value);
+                    }
+                }
+                // NVARCHAR(MAX) fields
+                else if (maxFields.includes(key)) {
                     request.input(key, sql.NVarChar(sql.MAX), value);
                 }
                 // Các field khác để driver tự infer
@@ -112,6 +126,12 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         const statusStr = String(value || '');
         if (statusStr === '-1') return 3;
         return 1;
+    }
+
+    isValidUUID(value) {
+        if (!value) return false;
+        const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        return uuidPattern.test(String(value));
     }
 
     parseBit(value) {
@@ -190,37 +210,57 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
    */
     async fetchListFromOldDb(lastSyncTime, lastSyncId = 0) {
         const query = `
-      ;WITH source_rows AS (
+    ;WITH source_rows AS (
         SELECT
-          *,
-          COALESCE(TRY_CONVERT(datetime2, Modified), TRY_CONVERT(datetime2, Created)) AS __sync_time,
-          TRY_CONVERT(
-            BIGINT,
-            NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
-          ) AS __sync_id_num
+            *,
+            COALESCE(
+                TRY_CONVERT(datetime2, Modified, 105),
+                TRY_CONVERT(datetime2, Created, 105),
+
+                TRY_CONVERT(datetime2, Modified, 120),
+                TRY_CONVERT(datetime2, Created, 120),
+
+                TRY_CONVERT(datetime2, Modified),
+                TRY_CONVERT(datetime2, Created)
+            ) AS __sync_time,
+
+            TRY_CONVERT(
+                BIGINT,
+                NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
+            ) AS __sync_id_num
+
         FROM ${this.oldDbSchema}.${this.oldDbTable}
-      )
-      SELECT
+    )
+    SELECT
         *,
         ISNULL(__sync_id_num, 0) AS __sync_id
-      FROM source_rows
-      WHERE (
-        __sync_time > @lastSyncTime
-        OR (
-          __sync_time = @lastSyncTime
-          AND ISNULL(__sync_id_num, -9223372036854775808) > @lastSyncId
+    FROM source_rows
+    WHERE 
+        __sync_time IS NOT NULL
+        AND (
+            __sync_time > @lastSyncTime
+            OR (
+                __sync_time = @lastSyncTime
+                AND ISNULL(__sync_id_num, -9223372036854775808) > @lastSyncId
+            )
         )
-      )
-      ORDER BY
+    ORDER BY
         __sync_time ASC,
         ISNULL(__sync_id_num, -9223372036854775808) ASC,
         ID ASC
     `;
 
-        return this.queryOldDb(query, {
+        const params = {
             lastSyncTime,
             lastSyncId: Number(lastSyncId || 0)
-        });
+        };
+
+        console.log('========== OLD DB SYNC QUERY ==========');
+        console.log('lastSyncTime:', lastSyncTime);
+        console.log('lastSyncId:', params.lastSyncId);
+        console.log('========================================');
+
+        return this.queryOldDb(query, params);
     }
 
     async syncOldToStaging(rows, { transaction } = {}) {
@@ -711,7 +751,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         const status = this.helper.parseStatus(oldRecord.TrangThai);
         const pageCount = this.safeNumber(oldRecord.SoTrang, null);
         const soBan = this.safeNumber(oldRecord.SoBan, null);
-
+        
         return {
             // Core fields
             document_id: `${Date.now()}${Math.floor(Math.random() * 10000)}`,
@@ -784,7 +824,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
             MigrateErrMess: this.safeString(oldRecord.MigrateErrMess),
             TrangThai: this.safeString(oldRecord.TrangThai),
             ModifiedBy: this.safeString(oldRecord.ModifiedBy),
-            CreatedBy: this.safeString(oldRecord.CreatedBy),
+            CreatedBy: drafter,
             DGPId: this.safeNumber(oldRecord.DGPId, null),
             deadline_reply: this.safeString(oldRecord.ThoiHanGQ),
         }
