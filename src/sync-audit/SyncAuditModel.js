@@ -3,9 +3,16 @@ const logger = require("../../utils/logger");
 const MigrationHelper = require("../helpers/MigrationHelper");
 const sql = require("mssql");
 
+// Outgoing document
 const CATEGORY_RELEASE_DV = "Phát hành văn bản ĐV";
 const CATEGORY_RELEASE_TCT = "Phát hành văn bản TCT";
+const CATEGORY_OUTGOING = "Văn bản đi";
 
+// Incomming document
+const CATEGORY_INCOMMING_SUBMIT = "Văn bản trình ký";
+const CATEGORY_INCOMMING_TCT = "Văn bản đến TCT";
+const CATEGORY_INCOMMING= "Văn bản đến";
+const CATEGORY_INCOMMING_INTERNAL= "Văn bản nội bộ";
 class SyncAuditModel extends BaseModel {
   constructor(oldDbTable) {
     super();
@@ -32,6 +39,7 @@ class SyncAuditModel extends BaseModel {
       [
         CATEGORY_RELEASE_DV,
         CATEGORY_RELEASE_TCT,
+        CATEGORY_OUTGOING,
       ]
     );
   }
@@ -109,8 +117,10 @@ class SyncAuditModel extends BaseModel {
     return this._fetchByDocumentIdInternal(
       oldDocumentId,
       [
-        CATEGORY_RELEASE_DV,
-        CATEGORY_RELEASE_TCT,
+        CATEGORY_INCOMMING_TCT,
+        CATEGORY_INCOMMING,
+        CATEGORY_INCOMMING_INTERNAL,
+        CATEGORY_INCOMMING_SUBMIT
       ]
     );
   }

@@ -84,18 +84,14 @@ class StreamCommentMigrationModel extends BaseModel {
     return {
       id,
       document_id: documentId || null,
-      document_id_bak: record.DocumentID ? String(record.DocumentID) : null,
       user_id: userId || null,
-      user_id_bak: record.Author || null,
       user_name: userName,
       content: record.Content || "",
       type: record.Type ? String(record.Type) : null,
-      type_bak: record.Type ? String(record.Type) : null,
       created_at: this.helper.parseDate(record.Created),
       file_id: record.Files || null,
       likes: record.LikeNumber ? String(record.LikeNumber) : null,
       id_comments_bak: String(record.ID),
-      parent_id_bak: record.ReplyTo || record.CommentID || null,
       table_backup: this.oldDbTable,
     };
   }
@@ -120,16 +116,14 @@ class StreamCommentMigrationModel extends BaseModel {
 
   async _insert(data, transaction) {
     const query = `
-      INSERT INTO ${process.env.NEW_DB_NAME}.dbo.document_comments_sync (
+      INSERT INTO ${process.env.NEW_DB_NAME}.dbo.document_comments (
         id, document_id, user_id, user_name, content, [type],
         created_at, updated_at, file_id, likes,
-        id_comments_bak, document_id_bak, type_bak,
-        table_backup, parent_id_bak, user_id_bak
+        id_comments_bak, table_bak
       ) VALUES (
         @id, @documentId, @userId, @userName, @content, @type,
         @createdAt, GETDATE(), @fileId, @likes,
-        @idCommentsBak, @documentIdBak, @typeBak,
-        @tableBackup, @parentIdBak, @userIdBak
+        @idCommentsBak, @tableBackup
       )
     `;
     await this.queryNewDbTx(query, {
@@ -143,17 +137,13 @@ class StreamCommentMigrationModel extends BaseModel {
       fileId: data.file_id,
       likes: data.likes,
       idCommentsBak: data.id_comments_bak,
-      documentIdBak: data.document_id_bak,
-      typeBak: data.type_bak,
       tableBackup: data.table_backup,
-      parentIdBak: data.parent_id_bak,
-      userIdBak: data.user_id_bak,
     }, transaction);
   }
 
   async _update(data, transaction) {
     const query = `
-      UPDATE ${process.env.NEW_DB_NAME}.dbo.document_comments_sync
+      UPDATE ${process.env.NEW_DB_NAME}.dbo.document_comments
       SET
         document_id = @documentId,
         user_id = @userId,
@@ -163,9 +153,7 @@ class StreamCommentMigrationModel extends BaseModel {
         file_id = @fileId,
         likes = @likes,
         updated_at = GETDATE(),
-        parent_id_bak = @parentIdBak,
-        user_id_bak = @userIdBak
-      WHERE id_comments_bak = @idCommentsBak AND table_backup = @tableBackup
+      WHERE id_comments_bak = @idCommentsBak AND table_bak = @tableBackup
     `;
     await this.queryNewDbTx(query, {
       documentId: data.document_id,
@@ -175,8 +163,6 @@ class StreamCommentMigrationModel extends BaseModel {
       type: data.type,
       fileId: data.file_id,
       likes: data.likes,
-      parentIdBak: data.parent_id_bak,
-      userIdBak: data.user_id_bak,
       idCommentsBak: data.id_comments_bak,
       tableBackup: data.table_backup,
     }, transaction);
