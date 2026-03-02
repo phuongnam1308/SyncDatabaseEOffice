@@ -109,8 +109,7 @@ const tableMappings = {
 
       status: '1',
 
-      bpmn_version:
-        process.env.DEFAULT_BPMN_VERSION || 'QUY_TRINH_LICH_HOP',
+      bpmn_version: process.env.DEFAULT_BPMN_VERSION || 'QUY_TRINH_LICH_HOP',
 
       content: (r) => r?.NoiDung || null,
 
@@ -125,10 +124,7 @@ const tableMappings = {
       updated_at: (r) =>
         parseDate(r?.tp_Modified) || new Date(),
 
-      status_code: (r) =>
-        r?.tp_Version
-          ? `MIGRATED_V${r.tp_Version}`
-          : 'MIGRATED',
+      status_code:1,
 
       direct_command: '',
       conclusion: null,
@@ -168,7 +164,7 @@ const tableMappings = {
     /* ================= DUPLICATE ================= */
     duplicateCheck: {
       fields: ['sharepoint_item_id'],
-      strategy: 'skip'
+      strategy: 'skip' // 'skip' | 'update' | 'upsert'
     },
     
     externalKey: 'sharepoint_item_id',
