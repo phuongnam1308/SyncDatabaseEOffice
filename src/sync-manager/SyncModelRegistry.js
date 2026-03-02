@@ -38,7 +38,7 @@ const MODEL_DEFINITIONS = [
     label: 'Đồng bộ tin tức ',
     section: 'realtime',
     ModelClass: StreamSocialMigrationModel,
-    ModelClass: StreamUserMigrationModel
+    // ModelClass: StreamUserMigrationModel
   },
   {
     key: '3_incoming',

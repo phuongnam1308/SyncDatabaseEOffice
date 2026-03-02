@@ -27,13 +27,17 @@ const tableMappings = {
         },
         defaultValues: {
             'status': 1, // Default status
-            'content': (record) => { const raw = (record.ResourceData || '').trim(); return raw === 'NULL' || !raw ? '<p></p>' : raw; },
+            'content': (record) => {
+                let raw = (record.Subject || '').trim();
+                if (raw === 'NULL' || !raw) return '<p></p>';
+                // Nếu đã có tag <p> ở đầu thì không bọc thêm (tránh <p><p>...</p></p>)
+                if (raw.toLowerCase().startsWith('<p>')) return raw;
+                return `<p>${raw}</p>`;
+            },
             'summary': (record) => { const raw = (record.Description || '').trim(); return raw === 'NULL' || !raw ? '' : raw; },
             'viewCount': (record) => parseInt(record.ViewCount || 0, 10) || 0,
             // Giả lập authorName tạm thời, hệ thống có thể cần map hoặc query từ user
             'authorName': 'Unknown',
-            // Có thể thêm một cột lưu old_id nếu table news hỗ trợ, hiện map tạm vào topic hoặc bỏ qua
-            'topic': (record) => record?.ID || '',
             'publishedAt': (record) => parseDateString(record.PostTime) || parseDateString(record.Created) || new Date(),
             'createdAt': (record) => parseDateString(record.Created) || new Date(),
             'updatedAt': (record) => parseDateString(record.Modified) || new Date()
