@@ -3,6 +3,55 @@ const logger = require("../../../utils/logger");
 const sql = require("mssql");
 const MigrationHelper = require("../../helpers/MigrationHelper");
 
+// ── Danh sách bảng comment trong DB cũ ───────────────────────
+const COMMENT_TABLES = [
+  'Comments',
+  'Comments_ATPC',
+  'Comments_CLL',
+  'Comments_CNTT',
+  'Comments_CT',
+  'Comments_CVTC',
+  'Comments_DonVi',
+  'Comments_DVHH',
+  'Comments_DVKT',
+  'Comments_GNVT',
+  'Comments_HC',
+  'Comments_HT',
+  'Comments_ICDLB',
+  'Comments_ICDST',
+  'Comments_KHDT',
+  'Comments_KHKD',
+  'Comments_KTVT',
+  'Comments_KVTC',
+  'Comments_MKT',
+  'Comments_NPL',
+  'Comments_QLCT',
+  'Comments_QSBV',
+  'Comments_SNPL',
+  'Comments_TC',
+  'Comments_TC189',
+  'Comments_TCCT',
+  'Comments_TCHP',
+  'Comments_TCIDI',
+  'Comments_TCLD',
+  'Comments_TCMT',
+  'Comments_TCO',
+  'Comments_TCOT',
+  'Comments_TCPC',
+  'Comments_TCPH',
+  'Comments_TCTT',
+  'Comments_TTDDC',
+  'Comments_TTDTC',
+  'Comments_VP',
+  'Comments_VPMB',
+  'Comments_VPTNB',
+  'Comments_VTB',
+  'Comments_VTT',
+  'Comments_XDCT',
+  'Comments_xdsm',
+  'Comments_XNCG',
+  'Comments_YTE',
+];
 class StreamCommentMigrationModel extends BaseModel {
   constructor(oldDbTable) {
     super();
@@ -10,7 +59,7 @@ class StreamCommentMigrationModel extends BaseModel {
     this.oldDbTable = oldDbTable;
     this.newDbSchema = "dbo";
     this.newDbTable = "document_comments_sync";
-    this.helper = new MigrationHelper(this.queryNewDbTx.bind(this));
+    this.helper = new MigrationHelper(this.queryNewDbTx.bind(this), this.queryOldDb.bind(this));
   }
 
   async fetchBatch({ batch, lastId }) {

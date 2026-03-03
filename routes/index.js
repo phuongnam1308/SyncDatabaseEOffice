@@ -23,14 +23,14 @@ const UpdateIncomingBookDocumentIdController =
   require('../controllers/updates/UpdateIncomingBookDocumentIdController');
 const UpdateIncomingStatusCodeController =
   require('../controllers/updates/UpdateIncomingStatusCodeController');
-  const migrateIncomingDocs =
+const migrateIncomingDocs =
   require('../controllers/updates/MigrateIncomingDocumentsController');
 
 const UpdateIncomingSenderUnitController =
   require('../controllers/UpdateIncomingSenderUnitController');
 const MigrationTaskController = require('../controllers/MigrationTaskController');
 const MigrationTaskDeleteController = require('../controllers/MigrationTaskDeleteController');
-  // Lấy thống kê migration
+// Lấy thống kê migration
 const MigrationTaskVBDiController = require('../controllers/MigrationTaskVBDiController');
 const MigrationTaskUsers2Controller = require('../controllers/MigrationTaskUsers2Controller');
 
@@ -46,9 +46,9 @@ const MigrationTaskUsers2ProcessGroupController =
   require('../controllers/MigrationTaskUsers2ProcessGroupController');
 const FileMigrationController =
   require('../controllers/FileMigrationController');
- const IncomingFileMigrationController =
+const IncomingFileMigrationController =
   require('../controllers/IncomingFileMigrationController');
-  router.get('/statistics', MigrationController.getStatistics);
+router.get('/statistics', MigrationController.getStatistics);
 
 // Thực hiện migration phòng ban - ĐỔI SANG GET ĐỂ DỄ TEST
 router.get('/migrate/phongban', MigrationController.migratePhongBan);
@@ -147,7 +147,7 @@ router.get('/migrate/sender-unit/batch/:limit', SenderUnitController.updateSende
 router.get('/sender-unit/update/:id', SenderUnitController.updateSingleSenderUnit);
 router.get('/statistics/drafter-preview', DrafterMigrationController.preview);
 router.get('/migrate/drafter', DrafterMigrationController.migrate);
-router.get('/update/incoming-book-document-id',UpdateIncomingBookDocumentIdController.update);
+router.get('/update/incoming-book-document-id', UpdateIncomingBookDocumentIdController.update);
 router.get(
   '/update/incoming-status-code',
   UpdateIncomingStatusCodeController.update
@@ -188,7 +188,7 @@ router.get('/statistics/task-users-taskid', TaskUsersTaskIdController.statistics
 router.get('/update/task-users-taskid', TaskUsersTaskIdController.update);
 
 // (Tùy chọn) Nếu bạn muốn dùng POST để an toàn hơn, có thể thay bằng:
-router.get('/update/task-users-taskid', TaskUsersTaskIdController.update);router.get('/update/task-users-taskid', MigrationTaskUsersMappingController.updateMapping);
+router.get('/update/task-users-taskid', TaskUsersTaskIdController.update); router.get('/update/task-users-taskid', MigrationTaskUsersMappingController.updateMapping);
 router.get(
   '/mapping/task-users2-process',
   MigrationTaskUsers2ProcessController.mapProcess
@@ -321,10 +321,10 @@ router.post(
 );
 
 
-const OutgoingRoutes = require('../src/sync-outgoing-document/route');
+const OutgoingRoutes = require('../src/older-sync-outgoing-document/route');
 router.use('/outgoing', OutgoingRoutes);
 
-const AuditRoutes = require('../src/sync-audit/route');
+const AuditRoutes = require('../src/older-sync-audit/route');
 router.use('/audit', AuditRoutes);
 
 const UserRoutes = require('../src/sync-user/route');
@@ -333,8 +333,18 @@ router.use('/user', UserRoutes);
 const UserCopyRoutes = require('../src/sync-user-copy/route');
 router.use('/user-copy', UserCopyRoutes);
 
+const SocialResourceRoutes = require('../src/sync-social-resource/route');
+router.use('/sync-social-resource', SocialResourceRoutes);
+
+const StreamMeetingMigrationController = require('../src/sync-meeting/route');
+router.use('/sync-meeting', StreamMeetingMigrationController);
+
 const FileRoutes = require('../src/sync-file/route');
 router.use('/file', FileRoutes);
+
+const incommingRoutes = require('../src/sync-incoming-document/route');
+router.use('/incoming', incommingRoutes);
+
 
 module.exports = router;
 const SrcSyncManagerController = require('../src/sync-manager/SyncManagerController');
@@ -346,7 +356,14 @@ router.post('/sync-manager-src/jobs/:jobId/resume', SrcSyncManagerController.res
 router.get('/sync-manager-src/jobs/:jobId', SrcSyncManagerController.getJobSyncStatus);
 router.get('/sync-manager-src/events', SrcSyncManagerController.sseEvents); // ← THÊM DÒNG NÀY
 
-const CommentRoutes = require('../src/sync-document-comment/route');
+
+const SyncOutgoingRoutes = require('../src/sync-outgoing-document/route');
+router.use('/sync-outgoing', SyncOutgoingRoutes);
+
+const CommentRoutes = require('../src/older-sync-document-comment/route');
 router.use('/document-comments', CommentRoutes);
+
+const TaskCopyRoutes = require('../src/sync-tasks/route');
+router.use('/sync-tasks', TaskCopyRoutes);
 
 module.exports = router;

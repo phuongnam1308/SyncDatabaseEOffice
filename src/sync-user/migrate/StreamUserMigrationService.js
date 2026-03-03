@@ -198,8 +198,8 @@ class StreamUserMigrationService {
 
     // --- Trả về đối tượng bản ghi mới ---
     return {
-      id: this.generateGuid(),
-      password: "$2b$10$Ohcqw9J1YStppJHeYdoD5.yWjnCm5Mt7MQxWoIMNc0LBwbFRW1DU2", // Mật khẩu mới
+      id: oldRecord.ID,
+      password: '$2b$10$Ohcqw9J1YStppJHeYdoD5.yWjnCm5Mt7MQxWoIMNc0LBwbFRW1DU2', // Mật khẩu mới
       name: name, // Tên đã xử lý
       avatar: oldRecord.Image || "[]",
       code_nd: code_nd, // Code ND đã xử lý

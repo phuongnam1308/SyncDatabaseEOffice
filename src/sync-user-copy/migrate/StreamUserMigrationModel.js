@@ -10,7 +10,8 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
     this.oldDbTable = 'PersonalProfile';
     this.newDbSchema = 'dbo';
     this.newTableSync = 'user_sync'; //Bảng trung gian lưu data raw dùng để sync dần vào bảng chính `user_clone_for_sync`
-    this.newDbTable = 'user_clone_for_sync';
+    this.newDbTable = 'users';
+    //_clone_for_sync';
   }
 
   getStagingTableRef() {
@@ -52,6 +53,126 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
     if (ta > tb) return true;
     if (ta < tb) return false;
     return Number(aId || 0) > Number(bId || 0);
+  }
+
+  safeString(value) {
+    if (value === 'NULL' || value === 'null' || value === null || value === undefined) {
+      return null;
+    }
+    if (typeof value === 'string' && value.trim() === '') {
+      return null;
+    }
+    return String(value).trim();
+  }
+
+  safeNumber(value, defaultValue = 0) {
+    if (value === 'NULL' || value === 'null' || value === null || value === undefined) {
+      return defaultValue;
+    }
+    const num = Number(value);
+    return Number.isNaN(num) ? defaultValue : num;
+  }
+
+  safeDate(value) {
+    if (value === 'NULL' || value === 'null' || value === null || value === undefined) {
+      return null;
+    }
+    try {
+      const dateStr = String(value).trim();
+      if (!dateStr) return null;
+      const date = new Date(dateStr);
+      return Number.isNaN(date.getTime()) ? null : date;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  parseGender(value) {
+    const genderStr = String(value || '');
+    if (genderStr === '1') return 'nam';
+    if (genderStr === '0') return 'nu';
+    return null;
+  }
+
+  parseStatus(value) {
+    const statusStr = String(value || '');
+    if (statusStr === '-1') return 3;
+    return 1;
+  }
+
+  parseBit(value) {
+    if (value === '1' || value === 1 || value === true) return 1;
+    if (value === '0' || value === 0 || value === false) return 0;
+    return 0;
+  }
+
+  mapRecordForUpsert(oldRecord) {
+    const username = oldRecord.AccountName || '';
+
+    let code_nd = username;
+    const backslashIndex = username.lastIndexOf('\\');
+    if (backslashIndex > -1) {
+      code_nd = username.substring(backslashIndex + 1);
+    }
+
+    let name = (oldRecord.FullName || username || 'Unknown').trim();
+    const hyphenIndex = name.indexOf('-');
+    if (hyphenIndex > -1) {
+      name = name.substring(0, hyphenIndex).trim();
+    }
+
+    let email_user = this.safeString(oldRecord.Email);
+    if (!email_user && code_nd) {
+      email_user = `${code_nd}@saigonnewport.com.vn`;
+    }
+
+    return {
+      id: oldRecord.ID,
+      password: '$2b$10$Ohcqw9J1YStppJHeYdoD5.yWjnCm5Mt7MQxWoIMNc0LBwbFRW1DU2',
+      name,
+      avatar: oldRecord.Image || '[]',
+      code_nd,
+      username: oldRecord.AccountName,
+      email_user,
+      phone_number_user: this.safeString(oldRecord.Mobile),
+      position: this.safeString(oldRecord.Position),
+      leader: this.safeString(oldRecord.Manager),
+      address_user: this.safeString(oldRecord.Address),
+      description: null,
+      role: null,
+      roles_by_process: '[{"processKey":"PHUC_DAP_DV","name":"PHUC_DAP_DV","roles":[{"roleCode":"LANH_DAO_TCT","name":"LANH_DAO_TCT"}]},{"processKey":"KY_SO_HS_VBD","name":"KY_SO_HS_VBD","roles":[{"roleCode":"NGUOI_KY_PHE_DUYET","name":"NGUOI_KY_PHE_DUYET"}]},{"processKey":"SOANTHAO_PHATHANH_VBD","name":"SOANTHAO_PHATHANH_VBD","roles":[{"roleCode":"NGUOI_KY_NOI_DUNG","name":"NGUOI_KY_NOI_DUNG"}]}]',
+      organization_name: null,
+      organization_code: null,
+      organization_type: null,
+      orders: this.safeNumber(oldRecord.Orders, 1000),
+      birthday: this.safeDate(oldRecord.BirthDay),
+      gender: this.parseGender(oldRecord.Gender),
+      identification_card: this.safeString(oldRecord.CMND),
+      contact_time: null,
+      parent: null,
+      wso2_user_id: null,
+      keycloak_user_id: null,
+      status: this.parseStatus(oldRecord.WorkStatus),
+      author: '',
+      role_group_source_authorized: '',
+      created_at: new Date(),
+      updated_at: new Date(),
+      name_authorized: null,
+      id_user_bak: oldRecord.ID,
+      AccountID: this.safeString(oldRecord.AccountID),
+      FullName: this.safeString(oldRecord.FullName),
+      Department: this.safeString(oldRecord.Department),
+      DepartmentId: this.safeString(oldRecord.DepartmentId),
+      PhongBanID: this.safeString(oldRecord.PhongBanID),
+      SimKySo1: this.safeString(oldRecord.SimKySo1),
+      SimKySo2: this.safeString(oldRecord.SimKySo2),
+      DepartmentManager: this.safeString(oldRecord.DepartmentManager),
+      IsTCT: this.parseBit(oldRecord.IsTCT),
+      ImagePath: this.safeString(oldRecord.ImagePath),
+      SignImage: this.safeString(oldRecord.SignImage),
+      SignImageSmall: this.safeString(oldRecord.SignImageSmall),
+      table_backups: 'PersonalProfile'
+    };
   }
 
   /**
@@ -323,9 +444,7 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
     }
 
     const backupId = String(rowData.ID);
-    const fallbackName = String(rowData.FullName || rowData.AccountName || '').trim();
-    // Use upsert helper to insert or update by id
-    const res = await this.upsertUserById(backupId, fallbackName, transaction);
+    const res = await this.upsertUserById(rowData, transaction);
 
     return {
       action: res.action || 'upsert',
@@ -344,27 +463,101 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
    * @param {Object} [transaction] - transaction của kết nối mới (nếu có)
    * @returns {Promise<{action:string,affected:number}>}
    */
-  async upsertUserById(backupId, fallbackName, transaction) {
-    if (!backupId) throw new Error('backupId is required');
+  async upsertUserById(rowDataOrBackupId, fallbackNameOrTransaction, maybeTransaction) {
+    const isRowDataInput = rowDataOrBackupId && typeof rowDataOrBackupId === 'object' && !Array.isArray(rowDataOrBackupId);
+    const rowData = isRowDataInput
+      ? rowDataOrBackupId
+      : {
+        ID: rowDataOrBackupId,
+        AccountName: String(rowDataOrBackupId || ''),
+        FullName: String(fallbackNameOrTransaction || '')
+      };
+    const transaction = isRowDataInput ? fallbackNameOrTransaction : maybeTransaction;
+
+    const mapped = this.mapRecordForUpsert(rowData);
+    if (!mapped.id) throw new Error('backupId is required');
+
+    const tableRef = this.newDbName
+      ? `${this.newDbName}.${this.newDbSchema}.${this.newDbTable}`
+      : `${this.newDbSchema}.${this.newDbTable}`;
 
     const query = `
-      IF EXISTS (SELECT 1 FROM ${this.newDbName}.${this.newDbSchema}.${this.newDbTable} WHERE id = @id)
+      IF EXISTS (SELECT 1 FROM ${tableRef} WHERE id = @id)
       BEGIN
-        UPDATE ${this.newDbName}.${this.newDbSchema}.${this.newDbTable}
-        SET name = UPPER(COALESCE(NULLIF(name, ''), NULLIF(@fallbackName, ''), name)),
-            updated_at = GETDATE()
+        UPDATE ${tableRef}
+        SET password = @password,
+            name = @name,
+            avatar = @avatar,
+            code_nd = @code_nd,
+            username = @username,
+            email_user = @email_user,
+            phone_number_user = @phone_number_user,
+            position = @position,
+            leader = @leader,
+            address_user = @address_user,
+            description = @description,
+            role = @role,
+            roles_by_process = @roles_by_process,
+            organization_name = @organization_name,
+            organization_code = @organization_code,
+            organization_type = @organization_type,
+            orders = @orders,
+            birthday = @birthday,
+            gender = @gender,
+            identification_card = @identification_card,
+            contact_time = @contact_time,
+            parent = @parent,
+            wso2_user_id = @wso2_user_id,
+            keycloak_user_id = @keycloak_user_id,
+            status = @status,
+            author = @author,
+            role_group_source_authorized = @role_group_source_authorized,
+            updated_at = @updated_at,
+            name_authorized = @name_authorized,
+            id_user_bak = @id_user_bak,
+            AccountID = @AccountID,
+            FullName = @FullName,
+            Department = @Department,
+            DepartmentId = @DepartmentId,
+            PhongBanID = @PhongBanID,
+            SimKySo1 = @SimKySo1,
+            SimKySo2 = @SimKySo2,
+            DepartmentManager = @DepartmentManager,
+            IsTCT = @IsTCT,
+            ImagePath = @ImagePath,
+            SignImage = @SignImage,
+            SignImageSmall = @SignImageSmall,
+            table_backups = @table_backups
         WHERE id = @id;
         SELECT @@ROWCOUNT AS affected, 'updated' AS action;
       END
       ELSE
       BEGIN
-        INSERT INTO ${this.newDbName}.${this.newDbSchema}.${this.newDbTable} (id, name, created_at, updated_at)
-        VALUES (@id, UPPER(NULLIF(@fallbackName, '')), GETDATE(), GETDATE());
+        INSERT INTO ${tableRef} (
+          id, password, name, avatar, code_nd, username, email_user, phone_number_user,
+          position, leader, address_user, description, role, roles_by_process,
+          organization_name, organization_code, organization_type, orders, birthday, gender,
+          identification_card, contact_time, parent, wso2_user_id, keycloak_user_id,
+          status, author, role_group_source_authorized, created_at, updated_at,
+          name_authorized, id_user_bak, AccountID, FullName, Department, DepartmentId,
+          PhongBanID, SimKySo1, SimKySo2, DepartmentManager, IsTCT, ImagePath, SignImage,
+          SignImageSmall, table_backups
+        )
+        VALUES (
+          @id, @password, @name, @avatar, @code_nd, @username, @email_user, @phone_number_user,
+          @position, @leader, @address_user, @description, @role, @roles_by_process,
+          @organization_name, @organization_code, @organization_type, @orders, @birthday, @gender,
+          @identification_card, @contact_time, @parent, @wso2_user_id, @keycloak_user_id,
+          @status, @author, @role_group_source_authorized, @created_at, @updated_at,
+          @name_authorized, @id_user_bak, @AccountID, @FullName, @Department, @DepartmentId,
+          @PhongBanID, @SimKySo1, @SimKySo2, @DepartmentManager, @IsTCT, @ImagePath, @SignImage,
+          @SignImageSmall, @table_backups
+        );
         SELECT @@ROWCOUNT AS affected, 'inserted' AS action;
       END
     `;
 
-    const params = { id: backupId, fallbackName };
+    const params = { ...mapped };
     const result = await this.queryNewDbTx(query, params, transaction);
     const row = Array.isArray(result) && result[0] ? result[0] : result;
     return {

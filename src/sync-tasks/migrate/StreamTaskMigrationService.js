@@ -1,10 +1,10 @@
-const StreamUserMigrationModel = require('./StreamUserMigrationModel');
+const StreamTaskMigrationModel = require('./StreamTaskMigrationModel');
 const SyncManagerService = require('../../sync-manager/SyncManagerService');
 
-const UNIT_TEST_MODEL_NAME = 'UNIT_TEST_STREAM_USER_COPY_MIGRATION111';
+const UNIT_TEST_MODEL_NAME = 'UNIT_TEST_STREAM_TASK_COPY_MIGRATION1';
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 
-class StreamUserMigrationService {
+class StreamTaskMigrationService {
   constructor() {
     this.model = null;
   }
@@ -15,7 +15,7 @@ class StreamUserMigrationService {
    */
   async initialize() {
     if (this.model) return;
-    this.model = new StreamUserMigrationModel();
+    this.model = new StreamTaskMigrationModel();
     await this.model.initialize();
   }
 
@@ -61,13 +61,13 @@ class StreamUserMigrationService {
   }
 
   /**
-   * Dành cho unit-test / debug: lấy danh sách user cần sync theo `lastSyncTime`.
+   * Dành cho unit-test / debug: lấy danh sách task cần sync theo `lastSyncTime`.
    * - Tạo (hoặc reuse) jobId để model stage dữ liệu raw từ DB cũ sang bảng trung gian.
    * - Trả về mảng dữ liệu tìm được và thông tin cần thiết để bước sau sync sang bảng chính.
    * @param {{lastSyncTime?:string,syncJobId?:string}} opts
    * @returns {Promise<Object>} thông tin kết quả kiểm tra
    */
-  async testGetList({ lastSyncTime = DEFAULT_SYNC_TIME, syncJobId = null } = {}) {
+  async taskGetList({ lastSyncTime = DEFAULT_SYNC_TIME, syncJobId = null } = {}) {
     if (!this.model) {
       throw new Error('Service chưa được khởi tạo');
     }
@@ -75,7 +75,7 @@ class StreamUserMigrationService {
     const jobId = await this._buildOrReuseJob(syncJobId);
     const listResult = await this.model.getList(lastSyncTime, jobId);
     const jobState = await this.model.getSyncJobState(jobId);
-    const newCount = await this.model.countNewUsers();
+    const newCount = await this.model.countNewTasks();
     // const foundRows = Array.isArray(listResult.rows) ? listResult.rows : [];
 
     return {
@@ -97,7 +97,7 @@ class StreamUserMigrationService {
    * @param {string} syncJobId
    * @returns {Promise<Object>}
    */
-  async testProcessOne(syncJobId) {
+  async taskProcessOne(syncJobId) {
     if (!this.model) {
       throw new Error('Service chưa được khởi tạo');
     }
@@ -108,4 +108,4 @@ class StreamUserMigrationService {
   }
 }
 
-module.exports = StreamUserMigrationService;
+module.exports = StreamTaskMigrationService;

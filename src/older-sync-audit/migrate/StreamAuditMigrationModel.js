@@ -3,6 +3,55 @@ const logger = require("../../../utils/logger");
 const sql = require('mssql');
 const MigrationHelper = require("../../helpers/MigrationHelper");
 
+// ── Danh sách bảng audit trong DB cũ ─────────────────────────
+const AUDIT_TABLES = [
+  'LuanChuyenVanBan',
+  'LuanChuyenVanBan_ATPC',
+  'LuanChuyenVanBan_CLL',
+  'LuanChuyenVanBan_CNTT',
+  'LuanChuyenVanBan_CT',
+  'LuanChuyenVanBan_CVTC',
+  'LuanChuyenVanBan_DonVi',
+  'LuanChuyenVanBan_DVHH',
+  'LuanChuyenVanBan_DVKT',
+  'LuanChuyenVanBan_GNVT',
+  'LuanChuyenVanBan_HC',
+  'LuanChuyenVanBan_HT',
+  'LuanChuyenVanBan_ICDLB',
+  'LuanChuyenVanBan_ICDST',
+  'LuanChuyenVanBan_KHDT',
+  'LuanChuyenVanBan_KHKD',
+  'LuanChuyenVanBan_KTVT',
+  'LuanChuyenVanBan_KVTC',
+  'LuanChuyenVanBan_MKT',
+  'LuanChuyenVanBan_NPL',
+  'LuanChuyenVanBan_QLCT',
+  'LuanChuyenVanBan_QSBV',
+  'LuanChuyenVanBan_SNPL',
+  'LuanChuyenVanBan_TC',
+  'LuanChuyenVanBan_TC189',
+  'LuanChuyenVanBan_TCCT',
+  'LuanChuyenVanBan_TCHP',
+  'LuanChuyenVanBan_TCIDI',
+  'LuanChuyenVanBan_TCLD',
+  'LuanChuyenVanBan_TCMT',
+  'LuanChuyenVanBan_TCO',
+  'LuanChuyenVanBan_TCOT',
+  'LuanChuyenVanBan_TCPC',
+  'LuanChuyenVanBan_TCPH',
+  'LuanChuyenVanBan_TCTT',
+  'LuanChuyenVanBan_TTDDC',
+  'LuanChuyenVanBan_TTDTC',
+  'LuanChuyenVanBan_VP',
+  'LuanChuyenVanBan_VPMB',
+  'LuanChuyenVanBan_VPTNB',
+  'LuanChuyenVanBan_VTB',
+  'LuanChuyenVanBan_VTT',
+  'LuanChuyenVanBan_XDCT',
+  'LuanChuyenVanBan_xdsm',
+  'LuanChuyenVanBan_XNCG',
+  'LuanChuyenVanBan_YTE',
+];
 class StreamOutgoingAuditSyncModel extends BaseModel {
   constructor(oldDbTable) {
     super();
@@ -10,9 +59,10 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
     this.oldDbTable = oldDbTable;
     this.newDbSchema = "dbo";
     this.newDbTable = "audit_sync";
-    this.helper = new MigrationHelper(this.queryNewDbTx.bind(this));
+    this.helper = new MigrationHelper(this.queryNewDbTx.bind(this), this.queryOldDb.bind(this));
   }
 
+  // Hàm fetch batch từ DB cũ, vẫn giữ nguyên để chạy theo batch nếu cần, nhưng ưu tiên dùng fetchByDocumentId cho từng văn bản cụ thể
   async fetchBatch({ batch, lastId }) {
     const query = `
       SELECT TOP (@batch) *
@@ -24,12 +74,56 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
     return this.queryOldDb(query, { batch, lastId: lastId || null });
   }
 
+  // Hàm migrate batch, vẫn giữ nguyên để chạy theo batch nếu cần, nhưng ưu tiên dùng processSingleRecord cho từng bản ghi
+  async insertBatchToNewDb(records) {
+    if (!records?.length) return { inserted: 0, updated: 0 };
+
+    const transaction = await this.beginTransaction();
+
+    let inserted = 0;
+    let updated = 0;
+
+    try {
+      for (const raw of records) {
+        try {
+          const mapped = await this._mapSingleRecord(raw, transaction);
+          if (!mapped) continue;
+          const audits = this.helper._expandMappedRecords(mapped);
+
+          for (const audit of audits) {
+            try {
+              const existed = await this._getExistingAuditSync(audit, transaction);
+
+              if (existed) {
+                await this._update(audit, transaction);
+                updated++;
+              } else {
+                await this._insert(audit, transaction);
+                inserted++;
+              }
+            } catch (auditErr) {
+              logger.warn(
+                `[AuditSync:${this.oldDbTable}] Skip audit id_van_ban=${audit?.id_van_ban} receiver=${audit?.receiver}: ${auditErr.message}`
+              );
+            }
+          }
+        } catch (err) {
+          logger.warn(`[AuditSync:${this.oldDbTable}] Skip ID=${raw?.ID}: ${err.message}`);
+        }
+      }
+
+      await this.commitTransaction(transaction);
+
+      return { inserted, updated };
+    } catch (error) {
+      await this.rollbackTransaction(transaction);
+      throw error;
+    }
+  }
+
   /**
    * Lấy tất cả bản ghi audit liên quan đến một văn bản cụ thể từ bảng cũ.
    * Được gọi bởi document migration model để truy vấn audit theo oldDocumentId.
-   *
-   * @param {string|number} oldDocumentId - ID văn bản trong hệ thống cũ (IDVanBan)
-   * @returns {Promise<Array>} Danh sách bản ghi audit thô từ DB cũ
    */
   async fetchByDocumentId(oldDocumentId) {
     if (!oldDocumentId) return [];
@@ -50,11 +144,6 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
   /**
    * Migrate một bản ghi audit đơn lẻ từ DB cũ sang bảng audit_sync.
    * Được gọi bởi document migration model thay vì xử lý theo batch.
-   *
-   * @param {object} rawRecord - Bản ghi thô từ DB cũ
-   * @param {object} [externalTransaction] - Transaction bên ngoài (tùy chọn)
-   * @returns {Promise<Array<object>|null>} Danh sách bản ghi đã được insert/update trong audit_sync,
-   *                                        hoặc null nếu bỏ qua
    */
   async processSingleRecord(rawRecord, externalTransaction = null) {
     if (!rawRecord) return null;
@@ -103,52 +192,86 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
     }
   }
 
-  async insertBatchToNewDb(records) {
-    if (!records?.length) return { inserted: 0, updated: 0 };
-
-    const transaction = await this.beginTransaction();
-
-    let inserted = 0;
-    let updated = 0;
-
-    try {
-      for (const raw of records) {
-        try {
-          const mapped = await this._mapSingleRecord(raw, transaction);
-          if (!mapped) continue;
-          const audits = this.helper._expandMappedRecords(mapped);
-
-          for (const audit of audits) {
-            try {
-              const existed = await this._getExistingAuditSync(audit, transaction);
-
-              if (existed) {
-                await this._update(audit, transaction);
-                updated++;
-              } else {
-                await this._insert(audit, transaction);
-                inserted++;
-              }
-            } catch (auditErr) {
-              logger.warn(
-                `[AuditSync:${this.oldDbTable}] Skip audit id_van_ban=${audit?.id_van_ban} receiver=${audit?.receiver}: ${auditErr.message}`
-              );
-            }
-          }
-        } catch (err) {
-          logger.warn(`[AuditSync:${this.oldDbTable}] Skip ID=${raw?.ID}: ${err.message}`);
-        }
-      }
-
-      await this.commitTransaction(transaction);
-
-      return { inserted, updated };
-    } catch (error) {
-      await this.rollbackTransaction(transaction);
-      throw error;
+  async _insert(data, transaction) {
+    if (!data?.document_id?.document_id) {
+      logger.warn(`[audit_sync] Skip insert vì document_id null | id_van_ban=${data?.id_van_ban}`);
+      return;
     }
+
+    const receiver = this._normalizeArrayField(data.receiver);
+    const receiverUnit = this._normalizeArrayField(data.receiver_unit);
+
+    const query = `
+      INSERT INTO ${process.env.NEW_DB_NAME}.${newDbSchema}.${newDbTable} (
+        document_id, time, display_name, user_id, created_by,
+        receiver, receiver_unit, action_code, roleProcess, stage_status,
+        id_van_ban, created_at, updated_at, type_document, table_backup
+      )
+      VALUES (
+        @documentId, @time, @displayName, @userId, @createdBy,
+        @receiver, @receiverUnit, @actionCode, @roleProcess, @stageStatus,
+        @idVanBan, @time, GETDATE(), @typeDocument, @sourceTable
+      )
+    `;
+
+    await this.queryNewDbTx(query, {
+      documentId: data.document_id.document_id,
+      time: data.time,
+      displayName: data.display_name,
+      userId: data.user_id || '6915f2387e39c2ba33cef79a',
+      createdBy: data.user_id,
+      receiver,
+      receiverUnit,
+      actionCode: data.action_code,
+      roleProcess: data.roleProcess || null,
+      stageStatus: data.stage_status || null,
+      idVanBan: data.id_van_ban,
+      typeDocument: data.document_id.type_document,
+      sourceTable: this.oldDbTable,
+    }, transaction);
   }
 
+  async _update(data, transaction) {
+    const receiver = this._normalizeArrayField(data.receiver);
+    const receiverUnit = this._normalizeArrayField(data.receiver_unit);
+
+    let whereClause = `WHERE id_van_ban = @idVanBan`;
+    const params = {
+      time: data.time,
+      displayName: data.display_name,
+      userId: '6915f2387e39c2ba33cef79a',
+      createBy: data.user_id,
+      actionCode: data.action_code,
+      receiver,
+      receiverUnit,
+      roleProcess: data.roleProcess || null,
+      stageStatus: data.stage_status || null,
+      idVanBan: data.id_van_ban,
+    };
+
+    if (receiver) {
+      whereClause += ` AND receiver = @receiver`;
+    }
+
+    if (receiverUnit) {
+      whereClause += ` AND receiver_unit = @receiverUnit`;
+    }
+
+    const query = `
+      UPDATE ${process.env.NEW_DB_NAME}.${newDbSchema}.${newDbTable}
+      SET
+        time = @time, display_name = @displayName, user_id = @userId,
+        created_by = @createBy, action_code = @actionCode,
+        receiver = @receiver, receiver_unit = @receiverUnit,
+        roleProcess = @roleProcess, stage_status = @stageStatus,
+        updated_at = GETDATE()
+      ${whereClause}
+    `;
+
+    await this.queryNewDbTx(query, params, transaction);
+  }
+
+  // Hàm map một bản ghi thô từ DB cũ sang định dạng của audit_sync, bao gồm việc ánh xạ document_id và user_id
   async _mapSingleRecord(record, transaction) {
     if (!record?.ID || !record?.IDVanBan) return null;
 
@@ -215,14 +338,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
     };
   }
 
-  _normalizeArrayField(value) {
-    if (!value) return null;
-    if (Array.isArray(value)) {
-      return value.length ? value.join(',') : null;
-    }
-    return String(value).trim() || null;
-  }
-
+  // Hàm kiểm tra xem đã tồn tại bản ghi audit_sync nào tương ứng với bản ghi audit cũ chưa, dựa trên id_van_ban và receiver/receiver_unit
   async _getExistingAuditSync(audit, transaction) {
     if (!transaction) {
       throw new Error('_getExistingAuditSync requires transaction');
@@ -237,7 +353,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
 
     let query = `
       SELECT TOP 1 id
-      FROM ${process.env.NEW_DB_NAME}.dbo.audit_sync
+      FROM ${process.env.NEW_DB_NAME}.${newDbSchema}.${newDbTable}
       WHERE id_van_ban = @idVanBan
     `;
 
@@ -258,6 +374,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
     return result?.[0] || null;
   }
 
+  // Hàm lấy document_id mới dựa trên idVanBan từ DB cũ, kiểm tra cả outgoing và incoming documents
   async _getNewDocumentId(idVanBan, transaction = null) {
     try {
       if (idVanBan === null || idVanBan === undefined) {
@@ -271,7 +388,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
 
       const outgoingQuery = `
         SELECT TOP 1 document_id
-        FROM ${process.env.NEW_DB_NAME}.dbo.outgoing_documents_sync
+        FROM ${process.env.NEW_DB_NAME}.${newDbSchema}.outgoing_documents
         WHERE id_outgoing_bak = @idVanBan
       `;
 
@@ -286,7 +403,7 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
 
       const incomingQuery2 = `
         SELECT TOP 1 document_id
-        FROM ${process.env.NEW_DB_NAME}.dbo.incomming_documents
+        FROM ${process.env.NEW_DB_NAME}.${newDbSchema}.incomming_documents
         WHERE id_incoming_bak = @idVanBan
       `;
 
@@ -307,85 +424,16 @@ class StreamOutgoingAuditSyncModel extends BaseModel {
     }
   }
 
-  async _insert(data, transaction) {
-    if (!data?.document_id?.document_id) {
-      logger.warn(`[audit_sync] Skip insert vì document_id null | id_van_ban=${data?.id_van_ban}`);
-      return;
+  // Helper để chuẩn hóa trường array thành string để so sánh trong SQL
+  _normalizeArrayField(value) {
+    if (!value) return null;
+    if (Array.isArray(value)) {
+      return value.length ? value.join(',') : null;
     }
-
-    const receiver = this._normalizeArrayField(data.receiver);
-    const receiverUnit = this._normalizeArrayField(data.receiver_unit);
-
-    const query = `
-      INSERT INTO ${process.env.NEW_DB_NAME}.dbo.audit_sync (
-        document_id, time, display_name, user_id, created_by,
-        receiver, receiver_unit, action_code, roleProcess, stage_status,
-        id_van_ban, created_at, updated_at, type_document, table_backup
-      )
-      VALUES (
-        @documentId, @time, @displayName, @userId, @createdBy,
-        @receiver, @receiverUnit, @actionCode, @roleProcess, @stageStatus,
-        @idVanBan, @time, GETDATE(), @typeDocument, @sourceTable
-      )
-    `;
-
-    await this.queryNewDbTx(query, {
-      documentId: data.document_id.document_id,
-      time: data.time,
-      displayName: data.display_name,
-      userId: data.user_id || '6915f2387e39c2ba33cef79a',
-      createdBy: data.user_id,
-      receiver,
-      receiverUnit,
-      actionCode: data.action_code,
-      roleProcess: data.roleProcess || null,
-      stageStatus: data.stage_status || null,
-      idVanBan: data.id_van_ban,
-      typeDocument: data.document_id.type_document,
-      sourceTable: this.oldDbTable,
-    }, transaction);
+    return String(value).trim() || null;
   }
 
-  async _update(data, transaction) {
-    const receiver = this._normalizeArrayField(data.receiver);
-    const receiverUnit = this._normalizeArrayField(data.receiver_unit);
-
-    let whereClause = `WHERE id_van_ban = @idVanBan`;
-    const params = {
-      time: data.time,
-      displayName: data.display_name,
-      userId: '6915f2387e39c2ba33cef79a',
-      createBy: data.user_id,
-      actionCode: data.action_code,
-      receiver,
-      receiverUnit,
-      roleProcess: data.roleProcess || null,
-      stageStatus: data.stage_status || null,
-      idVanBan: data.id_van_ban,
-    };
-
-    if (receiver) {
-      whereClause += ` AND receiver = @receiver`;
-    }
-
-    if (receiverUnit) {
-      whereClause += ` AND receiver_unit = @receiverUnit`;
-    }
-
-    const query = `
-      UPDATE ${process.env.NEW_DB_NAME}.dbo.audit_sync
-      SET
-        time = @time, display_name = @displayName, user_id = @userId,
-        created_by = @createBy, action_code = @actionCode,
-        receiver = @receiver, receiver_unit = @receiverUnit,
-        roleProcess = @roleProcess, stage_status = @stageStatus,
-        updated_at = GETDATE()
-      ${whereClause}
-    `;
-
-    await this.queryNewDbTx(query, params, transaction);
-  }
-
+  // Transaction helpers
   async beginTransaction() {
     try {
       const transaction = new sql.Transaction(this.newPool);

@@ -3,7 +3,7 @@ const logger = require("../../../utils/logger");
 const sql = require('mssql');
 const MigrationHelper = require("../../helpers/MigrationHelper");
 
-class FileMigrationModel extends BaseModel {
+class StreamOutgoingMigrationModel extends BaseModel {
   constructor() {
     super();
     this.oldDbSchema = "dbo";
@@ -25,7 +25,7 @@ class FileMigrationModel extends BaseModel {
       const countNewQuery = `
         SELECT COUNT(*) AS total
         FROM ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable}
-        WHERE table_backup = 'file_migration'
+        WHERE table_backup = 'stream_migration'
       `;
       const newResult = await this.queryNewDbTx(countNewQuery);
       const totalInNewDb = newResult[0]?.total || 0;
@@ -33,7 +33,7 @@ class FileMigrationModel extends BaseModel {
       const lastIdQuery = `
         SELECT TOP 1 id_outgoing_bak
         FROM ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable}
-        WHERE table_backup = 'file_migration'
+        WHERE table_backup = 'stream_migration'
         ORDER BY createdAt DESC
       `;
       const lastIdResult = await this.queryNewDbTx(lastIdQuery);
@@ -46,12 +46,12 @@ class FileMigrationModel extends BaseModel {
         lastMigratedId,
       };
     } catch (error) {
-      logger.error("[FileMigrationModel.getStatus] Error:", error);
+      logger.error("[StreamOutgoingMigrationModel.getStatus] Error:", error);
       throw error;
     }
   }
 
-  async insertBatchToMain({ batch, lastId = null }) {
+  async fetchBatchFromOldDb({ batch, lastId = null }) {
     try {
       let query = `
         SELECT TOP (@batch)
@@ -84,11 +84,11 @@ class FileMigrationModel extends BaseModel {
 
       const records = await this.queryOldDb(query, params);
 
-      logger.debug(`[insertBatchToMain] lastId=${lastId} → fetched ${records.length}`);
+      logger.debug(`[fetchBatchFromOldDb] lastId=${lastId} → fetched ${records.length}`);
 
       return records;
     } catch (error) {
-      logger.error("[insertBatchToMain] Error:", error);
+      logger.error("[fetchBatchFromOldDb] Error:", error);
       throw error;
     }
   }
@@ -110,7 +110,7 @@ class FileMigrationModel extends BaseModel {
 
       return mappedRecords;
     } catch (error) {
-      logger.error("[FileMigrationModel.mapAndCleanBatch] Error:", error);
+      logger.error("[StreamOutgoingMigrationModel.mapAndCleanBatch] Error:", error);
       throw error;
     }
   }
@@ -176,13 +176,13 @@ class FileMigrationModel extends BaseModel {
         release_no: this.helper.cleanText(oldRecord.Title),
         to_book_text_symbols: this.helper.cleanText(oldRecord.Title),
         release_date: promulgationDate || null,
-        bpmn_version: workflow || "VAN_BAN_DI",
-        type_of_process: workflow || "VAN_BAN_DI",
+        bpmn_version: "VAN_BAN_DI",
+        type_of_process: "VAN_BAN_DI",
         book_document_id: bookDocumentId,
         status: "1",
         replaced: 0,
         tb_bak: 0,
-        table_backup: "file_migration",
+        table_backup: "stream_migration",
         created_at: now,
         updated_at: now,
       };
@@ -208,21 +208,22 @@ class FileMigrationModel extends BaseModel {
 
       for (const record of records) {
         try {
+          const mapped = await this._mapSingleRecord(record);
           const existingQuery = `
             SELECT id FROM ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable}
-            WHERE id_outgoing_bak = @oldId AND table_backup = 'file_migration'
+            WHERE id_outgoing_bak = @oldId AND table_backup = 'stream_migration'
           `;
-          const existing = await this.queryNewDbTx(existingQuery, { oldId: record.id_outgoing_bak }, transaction);
+          const existing = await this.queryNewDbTx(existingQuery, { oldId: mapped.id_outgoing_bak }, transaction);
 
           if (existing && existing.length > 0) {
-            await this._updateRecord(record, transaction);
+            await this._updateRecord(mapped, transaction);
             updated++;
           } else {
-            await this._insertRecord(record, transaction);
+            await this._insertRecord(mapped, transaction);
             inserted++;
           }
         } catch (recordError) {
-          logger.warn(`[insertBatchToNewDb] Skip record id_outgoing_bak=${record.id_outgoing_bak}:`, recordError.message);
+          logger.warn(`[insertBatchToNewDb] Skip record id_outgoing_bak=${mapped.id_outgoing_bak}:`, recordError.message);
         }
       }
 
@@ -237,7 +238,7 @@ class FileMigrationModel extends BaseModel {
         logger.error("[insertBatchToNewDb] Transaction rolled back");
       }
 
-      logger.error("[FileMigrationModel.insertBatchToNewDb] Error:", error);
+      logger.error("[StreamOutgoingMigrationModel.insertBatchToNewDb] Error:", error);
       throw error;
     }
   }
@@ -246,7 +247,6 @@ class FileMigrationModel extends BaseModel {
     if (!record?.document_id || record.document_id.trim() === "") {
       throw new Error("document_id is required");
     }
-    console.log(`Inserting record id_outgoing_bak=${record.id_outgoing_bak}...`);
 
     const now = new Date();
 
@@ -293,7 +293,7 @@ class FileMigrationModel extends BaseModel {
       abstractNote: record.abstract_note ?? null,
       updatedAt: now,
       replaced: record.replaced ?? 0,
-      tableBackup: record.table_backup ?? "file_migration",
+      tableBackup: record.table_backup ?? "stream_migration",
       tbBak: record.tb_bak ?? 0,
     };
 
@@ -304,7 +304,6 @@ class FileMigrationModel extends BaseModel {
     if (!record?.id_outgoing_bak) {
       throw new Error("document_id is required for update");
     }
-    console.log(`Updating record id_outgoing_bak=${record.id_outgoing_bak}...`);
 
     const query = `
       UPDATE ${this.newDbSchema}.${this.newDbTable}
@@ -316,7 +315,7 @@ class FileMigrationModel extends BaseModel {
         release_no = @releaseNo, to_book_text_symbols = @toBookTextSymbols, release_date = @releaseDate, text_symbols = @textSymbols,
         type_doc = @typeDoc, bpmn_version = @bpmnVersion, type_of_process = @typeOfProcess,
         replaced = @replaced, abstract_note = @abstractNote, updated_at = GETDATE()
-      WHERE id_outgoing_bak = @idOutgoingBak AND table_backup = 'file_migration'
+      WHERE id_outgoing_bak = @idOutgoingBak AND table_backup = 'stream_migration'
     `;
 
     const params = {
@@ -350,17 +349,17 @@ class FileMigrationModel extends BaseModel {
     try {
       const query = `
         DELETE FROM ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable}
-        WHERE table_backup = 'file_migration'
+        WHERE table_backup = 'stream_migration'
       `;
 
       const result = await this.queryNewDbTx(query);
       const deleted = result.rowsAffected || 0;
 
-      logger.info(`[FileMigrationModel.rollback] Deleted ${deleted} records`);
+      logger.info(`[StreamOutgoingMigrationModel.rollback] Deleted ${deleted} records`);
 
       return { deleted };
     } catch (error) {
-      logger.error("[FileMigrationModel.rollback] Error:", error);
+      logger.error("[StreamOutgoingMigrationModel.rollback] Error:", error);
       throw error;
     }
   }
@@ -399,4 +398,4 @@ class FileMigrationModel extends BaseModel {
   }
 }
 
-module.exports = FileMigrationModel;
+module.exports = StreamOutgoingMigrationModel;
