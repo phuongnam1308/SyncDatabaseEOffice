@@ -325,8 +325,11 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
             ? this.topicIds[Math.floor(Math.random() * this.topicIds.length)]
             : (rowData.topic || null);
 
-        // Fallback author if missing
-        const authorId = rowData.Author && rowData.Author !== 'NULL' ? rowData.Author : this.adminId;
+        // Fallback author if missing or literal "NULL" string
+        let authorId = rowData.Author;
+        if (!authorId || String(authorId).trim().toUpperCase() === 'NULL' || String(authorId).trim() === '') {
+            authorId = this.adminId;
+        }
 
         const resultNews = await this.upsertDataToNewDB(rowData, {
             ...tableMappings.news,
