@@ -21,6 +21,11 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
         this.newTableSync = 'social_resource_sync';
 
         this.topicIds = [];
+        // Gioi han so luong ban ghi sync trong 1 job (0 = khong gioi han).
+        this.maxSyncRows = Math.max(
+            0,
+            Number(process.env.STREAM_SOCIAL_SYNC_LIMIT || process.env.SOCIAL_SYNC_LIMIT || 0)
+        );
     }
 
     async initialize() {
@@ -35,6 +40,7 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
             const adminRows = await this.queryNewDb(`SELECT id FROM ${this.newDbName}.dbo.users WHERE username = 'admin-tancang'`);
             this.adminId = adminRows?.[0]?.id || '6926bd32994b706c8b25118a';
             console.log(`[StreamSocialMigrationModel] Fallback Admin ID: ${this.adminId}`);
+            console.log(`[StreamSocialMigrationModel] Sync row limit: ${this.maxSyncRows || 'ALL'}`);
         } catch (error) {
             console.error('[StreamSocialMigrationModel] Failed to load initial data:', error.message);
         }
@@ -86,6 +92,7 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
     async fetchListFromOldDb(lastSyncTime, lastSyncId = 0) {
         // Giả định bảng cũ là Social_otherResource (DataEOfficeSNP)
         // Sử dụng ROW_NUMBER() OVER (PARTITION BY r.ID) để khử trùng bản ghi (thực tế dữ liệu cũ đang bị nhân đôi do lỗi quét/insert)
+        const topClause = this.maxSyncRows > 0 ? 'TOP (@maxRows)' : '';
         const query = `
       ;WITH source_rows AS (
         SELECT
@@ -109,6 +116,7 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
         ) ci
       )
       SELECT
+        ${topClause}
         *,
         ISNULL(__sync_id_num, 0) AS __sync_id
       FROM source_rows
@@ -124,22 +132,53 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
         ISNULL(__sync_id_num, -2147483648) ASC
     `;
 
-        return this.queryOldDb(query, {
+        const params = {
             lastSyncTime,
             lastSyncId: Number(lastSyncId || 0)
-        });
+        };
+        if (this.maxSyncRows > 0) {
+            params.maxRows = this.maxSyncRows;
+        }
+
+        return this.queryOldDb(query, params);
     }
 
     async getCount(lastSyncTime, lastSyncId = 0) {
+        const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
+        const normalizedLastSyncId = Number(lastSyncId || 0);
         const query = `
-            WITH source_rows AS (
-                SELECT r.ID FROM ${this.oldDbName}.${this.oldDbSchema}.${this.oldDbTable} r
-                GROUP BY r.ID
+            ;WITH source_rows AS (
+                SELECT
+                    r.ID,
+                    COALESCE(
+                        CASE WHEN LEN(r.Modified) > 4 AND TRY_CONVERT(datetime2, r.Modified) IS NOT NULL AND YEAR(TRY_CONVERT(datetime2, r.Modified)) BETWEEN 1970 AND 2099 THEN TRY_CONVERT(datetime2, r.Modified) ELSE NULL END,
+                        CASE WHEN LEN(r.Created) > 4 AND TRY_CONVERT(datetime2, r.Created) IS NOT NULL AND YEAR(TRY_CONVERT(datetime2, r.Created)) BETWEEN 1970 AND 2099 THEN TRY_CONVERT(datetime2, r.Created) ELSE NULL END,
+                        CASE WHEN LEN(r.PostTime) > 4 AND TRY_CONVERT(datetime2, r.PostTime) IS NOT NULL AND YEAR(TRY_CONVERT(datetime2, r.PostTime)) BETWEEN 1970 AND 2099 THEN TRY_CONVERT(datetime2, r.PostTime) ELSE NULL END,
+                        '1970-01-01T00:00:00.000Z'
+                    ) AS __sync_time,
+                    CHECKSUM(r.ID) AS __sync_id_num,
+                    ROW_NUMBER() OVER (PARTITION BY r.ID ORDER BY r.PostTime DESC, r.Created DESC) AS rn_dedup
+                FROM ${this.oldDbName}.${this.oldDbSchema}.${this.oldDbTable} r
             )
-            SELECT COUNT(*) as total FROM source_rows
+            SELECT COUNT(*) AS total
+            FROM source_rows
+            WHERE rn_dedup = 1 AND (
+                __sync_time > @lastSyncTime
+                OR (
+                    __sync_time = @lastSyncTime
+                    AND ISNULL(__sync_id_num, -2147483648) > @lastSyncId
+                )
+            )
         `;
-        const result = await this.queryOldDb(query);
-        return result?.[0]?.total || 0;
+        const result = await this.queryOldDb(query, {
+            lastSyncTime: normalizedLastSyncTime,
+            lastSyncId: normalizedLastSyncId
+        });
+        const total = Number(result?.[0]?.total || 0);
+        if (this.maxSyncRows > 0) {
+            return Math.min(total, this.maxSyncRows);
+        }
+        return total;
     }
 
     async syncOldToStaging(rows, { transaction } = {}) {
@@ -246,7 +285,8 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
             sourceLastSyncTime: normalizedLastSyncTime,
             sourceLastSyncId: normalizedLastSyncId,
             lastSyncTime: nextSyncTime,
-            lastSyncId: nextSyncId
+            lastSyncId: nextSyncId,
+            appliedLimit: this.maxSyncRows > 0 ? this.maxSyncRows : null
         };
     }
 
