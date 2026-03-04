@@ -1,5 +1,6 @@
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 const { roleMapping } = require('./roleMapping');
+const MigrationHelper = require('../../helpers/MigrationHelper');
 
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 
@@ -13,6 +14,10 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
     this.newTableSync = 'user_sync'; //Bảng trung gian lưu data raw dùng để sync dần vào bảng chính `user_clone_for_sync`
     this.newDbTable = 'users';
     //_clone_for_sync';
+    this.migrationHelper = new MigrationHelper(
+      (...args) => this.queryNewDbTx(...args),
+      (...args) => this.queryOldDb?.(...args) ?? null
+    );
   }
 
   getStagingTableRef() {
@@ -136,7 +141,9 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
     // console.log('[mapPositionToRoles] position noAccent:', JSON.stringify(noAccent));
     // console.log('[mapPositionToRoles] codepoints:', [...position].map(c => c.codePointAt(0).toString(16)).join(' '));
 
-    for (const { keywords, role } of roleMapping) {
+    for (const { keywords, roles } of roleMapping) {
+      if (!Array.isArray(roles) || !roles.length) continue;
+
       for (const keyword of keywords) {
         const lowerKw = keyword.normalize('NFC').toLowerCase();
         const noAccKw = this.normalizeVietnamese(keyword);
@@ -145,23 +152,18 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
           lowerPos.includes(lowerKw) ||
           noAccent.includes(noAccKw);
 
-        // console.log('  keyword:', JSON.stringify(keyword), '| lowerKw:', JSON.stringify(lowerKw), '| noAccKw:', JSON.stringify(noAccKw), '| matched:', matched);
-
         if (matched) {
-          const rolesByProcess = [
-            {
-              processKey: 'DEFAULT_PROCESS',
-              name: 'DEFAULT_PROCESS',
-              roles: [{ roleCode: role, name: role }],
-            },
-          ];
-          // console.log('[mapPositionToRoles] => MATCHED role:', role);
-          return JSON.stringify(rolesByProcess);
+          console.log(
+            '[mapPositionToRoles] position=' + JSON.stringify(position)
+            + ' matched keyword=' + JSON.stringify(keyword)
+            + ' → ' + roles.length + ' processKey(s): ' + roles.map(r => r.processKey).join(', ')
+          );
+          return JSON.stringify(roles);
         }
       }
     }
 
-    // console.log('[mapPositionToRoles] => NO MATCH, returning []');
+    console.warn('[mapPositionToRoles] position=' + JSON.stringify(position) + ' → không match keyword nào, trả []');
     return '[]';
   }
 
@@ -537,6 +539,44 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
 
     const mapped = this.mapRecordForUpsert(rowData);
     if (!mapped.id) throw new Error('backupId is required');
+
+    // Resolve parent: dùng processSenderUnit để chuẩn hoá tên Department
+    // rồi tìm id tương ứng trong organization_units
+    if (rowData.Department) {
+      try {
+        const orgRef = this.newDbName
+          ? `${this.newDbName}.${this.newDbSchema}.organization_units`
+          : `${this.newDbSchema}.organization_units`;
+
+        // ① Chuẩn hoá tên phòng ban qua processSenderUnit
+        const normalizedDept = this.migrationHelper.processSenderUnit(rowData.Department);
+
+        console.log(
+          `[upsertUserById] user.id=${mapped.id} | Department raw="${rowData.Department}" → processSenderUnit="${normalizedDept}"`
+        );
+
+        let parentId = null;
+        if (normalizedDept) {
+          // ② Tìm id trong organization_units theo tên đã chuẩn hoá
+          const orgRows = await this.queryNewDbTx(
+            `SELECT TOP 1 id FROM ${orgRef} WHERE LTRIM(RTRIM(name)) = @name AND status = 1`,
+            { name: normalizedDept },
+            transaction
+          );
+          parentId = orgRows?.length ? orgRows[0].id : null;
+        }
+
+        // ③ Gán vào parent
+        mapped.parent = parentId;
+
+        console.log(
+          `[upsertUserById] user.id=${mapped.id} | Department="${normalizedDept}" → parent=${parentId ?? 'NULL (không tìm thấy)'}`
+        );
+      } catch (err) {
+        console.warn(`[upsertUserById] Lỗi resolve parent cho user.id=${mapped.id}:`, err.message);
+        mapped.parent = null;
+      }
+    }
 
     const tableRef = this.newDbName
       ? `${this.newDbName}.${this.newDbSchema}.${this.newDbTable}`
