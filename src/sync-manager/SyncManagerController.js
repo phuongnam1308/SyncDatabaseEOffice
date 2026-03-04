@@ -644,22 +644,9 @@ class SyncManagerController extends BaseController {
       const rp  = rel.find(j => ['RUNNING','PAUSE_REQUESTED','RESUMING','PAUSED'].includes(j.status));
       const cur = (info.activeJobId && jobs[info.activeJobId]) ? jobs[info.activeJobId] : (rp || rel[0] || null);
 
+      // Khong tu suy dien CRASHED theo timeout heartbeat o giao dien.
+      // Với job du lieu lon, mot batch co the xu ly lau > 60s nhung van RUNNING.
       let ms = (info.status||'IDLE').toUpperCase();
-if (cur && ['RUNNING','RESUMING','PAUSE_REQUESTED'].includes(cur.status)) {
-  const last = new Date(cur.updatedAt || cur.startedAt || 0).getTime();
-
-  if (new Date().getTime() - last > 60000) {
-    cur.status = 'CRASHED';
-    ms = 'CRASHED';
-  }
-}
-      if (cur && ['RUNNING','RESUMING','PAUSE_REQUESTED'].includes(cur.status)) {
-        const last = new Date(cur.updatedAt || cur.startedAt || 0).getTime();
-        if (new Date().getTime() - last > 60000) {
-          cur.status = 'CRASHED';
-          ms = 'CRASHED';
-        }
-      }
       const js = cur ? String(cur.status||'').toUpperCase() : null;
 
       const canStart  = ['IDLE','COMPLETED','FAILED','CRASHED'].includes(ms);
@@ -787,14 +774,8 @@ if (cur && ['RUNNING','RESUMING','PAUSE_REQUESTED'].includes(cur.status)) {
       const cur = (info.activeJobId && jobs && jobs[info.activeJobId])
         ? jobs[info.activeJobId] : (rp || rel[0] || null);
 
+      // Khong tu suy dien CRASHED theo timeout heartbeat khi render dashboard.
       let ms = (info.status || 'IDLE').toUpperCase();
-      if (cur && ['RUNNING', 'RESUMING', 'PAUSE_REQUESTED'].includes(cur.status)) {
-        const last = new Date(cur.updatedAt || cur.startedAt || 0).getTime();
-        if (Date.now() - last > 60000) {
-          cur.status = 'CRASHED';
-          ms = 'CRASHED';
-        }
-      }
       const js = cur ? String(cur.status || '').toUpperCase() : null;
 
       const canStart = ['IDLE', 'COMPLETED', 'FAILED', 'CRASHED'].includes(ms);

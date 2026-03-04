@@ -76,7 +76,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
                 }
                 // NVARCHAR(MAX) fields
                 else if (maxFields.includes(key)) {
-                    request.input(key, sql.NVarChar(sql.MAX), value);
+                    request.input(key, sql.NVarChar(sql.MAX), this.normalizeNVarCharValue(value));
                 }
                 // Các field khác để driver tự infer
                 else {
@@ -138,6 +138,32 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         if (value === '1' || value === 1 || value === true) return 1;
         if (value === '0' || value === 0 || value === false) return 0;
         return 0;
+    }
+    /**
+     * Chuan hoa gia tri cho tham so NVARCHAR(MAX) truoc khi bind.
+     * Tranh loi "Validation failed ... Invalid string" khi value la so/object.
+     */
+    normalizeNVarCharValue(value) {
+        if (value === 'NULL' || value === 'null' || value === null || value === undefined) {
+            return null;
+        }
+        if (typeof value === 'string') {
+            return value;
+        }
+        if (value instanceof Date) {
+            return Number.isNaN(value.getTime()) ? null : value.toISOString();
+        }
+        if (typeof Buffer !== 'undefined' && Buffer.isBuffer(value)) {
+            return value.toString('utf8');
+        }
+        if (typeof value === 'object') {
+            try {
+                return JSON.stringify(value);
+            } catch (_) {
+                return String(value);
+            }
+        }
+        return String(value);
     }
     safeDate(value) {
         if (value === 'NULL' || value === 'null' || value === null || value === undefined) {
@@ -835,7 +861,8 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
             YKienLanhDaoTCT: this.safeString(oldRecord.YKienLanhDaoTCT),
             YKienLanhDaoVPDN: this.safeString(oldRecord.YKienLanhDaoVPDN),
             YKienCuaLDVPChoVanThu: this.safeString(oldRecord.YKienCuaLDVPChoVanThu),
-            ForwardType: this.safeNumber(oldRecord.ForwardType || oldRecord.Files, null),
+            // ForwardType map truc tiep tu cot cu, luu dang string/number-string.
+            ForwardType: this.safeStringOrNumber(oldRecord.ForwardType),
             ModuleId: this.safeNumber(oldRecord.ModuleId, null),
             SiteName: this.safeString(oldRecord.SiteName),
             ListName: this.safeString(oldRecord.ListName),
