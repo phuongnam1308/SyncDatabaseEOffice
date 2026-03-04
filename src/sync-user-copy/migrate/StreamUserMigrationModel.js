@@ -107,29 +107,62 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
     return 0;
   }
 
+  /**
+   * Chuẩn hoá chuỗi tiếng Việt: bỏ dấu + lowercase.
+   * VD: "Trưởng Phòng" → "truong phong"
+   * Giúp match được cả DB lưu có dấu lẫn không dấu.
+   */
+  normalizeVietnamese(str) {
+    if (!str) return '';
+    return str
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/đ/g, 'd')
+      .replace(/Đ/g, 'd');
+  }
+
   mapPositionToRoles(position) {
     if (!position) {
-      return "[]";
+      return '[]';
     }
 
-    const lowerCasePosition = position.toLowerCase();
+    const lowerPos = position.normalize('NFC').toLowerCase();
+    const noAccent = this.normalizeVietnamese(position);
+
+    // // DEBUG: log để xem giá trị thực tế từ DB
+    // console.log('[mapPositionToRoles] position raw    :', JSON.stringify(position));
+    // console.log('[mapPositionToRoles] position lowerPos:', JSON.stringify(lowerPos));
+    // console.log('[mapPositionToRoles] position noAccent:', JSON.stringify(noAccent));
+    // console.log('[mapPositionToRoles] codepoints:', [...position].map(c => c.codePointAt(0).toString(16)).join(' '));
 
     for (const { keywords, role } of roleMapping) {
       for (const keyword of keywords) {
-        if (lowerCasePosition.includes(keyword)) {
+        const lowerKw = keyword.normalize('NFC').toLowerCase();
+        const noAccKw = this.normalizeVietnamese(keyword);
+
+        const matched =
+          lowerPos.includes(lowerKw) ||
+          noAccent.includes(noAccKw);
+
+        // console.log('  keyword:', JSON.stringify(keyword), '| lowerKw:', JSON.stringify(lowerKw), '| noAccKw:', JSON.stringify(noAccKw), '| matched:', matched);
+
+        if (matched) {
           const rolesByProcess = [
             {
-              processKey: "DEFAULT_PROCESS",
-              name: "DEFAULT_PROCESS",
+              processKey: 'DEFAULT_PROCESS',
+              name: 'DEFAULT_PROCESS',
               roles: [{ roleCode: role, name: role }],
             },
           ];
+          // console.log('[mapPositionToRoles] => MATCHED role:', role);
           return JSON.stringify(rolesByProcess);
         }
       }
     }
 
-    return "[]";
+    // console.log('[mapPositionToRoles] => NO MATCH, returning []');
+    return '[]';
   }
 
   mapRecordForUpsert(oldRecord) {
