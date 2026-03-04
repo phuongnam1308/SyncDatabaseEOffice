@@ -1,4 +1,5 @@
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
+const { roleMapping } = require('./roleMapping');
 
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 
@@ -106,6 +107,31 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
     return 0;
   }
 
+  mapPositionToRoles(position) {
+    if (!position) {
+      return "[]";
+    }
+
+    const lowerCasePosition = position.toLowerCase();
+
+    for (const { keywords, role } of roleMapping) {
+      for (const keyword of keywords) {
+        if (lowerCasePosition.includes(keyword)) {
+          const rolesByProcess = [
+            {
+              processKey: "DEFAULT_PROCESS",
+              name: "DEFAULT_PROCESS",
+              roles: [{ roleCode: role, name: role }],
+            },
+          ];
+          return JSON.stringify(rolesByProcess);
+        }
+      }
+    }
+
+    return "[]";
+  }
+
   mapRecordForUpsert(oldRecord) {
     const username = oldRecord.AccountName || '';
 
@@ -126,6 +152,8 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
       email_user = `${code_nd}@saigonnewport.com.vn`;
     }
 
+    const position = this.safeString(oldRecord.Position);
+
     return {
       id: oldRecord.ID,
       password: '$2b$10$Ohcqw9J1YStppJHeYdoD5.yWjnCm5Mt7MQxWoIMNc0LBwbFRW1DU2',
@@ -135,12 +163,12 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
       username: oldRecord.AccountName,
       email_user,
       phone_number_user: this.safeString(oldRecord.Mobile),
-      position: this.safeString(oldRecord.Position),
+      position: position,
       leader: this.safeString(oldRecord.Manager),
       address_user: this.safeString(oldRecord.Address),
       description: null,
       role: null,
-      roles_by_process: '[{"processKey":"PHUC_DAP_DV","name":"PHUC_DAP_DV","roles":[{"roleCode":"LANH_DAO_TCT","name":"LANH_DAO_TCT"}]},{"processKey":"KY_SO_HS_VBD","name":"KY_SO_HS_VBD","roles":[{"roleCode":"NGUOI_KY_PHE_DUYET","name":"NGUOI_KY_PHE_DUYET"}]},{"processKey":"SOANTHAO_PHATHANH_VBD","name":"SOANTHAO_PHATHANH_VBD","roles":[{"roleCode":"NGUOI_KY_NOI_DUNG","name":"NGUOI_KY_NOI_DUNG"}]}]',
+      roles_by_process: this.mapPositionToRoles(position),
       organization_name: null,
       organization_code: null,
       organization_type: null,

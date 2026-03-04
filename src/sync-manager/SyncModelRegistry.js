@@ -22,12 +22,12 @@ const MODEL_DEFINITIONS = [
   //   section: 'realtime',
   //   ModelClass: SyncFileModel,
   // },
-  // {
-  //   key: 'UNIT_TEST_STREAM_USER_COPY_MIGRATION111',
-  //   label: 'Đồng bộ cơ sở dữ liệu cũ: người dùng (user copy)',
-  //   section: 'realtime',
-  //   ModelClass: StreamUserMigrationModel
-  // },
+  {
+    key: 'UNIT_TEST_STREAM_USER_COPY_MIGRATION111',
+    label: 'Đồng bộ cơ sở dữ liệu cũ: người dùng ',
+    section: 'realtime',
+    ModelClass: StreamUserMigrationModel
+  },
   {
     key: 'UNIT_TEST_STREAM_TASK_MIGRATION',
     label: 'Đồng bộ công việc từ văn bản đến',
