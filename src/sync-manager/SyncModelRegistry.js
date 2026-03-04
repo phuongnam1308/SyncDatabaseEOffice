@@ -8,6 +8,7 @@ const StreamSocialMigrationModel = require('../sync-social-resource/migrate/Stre
 const SyncIncomingDocumentModel = require('../sync-incoming-document/migrate/SyncIncomingDocumentModel');
 const StreamMeetingMigrationModel = require('../sync-meeting/migrate/StreamMeetingMigrationModel');
 const InCommingDocumentModel = require('../sync-incoming-document/migrate/StreamIncomingIncrementalModel');
+const StreamDepartmentMigrationModel = require('../sync-department/migrate/StreamDepartmentMigrationModel');
 
 const MODEL_DEFINITIONS = [
   {
@@ -52,6 +53,12 @@ const MODEL_DEFINITIONS = [
     label: 'Đồng bộ Lịch họp ',
     section: 'realtime',
     ModelClass: StreamMeetingMigrationModel,
+  },
+  {
+    key: 'UNIT_TEST_STREAM_DEPARTMENT_MIGRATION',
+    label: 'Đồng bộ phòng ban',
+    section: 'realtime',
+    ModelClass: StreamDepartmentMigrationModel,
   },
 ];
 
