@@ -191,7 +191,7 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
 
     return {
       id: oldRecord.ID,
-      password: '$2b$10$Ohcqw9J1YStppJHeYdoD5.yWjnCm5Mt7MQxWoIMNc0LBwbFRW1DU2',
+      password: process.env.DEFAULT_PASSWORD ||'$2b$10$Ohcqw9J1YStppJHeYdoD5.yWjnCm5Mt7MQxWoIMNc0LBwbFRW1DU2',
       name,
       avatar: oldRecord.Image || '[]',
       code_nd,
@@ -203,7 +203,7 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
       address_user: this.safeString(oldRecord.Address),
       description: null,
       role: null,
-      roles_by_process: this.mapPositionToRoles(position),
+      roles_by_process: this.mapPositionToRoles(position) || process.env.ROLES_DEFAULT || '[{"processKey":"VAN_BAN_DI","name":"VAN_BAN_DI","roles":[{"roleCode":"CAN_BO","name":"CAN_BO"},{"roleCode":"CAN_BO","name":"CAN_BO"}]},{"processKey":"vbdi","name":"vbdi","roles":[{"roleCode":"CANBO","name":"CANBO"}]},{"processKey":"XIN_Y_KIEN","name":"XIN_Y_KIEN","roles":[{"roleCode":"CAN_BO","name":"CAN_BO"}]},{"processKey":"QUY_TRINH_CV_PHONG_BAN","name":"QUY_TRINH_CV_PHONG_BAN","roles":[{"roleCode":"NGUOI_GIAO","name":"NGƯỜI GIAO"},{"roleCode":"NGUOI_PHOI_HOP","name":"NGƯỜI PHỐI HỢP"}]},{"processKey":"QUY_TRINH_LICH_HOP","name":"QUY_TRINH_LICH_HOP","roles":[{"roleCode":"UNKNOWN","name":"VAN_THU"}]},{"processKey":"quan_ly_tin_tuc","name":"quan_ly_tin_tuc","roles":[{"roleCode":"NGUOI_TAO_TIN","name":"NGUOI_TAO_TIN"}]},{"processKey":"SOANTHAO_PHATHANH_VBD","name":"SOANTHAO_PHATHANH_VBD","roles":[{"roleCode":"NGUOI_SOAN_THAO","name":"NGUOI_SOAN_THAO"}]},{"processKey":"CVDAN","name":"CVDAN","roles":[{"roleCode":"NGUOI_GIAO","name":"NGƯỜI GIAO"},{"roleCode":"NGUOI_PHOI_HOP","name":"NGƯỜI PHỐI HỢP"}]},{"processKey":"SOANTHAO_PHATHANH_CQD","name":"SOANTHAO_PHATHANH_CQD","roles":[{"roleCode":"NGUOI_SOAN_THAO","name":"NGUOI_SOAN_THAO"}]},{"processKey":"KY_SO_HS_VBD","name":"KY_SO_HS_VBD","roles":[{"roleCode":"NGUOI_SOAN_THAO","name":"NGUOI_SOAN_THAO"}]},{"processKey":"QUY_TRINH_DANG_KY_XE","name":"QUY_TRINH_DANG_KY_XE","roles":[{"roleCode":"ALL","name":"ALL"}]},{"processKey":"thhs","name":"thhs","roles":[{"roleCode":"bld","name":"bld"}]},{"processKey":"QUY_TRINH_PHAN_ANH_KIEN_NGHI","name":"QUY_TRINH_PHAN_ANH_KIEN_NGHI","roles":[{"roleCode":"NGUOI_PHAN_ANH","name":"NGUOI_PHAN_ANH"}]}]',
       organization_name: null,
       organization_code: null,
       organization_type: null,
@@ -551,9 +551,9 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
         // ① Chuẩn hoá tên phòng ban qua processSenderUnit
         const normalizedDept = this.migrationHelper.processSenderUnit(rowData.Department);
 
-        console.log(
-          `[upsertUserById] user.id=${mapped.id} | Department raw="${rowData.Department}" → processSenderUnit="${normalizedDept}"`
-        );
+        // console.log(
+        //   `[upsertUserById] user.id=${mapped.id} | Department raw="${rowData.Department}" → processSenderUnit="${normalizedDept}"`
+        // );
 
         let parentId = null;
         if (normalizedDept) {
@@ -565,13 +565,15 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
           );
           parentId = orgRows?.length ? orgRows[0].id : null;
         }
-
+        if (!parentId) {
+          parentId = process.env.USER_PAREN_DEFAULT || '68afb3a1cb36081f0bba5dd6'
+        }
         // ③ Gán vào parent
         mapped.parent = parentId;
 
-        console.log(
-          `[upsertUserById] user.id=${mapped.id} | Department="${normalizedDept}" → parent=${parentId ?? 'NULL (không tìm thấy)'}`
-        );
+        // console.log(
+        //   `[upsertUserById] user.id=${mapped.id} | Department="${normalizedDept}" → parent=${parentId ?? 'NULL (không tìm thấy)'}`
+        // );
       } catch (err) {
         console.warn(`[upsertUserById] Lỗi resolve parent cho user.id=${mapped.id}:`, err.message);
         mapped.parent = null;

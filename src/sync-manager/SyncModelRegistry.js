@@ -8,7 +8,7 @@ const StreamSocialMigrationModel = require('../sync-social-resource/migrate/Stre
 const SyncIncomingDocumentModel = require('../sync-incoming-document/migrate/SyncIncomingDocumentModel');
 const StreamMeetingMigrationModel = require('../sync-meeting/migrate/StreamMeetingMigrationModel');
 const InCommingDocumentModel = require('../sync-incoming-document/migrate/StreamIncomingIncrementalModel');
-
+const StreamDepartmentMigrationModel = require('../sync-department/migrate/StreamDepartmentMigrationModel');
 const MODEL_DEFINITIONS = [
   {
     key: 'UNIT_TEST_STREAM_OUTGOING_INCREMENTAL',
@@ -22,6 +22,12 @@ const MODEL_DEFINITIONS = [
   //   section: 'realtime',
   //   ModelClass: SyncFileModel,
   // },
+    {
+    key: 'UNIT_TEST_STREAM_DEPARTMENT_MIGRATION',
+    label: 'Đồng bộ phòng ban',
+    section: 'realtime',
+    ModelClass: StreamDepartmentMigrationModel,
+  },
   {
     key: 'UNIT_TEST_STREAM_USER_COPY_MIGRATION111',
     label: 'Đồng bộ cơ sở dữ liệu cũ: người dùng ',
