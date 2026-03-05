@@ -87,14 +87,16 @@ class SyncAuditModel extends BaseModel {
       );
     }
 
+// LTRIM(RTRIM(ISNULL(IDVanBan, ''))) = @oldDocumentId
+//           OR LTRIM(RTRIM(ISNULL(VBId, ''))) = @oldDocumentId
+//           OR LTRIM(RTRIM(ISNULL(IDVanBanGoc, ''))) = @oldDocumentId
+//           OR LTRIM(RTRIM(ISNULL(VBGocId, ''))) = @oldDocumentId
+
     const query = `
       SELECT *
       FROM ${this.oldDbSchema}.${this.oldDbTable}
       WHERE (
-          LTRIM(RTRIM(ISNULL(IDVanBan, ''))) = @oldDocumentId
-          OR LTRIM(RTRIM(ISNULL(VBId, ''))) = @oldDocumentId
-          OR LTRIM(RTRIM(ISNULL(IDVanBanGoc, ''))) = @oldDocumentId
-          OR LTRIM(RTRIM(ISNULL(VBGocId, ''))) = @oldDocumentId
+          LTRIM(RTRIM(ISNULL(VBId, ''))) = @oldDocumentId
       )
       ${categoryFilter}
       ORDER BY
