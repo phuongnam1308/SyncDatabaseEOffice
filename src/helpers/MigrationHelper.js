@@ -315,13 +315,13 @@ class MigrationHelper {
       const selectQuery = `
         SELECT TOP 1 id
         FROM ${process.env.NEW_DB_NAME}.dbo.organization_units
-        WHERE LTRIM(RTRIM(name)) = @name
+        WHERE LTRIM(RTRIM(name)) LIKE @name
           AND status = 1
       `;
 
       let result = await this.queryNewDbTx(
         selectQuery,
-        { name: normalizedName },
+        { name: `N'${normalizedName}'` },
         transaction,
       );
 
@@ -333,12 +333,11 @@ class MigrationHelper {
       const oldDeptQuery = `
         SELECT TOP 1 *
         FROM ${process.env.OLD_DB_NAME}.dbo.Department
-        WHERE LTRIM(RTRIM(Title)) = @name
+        WHERE LTRIM(RTRIM(Title)) LIKE @name
           AND (Status = 1 OR Status IS NULL)
       `;
 
-      const oldDept = await this.queryOldDb(oldDeptQuery, { name: normalizedName });
-
+      const oldDept = await this.queryOldDb(oldDeptQuery, { name: `N'${normalizedName}'` });
       if (oldDept?.length) {
         const dept = oldDept[0];
         const oldId = dept.ID;
