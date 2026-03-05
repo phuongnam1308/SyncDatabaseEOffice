@@ -647,7 +647,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         YKienLanhDao, YKienLanhDaoTCT, YKienLanhDaoVPDN, YKienCuaLDVPChoVanThu,
         ForwardType, ModuleId, SiteName, ListName, ItemId,
         MigrateFlg, YearMonth, MigrateErrFlg, MigrateErrMess,
-        TrangThai, ModifiedBy, CreatedBy, DGPId, deadline_reply
+        TrangThai, ModifiedBy, CreatedBy, DGPId, deadline_reply, table_backup
       )
       VALUES (
         @document_id, @status_code, @created_at, @updated_at, @book_document_id,
@@ -664,7 +664,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         @YKienLanhDao, @YKienLanhDaoTCT, @YKienLanhDaoVPDN, @YKienCuaLDVPChoVanThu,
         @ForwardType, @ModuleId, @SiteName, @ListName, @ItemId,
         @MigrateFlg, @YearMonth, @MigrateErrFlg, @MigrateErrMess,
-        @TrangThai, @ModifiedBy, @CreatedBy, @DGPId, @deadline_reply
+        @TrangThai, @ModifiedBy, @CreatedBy, @DGPId, @deadline_reply, @table_backup
       )
     `;
 
@@ -742,7 +742,8 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         ModifiedBy = @ModifiedBy,
         CreatedBy = @CreatedBy,
         DGPId = @DGPId,
-        deadline_reply = @deadline_reply
+        deadline_reply = @deadline_reply,
+        table_backup = @table_backup
       WHERE id_incoming_bak = @id_incoming_bak
     `;
 
@@ -876,6 +877,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
             CreatedBy: drafter,
             DGPId: this.safeNumber(oldRecord.DGPId, null),
             deadline_reply: this.safeString(oldRecord.ThoiHanGQ),
+            table_backup: 'data_sync',
         }
     }
 
@@ -955,6 +957,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
             CreatedBy: record.CreatedBy ?? null,
             DGPId: record.DGPId ?? null,
             deadline_reply: record.deadline_reply ?? null,
+            table_backup: record.table_backup ?? 'data_sync',
         }
     }
     
