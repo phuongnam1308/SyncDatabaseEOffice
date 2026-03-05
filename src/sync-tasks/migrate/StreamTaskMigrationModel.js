@@ -13,6 +13,48 @@ class StreamTaskMigrationModel extends BaseIncrementalSyncInterface {
     this.newDbTable = 'task';
   }
 
+  /**
+   * Override initialize: kết nối DB xong tự động tạo bảng staging nếu chưa có.
+   */
+  async initialize() {
+    await super.initialize();
+    await this.ensureStagingTableExists();
+  }
+
+  /**
+   * Tự động tạo bảng trung gian `task_sync` trong DB mới nếu chưa tồn tại.
+   * Cấu trúc bảng được clone từ `TaskVBDen` (DB cũ) qua SELECT TOP 0 * INTO.
+   */
+  async ensureStagingTableExists() {
+    try {
+      const stagingTableRef = this.getStagingTableRef();
+      const checkSchema = this.newDbSchema || 'dbo';
+      const checkTable  = this.newTableSync;
+
+      const oldDbName = process.env.OLD_DB_NAME;
+      const sourceTableRef = oldDbName
+        ? `[${oldDbName}].[${this.oldDbSchema}].[${this.oldDbTable}]`
+        : `[${this.oldDbSchema}].[${this.oldDbTable}]`;
+
+      const createQuery = `
+        IF NOT EXISTS (
+          SELECT 1 FROM INFORMATION_SCHEMA.TABLES
+          WHERE TABLE_SCHEMA = '${checkSchema}'
+            AND TABLE_NAME   = '${checkTable}'
+        )
+        BEGIN
+          SELECT TOP 0 * INTO ${stagingTableRef} FROM ${sourceTableRef}
+        END
+      `;
+
+      await this.queryNewDb(createQuery);
+      console.log(`[StreamTaskMigrationModel] ensureStagingTableExists OK: "${stagingTableRef}"`);
+    } catch (err) {
+      console.error(`[StreamTaskMigrationModel] ensureStagingTableExists thất bại: ${err.message}`);
+      throw err;
+    }
+  }
+
   getStagingTableRef() {
     if (this.newDbName) {
       return `${this.newDbName}.${this.newDbSchema}.${this.newTableSync}`;

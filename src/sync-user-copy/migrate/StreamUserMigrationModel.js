@@ -20,6 +20,50 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
     );
   }
 
+  /**
+   * Override initialize: kết nối DB xong tự động tạo bảng trung gian nếu chưa có.
+   */
+  async initialize() {
+    await super.initialize();
+    await this.ensureStagingTableExists();
+  }
+
+  /**
+   * Tự động tạo bảng trung gian `user_sync` trong DB mới nếu chưa tồn tại.
+   * Cấu trúc bảng được clone từ `PersonalProfile` (DB cũ) qua SELECT TOP 0 * INTO.
+   * Nếu 2 DB khác nhau instance thì câu lệnh này vẫn chạy được miễn cùng SQL Server.
+   */
+  async ensureStagingTableExists() {
+    try {
+      const stagingTableRef = this.getStagingTableRef();
+      const checkSchema = this.newDbSchema || 'dbo';
+      const checkTable  = this.newTableSync;
+
+      const oldDbName = process.env.OLD_DB_NAME;
+      const sourceTableRef = oldDbName
+        ? `[${oldDbName}].[${this.oldDbSchema}].[${this.oldDbTable}]`
+        : `[${this.oldDbSchema}].[${this.oldDbTable}]`;
+
+      // Dùng IF NOT EXISTS trực tiếp — tránh race condition và check sai DB context
+      const createQuery = `
+        IF NOT EXISTS (
+          SELECT 1 FROM INFORMATION_SCHEMA.TABLES
+          WHERE TABLE_SCHEMA = '${checkSchema}'
+            AND TABLE_NAME   = '${checkTable}'
+        )
+        BEGIN
+          SELECT TOP 0 * INTO ${stagingTableRef} FROM ${sourceTableRef}
+        END
+      `;
+
+      await this.queryNewDb(createQuery);
+      console.log(`[StreamUserMigrationModel] ensureStagingTableExists OK: "${stagingTableRef}"`);
+    } catch (err) {
+      console.error(`[StreamUserMigrationModel] ensureStagingTableExists thất bại: ${err.message}`);
+      throw err;
+    }
+  }
+
   getStagingTableRef() {
     if (this.newDbName) {
       return `${this.newDbName}.${this.newDbSchema}.${this.newTableSync}`;

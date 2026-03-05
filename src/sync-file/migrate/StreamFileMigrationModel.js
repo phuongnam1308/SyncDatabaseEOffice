@@ -14,7 +14,49 @@ class StreamFileMigrationModel extends BaseModel {
         this.helper = new MigrationHelper(this.queryNewDbTx.bind(this), this.queryOldDb.bind(this));
         
     }
-    async migrateFiles() {
+  /**
+   * Override initialize: kết nối DB xong tự động tạo bảng trung gian nếu chưa có.
+   */
+  async initialize() {
+    await super.initialize();
+    await this.ensureStagingTableExists();
+  }
+
+  /**
+   * Tự động tạo bảng `all_docs_sync` trong DB mới nếu chưa tồn tại.
+   * Clone cấu trúc từ `AllDocs` (DB cũ) qua IF NOT EXISTS + SELECT TOP 0 * INTO.
+   */
+  async ensureStagingTableExists() {
+    try {
+      const newDbName = this.dbName || process.env.NEW_DB_NAME;
+      const stagingTableRef = newDbName
+        ? `[${newDbName}].[${this.newDbSchema}].[${this.newDbTable}]`
+        : `[${this.newDbSchema}].[${this.newDbTable}]`;
+
+      const oldDbName = process.env.OLD_DB_NAME;
+      const sourceTableRef = oldDbName
+        ? `[${oldDbName}].[${this.oldDbSchema}].[${this.oldDbTable}]`
+        : `[${this.oldDbSchema}].[${this.oldDbTable}]`;
+
+      await this.queryNewDb(`
+        IF NOT EXISTS (
+          SELECT 1 FROM INFORMATION_SCHEMA.TABLES
+          WHERE TABLE_SCHEMA = '${this.newDbSchema}'
+            AND TABLE_NAME   = '${this.newDbTable}'
+        )
+        BEGIN
+          SELECT TOP 0 * INTO ${stagingTableRef} FROM ${sourceTableRef}
+        END
+      `);
+      console.log(`[StreamFileMigrationModel] ensureStagingTableExists OK: "${stagingTableRef}"`);
+    } catch (err) {
+      console.error(`[StreamFileMigrationModel] ensureStagingTableExists thất bại: ${err.message}`);
+      throw err;
+    }
+  }
+
+
+  async migrateFiles() {
         try {
             // 1. Kết nối tới SharePoint DB
             const pool = await sql.connect( );
@@ -64,4 +106,3 @@ class StreamFileMigrationModel extends BaseModel {
     }
 }
 module.exports = StreamFileMigrationModel;
-

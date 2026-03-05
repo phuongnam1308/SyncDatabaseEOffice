@@ -129,6 +129,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
    */
   async initialize() {
     await super.initialize();
+    await this.ensureStagingTableExists();
 
     this._syncAuditModel = [];
     this._syncCommentModel = [];
@@ -151,6 +152,40 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     logger.info(
       `[OutGoingDocumentModel] Initialized with auditTables=${this._syncAuditModel.length}, commentTables=${this._syncCommentModel.length}`
     );
+  }
+
+  /**
+   * Tự động tạo bảng staging `outgoing_documents_temp` trong DB mới nếu chưa tồn tại.
+   * Clone cấu trúc từ `VanBanBanHanh` (DB cũ) qua SELECT TOP 0 * INTO.
+   */
+  async ensureStagingTableExists() {
+    try {
+      const stagingTableRef = this.getStagingTableRef();
+      const checkSchema = this.newDbSchema || 'dbo';
+      const checkTable  = this.newTableSync;
+
+      const oldDbName = process.env.OLD_DB_NAME;
+      const sourceTableRef = oldDbName
+        ? `[${oldDbName}].[${this.oldDbSchema}].[${this.oldDbTable}]`
+        : `[${this.oldDbSchema}].[${this.oldDbTable}]`;
+
+      const createQuery = `
+        IF NOT EXISTS (
+          SELECT 1 FROM INFORMATION_SCHEMA.TABLES
+          WHERE TABLE_SCHEMA = '${checkSchema}'
+            AND TABLE_NAME   = '${checkTable}'
+        )
+        BEGIN
+          SELECT TOP 0 * INTO ${stagingTableRef} FROM ${sourceTableRef}
+        END
+      `;
+
+      await this.queryNewDb(createQuery);
+      logger.info(`[OutGoingDocumentModel] ensureStagingTableExists OK: "${stagingTableRef}"`);
+    } catch (err) {
+      logger.error(`[OutGoingDocumentModel] ensureStagingTableExists thất bại: ${err.message}`);
+      throw err;
+    }
   }
 
   /**

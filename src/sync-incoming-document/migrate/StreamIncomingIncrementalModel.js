@@ -154,6 +154,46 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
   }
 
   /**
+   * Override initialize: kết nối DB xong tự động tạo bảng trung gian nếu chưa có.
+   */
+  async initialize() {
+    await super.initialize();
+    await this.ensureStagingTableExists();
+  }
+
+  /**
+   * Tự động tạo bảng trung gian `incomming_documents_sync` trong DB mới nếu chưa tồn tại.
+   * Cấu trúc bảng được clone từ `VanBanDen` (DB cũ) qua IF NOT EXISTS + SELECT TOP 0 * INTO.
+   */
+  async ensureStagingTableExists() {
+    try {
+      const stagingTableRef = this.getStagingTableRef();
+      const checkSchema = this.newDbSchema || 'dbo';
+      const checkTable  = this.newTableSync;
+
+      const oldDbName = process.env.OLD_DB_NAME;
+      const sourceTableRef = oldDbName
+        ? `[${oldDbName}].[${this.oldDbSchema}].[${this.oldDbTable}]`
+        : `[${this.oldDbSchema}].[${this.oldDbTable}]`;
+
+      await this.queryNewDb(`
+        IF NOT EXISTS (
+          SELECT 1 FROM INFORMATION_SCHEMA.TABLES
+          WHERE TABLE_SCHEMA = '${checkSchema}'
+            AND TABLE_NAME   = '${checkTable}'
+        )
+        BEGIN
+          SELECT TOP 0 * INTO ${stagingTableRef} FROM ${sourceTableRef}
+        END
+      `);
+      console.log(`[StreamIncomingIncrementalModel] ensureStagingTableExists OK: "${stagingTableRef}"`);
+    } catch (err) {
+      console.error(`[StreamIncomingIncrementalModel] ensureStagingTableExists thất bại: ${err.message}`);
+      throw err;
+    }
+  }
+
+  /**
    * Resolves fully-qualified staging table reference in NEW DB.
    * @returns {string}
    */

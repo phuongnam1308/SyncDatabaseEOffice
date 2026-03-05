@@ -27,6 +27,14 @@ class StreamDepartmentMigrationModel extends BaseIncrementalSyncInterface {
     this.newDbTable   = 'organization_units'; // Bảng đích
   }
 
+  /**
+   * Override initialize: kết nối DB xong tự động tạo bảng staging nếu chưa có.
+   */
+  async initialize() {
+    await super.initialize();
+    await this.ensureStagingTable();
+  }
+
   // ─── Helpers ──────────────────────────────────────────────────────────────
 
   getStagingTableRef() {

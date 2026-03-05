@@ -21,6 +21,64 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     this.newTableSync = 'meeting_sync_staging';
     this.helper = new MigrationHelper(this.queryNewDbTx.bind(this), this.queryOldDb.bind(this));
   }
+
+  /**
+   * Override initialize: kết nối DB xong tự động tạo bảng staging nếu chưa có.
+   */
+  async initialize() {
+    await super.initialize();
+    await this.ensureStagingTableExists();
+  }
+
+  /**
+   * Tự động tạo bảng staging `meeting_sync_staging` trong DB mới nếu chưa tồn tại.
+   * Schema cố định khớp với các alias được SELECT ra từ AllUserData (đã parse XML).
+   */
+  async ensureStagingTableExists() {
+    try {
+      const stagingTableRef = this.getStagingTableRef();
+      const checkSchema = this.newDbSchema || 'dbo';
+      const checkTable  = this.newTableSync;
+
+      const createQuery = `
+        IF NOT EXISTS (
+          SELECT 1 FROM INFORMATION_SCHEMA.TABLES
+          WHERE TABLE_SCHEMA = '${checkSchema}'
+            AND TABLE_NAME   = '${checkTable}'
+        )
+        BEGIN
+          CREATE TABLE ${stagingTableRef} (
+            [SY_SyncId]      int          IDENTITY(1,1) PRIMARY KEY,
+            [__sync_time]    datetime2    NULL,
+            [__sync_id_num]  bigint       NULL,
+            [ID]             bigint       NOT NULL,
+            [TieuDe]         nvarchar(500)  NULL,
+            [BatDau]         nvarchar(50)   NULL,
+            [KetThuc]        nvarchar(50)   NULL,
+            [DiaDiem]        nvarchar(500)  NULL,
+            [LoaiHop]        nvarchar(255)  NULL,
+            [NoiDung]        nvarchar(max)  NULL,
+            [ThoiLuongGiay]  nvarchar(50)   NULL,
+            [ChuTri]         nvarchar(255)  NULL,
+            [ThuKy]          nvarchar(255)  NULL,
+            [tp_Created]     nvarchar(50)   NULL,
+            [tp_Modified]    nvarchar(50)   NULL,
+            [tp_Version]     nvarchar(50)   NULL
+          );
+
+          CREATE UNIQUE INDEX IX_${checkTable}_ID
+            ON ${stagingTableRef}([ID]);
+        END
+      `;
+
+      await this.queryNewDb(createQuery);
+      console.log(`[StreamMeetingMigrationModel] ensureStagingTableExists OK: "${stagingTableRef}"`);
+    } catch (err) {
+      console.error(`[StreamMeetingMigrationModel] ensureStagingTableExists thất bại: ${err.message}`);
+      throw err;
+    }
+  }
+
   log(level, message, meta = {}) {
     const payload = {
       model: this.modelName,
@@ -144,36 +202,8 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
 
     if (!columns.length) return { stagedCount: 0 };
 
-    // ✅ FIX: dùng ID làm khóa chính staging
+    // Bảng staging đã được tạo sẵn trong ensureStagingTableExists() lúc initialize
     const keyColumn = 'ID';
-
-    const createStagingTableQuery = `
-        IF NOT EXISTS (
-            SELECT 1
-            FROM sys.tables t
-            JOIN sys.schemas s ON t.schema_id = s.schema_id
-            WHERE t.name = '${this.newTableSync}'
-            AND s.name = '${this.newDbSchema}'
-        )
-        BEGIN
-            CREATE TABLE ${this.newDbName}.${this.newDbSchema}.${this.newTableSync}(
-                [SY_SyncId] int identity(1,1) primary key,
-                [__sync_time] datetime2 null,
-                [__sync_id_num] bigint null,
-                [ID] bigint NOT NULL,
-                ${columns
-            .filter(c => c !== 'ID')
-            .map(c => `[${c}] nvarchar(500) null`)
-            .join(',')}
-            );
-
-            CREATE UNIQUE INDEX IX_${this.newTableSync}_ID
-            ON ${this.newDbName}.${this.newDbSchema}.${this.newTableSync}(ID);
-        END
-        `;
-
-    await this.queryNewDbTx(createStagingTableQuery, {}, transaction);
-
     const stagingTableRef = this.getStagingTableRef();
 
     for (const row of rows) {

@@ -30,6 +30,8 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
 
     async initialize() {
         await super.initialize();
+        // Tự động tạo bảng staging nếu chưa có
+        await this.ensureStagingTableExists();
         // Lấy danh sách topicId từ DB mới để random
         try {
             const rows = await this.queryNewDb(`SELECT id FROM ${this.newDbName}.dbo.topics`);
@@ -43,6 +45,41 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
             console.log(`[StreamSocialMigrationModel] Sync row limit: ${this.maxSyncRows || 'ALL'}`);
         } catch (error) {
             console.error('[StreamSocialMigrationModel] Failed to load initial data:', error.message);
+        }
+    }
+
+    /**
+     * Tự động tạo bảng staging `social_resource_sync` trong DB mới nếu chưa tồn tại.
+     * Clone cấu trúc từ bảng nguồn qua SELECT TOP 0 * INTO,
+     * sau đó ALTER TABLE thêm các cột tracking cần thiết.
+     */
+    async ensureStagingTableExists() {
+        try {
+            const stagingTableRef = this.getStagingTableRef();
+            const checkSchema = this.newDbSchema || 'dbo';
+            const checkTable  = this.newTableSync;
+            const sourceTableRef = `[${this.oldDbName}].[${this.oldDbSchema}].[${this.oldDbTable}]`;
+
+            const createQuery = `
+                IF NOT EXISTS (
+                    SELECT 1 FROM INFORMATION_SCHEMA.TABLES
+                    WHERE TABLE_SCHEMA = '${checkSchema}'
+                      AND TABLE_NAME   = '${checkTable}'
+                )
+                BEGIN
+                    SELECT TOP 0 * INTO ${stagingTableRef} FROM ${sourceTableRef};
+                    ALTER TABLE ${stagingTableRef} ADD [__sync_time]   datetime2    NULL;
+                    ALTER TABLE ${stagingTableRef} ADD [__sync_id_num] bigint       NULL;
+                    ALTER TABLE ${stagingTableRef} ADD [Subject]       nvarchar(max) NULL;
+                    ALTER TABLE ${stagingTableRef} ADD [rn_dedup]      int          NULL;
+                END
+            `;
+
+            await this.queryNewDb(createQuery);
+            console.log(`[StreamSocialMigrationModel] ensureStagingTableExists OK: "${stagingTableRef}"`);
+        } catch (err) {
+            console.error(`[StreamSocialMigrationModel] ensureStagingTableExists thất bại: ${err.message}`);
+            throw err;
         }
     }
 
@@ -194,28 +231,16 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
             throw new Error('Staging sync requires source column "ID"');
         }
 
-        // Tạo nhanh bảng staging tự động nếu chưa có
-        const createStagingTableQuery = `
-      IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'${this.newDbName}.${this.newDbSchema}.${this.newTableSync}') AND type in (N'U'))
-      BEGIN
-        CREATE TABLE ${this.newDbName}.${this.newDbSchema}.${this.newTableSync}(
-          [SY_SyncId] int identity(1,1) primary key,
-          [__sync_time] datetime2 null,
-          [__sync_id_num] bigint null,
-          ${columns.map(c => this.sanitizeColumnName(c) + ' nvarchar(max) null').join(',\n')}
-        )
-      END
-      ELSE
-      BEGIN
-        -- Đảm bảo tất cả các cột từ nguồn đều có trong staging (tránh lỗi khi mới thêm JOIN)
-        ${columns.map(c => `
-        IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'${this.newDbName}.${this.newDbSchema}.${this.newTableSync}') AND name = N'${c}')
-        BEGIN
-            ALTER TABLE ${this.newDbName}.${this.newDbSchema}.${this.newTableSync} ADD ${this.sanitizeColumnName(c)} nvarchar(max) null;
-        END`).join('\n')}
-      END
-    `;
-        await this.queryNewDbTx(createStagingTableQuery, {}, transaction);
+        // Bảng staging đã được tạo trong ensureStagingTableExists() lúc initialize.
+        // Tự động thêm cột mới nếu source có thêm cột (vd: join mới)
+        const alterStagingQuery = `
+            ${columns.map(c => `
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'${this.newDbName}.${this.newDbSchema}.${this.newTableSync}') AND name = N'${c}')
+            BEGIN
+                ALTER TABLE ${this.newDbName}.${this.newDbSchema}.${this.newTableSync} ADD ${this.sanitizeColumnName(c)} nvarchar(max) null;
+            END`).join('\n')}
+        `;
+        await this.queryNewDbTx(alterStagingQuery, {}, transaction);
 
         const safeColumns = columns.map((column) => this.sanitizeColumnName(column));
         const nonIdColumns = columns.filter((column) => column !== 'ID');

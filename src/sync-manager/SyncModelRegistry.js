@@ -28,10 +28,9 @@ const MODEL_DEFINITIONS = [
     section: 'realtime',
     ModelClass: StreamDepartmentMigrationModel,
   },
-  {
+{
     key: 'UNIT_TEST_STREAM_USER_COPY_MIGRATION111',
-    label: 'Đồng bộ cơ sở dữ liệu cũ: người dùng ',
-    section: 'realtime',
+    label: 'Đồng bộ người dùng',  
     ModelClass: StreamUserMigrationModel
   },
   {
