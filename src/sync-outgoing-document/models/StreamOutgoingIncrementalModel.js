@@ -158,35 +158,135 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
    * Tự động tạo bảng staging `outgoing_documents_temp` trong DB mới nếu chưa tồn tại.
    * Clone cấu trúc từ `VanBanBanHanh` (DB cũ) qua SELECT TOP 0 * INTO.
    */
-  async ensureStagingTableExists() {
-    try {
-      const stagingTableRef = this.getStagingTableRef();
-      const checkSchema = this.newDbSchema || 'dbo';
-      const checkTable  = this.newTableSync;
+    async ensureStagingTableExists() {
+      const table = this.getStagingTableRef();
 
-      const oldDbName = process.env.OLD_DB_NAME;
-      const sourceTableRef = oldDbName
-        ? `[${oldDbName}].[${this.oldDbSchema}].[${this.oldDbTable}]`
-        : `[${this.oldDbSchema}].[${this.oldDbTable}]`;
+      const query = `
+      IF OBJECT_ID('${table}', 'U') IS NOT NULL
+          DROP TABLE ${table};
 
-      const createQuery = `
-        IF NOT EXISTS (
-          SELECT 1 FROM INFORMATION_SCHEMA.TABLES
-          WHERE TABLE_SCHEMA = '${checkSchema}'
-            AND TABLE_NAME   = '${checkTable}'
-        )
-        BEGIN
-          SELECT TOP 0 * INTO ${stagingTableRef} FROM ${sourceTableRef}
-        END
+      CREATE TABLE ${table} (
+        -- Source columns (raw from VanBanBanHanh / old DB)
+        ID                          NVARCHAR(255)   NOT NULL,
+        Title                       NVARCHAR(MAX),
+        BanLanhDao                  NVARCHAR(MAX),
+        ChenSo                      NVARCHAR(MAX),
+        TrangThai                   NVARCHAR(MAX),
+        IsLibrary                   NVARCHAR(MAX),
+        DoKhan                      NVARCHAR(MAX),
+        DoMat                       NVARCHAR(MAX),
+        DonVi                       NVARCHAR(MAX),
+        Files                       NVARCHAR(MAX),
+        ChucVu                      NVARCHAR(MAX),
+        DocNum                      NVARCHAR(MAX),
+        NguoiSoanThaoText           NVARCHAR(MAX),
+        FolderLocation              NVARCHAR(MAX),
+        HoSoXuLyLink                NVARCHAR(MAX),
+        InfoVBDi                    NVARCHAR(MAX),
+        ItemVBPH                    NVARCHAR(MAX),
+        LoaiBanHanh                 NVARCHAR(MAX),
+        LoaiVanBan                  NVARCHAR(MAX),
+        NoiLuuTru                   NVARCHAR(MAX),
+        NoiNhan                     NVARCHAR(MAX),
+        NgayBanHanh                 NVARCHAR(MAX),
+        NgayHieuLuc                 NVARCHAR(MAX),
+        NgayHoanTat                 NVARCHAR(MAX),
+        NguoiKyVanBan               NVARCHAR(MAX),
+        NguoiKyVanBanText           NVARCHAR(MAX),
+        PhanCong                    NVARCHAR(MAX),
+        TraLoiVBDen                 NVARCHAR(MAX),
+        SoBan                       NVARCHAR(MAX),
+        SoTrang                     NVARCHAR(MAX),
+        SoVanBan                    NVARCHAR(MAX),
+        SoVanBanText                NVARCHAR(MAX),
+        TrichYeu                    NVARCHAR(MAX),
+        BanLanhDaoTCT               NVARCHAR(MAX),
+        YKien                       NVARCHAR(MAX),
+        YKienChiHuy                 NVARCHAR(MAX),
+        ModuleId                    NVARCHAR(MAX),
+        SiteName                    NVARCHAR(MAX),
+        ListName                    NVARCHAR(MAX),
+        ItemId                      NVARCHAR(MAX),
+        YearMonth                   NVARCHAR(MAX),
+        Modified                    NVARCHAR(MAX),
+        Created                     NVARCHAR(MAX),
+        ModifiedBy                  NVARCHAR(MAX),
+        CreatedBy                   NVARCHAR(MAX),
+        MigrateFlg                  NVARCHAR(MAX),
+        MigrateErrFlg               NVARCHAR(MAX),
+        MigrateErrMess              NVARCHAR(MAX),
+        LoaiMoc                     NVARCHAR(MAX),
+        KySoFiles                   NVARCHAR(MAX),
+        DGPId                       NVARCHAR(MAX),
+        Workflow                    NVARCHAR(MAX),
+        IsKyQuyChe                  NVARCHAR(MAX),
+        DocSignType                 NVARCHAR(MAX),
+        IsConverting                NVARCHAR(MAX),
+        CodeItemId                  NVARCHAR(MAX),
+
+        -- Mapped/output columns (từ StreamOutgoingMigrationModel)
+        document_id                 NVARCHAR(MAX),
+        status_code                 NVARCHAR(MAX),
+        sender_unit                 NVARCHAR(MAX),
+        drafter                     NVARCHAR(MAX),
+        document_type               NVARCHAR(MAX),
+        urgency_level               NVARCHAR(MAX),
+        private_level               NVARCHAR(MAX),
+        document_field              NVARCHAR(MAX),
+        report_signer               NVARCHAR(MAX),
+        report_document_symbol      NVARCHAR(MAX),
+        to_book_text_symbols        NVARCHAR(MAX),
+        viewers                     NVARCHAR(MAX),
+        deadline_reply              NVARCHAR(MAX),
+        abstract_note               NVARCHAR(MAX),
+        recipient_ids               NVARCHAR(MAX),
+        internal_receiving_unit     NVARCHAR(MAX),
+        reply_incomming_doc         NVARCHAR(MAX),
+        created_at                  NVARCHAR(MAX),
+        updated_at                  NVARCHAR(MAX),
+        draft_signer                NVARCHAR(MAX),
+        book_document_id            NVARCHAR(MAX),
+        status                      NVARCHAR(MAX),
+        code_commanders             NVARCHAR(MAX),
+        commanders                  NVARCHAR(MAX),
+        current_note                NVARCHAR(MAX),
+        to_book                     NVARCHAR(MAX),
+        release_no                  NVARCHAR(MAX),
+        release_date                NVARCHAR(MAX),
+        text_symbols                NVARCHAR(MAX),
+        doc_work_files              NVARCHAR(MAX),
+        doc_proposal                NVARCHAR(MAX),
+        doc_draft                   NVARCHAR(MAX),
+        doc_attachments             NVARCHAR(MAX),
+        doc_recall                  NVARCHAR(MAX),
+        doc_replacement             NVARCHAR(MAX),
+        doc_answer                  NVARCHAR(MAX),
+        external_receiving_unit     NVARCHAR(MAX),
+        internal_receiving_dept     NVARCHAR(MAX),
+        processor                   NVARCHAR(MAX),
+        type_doc                    NVARCHAR(MAX),
+        bpmn_version                NVARCHAR(MAX),
+        vieweds                     NVARCHAR(MAX),
+        know_receivers              NVARCHAR(MAX),
+        type_of_process             NVARCHAR(MAX),
+        replaced_documents          NVARCHAR(MAX),
+        id_outgoing_bak             NVARCHAR(MAX),
+        internal_receiving_dept_old NVARCHAR(MAX),
+        sign_type                   NVARCHAR(MAX),
+        from_create_draf            NVARCHAR(MAX),
+        replaced                    NVARCHAR(MAX),
+        tb_bak                      NVARCHAR(MAX),
+        table_backup                NVARCHAR(MAX),
+        send_id_bak_bef_test        NVARCHAR(MAX),
+        status_code_bak_bef_test    NVARCHAR(MAX),
+        drafter_bak_bef_test        NVARCHAR(MAX),
+
+        CONSTRAINT PK_outgoing_documents_temp PRIMARY KEY (ID)
+      );
       `;
 
-      await this.queryNewDb(createQuery);
-      logger.info(`[OutGoingDocumentModel] ensureStagingTableExists OK: "${stagingTableRef}"`);
-    } catch (err) {
-      logger.error(`[OutGoingDocumentModel] ensureStagingTableExists thất bại: ${err.message}`);
-      throw err;
+      await this.queryNewDb(query);
     }
-  }
 
   /**
    * Resolves fully-qualified staging table reference in NEW DB.

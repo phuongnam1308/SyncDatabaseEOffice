@@ -53,35 +53,69 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
      * Clone cấu trúc từ bảng nguồn qua SELECT TOP 0 * INTO,
      * sau đó ALTER TABLE thêm các cột tracking cần thiết.
      */
-    async ensureStagingTableExists() {
+        async ensureStagingTableExists() {
         try {
             const stagingTableRef = this.getStagingTableRef();
-            const checkSchema = this.newDbSchema || 'dbo';
-            const checkTable  = this.newTableSync;
-            const sourceTableRef = `[${this.oldDbName}].[${this.oldDbSchema}].[${this.oldDbTable}]`;
+            const schema = this.newDbSchema || 'dbo';
+            const table = this.newTableSync;
 
-            const createQuery = `
-                IF NOT EXISTS (
-                    SELECT 1 FROM INFORMATION_SCHEMA.TABLES
-                    WHERE TABLE_SCHEMA = '${checkSchema}'
-                      AND TABLE_NAME   = '${checkTable}'
-                )
-                BEGIN
-                    SELECT TOP 0 * INTO ${stagingTableRef} FROM ${sourceTableRef};
-                    ALTER TABLE ${stagingTableRef} ADD [__sync_time]   datetime2    NULL;
-                    ALTER TABLE ${stagingTableRef} ADD [__sync_id_num] bigint       NULL;
-                    ALTER TABLE ${stagingTableRef} ADD [Subject]       nvarchar(max) NULL;
-                    ALTER TABLE ${stagingTableRef} ADD [rn_dedup]      int          NULL;
-                END
+            const query = `
+            IF NOT EXISTS (
+                SELECT 1
+                FROM INFORMATION_SCHEMA.TABLES
+                WHERE TABLE_SCHEMA = '${schema}'
+                AND TABLE_NAME = '${table}'
+            )
+            BEGIN
+                CREATE TABLE ${stagingTableRef} (
+                    SY_SyncId INT IDENTITY(1,1) PRIMARY KEY,
+                    [__sync_time] DATETIME2 NULL,
+                    [__sync_id_num] BIGINT NULL,
+
+                    ID NVARCHAR(MAX) NULL,
+                    ResourceUrl NVARCHAR(MAX) NULL,
+                    Title NVARCHAR(MAX) NULL,
+                    ItemId NVARCHAR(MAX) NULL,
+                    ItemImage NVARCHAR(MAX) NULL,
+                    ItemDepartmentId NVARCHAR(MAX) NULL,
+                    PostTime NVARCHAR(MAX) NULL,
+                    Author NVARCHAR(MAX) NULL,
+                    ListId NVARCHAR(MAX) NULL,
+                    SiteId NVARCHAR(MAX) NULL,
+                    ResourceCategoryId NVARCHAR(MAX) NULL,
+                    ResourceSubCategoryId NVARCHAR(MAX) NULL,
+                    ViewCount NVARCHAR(MAX) NULL,
+                    LikeCount NVARCHAR(MAX) NULL,
+                    ShareCount NVARCHAR(MAX) NULL,
+                    CommentCount NVARCHAR(MAX) NULL,
+                    FlgArchived NVARCHAR(MAX) NULL,
+                    FlgDeleted NVARCHAR(MAX) NULL,
+                    LastAccess NVARCHAR(MAX) NULL,
+                    Created NVARCHAR(MAX) NULL,
+                    ResourceId NVARCHAR(MAX) NULL,
+                    ThumbUrl NVARCHAR(MAX) NULL,
+                    Description NVARCHAR(MAX) NULL,
+                    ResourceData NVARCHAR(MAX) NULL,
+                    FavoriteFolderCount NVARCHAR(MAX) NULL,
+                    FavoriteCount NVARCHAR(MAX) NULL,
+                    QnACount NVARCHAR(MAX) NULL,
+                    Modified NVARCHAR(MAX) NULL,
+                    [__sync_id] BIGINT NULL,
+                    Subject NVARCHAR(MAX) NULL,
+                    rn_dedup NVARCHAR(MAX) NULL
+                );
+            END
             `;
 
-            await this.queryNewDb(createQuery);
-            console.log(`[StreamSocialMigrationModel] ensureStagingTableExists OK: "${stagingTableRef}"`);
+            await this.queryNewDb(query);
+
+            console.log(`[ensureStagingTableExists] OK: ${stagingTableRef}`);
+
         } catch (err) {
-            console.error(`[StreamSocialMigrationModel] ensureStagingTableExists thất bại: ${err.message}`);
+            console.error(`[ensureStagingTableExists] ERROR: ${err.message}`);
             throw err;
         }
-    }
+        }
 
     getStagingTableRef() {
         if (this.newDbName) {

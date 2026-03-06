@@ -34,34 +34,102 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
    * Nếu 2 DB khác nhau instance thì câu lệnh này vẫn chạy được miễn cùng SQL Server.
    */
   async ensureStagingTableExists() {
-    try {
-      const stagingTableRef = this.getStagingTableRef();
-      const checkSchema = this.newDbSchema || 'dbo';
-      const checkTable  = this.newTableSync;
+    const tableRef = this.getStagingTableRef();
 
-      const oldDbName = process.env.OLD_DB_NAME;
-      const sourceTableRef = oldDbName
-        ? `[${oldDbName}].[${this.oldDbSchema}].[${this.oldDbTable}]`
-        : `[${this.oldDbSchema}].[${this.oldDbTable}]`;
+    const query = `
+    IF OBJECT_ID('${tableRef}', 'U') IS NULL
+    BEGIN
+      CREATE TABLE ${tableRef} (
 
-      // Dùng IF NOT EXISTS trực tiếp — tránh race condition và check sai DB context
-      const createQuery = `
-        IF NOT EXISTS (
-          SELECT 1 FROM INFORMATION_SCHEMA.TABLES
-          WHERE TABLE_SCHEMA = '${checkSchema}'
-            AND TABLE_NAME   = '${checkTable}'
-        )
-        BEGIN
-          SELECT TOP 0 * INTO ${stagingTableRef} FROM ${sourceTableRef}
-        END
-      `;
+        ID NVARCHAR(MAX) NULL,
+        AccountID NVARCHAR(MAX) NULL,
+        AccountName NVARCHAR(MAX) NULL,
+        FullName NVARCHAR(MAX) NULL,
 
-      await this.queryNewDb(createQuery);
-      console.log(`[StreamUserMigrationModel] ensureStagingTableExists OK: "${stagingTableRef}"`);
-    } catch (err) {
-      console.error(`[StreamUserMigrationModel] ensureStagingTableExists thất bại: ${err.message}`);
-      throw err;
-    }
+        Department NVARCHAR(MAX) NULL,
+        DepartmentManager NVARCHAR(MAX) NULL,
+        Manager NVARCHAR(MAX) NULL,
+
+        Gender NVARCHAR(MAX) NULL,
+        BirthDay NVARCHAR(MAX) NULL,
+
+        Address NVARCHAR(MAX) NULL,
+        Image NVARCHAR(MAX) NULL,
+
+        StaffID NVARCHAR(MAX) NULL,
+        DateOfHire NVARCHAR(MAX) NULL,
+
+        Mobile NVARCHAR(MAX) NULL,
+        Ext NVARCHAR(MAX) NULL,
+
+        Notify NVARCHAR(MAX) NULL,
+        Reminder NVARCHAR(MAX) NULL,
+        ReceiveMail NVARCHAR(MAX) NULL,
+
+        Email NVARCHAR(MAX) NULL,
+        Position NVARCHAR(MAX) NULL,
+
+        After_CompletedDate NVARCHAR(MAX) NULL,
+
+        PhongBan NVARCHAR(MAX) NULL,
+        SiteName NVARCHAR(MAX) NULL,
+
+        DienThoaiIP NVARCHAR(MAX) NULL,
+        DienThoaiNoiBo NVARCHAR(MAX) NULL,
+
+        Orders NVARCHAR(MAX) NULL,
+        Nickname NVARCHAR(MAX) NULL,
+
+        DateOff NVARCHAR(MAX) NULL,
+        PublicSiteRedirect NVARCHAR(MAX) NULL,
+
+        DeviceOS NVARCHAR(MAX) NULL,
+        DeviceInfo NVARCHAR(MAX) NULL,
+
+        DepartmentId NVARCHAR(MAX) NULL,
+        PhongBanID NVARCHAR(MAX) NULL,
+
+        WorkStatus NVARCHAR(MAX) NULL,
+
+        NgayNghiViec NVARCHAR(MAX) NULL,
+        LyDoNghiViec NVARCHAR(MAX) NULL,
+
+        NgayTao NVARCHAR(MAX) NULL,
+        Modified NVARCHAR(MAX) NULL,
+
+        IsTCT NVARCHAR(MAX) NULL,
+
+        ImagePath NVARCHAR(MAX) NULL,
+        SignImage NVARCHAR(MAX) NULL,
+        SignImageSmall NVARCHAR(MAX) NULL,
+
+        CMND NVARCHAR(MAX) NULL,
+
+        SimKySo1 NVARCHAR(MAX) NULL,
+        SimKySo2 NVARCHAR(MAX) NULL,
+
+        HeSoDich NVARCHAR(MAX) NULL,
+
+        IsForceRelogin NVARCHAR(MAX) NULL,
+
+        CapBac NVARCHAR(MAX) NULL,
+        ChucVu NVARCHAR(MAX) NULL,
+
+        LoaiDoiTuong NVARCHAR(MAX) NULL,
+        LoaiCBNV NVARCHAR(MAX) NULL,
+
+        OTP NVARCHAR(MAX) NULL,
+        OTPTimeOut NVARCHAR(MAX) NULL,
+
+        Password NVARCHAR(MAX) NULL,
+
+        IsKyCAMem NVARCHAR(MAX) NULL,
+        IsSortToDoNewOld NVARCHAR(MAX) NULL
+      )
+    END
+    `;
+
+    await this.queryNewDb(query);
   }
 
   getStagingTableRef() {

@@ -21,36 +21,50 @@ class StreamTaskMigrationModel extends BaseIncrementalSyncInterface {
     await this.ensureStagingTableExists();
   }
 
-  /**
-   * Tự động tạo bảng trung gian `task_sync` trong DB mới nếu chưa tồn tại.
-   * Cấu trúc bảng được clone từ `TaskVBDen` (DB cũ) qua SELECT TOP 0 * INTO.
-   */
   async ensureStagingTableExists() {
     try {
-      const stagingTableRef = this.getStagingTableRef();
-      const checkSchema = this.newDbSchema || 'dbo';
-      const checkTable  = this.newTableSync;
 
-      const oldDbName = process.env.OLD_DB_NAME;
-      const sourceTableRef = oldDbName
-        ? `[${oldDbName}].[${this.oldDbSchema}].[${this.oldDbTable}]`
-        : `[${this.oldDbSchema}].[${this.oldDbTable}]`;
+      const tableRef = `${this.newDbName}.${this.newDbSchema}.${this.newTableSync}`;
 
-      const createQuery = `
-        IF NOT EXISTS (
-          SELECT 1 FROM INFORMATION_SCHEMA.TABLES
-          WHERE TABLE_SCHEMA = '${checkSchema}'
-            AND TABLE_NAME   = '${checkTable}'
-        )
-        BEGIN
-          SELECT TOP 0 * INTO ${stagingTableRef} FROM ${sourceTableRef}
-        END
+      const query = `
+      IF NOT EXISTS (
+          SELECT 1
+          FROM ${this.newDbName}.sys.tables t
+          JOIN ${this.newDbName}.sys.schemas s ON t.schema_id = s.schema_id
+          WHERE t.name = 'task_sync'
+          AND s.name = 'dbo'
+      )
+      BEGIN
+          CREATE TABLE ${tableRef} (
+
+              SY_SyncId INT IDENTITY(1,1) PRIMARY KEY,
+              __sync_time DATETIME2 NULL,
+              __sync_id_num BIGINT NULL,
+
+              ID NVARCHAR(MAX) NULL,
+              VBId NVARCHAR(MAX) NULL,
+              Title NVARCHAR(MAX) NULL,
+              StartDate NVARCHAR(MAX) NULL,
+              DueDate NVARCHAR(MAX) NULL,
+              [Percent] NVARCHAR(MAX) NULL,
+              TrangThai NVARCHAR(MAX) NULL,
+              Priority NVARCHAR(MAX) NULL,
+              YKienChiDao NVARCHAR(MAX) NULL,
+              Modified NVARCHAR(MAX) NULL,
+              Created NVARCHAR(MAX) NULL,
+              ModifiedBy NVARCHAR(MAX) NULL,
+              CreatedBy NVARCHAR(MAX) NULL,
+              ParentTaskID NVARCHAR(MAX) NULL
+          )
+      END
       `;
 
-      await this.queryNewDb(createQuery);
-      console.log(`[StreamTaskMigrationModel] ensureStagingTableExists OK: "${stagingTableRef}"`);
+      await this.queryNewDb(query);
+
+      console.log('✅ task_sync staging table ready');
+
     } catch (err) {
-      console.error(`[StreamTaskMigrationModel] ensureStagingTableExists thất bại: ${err.message}`);
+      console.error('❌ Create task_sync failed:', err.message);
       throw err;
     }
   }

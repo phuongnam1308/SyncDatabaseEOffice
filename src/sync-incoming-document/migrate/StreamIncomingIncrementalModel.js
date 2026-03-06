@@ -165,33 +165,75 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
    * Tự động tạo bảng trung gian `incomming_documents_sync` trong DB mới nếu chưa tồn tại.
    * Cấu trúc bảng được clone từ `VanBanDen` (DB cũ) qua IF NOT EXISTS + SELECT TOP 0 * INTO.
    */
-  async ensureStagingTableExists() {
-    try {
-      const stagingTableRef = this.getStagingTableRef();
-      const checkSchema = this.newDbSchema || 'dbo';
-      const checkTable  = this.newTableSync;
+    async ensureStagingTableExists() {
+      try {
+        const stagingTableRef = this.getStagingTableRef();
 
-      const oldDbName = process.env.OLD_DB_NAME;
-      const sourceTableRef = oldDbName
-        ? `[${oldDbName}].[${this.oldDbSchema}].[${this.oldDbTable}]`
-        : `[${this.oldDbSchema}].[${this.oldDbTable}]`;
-
-      await this.queryNewDb(`
-        IF NOT EXISTS (
-          SELECT 1 FROM INFORMATION_SCHEMA.TABLES
-          WHERE TABLE_SCHEMA = '${checkSchema}'
-            AND TABLE_NAME   = '${checkTable}'
-        )
+        const createQuery = `
+        IF OBJECT_ID('${stagingTableRef}', 'U') IS NULL
         BEGIN
-          SELECT TOP 0 * INTO ${stagingTableRef} FROM ${sourceTableRef}
+            CREATE TABLE ${stagingTableRef} (
+
+            ID NVARCHAR(MAX) NULL,
+            Title NVARCHAR(MAX) NULL,
+            SoDen NVARCHAR(MAX) NULL,
+            CoQuanGui2 NVARCHAR(MAX) NULL,
+            CoQuanGuiText NVARCHAR(MAX) NULL,
+            DonVi NVARCHAR(MAX) NULL,
+            IsLibrary NVARCHAR(MAX) NULL,
+            DoKhan NVARCHAR(MAX) NULL,
+            DoMat NVARCHAR(MAX) NULL,
+            Files NVARCHAR(MAX) NULL,
+            ThoiHanGQ NVARCHAR(MAX) NULL,
+            ItemVBDTCT NVARCHAR(MAX) NULL,
+            ItemVBPH NVARCHAR(MAX) NULL,
+            BanLanhDao NVARCHAR(MAX) NULL,
+            LanhDaoTCT NVARCHAR(MAX) NULL,
+            LanhDaoTCTDaXuLy NVARCHAR(MAX) NULL,
+            LanhDaoTCTDeBiet NVARCHAR(MAX) NULL,
+            LanhDaoVPDN NVARCHAR(MAX) NULL,
+            LinhVuc NVARCHAR(MAX) NULL,
+            LoaiVanBan NVARCHAR(MAX) NULL,
+            NgayDen NVARCHAR(MAX) NULL,
+            NgayTrenVB NVARCHAR(MAX) NULL,
+            SoBan NVARCHAR(MAX) NULL,
+            SoTrang NVARCHAR(MAX) NULL,
+            SoVanBan NVARCHAR(MAX) NULL,
+            TrangThai NVARCHAR(MAX) NULL,
+            TrichYeu NVARCHAR(MAX) NULL,
+            VanBanTraLoi NVARCHAR(MAX) NULL,
+            ChenSo NVARCHAR(MAX) NULL,
+            YKienLanhDao NVARCHAR(MAX) NULL,
+            YKienLanhDaoTCT NVARCHAR(MAX) NULL,
+            YKienLanhDaoVPDN NVARCHAR(MAX) NULL,
+            YKienCuaLDVPChoVanThu NVARCHAR(MAX) NULL,
+            ForwardType NVARCHAR(MAX) NULL,
+            Modified NVARCHAR(MAX) NULL,
+            Created NVARCHAR(MAX) NULL,
+            ModifiedBy NVARCHAR(MAX) NULL,
+            CreatedBy NVARCHAR(MAX) NULL,
+            ModuleId NVARCHAR(MAX) NULL,
+            SiteName NVARCHAR(MAX) NULL,
+            ListName NVARCHAR(MAX) NULL,
+            ItemId NVARCHAR(MAX) NULL,
+            MigrateFlg NVARCHAR(MAX) NULL,
+            YearMonth NVARCHAR(MAX) NULL,
+            MigrateErrFlg NVARCHAR(MAX) NULL,
+            MigrateErrMess NVARCHAR(MAX) NULL,
+            ItemVBPHOld NVARCHAR(MAX) NULL,
+            DGPId NVARCHAR(MAX) NULL
+            )
         END
-      `);
-      console.log(`[StreamIncomingIncrementalModel] ensureStagingTableExists OK: "${stagingTableRef}"`);
-    } catch (err) {
-      console.error(`[StreamIncomingIncrementalModel] ensureStagingTableExists thất bại: ${err.message}`);
-      throw err;
+        `;
+
+        await this.queryNewDb(createQuery);
+
+        logger.info(`[InCommingDocumentModel] Staging table ready`);
+      } catch (err) {
+        logger.error(`[ensureStagingTableExists] ${err.message}`);
+        throw err;
+      }
     }
-  }
 
   /**
    * Resolves fully-qualified staging table reference in NEW DB.
