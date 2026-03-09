@@ -124,11 +124,13 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
   }
 
   /**
-   * Initializes DB pools and dependent audit/comment/document models.
+   * Initializes DB pools, creates staging table if needed,
+   * and initializes dependent audit/comment/document models.
    * @returns {Promise<void>}
    */
   async initialize() {
     await super.initialize();
+    await this.ensureStagingTableExists();
 
     this._syncAuditModel = [];
     this._syncCommentModel = [];
@@ -151,14 +153,6 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
     logger.info(
       `[InCommingDocumentModel] Initialized with auditTables=${this._syncAuditModel.length}, commentTables=${this._syncCommentModel.length}`
     );
-  }
-
-  /**
-   * Override initialize: kết nối DB xong tự động tạo bảng trung gian nếu chưa có.
-   */
-  async initialize() {
-    await super.initialize();
-    await this.ensureStagingTableExists();
   }
 
   /**
@@ -340,7 +334,7 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
           ) AS __sync_id_num
         FROM ${this.oldDbSchema}.${this.oldDbTable}
       )
-      SELECT TOP (1000)
+      SELECT
         *,
         ISNULL(__sync_id_num, 0) AS __sync_id
       FROM source_rows
@@ -355,6 +349,7 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
         __sync_time ASC,
         ISNULL(__sync_id_num, -9223372036854775808) ASC,
         ID ASC
+      OFFSET ${process.env.BEGIN_LIMIT || 0} ROWS FETCH NEXT ${process.env.COMPLETED_LIMIT} ROWS ONLY
     `;
 
     return this.queryOldDb(query, {

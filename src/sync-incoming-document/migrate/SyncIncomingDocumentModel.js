@@ -257,7 +257,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
 
         FROM ${this.oldDbSchema}.${this.oldDbTable}
     )
-    SELECT TOP (1000)
+    SELECT
         *,
         ISNULL(__sync_id_num, 0) AS __sync_id
     FROM source_rows
@@ -274,6 +274,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         __sync_time ASC,
         ISNULL(__sync_id_num, -9223372036854775808) ASC,
         ID ASC
+        OFFSET ${process.env.BEGIN_LIMIT || 0} ROWS FETCH NEXT ${process.env.COMPLETED_LIMIT} ROWS ONLY
     `;
 
         const params = {
