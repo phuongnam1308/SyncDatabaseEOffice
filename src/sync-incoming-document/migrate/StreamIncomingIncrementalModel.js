@@ -129,30 +129,35 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
    * @returns {Promise<void>}
    */
   async initialize() {
-    await super.initialize();
-    await this.ensureStagingTableExists();
+    try {
+      await super.initialize();
+      await this.ensureStagingTableExists();
 
-    this._syncAuditModel = [];
-    this._syncCommentModel = [];
+      this._syncAuditModel = [];
+      this._syncCommentModel = [];
 
-    this._InCommingMigrationModels = new StreamInCommingMigrationModel();
-    await this._InCommingMigrationModels.initialize();
+      this._InCommingMigrationModels = new StreamInCommingMigrationModel();
+      await this._InCommingMigrationModels.initialize();
 
-    for (const table of AUDIT_TABLES) {
-      const model = new SyncAuditModel(table);
-      await model.initialize();
-      this._syncAuditModel.push(model);
+      for (const table of AUDIT_TABLES) {
+        const model = new SyncAuditModel(table);
+        await model.initialize();
+        this._syncAuditModel.push(model);
+      }
+
+      for (const table of COMMENT_TABLES) {
+        const model = new SyncCommentModel(table);
+        await model.initialize();
+        this._syncCommentModel.push(model);
+      }
+
+      logger.info(
+        `[InCommingDocumentModel] Initialized with auditTables=${this._syncAuditModel.length}, commentTables=${this._syncCommentModel.length}`
+      );
+    } catch (error) {
+      logger.error(`[InCommingDocumentModel.initialize] Failed to initialize: ${error.message}`, { stack: error.stack });
+      throw error;
     }
-
-    for (const table of COMMENT_TABLES) {
-      const model = new SyncCommentModel(table);
-      await model.initialize();
-      this._syncCommentModel.push(model);
-    }
-
-    logger.info(
-      `[InCommingDocumentModel] Initialized with auditTables=${this._syncAuditModel.length}, commentTables=${this._syncCommentModel.length}`
-    );
   }
 
   /**
@@ -224,7 +229,7 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
 
         logger.info(`[InCommingDocumentModel] Staging table ready`);
       } catch (err) {
-        logger.error(`[ensureStagingTableExists] ${err.message}`);
+        logger.error(`[InCommingDocumentModel.ensureStagingTableExists] Failed to create or verify staging table: ${err.message}`, { stack: err.stack });
         throw err;
       }
     }
@@ -322,8 +327,9 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
    * @returns {Promise<object[]>}
    */
   async fetchListFromOldDb(lastSyncTime, lastSyncId = 0) {
-    const syncTimeExpr = this.getSyncTimeExpression();
-    const query = `
+    try {
+      const syncTimeExpr = this.getSyncTimeExpression();
+      const query = `
       ;WITH source_rows AS (
         SELECT
           *,
@@ -352,10 +358,14 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
       OFFSET ${process.env.BEGIN_LIMIT || 0} ROWS FETCH NEXT ${process.env.COMPLETED_LIMIT} ROWS ONLY
     `;
 
-    return this.queryOldDb(query, {
-      lastSyncTime,
-      lastSyncId: Number(lastSyncId || 0)
-    });
+      return await this.queryOldDb(query, {
+        lastSyncTime,
+        lastSyncId: Number(lastSyncId || 0)
+      });
+    } catch (error) {
+      logger.error(`[InCommingDocumentModel.fetchListFromOldDb] Failed to fetch list from old DB with lastSyncTime=${lastSyncTime}, lastSyncId=${lastSyncId}: ${error.message}`, { stack: error.stack });
+      throw error;
+    }
   }
 
   /**
@@ -384,22 +394,23 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
     const safeNonIdColumns = nonIdColumns.map((column) => this.sanitizeColumnName(column));
     const stagingTableRef = this.getStagingTableRef();
 
-    for (const row of rows) {
-      const rawId = row?.ID;
-      if (rawId == null || String(rawId).trim() === '') {
-        throw new Error('Row ID is required for staging');
-      }
+    try {
+      for (const row of rows) {
+        const rawId = row?.ID;
+        if (rawId == null || String(rawId).trim() === '') {
+          throw new Error('Row ID is required for staging');
+        }
 
-      const params = {};
-      for (const column of columns) {
-        params[column] = row[column];
-      }
+        const params = {};
+        for (const column of columns) {
+          params[column] = row[column];
+        }
 
-      const updateClause = safeNonIdColumns
-        .map((columnName, idx) => `${columnName} = @${nonIdColumns[idx]}`)
-        .join(', ');
+        const updateClause = safeNonIdColumns
+          .map((columnName, idx) => `${columnName} = @${nonIdColumns[idx]}`)
+          .join(', ');
 
-      const query = `
+        const query = `
         IF EXISTS (SELECT 1 FROM ${stagingTableRef} WHERE ID = @ID)
         BEGIN
           ${nonIdColumns.length > 0 ? `
@@ -415,7 +426,11 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
         END
       `;
 
-      await this.queryNewDbTx(query, params, transaction);
+        await this.queryNewDbTx(query, params, transaction);
+      }
+    } catch (error) {
+      logger.error(`[InCommingDocumentModel.syncOldToStaging] Failed to sync to staging table: ${error.message}`, { stack: error.stack });
+      throw error;
     }
 
     return { stagedCount: rows.length };
@@ -429,38 +444,43 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
    * @returns {Promise<object>}
    */
   async getList(lastSyncTime, syncJobId, lastSyncId = 0) {
-    if (!syncJobId) {
-      throw new Error('syncJobId is required');
-    }
-
-    const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
-    const normalizedLastSyncId = Number(lastSyncId || 0);
-    const rows = await this.fetchListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId);
-    const stageResult = await this.syncOldToStaging(rows);
-
-    let nextSyncTime = normalizedLastSyncTime;
-    let nextSyncId = normalizedLastSyncId;
-
-    for (const row of rows) {
-      const rowTime = this.extractRowSyncTime(row);
-      const rowId = this.extractRowSyncId(row);
-      if (!rowTime) continue;
-      if (this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId)) {
-        nextSyncTime = rowTime;
-        nextSyncId = rowId;
+    try {
+      if (!syncJobId) {
+        throw new Error('syncJobId is required');
       }
-    }
 
-    return {
-      syncJobId,
-      rows,
-      totalCount: rows.length,
-      stagedCount: Number(stageResult?.stagedCount || 0),
-      sourceLastSyncTime: normalizedLastSyncTime,
-      sourceLastSyncId: normalizedLastSyncId,
-      lastSyncTime: nextSyncTime,
-      lastSyncId: nextSyncId
-    };
+      const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
+      const normalizedLastSyncId = Number(lastSyncId || 0);
+      const rows = await this.fetchListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId);
+      const stageResult = await this.syncOldToStaging(rows);
+
+      let nextSyncTime = normalizedLastSyncTime;
+      let nextSyncId = normalizedLastSyncId;
+
+      for (const row of rows) {
+        const rowTime = this.extractRowSyncTime(row);
+        const rowId = this.extractRowSyncId(row);
+        if (!rowTime) continue;
+        if (this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId)) {
+          nextSyncTime = rowTime;
+          nextSyncId = rowId;
+        }
+      }
+
+      return {
+        syncJobId,
+        rows,
+        totalCount: rows.length,
+        stagedCount: Number(stageResult?.stagedCount || 0),
+        sourceLastSyncTime: normalizedLastSyncTime,
+        sourceLastSyncId: normalizedLastSyncId,
+        lastSyncTime: nextSyncTime,
+        lastSyncId: nextSyncId
+      };
+    } catch (error) {
+      logger.error(`[InCommingDocumentModel.getList] Failed to get list for syncJobId=${syncJobId}: ${error.message}`, { stack: error.stack });
+      throw error;
+    }
   }
 
   /**
@@ -469,12 +489,13 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
    * @returns {Promise<object|null>}
    */
   async getSyncJobState(syncJobId) {
-    if (!syncJobId) {
-      throw new Error('syncJobId is required');
-    }
+    try {
+      if (!syncJobId) {
+        throw new Error('syncJobId is required');
+      }
 
-    const rows = await this.queryNewDb(
-      `
+      const rows = await this.queryNewDb(
+        `
       SELECT TOP 1
         job_id,
         total_to_sync,
@@ -486,10 +507,14 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
       FROM sync_jobs
       WHERE job_id = @syncJobId
       `,
-      { syncJobId }
-    );
+        { syncJobId }
+      );
 
-    return rows?.[0] || null;
+      return rows?.[0] || null;
+    } catch (error) {
+      logger.error(`[InCommingDocumentModel.getSyncJobState] Failed to get sync job state for syncJobId=${syncJobId}: ${error.message}`, { stack: error.stack });
+      throw error;
+    }
   }
 
   /**
@@ -503,12 +528,19 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
       throw new Error('syncJobId is required');
     }
 
-    const jobState = await this.getSyncJobState(syncJobId);
-    const itemIndex = Number(
-      options.itemIndex != null
-        ? options.itemIndex
-        : (jobState?.total_processed || 0)
-    );
+    let jobState;
+    let itemIndex;
+    try {
+      jobState = await this.getSyncJobState(syncJobId);
+      itemIndex = Number(
+        options.itemIndex != null
+          ? options.itemIndex
+          : (jobState?.total_processed || 0)
+      );
+    } catch (error) {
+      logger.error(`[InCommingDocumentModel.processOne] Failed to get job state or determine item index for syncJobId=${syncJobId}: ${error.message}`, { stack: error.stack });
+      throw error;
+    }
 
     const sourceLastSyncTime = this.normalizeSyncTime(
       options.sourceLastSyncTime || options.lastSyncTime || jobState?.last_sync_time || DEFAULT_SYNC_TIME
@@ -520,9 +552,9 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
     );
 
     const transaction = new sql.Transaction(this.newPool);
-    await transaction.begin();
 
     try {
+      await transaction.begin();
       const rowData = await this.fetchOneFromStaging({
         lastSyncTime: sourceLastSyncTime,
         lastSyncId: sourceLastSyncId,
@@ -555,8 +587,9 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
       try {
         await transaction.rollback();
       } catch (rollbackError) {
-        logger.error('[InCommingDocumentModel.processOne] rollback failed:', rollbackError);
+        logger.error(`[InCommingDocumentModel.processOne] Rollback failed for syncJobId=${syncJobId}, itemIndex=${itemIndex}:`, rollbackError);
       }
+      logger.error(`[InCommingDocumentModel.processOne] Failed to process item for syncJobId=${syncJobId}, itemIndex=${itemIndex}: ${error.message}`, { stack: error.stack });
       throw error;
     }
   }
@@ -567,10 +600,11 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
    * @returns {Promise<object|null>}
    */
   async fetchOneFromStaging({ lastSyncTime, lastSyncId = 0, itemIndex, transaction } = {}) {
-    const rowNumber = Number(itemIndex || 0) + 1;
-    const stagingTableRef = this.getStagingTableRef();
-    const syncTimeExpr = this.getSyncTimeExpression();
-    const query = `
+    try {
+      const rowNumber = Number(itemIndex || 0) + 1;
+      const stagingTableRef = this.getStagingTableRef();
+      const syncTimeExpr = this.getSyncTimeExpression();
+      const query = `
       ;WITH source_rows AS (
         SELECT
           *,
@@ -604,23 +638,27 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
       WHERE rn = @rowNumber
     `;
 
-    const rows = await this.queryNewDbTx(
-      query,
-      {
-        lastSyncTime,
-        lastSyncId: Number(lastSyncId || 0),
-        rowNumber
-      },
-      transaction
-    );
+      const rows = await this.queryNewDbTx(
+        query,
+        {
+          lastSyncTime,
+          lastSyncId: Number(lastSyncId || 0),
+          rowNumber
+        },
+        transaction
+      );
 
-    if (!rows?.length) {
-      return null;
+      if (!rows?.length) {
+        return null;
+      }
+
+      const row = { ...rows[0] };
+      delete row.rn;
+      return row;
+    } catch (error) {
+      logger.error(`[InCommingDocumentModel.fetchOneFromStaging] Failed to fetch itemIndex=${itemIndex} with lastSyncTime=${lastSyncTime}, lastSyncId=${lastSyncId}: ${error.message}`, { stack: error.stack });
+      throw error;
     }
-
-    const row = { ...rows[0] };
-    delete row.rn;
-    return row;
   }
 
   /**
@@ -630,27 +668,33 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
    * @returns {Promise<{action:string,backupId:string,affected:number}>}
    */
   async processRowData(rowData, { transaction } = {}) {
-    if (!rowData) {
-      throw new Error('rowData is required');
+    try {
+      if (!rowData) {
+        throw new Error('rowData is required');
+      }
+
+      const backupId = String(rowData.ID || '').trim();
+      if (!backupId) {
+        throw new Error('Invalid document ID from staging');
+      }
+
+      const res = await this.upsertDocumentAggregateById(rowData, { transaction });
+      const affected = Number(res?.affected || 0);
+
+      if (affected === 0) {
+        throw new Error(`Document was not inserted or updated for ID=${backupId}`);
+      }
+
+      return {
+        action: res?.action || 'upsert',
+        backupId,
+        affected
+      };
+    } catch (error) {
+      const backupId = rowData?.ID || 'unknown';
+      logger.error(`[InCommingDocumentModel.processRowData] Failed to process row with ID=${backupId}: ${error.message}`, { stack: error.stack, rowData });
+      throw error;
     }
-
-    const backupId = String(rowData.ID || '').trim();
-    if (!backupId) {
-      throw new Error('Invalid document ID from staging');
-    }
-
-    const res = await this.upsertDocumentAggregateById(rowData, { transaction });
-    const affected = Number(res?.affected || 0);
-
-    if (affected === 0) {
-      throw new Error(`Document was not inserted or updated for ID=${backupId}`);
-    }
-
-    return {
-      action: res?.action || 'upsert',
-      backupId,
-      affected
-    };
   }
 
   /**
@@ -660,106 +704,111 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
    * @returns {Promise<{action:string,affected:number}>}
    */
   async upsertDocumentAggregateById(oldRecord, { transaction } = {}) {
-    if (!oldRecord) {
-      return { action: 'none', affected: 0 };
-    }
-    const id = String(oldRecord.ID || '').trim();
+    const id = String(oldRecord?.ID || '').trim();
+    try {
+      if (!oldRecord) {
+        return { action: 'none', affected: 0 };
+      }
 
-    if (!this._InCommingMigrationModels) {
-      throw new Error(`[upsertDocumentAggregateById] Model not initialized for ID=${id}`);
-    }
+      if (!this._InCommingMigrationModels) {
+        throw new Error(`[upsertDocumentAggregateById] Model not initialized for ID=${id}`);
+      }
 
-    let totalAffected = 0;
+      let totalAffected = 0;
 
-    const documentResult = await this._InCommingMigrationModels.processSingleRecord(
-      oldRecord,
-      transaction
-    );
+      const documentResult = await this._InCommingMigrationModels.processSingleRecord(
+        oldRecord,
+        transaction
+      );
 
-    if (!documentResult || documentResult.affected === 0) {
-      return { action: 'none', affected: 0 };
-    }
-    logger.info(
-      `[AggregateSync][Document] documentId=${documentResult.documentId} action=${documentResult?.action} affected=${documentResult?.affected}`
-    );
+      if (!documentResult || documentResult.affected === 0) {
+        return { action: 'none', affected: 0 };
+      }
+      logger.info(
+        `[AggregateSync][Document] documentId=${documentResult.documentId} action=${documentResult?.action} affected=${documentResult?.affected}`
+      );
 
-    totalAffected += Number(documentResult.affected || 0);
-    const documentId = documentResult.documentId;
+      totalAffected += Number(documentResult.affected || 0);
+      const documentId = documentResult.documentId;
 
-    if (!documentId) {
+      if (!documentId) {
+        return {
+          action: documentResult.action || 'upsert',
+          affected: Number(totalAffected || 0)
+        };
+      }
+
+      for (const auditModel of this._syncAuditModel || []) {
+        try {
+          const rawAudits =
+            await auditModel.fetchByInCommingDocumentId(
+              id
+            );
+
+          if (!Array.isArray(rawAudits) || !rawAudits.length) {
+            continue;
+          }
+
+          for (const rawAudit of rawAudits) {
+            try {
+              const result = await auditModel.processSingleRecord(rawAudit, documentId, transaction);
+              if (!result) continue;
+              logger.info(
+                `[AggregateSync][Audit] table=${auditModel?.oldDbTable} documentId=${documentResult.documentId} inserted=${result?.inserted || 0} updated=${result?.updated || 0}`
+              );
+              totalAffected += Number(result.inserted || 0);
+              totalAffected += Number(result.updated || 0);
+            } catch (auditErr) {
+              logger.warn(
+                `[upsertDocumentAggregateById] Audit migrate failed for table=${auditModel?.oldDbTable}, source ID=${id}, target documentId=${documentId}: ${auditErr.message}`, { stack: auditErr.stack }
+              );
+            }
+          }
+        } catch (error) {
+          logger.warn(
+            `[upsertDocumentAggregateById] Fetch audit failed for table=${auditModel?.oldDbTable}, source ID=${id}: ${error.message}`, { stack: error.stack }
+          );
+        }
+      }
+
+      for (const commentModel of this._syncCommentModel || []) {
+        try {
+          const rawComments = await commentModel.fetchByDocumentId(id);
+
+          if (!Array.isArray(rawComments) || !rawComments.length) {
+            continue;
+          }
+
+          for (const rawComment of rawComments) {
+            try {
+              const result = await commentModel.processSingleRecord(rawComment, documentId, transaction);
+              if (!result) continue;
+              logger.info(
+                `[AggregateSync][Comment] table=${commentModel?.oldDbTable} documentId=${documentResult.documentId} inserted=${result?.inserted || 0} updated=${result?.updated || 0}`
+              );
+              totalAffected += Number(result.inserted || 0);
+              totalAffected += Number(result.updated || 0);
+            } catch (error) {
+              logger.warn(
+                `[upsertDocumentAggregateById] Comment migrate failed for table=${commentModel?.oldDbTable}, source ID=${id}, target documentId=${documentId}: ${error.message}`, { stack: error.stack }
+              );
+            }
+          }
+        } catch (error) {
+          logger.warn(
+            `[upsertDocumentAggregateById] Fetch comment failed for table=${commentModel?.oldDbTable}, source ID=${id}: ${error.message}`, { stack: error.stack }
+          );
+        }
+      }
+
       return {
         action: documentResult.action || 'upsert',
         affected: Number(totalAffected || 0)
       };
+    } catch (error) {
+      logger.error(`[InCommingDocumentModel.upsertDocumentAggregateById] Failed to upsert document aggregate for ID=${id}: ${error.message}`, { stack: error.stack, oldRecord });
+      throw error;
     }
-
-    for (const auditModel of this._syncAuditModel || []) {
-      try {
-        const rawAudits =
-          await auditModel.fetchByInCommingDocumentId(
-            id
-          );
-
-        if (!Array.isArray(rawAudits) || !rawAudits.length) {
-          continue;
-        }
-
-        for (const rawAudit of rawAudits) {
-          try {
-            const result = await auditModel.processSingleRecord(rawAudit, documentId, transaction);
-            if (!result) continue;
-            logger.info(
-              `[AggregateSync][Audit] table=${auditModel?.oldDbTable} documentId=${documentResult.documentId} inserted=${result?.inserted || 0} updated=${result?.updated || 0}`
-            );
-            totalAffected += Number(result.inserted || 0);
-            totalAffected += Number(result.updated || 0);
-          } catch (auditErr) {
-            logger.warn(
-              `[upsertDocumentAggregateById] Audit migrate failed table=${auditModel?.oldDbTable} ID=${id}: ${auditErr.message}`
-            );
-          }
-        }
-      } catch (error) {
-        logger.warn(
-          `[upsertDocumentAggregateById] Fetch audit failed table=${auditModel?.oldDbTable} ID=${id}: ${error.message}`
-        );
-      }
-    }
-
-    for (const commentModel of this._syncCommentModel || []) {
-      try {
-        const rawComments = await commentModel.fetchByDocumentId(id);
-        
-        if (!Array.isArray(rawComments) || !rawComments.length) {
-          continue;
-        }
-
-        for (const rawComment of rawComments) {
-          try {
-            const result = await commentModel.processSingleRecord(rawComment, documentId, transaction);
-            if (!result) continue;
-            logger.info(
-              `[AggregateSync][Comment] table=${commentModel?.oldDbTable} documentId=${documentResult.documentId} inserted=${result?.inserted || 0} updated=${result?.updated || 0}`
-            );
-            totalAffected += Number(result.inserted || 0);
-            totalAffected += Number(result.updated || 0);
-          } catch (error) {
-            logger.warn(
-              `[upsertDocumentAggregateById] Comment migrate failed table=${commentModel?.oldDbTable} ID=${id}: ${error.message}`
-            );
-          }
-        }
-      } catch (error) {
-        logger.warn(
-          `[upsertDocumentAggregateById] Fetch comment failed table=${commentModel?.oldDbTable} ID=${id}: ${error.message}`
-        );
-      }
-    }
-
-    return {
-      action: documentResult.action || 'upsert',
-      affected: Number(totalAffected || 0)
-    };
   }
 }
 
