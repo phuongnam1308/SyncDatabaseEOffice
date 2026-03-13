@@ -752,6 +752,80 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         await this.queryNewDbTx(query, params, transaction);
     }
 
+    _mapStatus(trangThai) {
+        const safeTrangThai = this.safeString(trangThai);
+        if (!safeTrangThai) {
+            return {
+                statusCode: String(this.parseStatus(trangThai)),
+                bpmnVersion: 'PHUC_DAP_DV'
+            };
+        }
+
+        const statusMap = [
+            {
+                trangthais: ['Trình chỉ huy'],
+                statusCode: '1',
+                bpmnVersion: 'PHUC_DAP_DV',
+            },
+            {
+                trangthais: ['Văn bản từ cơ quan, đơn vị', 'Văn bản từ TCT'],
+                statusCode: '6',
+                bpmnVersion: 'PHUC_DAP_DV',
+            },
+            {
+                trangthais: ['Tổ chức thực hiện'],
+                statusCode: '6',
+                bpmnVersion: 'PHUC_DAP_DV',
+            },
+            {
+                trangthais: ['Trình lãnh đạo TCT'],
+                statusCode: '6',
+                bpmnVersion: 'PHUC_DAP_DV',
+            },
+            {
+                trangthais: ['Chuyển đơn vị'],
+                statusCode: '7',
+                bpmnVersion: 'PHOIHOP_NHANDEBIET',
+            },
+            {
+                trangthais: ['Chuyển văn thư'],
+                statusCode: '5',
+                bpmnVersion: 'HOAN_THANH_VAN_BAN',
+            },
+            {
+                trangthais: ['Thu hồi'],
+                statusCode: '10',
+                bpmnVersion: 'PHUC_DAP_DV',
+            },
+            {
+                trangthais: ['Trình Chỉ huy VP'],
+                statusCode: '3',
+                bpmnVersion: 'PHUC_DAP_DV_CON',
+            },
+            {
+                trangthais: ['Hoàn tất'],
+                statusCode: '13',
+                bpmnVersion: 'LUONG_PHONG',
+            },
+        ];
+
+        for (const mapping of statusMap) {
+            for (const t of mapping.trangthais) {
+                if (safeTrangThai.includes(t)) {
+                    return {
+                        statusCode: mapping.statusCode,
+                        bpmnVersion: mapping.bpmnVersion,
+                    };
+                }
+            }
+        }
+
+        return {
+            statusCode: String(this.parseStatus(trangThai)),
+            bpmnVersion: 'PHUC_DAP_DV'
+        };
+    }
+
     async _mapSingleRecord(oldRecord, transaction) {
         if (!oldRecord?.ID) {
             throw new Error("Old record ID is required");
@@ -789,7 +863,10 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         }
         const receiverUnitStr = JSON.stringify(internalReceivingDeptIds);
 
-        const statusCode = '100';
+        const statusInfo = this._mapStatus(oldRecord.TrangThai);
+        const statusCode = statusInfo.statusCode;
+        const bpmnVersion = statusInfo.bpmnVersion;
+        
         const createdAt = this.safeDate(oldRecord.Created);
         const updatedAt = this.safeDate(oldRecord.Modified || oldRecord.modifiedBy);
         const abstractNote = this.safeString(oldRecord.TrichYeu);
@@ -798,7 +875,6 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         const receiveDate = this.safeDate(oldRecord.NgayDen);
         const deadline = this.safeDate(oldRecord.ThoiHanGQ);
         const documentField = await this.helper.documentField(oldRecord.LinhVuc);
-        const status = this.helper.parseStatus(oldRecord.TrangThai);
         const pageCount = this.safeNumber(oldRecord.SoTrang, null);
         const soBan = this.safeNumber(oldRecord.SoBan, null);
         
@@ -826,11 +902,11 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
             signer: null,
             to_book_code: null,
             fileids: this.safeString(oldRecord.Files),
-            status: status,
+            status: statusCode,
             isStar: 0,
             parent_doc: null,
             type_process_doc: null,
-            bpmn_version: 'PHUC_DAP_DV',
+            bpmn_version: bpmnVersion,
             copy_to_internal: null,
             resolution_deadline: null,
             copy_count: null,

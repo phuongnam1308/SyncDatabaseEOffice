@@ -2,6 +2,10 @@ const logger = require("../../utils/logger");
 const { v4: uuidv4 } = require("uuid");
 const bcrypt = require('bcrypt');
 
+const axios = require('axios');
+const FormData = require('form-data');
+const fs = require('fs').promises; // Use promise-based fs
+const path = require('path');
 const DEFAULT_PASSWORD = process.env.MIGRATION_DEFAULT_PASSWORD || '12345678';
 const SALT_ROUNDS = parseInt(process.env.BCRYPT_SALT_ROUNDS || '10', 10);
 
@@ -984,15 +988,473 @@ class MigrationHelper {
 
       // 🔥 Nếu hệ thống mày lưu 1 cột string
       return ids.join(',');
-
-      // Nếu muốn trả về array thì dùng:
-      // return ids;
-
     } catch (error) {
-      logger.warn("[mapMeetingRoom] Error:", error);
+      logger.error(`[mapMeetingRoom] Error for roomName "${roomName}":`, error);
       return null;
     }
   }
+
+  // ===========================================================================
+// MINIO UPLOAD
+// Logic: username/password → POST /api/v1/login → token JWT → upload file
+//
+// Config trong .env:
+//   MINIO_URL=https://minio.lifetex.vn   (không có / cuối)
+//   MINIO_BUCKET=tancang
+//   MINIO_USER=admin
+//   MINIO_PASSWORD=yourpassword
+//   MINIO_TOKEN_TTL_MS=3300000           (tuỳ chọn, mặc định 55 phút)
+//
+// Token cache: dùng lại token đến khi hết hạn, tự login lại khi hết.
+// Hàm public: uploadFileWithLogin | uploadFolderWithLogin | uploadFromUrlToMinio
+// ===========================================================================
+
+/**
+ * [PRIVATE] Lấy token MinIO — có cache + kiểm tra TTL.
+ *
+ * Luồng:
+ *   - Cache còn hạn + đúng user/pass → dùng lại, KHÔNG login lại
+ *   - Cache hết hạn hoặc chưa có    → login mới → lưu cache kèm expiresAt
+ *   - Login thất bại                → xóa cache → throw để hàm gọi xử lý
+ *
+ * TTL mặc định 55 phút (token MinIO thường sống 60 phút, trừ 5 phút buffer).
+ * Override bằng MINIO_TOKEN_TTL_MS trong .env nếu server cấu hình khác.
+ *
+ * @param {string} username - Tên đăng nhập MinIO Console
+ * @param {string} password - Mật khẩu MinIO Console
+ * @returns {Promise<string>} Token JWT dùng để upload
+ */
+async _getMinioToken(username, password) {
+  const now = Date.now();
+
+  // ── Kiểm tra cache ────────────────────────────────────────────────────────
+  if (
+    this._minioTokenCache &&
+    this._minioTokenCache.key === `${username}:${password}` &&
+    now < this._minioTokenCache.expiresAt
+  ) {
+    const remainSec = Math.round((this._minioTokenCache.expiresAt - now) / 1000);
+    logger.info(`[MinIO:_getMinioToken] Dùng token cache — còn hạn ${remainSec}s.`);
+    return this._minioTokenCache.token;
+  }
+
+  // ── Login mới ─────────────────────────────────────────────────────────────
+  const minioUrl = (process.env.MINIO_URL || 'https://minio.lifetex.vn').replace(/\/$/, '');
+  const loginUrl = `${minioUrl}/api/v1/login`;
+  const ttlMs    = parseInt(process.env.MINIO_TOKEN_TTL_MS || '') || 55 * 60 * 1000;
+
+  logger.info(`[MinIO:_getMinioToken] Token hết hạn hoặc chưa có — login tại: ${loginUrl}`);
+
+  try {
+    const response = await axios.post(
+      loginUrl,
+      { username, password },
+      { headers: { 'Content-Type': 'application/json' } }
+    );
+
+    const token = response.data?.token;
+    if (!token) {
+      // Server trả 200 nhưng không có token trong body
+      throw new Error('[MinIO:_getMinioToken] Phản hồi login không chứa token (kiểm tra lại API MinIO).');
+    }
+
+    // Lưu cache kèm thời điểm hết hạn
+    this._minioTokenCache = {
+      key: `${username}:${password}`,
+      token,
+      expiresAt: now + ttlMs,
+    };
+
+    logger.info(`[MinIO:_getMinioToken] Login thành công — token hợp lệ trong ${Math.round(ttlMs / 60000)} phút.`);
+    return token;
+
+  } catch (error) {
+    // Xóa cache khi login thất bại để lần sau không dùng token cũ
+    this._minioTokenCache = null;
+
+    if (error.response) {
+      // Lỗi HTTP từ server MinIO (401 sai pass, 500 server lỗi...)
+      logger.error(
+        `[MinIO:_getMinioToken] Login thất bại — HTTP ${error.response.status}: ` +
+        `${JSON.stringify(error.response.data)}`
+      );
+    } else if (error.request) {
+      // Gửi request nhưng không nhận được response (timeout, network...)
+      logger.error(`[MinIO:_getMinioToken] Không kết nối được MinIO tại ${loginUrl} — ${error.message}`);
+    } else {
+      // Lỗi khác (config, logic...)
+      logger.error(`[MinIO:_getMinioToken] Lỗi: ${error.message}`);
+    }
+    throw error;
+  }
+}
+
+/**
+ * [PRIVATE] Upload một Buffer lên MinIO qua Console API.
+ * Không gọi trực tiếp từ ngoài — dùng 3 hàm public bên dưới.
+ *
+ * Luồng:
+ *   - Validate params → build URL upload → POST multipart/form-data
+ *   - Nếu server trả 401/403 → xóa cache token → lần sau tự login lại
+ *
+ * @param {object} params
+ * @param {Buffer} params.fileBuffer      - Nội dung file dạng Buffer
+ * @param {string} params.filename        - Tên file lưu trên MinIO
+ * @param {string} params.token           - Token JWT lấy từ _getMinioToken()
+ * @param {string} [params.folderPath=''] - Thư mục đích trong bucket (vd: 'TCSG/van-ban-di')
+ * @returns {Promise<object>} Phản hồi từ MinIO API
+ */
+async _uploadBufferToMinio({ fileBuffer, filename, token, folderPath = '' }) {
+  // ── Validate đầu vào ──────────────────────────────────────────────────────
+  if (!fileBuffer) throw new Error('[MinIO:_uploadBufferToMinio] Thiếu fileBuffer.');
+  if (!filename)   throw new Error('[MinIO:_uploadBufferToMinio] Thiếu filename.');
+  if (!token)      throw new Error('[MinIO:_uploadBufferToMinio] Thiếu token.');
+
+  const minioUrl = (process.env.MINIO_URL || 'https://minio.lifetex.vn').replace(/\/$/, '');
+  const bucket   = process.env.MINIO_BUCKET || 'tancang';
+
+  // Build object key: "folderPath/filename" hoặc chỉ "filename" nếu không có folder
+  const normalizedFolder = folderPath ? folderPath.replace(/\/$/, '') + '/' : '';
+  const objectKey        = normalizedFolder + filename;
+  const uploadUrl        = `${minioUrl}/api/v1/buckets/${bucket}/objects/upload?prefix=${encodeURIComponent(objectKey)}`;
+
+  logger.info(`[MinIO:_uploadBufferToMinio] Uploading → bucket='${bucket}' | key='${objectKey}' | size=${fileBuffer.length} bytes`);
+
+  const form = new FormData();
+  form.append('file', fileBuffer, filename);
+
+  try {
+    const response = await axios.post(uploadUrl, form, {
+      headers: {
+        ...form.getHeaders(),
+        'token':  token,
+        'accept': '*/*',
+      },
+      maxContentLength: Infinity,
+      maxBodyLength:    Infinity,
+    });
+
+    logger.info(`[MinIO:_uploadBufferToMinio] Upload OK — key='${objectKey}'`);
+    return response.data;
+
+  } catch (error) {
+    if (error.response) {
+      const status = error.response.status;
+
+      // 401/403: token hết hạn hoặc không hợp lệ → xóa cache để lần sau login lại
+      if (status === 401 || status === 403) {
+        logger.warn(
+          `[MinIO:_uploadBufferToMinio] Token bị từ chối (HTTP ${status}) — ` +
+          `xóa cache, sẽ tự login lại lần upload tiếp theo.`
+        );
+        this._minioTokenCache = null;
+      }
+
+      logger.error(
+        `[MinIO:_uploadBufferToMinio] Upload thất bại '${objectKey}' — ` +
+        `HTTP ${status}: ${JSON.stringify(error.response.data)}`
+      );
+    } else if (error.request) {
+      logger.error(`[MinIO:_uploadBufferToMinio] Không nhận được phản hồi từ MinIO — ${error.message}`);
+    } else {
+      logger.error(`[MinIO:_uploadBufferToMinio] Lỗi: ${error.message}`);
+    }
+    throw error;
+  }
+}
+
+/**
+ * [PUBLIC] Upload một file từ đường dẫn local lên MinIO.
+ *
+ * Luồng:
+ *   1. Lấy credentials (tham số hoặc .env)
+ *   2. Kiểm tra file tồn tại
+ *   3. Lấy token (cache hoặc login mới)
+ *   4. Đọc file → upload
+ *
+ * @param {object} params
+ * @param {string} params.filePath           - Đường dẫn file local cần upload
+ * @param {string} [params.username]         - Tên đăng nhập MinIO. Mặc định: MINIO_USER trong .env
+ * @param {string} [params.password]         - Mật khẩu MinIO. Mặc định: MINIO_PASSWORD trong .env
+ * @param {string} [params.targetFolder='']  - Thư mục đích trong bucket MinIO
+ * @returns {Promise<object>} Phản hồi từ MinIO API
+ *
+ * Ví dụ:
+ *   // Dùng .env (khuyến nghị cho migration)
+ *   await helper.uploadFileWithLogin({ filePath: '/data/doc.pdf', targetFolder: 'TCSG/vbd' });
+ *
+ *   // Override credential khi cần
+ *   await helper.uploadFileWithLogin({ filePath: '/data/doc.pdf', username: 'u', password: 'p' });
+ */
+async uploadFileWithLogin({ filePath, username, password, targetFolder = '' }) {
+  logger.info(`[MinIO:uploadFileWithLogin] Bắt đầu — file: '${filePath}' | targetFolder: '${targetFolder || "(root)"}'`);
+
+  try {
+    // ── Bước 1: Lấy credentials ───────────────────────────────────────────
+    const minioUser = username || process.env.MINIO_USER;
+    const minioPass = password || process.env.MINIO_PASSWORD;
+
+    if (!minioUser || !minioPass) {
+      throw new Error(
+        '[MinIO:uploadFileWithLogin] Thiếu thông tin đăng nhập. ' +
+        'Truyền username/password vào hàm hoặc đặt MINIO_USER/MINIO_PASSWORD trong .env'
+      );
+    }
+
+    // ── Bước 2: Kiểm tra file tồn tại ────────────────────────────────────
+    await fs.access(filePath).catch(() => {
+      throw new Error(`[MinIO:uploadFileWithLogin] File không tồn tại hoặc không có quyền đọc: '${filePath}'`);
+    });
+
+    // ── Bước 3: Lấy token (cache hoặc login mới) ─────────────────────────
+    const token = await this._getMinioToken(minioUser, minioPass);
+
+    // ── Bước 4: Đọc file và upload ────────────────────────────────────────
+    const fileBuffer = await fs.readFile(filePath);
+    const filename   = path.basename(filePath);
+
+    logger.info(`[MinIO:uploadFileWithLogin] Đọc file OK — tên: '${filename}' | size: ${fileBuffer.length} bytes`);
+
+    const result = await this._uploadBufferToMinio({
+      fileBuffer,
+      filename,
+      token,
+      folderPath: targetFolder,
+    });
+
+    logger.info(`[MinIO:uploadFileWithLogin] Hoàn tất — file: '${filePath}'`);
+    return result;
+
+  } catch (error) {
+    logger.error(`[MinIO:uploadFileWithLogin] Thất bại — file: '${filePath}' | lỗi: ${error.message}`);
+    throw error;
+  }
+}
+
+/**
+ * [PUBLIC] Upload toàn bộ file trong một thư mục local lên MinIO.
+ * Chỉ upload file trực tiếp trong thư mục — KHÔNG đệ quy vào sub-folder.
+ * File lỗi sẽ được ghi nhận và tiếp tục, KHÔNG dừng cả batch.
+ *
+ * Luồng:
+ *   1. Lấy credentials
+ *   2. Đọc danh sách entries trong thư mục
+ *   3. Lấy token 1 lần — mỗi file gọi lại _getMinioToken để tự check TTL
+ *   4. Loop từng file: đọc → upload → ghi nhận kết quả
+ *   5. Trả về tóm tắt kết quả
+ *
+ * @param {object} params
+ * @param {string} params.localFolderPath    - Đường dẫn thư mục local
+ * @param {string} [params.username]         - Tên đăng nhập MinIO. Mặc định: MINIO_USER trong .env
+ * @param {string} [params.password]         - Mật khẩu MinIO. Mặc định: MINIO_PASSWORD trong .env
+ * @param {string} [params.targetFolder='']  - Thư mục đích trong bucket MinIO
+ * @returns {Promise<{success: boolean, totalFiles: number, uploadedCount: number, failedCount: number, failedFiles: Array}>}
+ *
+ * Ví dụ:
+ *   const result = await helper.uploadFolderWithLogin({
+ *     localFolderPath: '/data/attachments/2024',
+ *     targetFolder: 'TCSG/attachments/2024',
+ *   });
+ *   console.log(result.message);
+ */
+async uploadFolderWithLogin({ localFolderPath, username, password, targetFolder = '' }) {
+  logger.info(`[MinIO:uploadFolderWithLogin] Bắt đầu — folder: '${localFolderPath}' | targetFolder: '${targetFolder || "(root)"}'`);
+
+  try {
+    // ── Bước 1: Lấy credentials ───────────────────────────────────────────
+    const minioUser = username || process.env.MINIO_USER;
+    const minioPass = password || process.env.MINIO_PASSWORD;
+
+    if (!minioUser || !minioPass) {
+      throw new Error(
+        '[MinIO:uploadFolderWithLogin] Thiếu thông tin đăng nhập. ' +
+        'Truyền username/password vào hàm hoặc đặt MINIO_USER/MINIO_PASSWORD trong .env'
+      );
+    }
+
+    // ── Bước 2: Đọc danh sách entries ────────────────────────────────────
+    let allEntries;
+    try {
+      allEntries = await fs.readdir(localFolderPath);
+    } catch (readDirError) {
+      throw new Error(
+        `[MinIO:uploadFolderWithLogin] Không đọc được thư mục '${localFolderPath}' — ${readDirError.message}`
+      );
+    }
+
+    if (!allEntries.length) {
+      logger.warn(`[MinIO:uploadFolderWithLogin] Thư mục rỗng: '${localFolderPath}' — không có gì để upload.`);
+      return { success: true, message: 'Thư mục rỗng.', totalFiles: 0, uploadedCount: 0, failedCount: 0, failedFiles: [] };
+    }
+
+    logger.info(`[MinIO:uploadFolderWithLogin] Tìm thấy ${allEntries.length} entries trong '${localFolderPath}'.`);
+
+    // ── Bước 3: Lấy token lần đầu ────────────────────────────────────────
+    // Mỗi file trong loop đều gọi _getMinioToken → tự check TTL → login lại nếu hết hạn
+    let token = await this._getMinioToken(minioUser, minioPass);
+
+    let uploadedCount = 0;
+    let failedCount   = 0;
+    const failedFiles = [];
+
+    // ── Bước 4: Loop từng entry ───────────────────────────────────────────
+    for (const entry of allEntries) {
+      const entryPath = path.join(localFolderPath, entry);
+
+      // Kiểm tra có phải file không (bỏ qua thư mục con)
+      let stat;
+      try {
+        stat = await fs.stat(entryPath);
+      } catch (statError) {
+        logger.warn(`[MinIO:uploadFolderWithLogin] Không stat được '${entry}' — bỏ qua. Lỗi: ${statError.message}`);
+        continue;
+      }
+
+      if (!stat.isFile()) {
+        logger.warn(`[MinIO:uploadFolderWithLogin] Bỏ qua '${entry}' (không phải file).`);
+        continue;
+      }
+
+      try {
+        // Check TTL mỗi file — tự login lại nếu token hết hạn giữa batch
+        token = await this._getMinioToken(minioUser, minioPass);
+
+        const fileBuffer = await fs.readFile(entryPath);
+        await this._uploadBufferToMinio({ fileBuffer, filename: entry, token, folderPath: targetFolder });
+
+        uploadedCount++;
+        logger.info(`[MinIO:uploadFolderWithLogin] OK (${uploadedCount}/${allEntries.length}) — '${entry}'`);
+
+      } catch (uploadError) {
+        // Ghi nhận lỗi nhưng KHÔNG throw — tiếp tục file tiếp theo
+        failedCount++;
+        failedFiles.push({ file: entry, error: uploadError.message });
+        logger.error(`[MinIO:uploadFolderWithLogin] Lỗi file '${entry}': ${uploadError.message}`);
+      }
+    }
+
+    // ── Bước 5: Trả về kết quả ────────────────────────────────────────────
+    const result = {
+      success:       failedCount === 0,
+      message:       `Hoàn tất. Thành công: ${uploadedCount}/${allEntries.length}. Thất bại: ${failedCount}.`,
+      totalFiles:    allEntries.length,
+      uploadedCount,
+      failedCount,
+      failedFiles,
+    };
+
+    if (failedCount > 0) {
+      logger.warn(`[MinIO:uploadFolderWithLogin] Danh sách file thất bại: ${JSON.stringify(failedFiles)}`);
+    }
+
+    logger.info(`[MinIO:uploadFolderWithLogin] ${result.message}`);
+    return result;
+
+  } catch (error) {
+    logger.error(`[MinIO:uploadFolderWithLogin] Thất bại nghiêm trọng — folder: '${localFolderPath}' | lỗi: ${error.message}`);
+    throw error;
+  }
+}
+
+/**
+ * [PUBLIC] Tải file từ URL rồi upload thẳng lên MinIO.
+ * Không ghi file tạm xuống đĩa — toàn bộ xử lý trong memory.
+ *
+ * Luồng:
+ *   1. Lấy credentials
+ *   2. Lấy token (cache hoặc login mới)
+ *   3. GET file từ URL → Buffer
+ *   4. Xác định tên file
+ *   5. Upload Buffer lên MinIO
+ *
+ * @param {object} params
+ * @param {string} params.url                - URL file cần tải về
+ * @param {string} [params.filename]         - Tên file lưu trên MinIO. Nếu bỏ trống, tự lấy từ cuối URL
+ * @param {string} [params.username]         - Tên đăng nhập MinIO. Mặc định: MINIO_USER trong .env
+ * @param {string} [params.password]         - Mật khẩu MinIO. Mặc định: MINIO_PASSWORD trong .env
+ * @param {string} [params.targetFolder='']  - Thư mục đích trong bucket MinIO
+ * @returns {Promise<object>} Phản hồi từ MinIO API
+ *
+ * Ví dụ:
+ *   await helper.uploadFromUrlToMinio({
+ *     url: 'http://old-server/files/bao-cao.pdf',
+ *     filename: 'bao-cao-2024.pdf',      // bỏ qua nếu muốn tự lấy tên từ URL
+ *     targetFolder: 'TCSG/van-ban-den',
+ *   });
+ */
+async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '' }) {
+  logger.info(`[MinIO:uploadFromUrlToMinio] Bắt đầu — url: '${url}' | targetFolder: '${targetFolder || "(root)"}'`);
+
+  try {
+    // ── Bước 1: Lấy credentials ───────────────────────────────────────────
+    const minioUser = username || process.env.MINIO_USER;
+    const minioPass = password || process.env.MINIO_PASSWORD;
+
+    if (!minioUser || !minioPass) {
+      throw new Error(
+        '[MinIO:uploadFromUrlToMinio] Thiếu thông tin đăng nhập. ' +
+        'Truyền username/password vào hàm hoặc đặt MINIO_USER/MINIO_PASSWORD trong .env'
+      );
+    }
+
+    // ── Bước 2: Lấy token (cache hoặc login mới) ─────────────────────────
+    const token = await this._getMinioToken(minioUser, minioPass);
+
+    // ── Bước 3: Tải file từ URL về memory ────────────────────────────────
+    logger.info(`[MinIO:uploadFromUrlToMinio] Đang GET file từ: ${url}`);
+    let fileBuffer;
+    try {
+      const response = await axios.get(url, { responseType: 'arraybuffer' });
+      fileBuffer = Buffer.from(response.data);
+      logger.info(`[MinIO:uploadFromUrlToMinio] GET OK — kích thước: ${fileBuffer.length} bytes`);
+    } catch (getError) {
+      if (getError.response) {
+        throw new Error(
+          `[MinIO:uploadFromUrlToMinio] Tải file từ URL thất bại — ` +
+          `HTTP ${getError.response.status}: ${url}`
+        );
+      }
+      throw new Error(`[MinIO:uploadFromUrlToMinio] Không kết nối được URL '${url}' — ${getError.message}`);
+    }
+
+    // ── Bước 4: Xác định tên file ─────────────────────────────────────────
+    let finalFilename = filename;
+    if (!finalFilename) {
+      try {
+        finalFilename = path.basename(new URL(url).pathname);
+      } catch {
+        finalFilename = null;
+      }
+    }
+
+    if (!finalFilename || finalFilename === '/' || finalFilename === '') {
+      throw new Error(
+        `[MinIO:uploadFromUrlToMinio] Không xác định được tên file từ URL '${url}'. ` +
+        `Vui lòng truyền params.filename.`
+      );
+    }
+
+    logger.info(`[MinIO:uploadFromUrlToMinio] Tên file: '${finalFilename}'`);
+
+    // ── Bước 5: Upload lên MinIO ──────────────────────────────────────────
+    const result = await this._uploadBufferToMinio({
+      fileBuffer,
+      filename: finalFilename,
+      token,
+      folderPath: targetFolder,
+    });
+
+    logger.info(`[MinIO:uploadFromUrlToMinio] Hoàn tất — url: '${url}'`);
+    return result;
+
+  } catch (error) {
+    if (error.response) {
+      logger.error(`[MinIO:uploadFromUrlToMinio] HTTP ${error.response.status}`);
+    }
+    logger.error(`[MinIO:uploadFromUrlToMinio] Thất bại — url: '${url}' | lỗi: ${error.message}`);
+    throw error;
+  }
+}
 
   async createChairmanAndSecretary(
     meetingId,
@@ -1425,6 +1887,61 @@ class MigrationHelper {
 
     return results;
   }
+
+  /**
+   * Ánh xạ dữ liệu từ bản ghi file relation cũ sang cấu trúc mới.
+   * @param {object} record - Dữ liệu file relation từ hệ thống cũ.
+   * @returns {object|null} Dữ liệu đã được ánh xạ hoặc null nếu thiếu thông tin.
+   */
+  async mapFileRelations(record) {
+    if (!record) return null;
+
+    try {
+      const fileId = record.file_id;
+      if (!fileId) {
+        logger.warn('[mapFileRelations] Bỏ qua vì thiếu file_id:', record);
+        return null;
+      }
+
+      const objectId = record.object_id;
+      if (!objectId) {
+        logger.warn('[mapFileRelations] Bỏ qua vì thiếu object_id:', record);
+        return null;
+      }
+
+      const objectType = record.object_type || 'IncomingDocument';
+
+      // Các trường khác
+      const status = (record.status === 0 || record.status === '0') ? 0 : 1;
+      const isCertifiedCopy = (record.is_certified_copy === 1 || record.is_certified_copy === '1' || record.is_certified_copy === true) ? 1 : 0;
+      const typeDoc = record.type_doc || null;
+      const tableBak = record.table_bak || 'FileRelations';
+
+      // ID backup từ hệ thống cũ
+      const objectIdBak = record.object_id_bak || record.object_id || null;
+      const fileIdBak = record.file_id_bak || record.file_id || null;
+
+      const mapped = {
+        object_type: objectType,
+        object_id: String(objectId),
+        file_id: fileId,
+        status: status,
+        is_certified_copy: isCertifiedCopy,
+        object_id_bak: objectIdBak ? String(objectIdBak) : null,
+        file_id_bak: fileIdBak ? String(fileIdBak) : null,
+        table_bak: tableBak,
+        type_doc: typeDoc,
+        created_at: this.parseDate(record.created_at) || null,
+      };
+      
+      return mapped;
+
+    } catch (error) {
+      logger.error(`[mapFileRelations] Lỗi xử lý record:`, record, error);
+      return null;
+    }
+  }
+  
   async documentField(value) {
     try {
       if (typeof value !== "string") return null;

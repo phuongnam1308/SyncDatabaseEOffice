@@ -1,11 +1,12 @@
 const logger = require('../../../utils/logger');
 const sql = require('mssql');
-
+const axios = require("axios");
+const { v4: uuidv4 } = require("uuid");
 const SyncCommentModel = require('../../sync-document-comment/SyncCommentModel');
 const SyncAuditModel = require('../../sync-audit/SyncAuditModel');
 const StreamOutgoingMigrationModel = require('./StreamOutgoingMigrationModel');
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
-
+const FileService = require('../../sync-file-copy/Fileuploadservice');
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 
 const AUDIT_TABLES = [
@@ -374,6 +375,58 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     `;
   }
 
+    /**
+   * Tìm một bản ghi đầy đủ trong bảng staging theo ID.
+   * @param {string|number} id - ID của bản ghi cần tìm
+   * @param {object} [transaction] - SQL Transaction (nếu có)
+   * @returns {Promise<object|null>} Bản ghi đầy đủ hoặc null nếu không tìm thấy
+   */
+  async getByIdFromStaging(id, transaction = null) {
+    if (!id) {
+      throw new Error('[getByIdFromStaging] id là bắt buộc.');
+    }
+
+    const stagingTableRef = this.getStagingTableRef();
+
+    const query = `
+      SELECT TOP 1 *
+      FROM ${stagingTableRef}
+      WHERE ID = @id
+    `;
+
+    const rows = await this.queryNewDbTx(
+      query,
+      { id: String(id).trim() },
+      transaction
+    );
+
+    return rows?.[0] || null;
+  }
+
+  /**
+   * Tìm một bản ghi đầy đủ trong bảng VanBanBanHanh (old DB) theo ID.
+   * @param {string|number} id - ID của bản ghi cần tìm
+   * @returns {Promise<object|null>} Bản ghi đầy đủ hoặc null nếu không tìm thấy
+   */
+  async getByIdFromOldDb(id) {
+    if (!id) {
+      throw new Error('[getByIdFromOldDb] id là bắt buộc.');
+    }
+
+    const query = `
+      SELECT TOP 1 *
+      FROM ${this.oldDbSchema}.${this.oldDbTable}
+      WHERE ID = @id
+    `;
+
+    const rows = await this.queryOldDb(
+      query,
+      { id: String(id).trim() }
+    );
+
+    return rows?.[0] || null;
+  }
+
   /**
    * Loads incremental source records from OLD DB after current cursor.
    * @param {string} lastSyncTime
@@ -710,6 +763,101 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       affected
     };
   }
+  // hàm nhận vào bản ghi cũ và mới để thêm file
+  async ThemFileDinhKem(oldRecord, newDocumentRecord) {
+
+  const files = oldRecord?.Files || '';
+
+  if (!files) {
+    console.log('Bản ghi cũ không có file');
+    return false;
+  }
+
+  try {
+
+    const parts = files.split('|').filter(Boolean);
+
+    const path = parts[0];
+    const names = parts.slice(1);
+
+    console.log("Danh sách file:", names);
+
+    const url = `${process.env.BASE_URL.replace(/\/$/, '')}${encodeURI(path)}`;
+
+    // chỉ download 1 lần
+    const response = await axios.get(url, {
+      responseType: "arraybuffer",
+      timeout: 30000
+    });
+
+    const buffer = Buffer.from(response.data);
+
+    // detect file type
+    const { fileTypeFromBuffer } = await import('file-type');
+    const fileType = await fileTypeFromBuffer(buffer);
+
+    if (!fileType) {
+      console.log("Không xác định được loại file");
+      return false;
+    }
+
+    const allowedTypes = [
+      'pdf','doc','docx','xls','xlsx','ppt','pptx','txt'
+    ];
+
+    if (!allowedTypes.includes(fileType.ext)) {
+      console.log(`Bỏ qua file: ${fileType.ext}`);
+      return false;
+    }
+
+    for (const name of names) {
+
+      const fileIdBak = uuidv4();
+
+      const fileRecord = {
+        file_name: name,
+        file_path: path,
+        mime_type: fileType.mime,
+        created_by: newDocumentRecord?.drafter,
+        version: 1,
+        id_bak: fileIdBak,
+        table_bak: 'VanBanBanHanh',
+        type_doc: newDocumentRecord?.type_doc,
+        isBak: 1
+      };
+
+      const relationRecord = {
+        object_type: 'docDraft',
+        object_id: newDocumentRecord?.drafter ,
+        object_id_bak: oldRecord?.ID,
+        file_id_bak: fileIdBak,
+        table_bak: 'VanBanBanHanh',
+        type_doc: 'docDraft',
+      };
+
+      // mỗi lần insert sẽ tạo id file khác nhau
+      const result = await FileService.uploadAndInsert({
+        fileBuffer: buffer,
+        originalName: `${name}.${fileType.ext}`,
+        mimeType: fileType.mime,
+        fileRecord,
+        relationRecord
+      });
+
+      console.log("File insert id:", result.fileId);
+
+    }
+
+    return true;
+
+  } catch (error) {
+
+    console.log("Lỗi migrate file:", error.message);
+    return false;
+
+  }
+
+}
 
   /**
    * Upserts one outgoing document and its related audit/comment entities.
@@ -722,7 +870,12 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       return { action: 'none', affected: 0 };
     }
     const id = String(oldRecord.ID || '').trim();
-
+    const oldDbRecord = id
+      ? await this.getByIdFromOldDb(id).catch(err => {
+          logger.warn(`[upsertDocumentAggregateById] Không lấy được old record ID=${id}: ${err.message}`);
+          return null;
+        })
+      : null;    
     if (!this._outGoingMigrationModels) {
       throw new Error(`[upsertDocumentAggregateById] Model not initialized for ID=${id}`);
     }
@@ -743,13 +896,40 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
 
     totalAffected += Number(documentResult.affected || 0);
     const documentId = documentResult.documentId;
-
+    const stagingRecord = documentId
+      ? await this.getByIdFromStaging(id, transaction).catch(err => {
+          logger.warn(`[upsertDocumentAggregateById] Không lấy được staging record ID=${id}: ${err.message}`);
+          return null;
+        })
+      : null;
     if (!documentId) {
       return {
         action: documentResult.action || 'upsert',
         affected: Number(totalAffected || 0)
       };
     }
+
+    /* ====== thêm file====== */
+    try {
+      if (oldRecord?.Files) {
+        const ok = await this.ThemFileDinhKem(
+          oldRecord,
+          {
+            id: documentId,
+            type_doc: stagingRecord?.type_doc
+          }
+        );
+
+        logger.info(
+          `[AggregateSync][Files] documentId=${documentId} migrated=${ok}`
+        );
+      }
+    } catch (fileErr) {
+      logger.warn(
+        `[upsertDocumentAggregateById] File migrate failed ID=${id}: ${fileErr.message}`
+      );
+    }
+
 
     for (const auditModel of this._syncAuditModel || []) {
       try {
@@ -813,7 +993,8 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         );
       }
     }
-
+    // logic xu
+  
     return {
       action: documentResult.action || 'upsert',
       affected: Number(totalAffected || 0)
