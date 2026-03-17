@@ -814,12 +814,14 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
           type_doc: 'incommingdocument',
         };
 
-        const result = await fileSvc.saveToLocalAndInsert({
+        const result = await fileSvc.uploadAndInsert({
           fileBuffer: buffer,
           originalName: fileName,
           mimeType,
           fileRecord,
-          relationRecord
+          relationRecord,
+          folder: 'incoming',
+          localFolder: 'incoming'
         });
 
         console.log(`[ThemFileDinhKem] Inserted file for record ${oldRecord.ID}, new file ID: ${result.fileId}`);

@@ -871,13 +871,14 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
           type_doc: 'docDraft',
         };
 
-        await fileSvc.saveToLocalAndInsert({
+        await fileSvc.uploadAndInsert({
           fileBuffer: buffer,
           originalName: fileName,
           mimeType,
           fileRecord,
           relationRecord,
-          folder: 'outgoing'
+          folder: 'outgoing',
+          localFolder: 'outgoing'
         });
       }
 
