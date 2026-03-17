@@ -1,5 +1,31 @@
 const logger = require('../../../utils/logger');
 const sql = require('mssql');
+const axios = require('axios');
+const { v4: uuidv4 } = require('uuid');
+const FileService = require('../../sync-file-copy/Fileuploadservice');
+const { downloadFile: spDownload } = require('../../sync-file-copy/SharePointAuthService');
+/**
+ * Phát hiện MIME type từ magic bytes — thay thế package file-type (ESM-only)
+ */
+function detectFileType(buffer) {
+  if (!buffer || buffer.length < 4) return { mime: 'application/octet-stream', ext: 'bin' };
+  const b = buffer;
+  if (b[0]===0x25&&b[1]===0x50&&b[2]===0x44&&b[3]===0x46) return { mime:'application/pdf', ext:'pdf' };
+  if (b[0]===0x89&&b[1]===0x50&&b[2]===0x4E&&b[3]===0x47) return { mime:'image/png', ext:'png' };
+  if (b[0]===0xFF&&b[1]===0xD8&&b[2]===0xFF)               return { mime:'image/jpeg', ext:'jpg' };
+  if (b[0]===0x47&&b[1]===0x49&&b[2]===0x46)               return { mime:'image/gif', ext:'gif' };
+  if (b[0]===0x42&&b[1]===0x4D)                             return { mime:'image/bmp', ext:'bmp' };
+  if (b[0]===0x50&&b[1]===0x4B&&b[2]===0x03&&b[3]===0x04) {
+    const s = buffer.slice(0,200).toString('latin1');
+    if (s.includes('word/')) return { mime:'application/vnd.openxmlformats-officedocument.wordprocessingml.document', ext:'docx' };
+    if (s.includes('xl/'))   return { mime:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', ext:'xlsx' };
+    if (s.includes('ppt/'))  return { mime:'application/vnd.openxmlformats-officedocument.presentationml.presentation', ext:'pptx' };
+    return { mime:'application/zip', ext:'zip' };
+  }
+  if (b[0]===0xD0&&b[1]===0xCF&&b[2]===0x11&&b[3]===0xE0) return { mime:'application/msword', ext:'doc' };
+  if (b[0]===0x52&&b[1]===0x61&&b[2]===0x72&&b[3]===0x21) return { mime:'application/x-rar-compressed', ext:'rar' };
+  return { mime:'application/octet-stream', ext:'bin' };
+}
 
 const SyncCommentModel = require('../../sync-document-comment/SyncCommentModel');
 const SyncAuditModel = require('../../sync-audit/SyncAuditModel');
@@ -121,6 +147,7 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
     this._syncAuditModel = [];
     this._syncCommentModel = [];
     this._InCommingMigrationModels = null;
+    this._fileService = null;
   }
 
   /**
@@ -138,6 +165,8 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
 
       this._InCommingMigrationModels = new StreamInCommingMigrationModel();
       await this._InCommingMigrationModels.initialize();
+
+      this._fileService = new FileService(this.newPool);
 
       for (const table of AUDIT_TABLES) {
         const model = new SyncAuditModel(table);
@@ -697,6 +726,166 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
     }
   }
 
+  async ThemFileDinhKem(oldRecord, newDocumentRecord, documentId) {
+    const files = oldRecord?.Files || '';
+    if (!files) {
+      // This is normal, just return
+      return false;
+    }
+
+    try {
+      const fileSvc = this._fileService;
+      const baseUrl = (process.env.BASE_URL || "").replace(/\/$/, "");
+      if (!baseUrl) {
+        logger.error('[ThemFileDinhKem] BASE_URL is not configured in .env');
+        return false;
+      }
+
+      const parts = files.split('|').filter(Boolean);
+      if (parts.length === 0) return true;
+
+      let filesToProcess = [];
+
+      // Heuristic to decide parsing strategy based on the format of the first part.
+      const firstPartIsLikelyFile = /\.(pdf|docx?|xlsx?|jpe?g|png|gif|bmp)$/i.test(parts[0]);
+
+      if (firstPartIsLikelyFile) {
+        // FORMAT 1: "path/to/file.pdf|other_data..."
+        // Assume the first part is the full relative path to the file.
+        // The current logic handles only this first file found.
+        const relativePath = parts[0];
+        filesToProcess.push(relativePath);
+
+      } else {
+        // FORMAT 2: "path/to/dir/|file1.pdf|file2.docx"
+        // The first part is the directory, subsequent parts are filenames.
+        const directory = parts[0];
+        const names = parts.slice(1);
+        for (const name of names) {
+          if (!name) continue; // Sanity check
+          const relativePath = directory.endsWith('/') ? `${directory}${name}` : `${directory}/${name}`;
+          filesToProcess.push(relativePath);
+        }
+      }
+
+      console.log(`[ThemFileDinhKem] Record ${oldRecord.ID}: Found files to process:`, filesToProcess);
+
+      for (const relativePath of filesToProcess) {
+        if (!relativePath.includes('/')) {
+            logger.warn(`[ThemFileDinhKem] Skipping invalid path part: "${relativePath}" for record ${oldRecord.ID}`);
+            continue;
+        }
+        
+        const fullUrl = `${baseUrl}${relativePath}`;
+        const fileName = relativePath.substring(relativePath.lastIndexOf('/') + 1);
+
+        let buffer;
+        try {
+          // spDownload uses authentication cookies managed by SharePointAuthService
+          buffer = await spDownload(fullUrl);
+          console.log(`[ThemFileDinhKem] Successfully downloaded: ${fileName}`);
+        } catch (downloadErr) {
+          logger.error(`[ThemFileDinhKem] Failed to download file from ${fullUrl}: ${downloadErr.message}`);
+          continue; // Skip this file and continue with the next one.
+        }
+
+        const fileType = detectFileType(buffer);
+        const mimeType = fileType.mime;
+
+        const fileIdBak = uuidv4();
+        const fileRecord = {
+          file_name: fileName,
+          file_path: relativePath,
+          mime_type: mimeType,
+          created_by: newDocumentRecord?.drafter,
+          version: 1,
+          id_bak: fileIdBak,
+          table_bak: 'VanBanDen',
+          type_doc: 'incommingdocument',
+          isBak: 1
+        };
+
+        const relationRecord = {
+          object_type: 'incommingdocument',
+          object_id: String(documentId),
+          object_id_bak: oldRecord?.ID,
+          file_id_bak: fileIdBak,
+          table_bak: 'VanBanDen',
+          type_doc: 'incommingdocument',
+        };
+
+        const result = await fileSvc.saveToLocalAndInsert({
+          fileBuffer: buffer,
+          originalName: fileName,
+          mimeType,
+          fileRecord,
+          relationRecord
+        });
+
+        console.log(`[ThemFileDinhKem] Inserted file for record ${oldRecord.ID}, new file ID: ${result.fileId}`);
+      }
+
+      return true;
+
+    } catch (error) {
+      logger.error(`[ThemFileDinhKem] Unexpected error while migrating files for record ID ${oldRecord?.ID}: ${error.message}`, { stack: error.stack });
+      return false;
+    }
+  }
+
+/**
+   * Tìm một bản ghi đầy đủ trong bảng staging theo ID.
+   * @param {string|number} id
+   * @param {object} [transaction]
+   * @returns {Promise<object|null>}
+   */
+  async getByIdFromStaging(id, transaction = null) {
+    if (!id) {
+      throw new Error('[getByIdFromStaging] id là bắt buộc.');
+    }
+
+    const stagingTableRef = this.getStagingTableRef();
+
+    const query = `
+      SELECT TOP 1 *
+      FROM ${stagingTableRef}
+      WHERE ID = @id
+    `;
+
+    const rows = await this.queryNewDbTx(
+      query,
+      { id: String(id).trim() },
+      transaction
+    );
+
+    return rows?.[0] || null;
+  }
+
+  /**
+   * Tìm một bản ghi đầy đủ trong bảng VanBanDen (old DB) theo ID.
+   * @param {string|number} id
+   * @returns {Promise<object|null>}
+   */
+  async getByIdFromOldDb(id) {
+    if (!id) {
+      throw new Error('[getByIdFromOldDb] id là bắt buộc.');
+    }
+
+    const query = `
+      SELECT TOP 1 *
+      FROM ${this.oldDbSchema}.${this.oldDbTable}
+      WHERE ID = @id
+    `;
+
+    const rows = await this.queryOldDb(
+      query,
+      { id: String(id).trim() }
+    );
+
+    return rows?.[0] || null;
+  }
+
+
   /**
    * Upserts one InComming document and its related audit/comment entities.
    * @param {object} oldRecord
@@ -737,6 +926,10 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
           affected: Number(totalAffected || 0)
         };
       }
+
+      const newRrecord = await this.getByIdFromStaging(id, transaction);
+      await this.ThemFileDinhKem(oldRecord, newRrecord, documentId);
+
 
       for (const auditModel of this._syncAuditModel || []) {
         try {

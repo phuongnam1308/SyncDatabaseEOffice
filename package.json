@@ -4,11 +4,13 @@
   "description": "Hệ thống migration dữ liệu từ SQL Server cũ sang mới",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
+    "start": "node auth/login.js && nodemon index.js",
     "dev": "nodemon index.js",
+    "login": "node auth/login.js",
     "swagger:gen": "node generate-swagger.js",
     "build": "npm run swagger:gen && webpack",
-    "start:dist": "node dist/app.js"
+    "start:dist": "node dist/app.js",
+    "start:session-refresher": "node auth/session-refresher.js"
   },
   "keywords": [
     "migration",
@@ -34,10 +36,10 @@
     "swagger-ui-dist": "^5.31.0",
     "swagger-ui-express": "^5.0.1",
     "uuid": "^8.3.2",
-    "winston": "^3.11.0"
+    "winston": "^3.11.0",
+    "@playwright/test": "^1.45.3"
   },
   "devDependencies": {
-    "@playwright/test": "^1.45.3",
     "archiver": "^7.0.1",
     "copy-webpack-plugin": "^13.0.1",
     "nodemon": "^3.0.2",

@@ -60,7 +60,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
                 'SoVanBan', 'TrichYeu', 'VanBanTraLoi', 'YKienLanhDao', 'YKienLanhDaoTCT',
                 'YKienLanhDaoVPDN', 'YKienCuaLDVPChoVanThu', 'ForwardType', 'MigrateErrMess',
                 'receiver_unit', 'copy_to_internal', 'view_group', 'directive_comment',
-                'fileids', 'LanhDaoTCT', 'LanhDaoTCTDaXuLy', 'LanhDaoTCTDeBiet'];
+                'fileids', 'LanhDaoTCT', 'LanhDaoTCTDaXuLy', 'LanhDaoTCTDeBiet', 'Files']; // <-- thêm 'Files'
 
             Object.keys(params || {}).forEach(key => {
                 const value = params[key];
@@ -238,7 +238,15 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         const query = `
     ;WITH source_rows AS (
         SELECT
-            *,
+            [ID], [Title], [SoDen], [CoQuanGui2], [CoQuanGuiText], [DonVi], [IsLibrary], [DoKhan], [DoMat],
+            CAST([Files] AS NVARCHAR(MAX)) AS [Files],
+            [ThoiHanGQ], [ItemVBDTCT], [ItemVBPH], [BanLanhDao], [LanhDaoTCT], [LanhDaoTCTDaXuLy],
+            [LanhDaoTCTDeBiet], [LanhDaoVPDN], [LinhVuc], [LoaiVanBan], [NgayDen], [NgayTrenVB],
+            [SoBan], [SoTrang], [SoVanBan], [TrangThai], [TrichYeu], [VanBanTraLoi], [ChenSo],
+            [YKienLanhDao], [YKienLanhDaoTCT], [YKienLanhDaoVPDN], [YKienCuaLDVPChoVanThu],
+            [ForwardType], [Modified], [Created], [ModifiedBy], [CreatedBy], [ModuleId],
+            [SiteName], [ListName], [ItemId], [MigrateFlg], [YearMonth], [MigrateErrFlg],
+            [MigrateErrMess], [ItemVBPHOld], [DGPId],
             COALESCE(
                 TRY_CONVERT(datetime2, Modified, 105),
                 TRY_CONVERT(datetime2, Created, 105),

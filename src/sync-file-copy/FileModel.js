@@ -21,7 +21,6 @@ class FileModel extends BaseModel {
 
   /**
    * Chuẩn hóa giá trị trước khi bind vào tham số NVARCHAR(MAX).
-   * Tránh lỗi "Invalid string" khi giá trị là số, object, hoặc Date.
    */
   normalizeNVarCharValue(value) {
     if (value === null || value === undefined || value === 'NULL' || value === 'null') return null;
@@ -31,6 +30,19 @@ class FileModel extends BaseModel {
       try { return JSON.stringify(value); } catch (_) { return String(value); }
     }
     return String(value);
+  }
+
+  /**
+   * Chuẩn hóa giá trị datetime trước khi bind vào tham số sql.DateTime.
+   * Chuyển string / timestamp / Date thành Date object hợp lệ, trả null nếu không parse được.
+   * @param {string|Date|number|null} value
+   * @returns {Date|null}
+   */
+  normalizeDateValue(value) {
+    if (value === null || value === undefined || value === 'NULL' || value === 'null' || value === '') return null;
+    if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? null : d;
   }
 
   /**
@@ -56,10 +68,15 @@ class FileModel extends BaseModel {
         'id_bak', 'table_bak', 'type_doc', 'nguoikyvanban',
       ];
 
+      // Các field datetime — bind explicit để tránh SQL Server fail convert từ string
+      const dateFields = ['created_at', 'updated_at'];
+
       Object.keys(params || {}).forEach(key => {
         const value = params[key];
         if (maxFields.includes(key)) {
           request.input(key, sql.NVarChar(sql.MAX), this.normalizeNVarCharValue(value));
+        } else if (dateFields.includes(key)) {
+          request.input(key, sql.DateTime, this.normalizeDateValue(value));
         } else {
           request.input(key, value);
         }

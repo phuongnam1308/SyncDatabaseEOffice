@@ -7,6 +7,29 @@ const SyncAuditModel = require('../../sync-audit/SyncAuditModel');
 const StreamOutgoingMigrationModel = require('./StreamOutgoingMigrationModel');
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 const FileService = require('../../sync-file-copy/Fileuploadservice');
+
+/**
+ * Phát hiện MIME type từ magic bytes — thay thế package file-type (ESM-only)
+ */
+function detectFileType(buffer) {
+  if (!buffer || buffer.length < 4) return { mime: 'application/octet-stream', ext: 'bin' };
+  const b = buffer;
+  if (b[0]===0x25&&b[1]===0x50&&b[2]===0x44&&b[3]===0x46) return { mime:'application/pdf', ext:'pdf' };
+  if (b[0]===0x89&&b[1]===0x50&&b[2]===0x4E&&b[3]===0x47) return { mime:'image/png', ext:'png' };
+  if (b[0]===0xFF&&b[1]===0xD8&&b[2]===0xFF)               return { mime:'image/jpeg', ext:'jpg' };
+  if (b[0]===0x47&&b[1]===0x49&&b[2]===0x46)               return { mime:'image/gif', ext:'gif' };
+  if (b[0]===0x42&&b[1]===0x4D)                             return { mime:'image/bmp', ext:'bmp' };
+  if (b[0]===0x50&&b[1]===0x4B&&b[2]===0x03&&b[3]===0x04) {
+    const s = buffer.slice(0,200).toString('latin1');
+    if (s.includes('word/')) return { mime:'application/vnd.openxmlformats-officedocument.wordprocessingml.document', ext:'docx' };
+    if (s.includes('xl/'))   return { mime:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', ext:'xlsx' };
+    if (s.includes('ppt/'))  return { mime:'application/vnd.openxmlformats-officedocument.presentationml.presentation', ext:'pptx' };
+    return { mime:'application/zip', ext:'zip' };
+  }
+  if (b[0]===0xD0&&b[1]===0xCF&&b[2]===0x11&&b[3]===0xE0) return { mime:'application/msword', ext:'doc' };
+  if (b[0]===0x52&&b[1]===0x61&&b[2]===0x72&&b[3]===0x21) return { mime:'application/x-rar-compressed', ext:'rar' };
+  return { mime:'application/octet-stream', ext:'bin' };
+}
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 
 const AUDIT_TABLES = [
@@ -122,6 +145,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     this._syncAuditModel = [];
     this._syncCommentModel = [];
     this._outGoingMigrationModels = null;
+    this._fileService = null;
   }
 
   /**
@@ -137,6 +161,9 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
 
     this._outGoingMigrationModels = new StreamOutgoingMigrationModel();
     await this._outGoingMigrationModels.initialize();
+
+    // Khởi tạo FileService một lần với pool đã sẵn sàng
+    this._fileService = new FileService(this.newPool);
 
     for (const table of AUDIT_TABLES) {
       const model = new SyncAuditModel(table);
@@ -792,11 +819,10 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
 
     const buffer = Buffer.from(response.data);
 
-    // detect file type
-    const { fileTypeFromBuffer } = await import('file-type');
-    const fileType = await fileTypeFromBuffer(buffer);
+    // detect file type từ magic bytes — không dùng file-type (ESM-only)
+    const fileType = detectFileType(buffer);
 
-    if (!fileType) {
+    if (fileType.ext === 'bin') {
       console.log("Không xác định được loại file");
       return false;
     }
@@ -828,15 +854,14 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
 
       const relationRecord = {
         object_type: 'docDraft',
-        object_id: newDocumentRecord?.drafter ,
+        object_id: String(newDocumentRecord?.id),  // ID văn bản trong DB mới — NOT NULL
         object_id_bak: oldRecord?.ID,
         file_id_bak: fileIdBak,
         table_bak: 'VanBanBanHanh',
         type_doc: 'docDraft',
       };
 
-      // mỗi lần insert sẽ tạo id file khác nhau
-      const result = await FileService.uploadAndInsert({
+      const result = await this._fileService.saveToLocalAndInsert({
         fileBuffer: buffer,
         originalName: `${name}.${fileType.ext}`,
         mimeType: fileType.mime,
@@ -852,7 +877,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
 
   } catch (error) {
 
-    console.log("Lỗi migrate file:", error.message);
+    console.log("Lỗi migrate file:", error);
     return false;
 
   }

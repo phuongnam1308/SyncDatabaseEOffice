@@ -4,6 +4,8 @@ const { v4: uuidv4 } = require('uuid');
 const logger = require('../../utils/logger');
 const FileModel = require('./FileModel');
 const FileRelationsModel = require('./FileRelationsModel');
+const fs = require('fs/promises');
+const fsSync = require('fs');
 
 // ══════════════════════════════════════════════
 //  KHỞI TẠO MINIO CLIENT TỪ ENV
@@ -24,11 +26,21 @@ const minioClient = new MinioClient({
 });
 
 const DEFAULT_BUCKET = process.env.MINIO_BUCKET || 'files';
+const LOCAL_STORAGE_PATH = process.env.LOCAL_STORAGE_PATH || path.join(__dirname, '..', '..', 'uploads');
+
 
 class FileUploadService {
-  constructor() {
+  /**
+   * @param {import('mssql').ConnectionPool|null} pool - DB pool đã được khởi tạo (this.newPool từ BaseModel)
+   */
+  constructor(pool = null) {
     this.fileModel          = new FileModel();
     this.fileRelationsModel = new FileRelationsModel();
+    // Gán pool trực tiếp vào 2 model — tránh phải gọi initialize() riêng
+    if (pool) {
+      this.fileModel.newPool          = pool;
+      this.fileRelationsModel.newPool = pool;
+    }
   }
 
   // ──────────────────────────────────────────────
@@ -121,13 +133,17 @@ class FileUploadService {
     const targetBucket = bucket || DEFAULT_BUCKET;
     const objectName   = this._buildObjectName(originalName, folder);
 
-    // ── BƯỚC 1: Đảm bảo bucket tồn tại ──
-    await this._ensureBucket(targetBucket);
+    // // ── BƯỚC 1: Đảm bảo bucket tồn tại ──
+    // await this._ensureBucket(targetBucket);
 
-    // ── BƯỚC 2: Upload lên MinIO ──
-    //    Từ đây nếu DB fail → phải xóa file này khỏi MinIO
-    const storagePath = await this._upload(targetBucket, objectName, fileBuffer, mimeType);
-    logger.info(`[FileUploadService] Upload MinIO OK: bucket=${targetBucket}, object=${objectName}`);
+    // // ── BƯỚC 2: Upload lên MinIO ──
+    // //    Từ đây nếu DB fail → phải xóa file này khỏi MinIO
+    // const storagePath = await this._upload(targetBucket, objectName, fileBuffer, mimeType);
+    // logger.info(`[FileUploadService] Upload MinIO OK: bucket=${targetBucket}, object=${objectName}`);
+
+    const storagePath = 'https://file-examples.com/wp-content/storage/2017/02/file-sample_100kB.docx';
+
+
 
     // ── BƯỚC 3 & 4: Insert files + file_relations, bọc chung try-catch ──
     //    Bất kỳ lỗi nào trong 2 bước này → rollback MinIO ngay
@@ -190,6 +206,107 @@ class FileUploadService {
       bucket: targetBucket,
     };
   }
+
+  /**
+   * Lưu file vào thư mục cục bộ → insert vào bảng `files` → insert vào bảng `file_relations`.
+   * Nếu bất kỳ bước DB nào fail thì tự động rollback (xóa file đã lưu).
+   *
+   * @param {object} options - Tương tự `uploadAndInsert` nhưng không có `bucket`.
+   * @returns {Promise<{
+   *   fileId:      number,
+   *   relationId:  number|null,
+   *   storagePath: string,
+   * }>}
+   */
+  async saveToLocalAndInsert({
+    fileBuffer,
+    originalName,
+    mimeType,
+    fileRecord,
+    relationRecord,
+    folder,
+    transaction,
+  } = {}) {
+    // ── Validate đầu vào ──
+    if (!fileBuffer || !Buffer.isBuffer(fileBuffer)) {
+      throw new Error('[FileUploadService] fileBuffer phải là Buffer hợp lệ.');
+    }
+    if (!originalName) {
+      throw new Error('[FileUploadService] originalName là bắt buộc.');
+    }
+    if (!fileRecord || typeof fileRecord !== 'object') {
+      throw new Error('[FileUploadService] fileRecord là bắt buộc.');
+    }
+
+    // ── BƯỚC 1: Chuẩn bị đường dẫn và thư mục ──
+    const uniqueFileName = this._buildObjectName(originalName, null);
+    const targetFolder = folder ? path.join(LOCAL_STORAGE_PATH, folder) : LOCAL_STORAGE_PATH;
+    const fullPath = path.join(targetFolder, uniqueFileName);
+    const relativePath = path.relative(LOCAL_STORAGE_PATH, fullPath);
+
+    // Tạo thư mục nếu chưa có
+    if (!fsSync.existsSync(targetFolder)) {
+      await fs.mkdir(targetFolder, { recursive: true });
+      logger.info(`[FileUploadService] Đã tạo thư mục cục bộ: ${targetFolder}`);
+    }
+
+    // ── BƯỚC 2: Lưu file vào thư mục ──
+    await fs.writeFile(fullPath, fileBuffer);
+    logger.info(`[FileUploadService] Lưu file cục bộ OK: ${fullPath}`);
+    
+    // ── BƯỚC 3 & 4: Insert files + file_relations, bọc chung try-catch ──
+    let fileId = null;
+    let relationId = null;
+
+    try {
+      // BƯỚC 3: Insert vào bảng files
+      const enrichedFileRecord = {
+        ...fileRecord,
+        file_name: fileRecord.file_name || originalName,
+        mime_type: fileRecord.mime_type || mimeType || null,
+        file_size: fileRecord.file_size ?? fileBuffer.length,
+        storage_path: relativePath,
+        storage_type: 'filesystem',
+      };
+
+      const fileResult = await this.fileModel.insert(enrichedFileRecord, transaction);
+      fileId = fileResult.newId;
+      logger.info(`[FileUploadService] Insert files OK: fileId=${fileId}`);
+
+      // BƯỚC 4: Insert vào bảng file_relations (nếu có)
+      if (relationRecord && typeof relationRecord === 'object') {
+        const enrichedRelationRecord = {
+          ...relationRecord,
+          file_id: fileId,
+        };
+
+        const relationResult = await this.fileRelationsModel.insert(enrichedRelationRecord, transaction);
+        relationId = relationResult.newId;
+        logger.info(`[FileUploadService] Insert file_relations OK: relationId=${relationId}`);
+      }
+
+    } catch (dbError) {
+      logger.error(
+        `[FileUploadService] Insert DB thất bại, đang rollback file cục bộ (${fullPath})... Lỗi: ${dbError.message}`
+      );
+      try {
+        await fs.unlink(fullPath);
+        logger.info(`[FileUploadService] Rollback file cục bộ OK: đã xóa ${fullPath}`);
+      } catch (rollbackErr) {
+        logger.error(
+          `[FileUploadService] ⚠ ROLLBACK FILE CỤC BỘ THẤT BẠI — file rác tồn tại! Path: ${fullPath}. Lỗi rollback: ${rollbackErr.message}`
+        );
+      }
+      throw dbError;
+    }
+
+    return {
+      fileId,
+      relationId,
+      storagePath: relativePath,
+    };
+  }
+
 
   /**
    * Tạo presigned URL để client tải file trực tiếp từ MinIO.
