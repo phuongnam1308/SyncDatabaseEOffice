@@ -1,12 +1,12 @@
 const logger = require('../../../utils/logger');
 const sql = require('mssql');
-const axios = require("axios");
 const { v4: uuidv4 } = require("uuid");
 const SyncCommentModel = require('../../sync-document-comment/SyncCommentModel');
 const SyncAuditModel = require('../../sync-audit/SyncAuditModel');
 const StreamOutgoingMigrationModel = require('./StreamOutgoingMigrationModel');
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 const FileService = require('../../sync-file-copy/Fileuploadservice');
+const { downloadFile: spDownload } = require('../../sync-file-copy/SharePointAuthService');
 
 /**
  * Phát hiện MIME type từ magic bytes — thay thế package file-type (ESM-only)
@@ -793,94 +793,99 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
   // hàm nhận vào bản ghi cũ và mới để thêm file
   async ThemFileDinhKem(oldRecord, newDocumentRecord) {
 
-  const files = oldRecord?.Files || '';
+    const files = oldRecord?.Files || '';
 
-  if (!files) {
-    console.log('Bản ghi cũ không có file');
-    return false;
-  }
-
-  try {
-
-    const parts = files.split('|').filter(Boolean);
-
-    const path = parts[0];
-    const names = parts.slice(1);
-
-    console.log("Danh sách file:", names);
-
-    const url = `${process.env.BASE_URL.replace(/\/$/, '')}${encodeURI(path)}`;
-
-    // chỉ download 1 lần
-    const response = await axios.get(url, {
-      responseType: "arraybuffer",
-      timeout: 30000
-    });
-
-    const buffer = Buffer.from(response.data);
-
-    // detect file type từ magic bytes — không dùng file-type (ESM-only)
-    const fileType = detectFileType(buffer);
-
-    if (fileType.ext === 'bin') {
-      console.log("Không xác định được loại file");
+    if (!files) {
       return false;
     }
 
-    const allowedTypes = [
-      'pdf','doc','docx','xls','xlsx','ppt','pptx','txt'
-    ];
+    try {
+      const fileSvc = this._fileService;
+      const baseUrl = (process.env.BASE_URL || "").replace(/\/$/, "");
+      if (!baseUrl) {
+        logger.error('[ThemFileDinhKem][Outgoing] BASE_URL is not configured in .env');
+        return false;
+      }
 
-    if (!allowedTypes.includes(fileType.ext)) {
-      console.log(`Bỏ qua file: ${fileType.ext}`);
+      const parts = files.split('|').filter(Boolean);
+      if (parts.length === 0) return true;
+
+      let filesToProcess = [];
+
+      // Heuristic to decide parsing strategy based on the format of the first part.
+      const firstPartIsLikelyFile = /\.(pdf|docx?|xlsx?|pptx?|jpe?g|png|gif|bmp|txt|zip|rar)$/i.test(parts[0]);
+
+      if (firstPartIsLikelyFile) {
+        // FORMAT 1: "path/to/file.ext|other_data..."
+        filesToProcess.push(parts[0]);
+      } else {
+        // FORMAT 2: "path/to/dir/|file1.pdf|file2.docx"
+        const directory = parts[0];
+        const names = parts.slice(1);
+        for (const name of names) {
+          if (!name) continue;
+          const relativePath = directory.endsWith('/') ? `${directory}${name}` : `${directory}/${name}`;
+          filesToProcess.push(relativePath);
+        }
+      }
+
+      for (const relativePath of filesToProcess) {
+        if (!relativePath || !relativePath.includes('/')) {
+          logger.warn(`[ThemFileDinhKem][Outgoing] Skipping invalid path part: "${relativePath}" for record ${oldRecord?.ID}`);
+          continue;
+        }
+
+        const fullUrl = `${baseUrl}${relativePath}`;
+        const fileName = relativePath.substring(relativePath.lastIndexOf('/') + 1);
+
+        let buffer;
+        try {
+          buffer = await spDownload(fullUrl);
+        } catch (downloadErr) {
+          logger.error(`[ThemFileDinhKem][Outgoing] Failed to download file from ${fullUrl}: ${downloadErr.message}`);
+          continue;
+        }
+
+        const fileType = detectFileType(buffer);
+        const mimeType = fileType.mime;
+
+        const fileIdBak = uuidv4();
+        const fileRecord = {
+          file_name: fileName,
+          file_path: relativePath,
+          mime_type: mimeType,
+          created_by: newDocumentRecord?.drafter,
+          version: 1,
+          id_bak: fileIdBak,
+          table_bak: 'VanBanBanHanh',
+          type_doc: newDocumentRecord?.type_doc,
+          isBak: 1
+        };
+
+        const relationRecord = {
+          object_type: 'docDraft',
+          object_id: String(newDocumentRecord?.id),  // ID văn bản trong DB mới — NOT NULL
+          object_id_bak: oldRecord?.ID,
+          file_id_bak: fileIdBak,
+          table_bak: 'VanBanBanHanh',
+          type_doc: 'docDraft',
+        };
+
+        await fileSvc.saveToLocalAndInsert({
+          fileBuffer: buffer,
+          originalName: fileName,
+          mimeType,
+          fileRecord,
+          relationRecord,
+          folder: 'outgoing'
+        });
+      }
+
+      return true;
+    } catch (error) {
+      logger.error(`[ThemFileDinhKem][Outgoing] Unexpected error while migrating files for record ID ${oldRecord?.ID}: ${error.message}`, { stack: error.stack });
       return false;
     }
-
-    for (const name of names) {
-
-      const fileIdBak = uuidv4();
-
-      const fileRecord = {
-        file_name: name,
-        file_path: path,
-        mime_type: fileType.mime,
-        created_by: newDocumentRecord?.drafter,
-        version: 1,
-        id_bak: fileIdBak,
-        table_bak: 'VanBanBanHanh',
-        type_doc: newDocumentRecord?.type_doc,
-        isBak: 1
-      };
-
-      const relationRecord = {
-        object_type: 'docDraft',
-        object_id: String(newDocumentRecord?.id),  // ID văn bản trong DB mới — NOT NULL
-        object_id_bak: oldRecord?.ID,
-        file_id_bak: fileIdBak,
-        table_bak: 'VanBanBanHanh',
-        type_doc: 'docDraft',
-      };
-
-      const result = await this._fileService.saveToLocalAndInsert({
-        fileBuffer: buffer,
-        originalName: `${name}.${fileType.ext}`,
-        mimeType: fileType.mime,
-        fileRecord,
-        relationRecord
-      });
-
-      console.log("File insert id:", result.fileId);
-
-    }
-
-    return true;
-
-  } catch (error) {
-
-    console.log("Lỗi migrate file:", error);
-    return false;
-
-  }
 
 }
 
