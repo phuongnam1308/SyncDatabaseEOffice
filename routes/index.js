@@ -360,6 +360,9 @@ router.get('/sync-manager-src/events', SrcSyncManagerController.sseEvents); // â
 const SyncOutgoingRoutes = require('../src/sync-outgoing-document/route');
 router.use('/sync-outgoing', SyncOutgoingRoutes);
 
+const SyncTintucRawRoutes = require('../src/sync-news-aspx-page/route');
+router.use('/sync-tintucraw', SyncTintucRawRoutes);
+
 const CommentRoutes = require('../src/older-sync-document-comment/route');
 router.use('/document-comments', CommentRoutes);
 

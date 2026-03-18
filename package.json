@@ -21,7 +21,9 @@
   "license": "ISC",
   "dependencies": {
     "@fontsource/inter": "^5.2.8",
+    "@playwright/test": "^1.45.3",
     "axios": "^1.13.6",
+    "axios-ntlm": "^1.4.6",
     "bcrypt": "^6.0.0",
     "bootstrap-icons": "^1.13.1",
     "cors": "^2.8.5",
@@ -36,8 +38,7 @@
     "swagger-ui-dist": "^5.31.0",
     "swagger-ui-express": "^5.0.1",
     "uuid": "^8.3.2",
-    "winston": "^3.11.0",
-    "@playwright/test": "^1.45.3"
+    "winston": "^3.11.0"
   },
   "devDependencies": {
     "archiver": "^7.0.1",

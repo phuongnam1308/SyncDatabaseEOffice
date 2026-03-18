@@ -9,6 +9,7 @@ const SyncIncomingDocumentModel = require('../sync-incoming-document/migrate/Syn
 const StreamMeetingMigrationModel = require('../sync-meeting/migrate/StreamMeetingMigrationModel');
 const InCommingDocumentModel = require('../sync-incoming-document/migrate/StreamIncomingIncrementalModel');
 const StreamDepartmentMigrationModel = require('../sync-department/migrate/StreamDepartmentMigrationModel');
+const StreamNewsAspxPageIncrementalModel = require('../sync-news-aspx-page/models/StreamNewsAspxPageIncrementalModel');
 const MODEL_DEFINITIONS = [
   {
     key: 'UNIT_TEST_STREAM_OUTGOING_INCREMENTAL',
@@ -45,6 +46,12 @@ const MODEL_DEFINITIONS = [
     section: 'realtime',
     ModelClass: StreamSocialMigrationModel,
     // ModelClass: StreamUserMigrationModel
+  },
+  {
+    key: 'UNIT_TEST_STREAM_NEWS_ASPX_PAGE_INCREMENTAL',
+    label: 'Đồng bộ tintuc raw (aspx)',
+    section: 'realtime',
+    ModelClass: StreamNewsAspxPageIncrementalModel
   },
   {
     key: '3_incoming',
