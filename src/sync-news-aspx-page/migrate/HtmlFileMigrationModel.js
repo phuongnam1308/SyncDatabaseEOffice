@@ -4,6 +4,7 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const crypto = require('crypto');
 const BaseModel = require('../../../models/BaseModel');
+const FileUploadService = require('../../sync-file-copy/Fileuploadservice');
 
 class HtmlFileMigrationModel extends BaseModel {
     constructor() {
@@ -25,6 +26,127 @@ class HtmlFileMigrationModel extends BaseModel {
         if (!fs.existsSync(this.jsonOutputPath)) {
             fs.mkdirSync(this.jsonOutputPath, { recursive: true });
         }
+
+        this.fileUploadService = new FileUploadService();
+    }
+
+    /**
+     * Tìm ảnh local dựa trên slug và chỉ số (index)
+     */
+    async findLocalImage(slug, index) {
+        const subFolder = path.join(this.targetImgFolderPath, slug);
+        if (!fs.existsSync(subFolder)) return null;
+
+        const files = fs.readdirSync(subFolder);
+        // Tên file có dạng: slug_index_hash.ext
+        const pattern = new RegExp(`^${this.escapeRegExp(slug)}_${index}_`);
+        const found = files.find(f => pattern.test(f));
+        
+        if (found) {
+            const fullPath = path.join(subFolder, found);
+            console.log(`    [*] Tìm thấy ảnh đã tải sẵn tại local: ${fullPath}`);
+            return fs.readFileSync(fullPath);
+        }
+        return null;
+    }
+
+    escapeRegExp(string) {
+        return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    /**
+     * Tải ảnh từ SharePoint/Old system về Buffer (ưu tiên đọc từ local nếu đã tải)
+     */
+    async _downloadToBuffer(imgUrl, slug, index) {
+        try {
+            // 1. Ưu tiên tìm trong folder img cục bộ theo slug và index
+            if (slug && index !== undefined) {
+                const localBuffer = await this.findLocalImage(slug, index);
+                if (localBuffer) return localBuffer;
+            }
+
+            // 2. Nếu không tìm thấy theo slug/index, thử map trực tiếp từ imgUrl nếu nó là link /tintuc/img
+            if (imgUrl.startsWith('/tintuc/img/')) {
+                const relativePath = imgUrl.replace('/tintuc/img/', '');
+                const localPath = path.join(this.targetImgFolderPath, relativePath);
+                
+                if (fs.existsSync(localPath)) {
+                    console.log(`    [*] Đang đọc ảnh từ local (theo path): ${localPath}`);
+                    return fs.readFileSync(localPath);
+                }
+            }
+
+            // 3. Fallback: Tải từ SharePoint (nếu server sống)
+            let fullUrl = imgUrl;
+            if (fullUrl.startsWith('//')) {
+                fullUrl = 'https:' + fullUrl;
+            } else if (fullUrl.startsWith('/')) {
+                fullUrl = this.baseSourceUrl + fullUrl;
+            } else if (!fullUrl.startsWith('http')) {
+                fullUrl = this.baseSourceUrl + '/' + fullUrl;
+            }
+
+            console.log(`    [*] Đang tải ảnh từ URL: ${fullUrl}`);
+            const response = await axios({
+                url: fullUrl,
+                method: 'GET',
+                responseType: 'arraybuffer',
+                timeout: 5000 // Giảm timeout để tránh chờ quá lâu nễu DNS chết
+            });
+            return Buffer.from(response.data);
+        } catch (error) {
+            console.error(`  [!] Lỗi khi lấy buffer cho ảnh ${imgUrl}:`, error.message);
+            return null;
+        }
+    }
+
+    /**
+     * Xử lý tìm ảnh trong content, upload lên hệ thống mới và thay thế URL
+     */
+    async processContentImages(content, itemId, slug) {
+        if (!content) return content;
+        
+        const $ = cheerio.load(content, { decodeEntities: false });
+        const images = $('img');
+        
+        console.log(`  [*] Đang xử lý ${images.length} ảnh trong nội dung của slug: ${slug}...`);
+        
+        for (let i = 0; i < images.length; i++) {
+            const imgParams = $(images[i]);
+            const src = imgParams.attr('src');
+            
+            if (!src) continue;
+
+            const isSharePoint = src.startsWith('/') || src.includes(this.baseSourceUrl.replace('https://', '').replace('http://', ''));
+            const isAlreadyNew = src.includes('apigw-uat.snp.com.vn');
+
+            if (isSharePoint && !isAlreadyNew) {
+                // Truyền i để tìm local file nếu đã tải trước đó
+                const buffer = await this._downloadToBuffer(src, slug, i);
+                if (buffer) {
+                    const originalName = path.basename(src.split('?')[0]) || `image_${Date.now()}_${i}.png`;
+                    
+                    console.log(`    -> Đang upload ảnh [${originalName}] lên hệ thống mới...`);
+                    const uploadRes = await this.fileUploadService.uploadToNewSystem({
+                        fileBuffer: buffer,
+                        originalName: originalName,
+                        objectType: 'news',
+                        objectId: itemId || '9999'
+                    });
+
+                    if (uploadRes && uploadRes.id) {
+                        // Theo yêu cầu mới: Sử dụng /api/files/view/{id} và prefix từ ENV
+                        const viewPrefix = process.env.NEW_SYSTEM_VIEW_PREFIX || 'https://apigw-uat.snp.com.vn/doffice-be';
+                        const newUrl = `${viewPrefix}/api/files/view/${uploadRes.id}`;
+                        
+                        imgParams.attr('src', newUrl);
+                        console.log(`    ✅ Đã thay thế URL theo ID: ${newUrl}`);
+                    }
+                }
+            }
+        }
+        
+        return $.html();
     }
 
     async ensureSyncTableExists() {
@@ -189,48 +311,39 @@ class HtmlFileMigrationModel extends BaseModel {
         const images = printNews.find('img');
         const extractedImages = [];
 
+        // Lưu thông tin ảnh nguyên thủy (để khớp với JSON cũ nếu cần)
         for (let i = 0; i < images.length; i++) {
             const imgParams = $(images[i]);
             let src = imgParams.attr('src');
-            
-            // Skip các ảnh logo/banner nếu lỡ dính
-            if (src && (src.includes('logo_short.png') || src.includes('banner29.png') || src.includes('hc.jpg'))) {
-                continue;
-            }
-
             if (src) {
-                const newSrc = await this.downloadImage(src, slug, i);
-                imgParams.attr('src', newSrc);
-                
                 const fullUrl = src.startsWith('http') ? src : `${this.baseSourceUrl}${src.startsWith('/') ? '' : '/'}${src}`;
-
-                // Thu thập thông tin ảnh để lưu vào JSON
                 extractedImages.push({
                     originalUrl: src,
-                    fullUrl: fullUrl,
-                    localPath: newSrc
+                    fullUrl: fullUrl
                 });
-
-                // Ghi nhận vào bảng file_new_sync với khóa ngoại là slug (nếu có DB)
-                await this.insertToFileNewSync(slug, src, newSrc);
             }
         }
         
         // Lấy nội dung bao gồm cả mô tả (.des), bảng ảnh (.tbimg-news) và nội dung chính (.content)
-        let content = '';
+        let contentHtml = '';
         const desHtml = $('.des').html();
         const tbimgHtml = $('.tbimg-news').html();
         const mainContentHtml = $('.content').html();
 
-        if (desHtml) content += `<div class="des">${desHtml}</div>`;
-        if (tbimgHtml) content += `<div class="tbimg-news">${tbimgHtml}</div>`;
-        if (mainContentHtml) content += `<div class="content">${mainContentHtml}</div>`;
+        if (desHtml) contentHtml += `<div class="des">${desHtml}</div>`;
+        if (tbimgHtml) contentHtml += `<div class="tbimg-news">${tbimgHtml}</div>`;
+        if (mainContentHtml) contentHtml += `<div class="content">${mainContentHtml}</div>`;
 
-        if(!content) {
+        if(!contentHtml) {
             // fallback cho ASPX nếu tìm không ra các thẻ trên
             const match = html.match(/<div class="content">([\s\S]*?)<\/div><!-- end content -->/);
-            content = match ? match[1].trim() : '';
+            contentHtml = match ? match[1].trim() : '';
         }
+
+        // --- BƯỚC QUAN TRỌNG: Upload ảnh trong content lên hệ thống mới và thay URL ---
+        console.log(`[Extaction] Đang xử lý và upload ảnh cho : ${slug}`);
+        const updatedContent = await this.processContentImages(contentHtml, ogItemId, slug);
+        // ----------------------------------------------------------------------------
 
         // Convert chuỗi Date của VN "dd/mm/yyyy hh:mm" sang JS Date
         let publishedAt = null;
@@ -256,7 +369,7 @@ class HtmlFileMigrationModel extends BaseModel {
             itemId: ogItemId,   // ID bài viết trên SharePoint
             newsType: ogType,   // Loại bài viết
             images: extractedImages,
-            content
+            content: updatedContent
         };
     }
 
@@ -278,6 +391,11 @@ class HtmlFileMigrationModel extends BaseModel {
             console.log('[HtmlFileMigrationModel] Skip insertToSyncTable: No DB connection.');
             return;
         }
+
+        // Xử lý upload ảnh trong content trước khi lưu vào DB
+        console.log(`[Content Processing] Đang kiểm tra ảnh cho bài viết: ${data.title}`);
+        const updatedContent = await this.processContentImages(data.content, data.itemId, data.slug);
+
         const query = `
             INSERT INTO dbo.news_aspx_new_sync (title, slug, authorName, publishedAt, content, isActive, itemId, newsType, images, status)
             VALUES (@title, @slug, @authorName, @publishedAt, @content, @isActive, @itemId, @newsType, @images, @status)
@@ -288,7 +406,7 @@ class HtmlFileMigrationModel extends BaseModel {
                 slug: data.slug,
                 authorName: data.authorName,
                 publishedAt: data.publishedAt,
-                content: data.content,
+                content: updatedContent, // Sử dụng content đã update URL ảnh
                 isActive: data.isActive,
                 itemId: data.itemId,
                 newsType: data.newsType,

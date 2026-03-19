@@ -79,7 +79,7 @@ router.get('/migrate/donvi', MigrationDonViController.migrateDonVi);
 // Thống kê số văn bản
 router.get('/statistics/bookdocuments', MigrationBookDocumentController.getStatistics);
 
-// Migration số văn bản 
+// Migration số văn bản
 router.get('/migrate/bookdocuments', MigrationBookDocumentController.migrateBookDocuments);
 
 // Thống kê Văn bản đến Delete

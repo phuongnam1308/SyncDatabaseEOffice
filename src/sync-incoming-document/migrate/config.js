@@ -5,7 +5,7 @@ const tableMappings = {
     oldSchema: 'dbo',
     oldDatabase: process.env.OLD_DB_NAME,
 
-    newTable: 'incomming_documents2',
+    newTable: 'incoming_documents2',
     newSchema: 'dbo',
     newDatabase: process.env.NEW_DB_NAME,
 

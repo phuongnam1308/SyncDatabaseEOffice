@@ -1,6 +1,6 @@
 
 const SyncManagerService = require('../../sync-manager/SyncManagerService');
-const InCommingDocumentModel = require('./StreamIncomingIncrementalModel');
+const IncomingDocumentModel = require('./StreamIncomingIncrementalModel');
 const SyncIncomingDocumentModel = require('./SyncIncomingDocumentModel');
 
 const UNIT_TEST_MODEL_NAME = '3_incoming';
@@ -18,7 +18,7 @@ class SyncIncomingDocumentService {
     async initialize() {
         if (this.model) return;
         this.model = new SyncIncomingDocumentModel();
-        this.modelv2 = new InCommingDocumentModel();
+        this.modelv2 = new IncomingDocumentModel();
         await this.model.initialize();
         await this.modelv2.initialize();
     }
@@ -77,7 +77,7 @@ class SyncIncomingDocumentService {
         const jobId = await this._buildOrReuseJob(syncJobId);
         const listResult = await this.model.getList(lastSyncTime, jobId);
         const jobState = await this.model.getSyncJobState(jobId);
-        const newCount = await this.model.countNewIncommingDocument();
+        const newCount = await this.model.countNewIncomingDocument();
         // const foundRows = Array.isArray(listResult.rows) ? listResult.rows : [];
 
         return {

@@ -10,17 +10,17 @@ const CATEGORY_RELEASE_TCT = "Phát hành văn bản TCT";
 const CATEGORY_OUTGOING = "Văn bản đi";
 
 // Định nghĩa các hằng số cho danh mục (Category) của văn bản đến
-const CATEGORY_INCOMMING_SUBMIT = "Văn bản trình ký";
-const CATEGORY_INCOMMING_TCT = "Văn bản đến TCT";
-const CATEGORY_INCOMMING= "Văn bản đến";
-const CATEGORY_INCOMMING_INTERNAL= "Văn bản nội bộ";
+const CATEGORY_INCOMING_SUBMIT = "Văn bản trình ký";
+const CATEGORY_INCOMING_TCT = "Văn bản đến TCT";
+const CATEGORY_INCOMING= "Văn bản đến";
+const CATEGORY_INCOMING_INTERNAL= "Văn bản nội bộ";
 
 // Tạo các tập hợp (Set) để kiểm tra category hiệu quả
 const INCOMING_CATEGORIES = new Set([
-  CATEGORY_INCOMMING_SUBMIT,
-  CATEGORY_INCOMMING_TCT,
-  CATEGORY_INCOMMING,
-  CATEGORY_INCOMMING_INTERNAL,
+  CATEGORY_INCOMING_SUBMIT,
+  CATEGORY_INCOMING_TCT,
+  CATEGORY_INCOMING,
+  CATEGORY_INCOMING_INTERNAL,
 ]);
 const OUTGOING_CATEGORIES = new Set([
   CATEGORY_RELEASE_DV,
@@ -175,16 +175,16 @@ class SyncAuditModel extends BaseModel {
    * lọc theo các danh mục (category) dành riêng cho văn bản đến.
    * @param {string|number} oldDocumentId - ID của văn bản đến trong CSDL cũ.
    */
-  async fetchByInCommingDocumentId(
+  async fetchByIncomingDocumentId(
     oldDocumentId
   ) {
     return this._fetchByDocumentIdInternal(
       oldDocumentId,
       [
-        CATEGORY_INCOMMING_TCT,
-        CATEGORY_INCOMMING,
-        CATEGORY_INCOMMING_INTERNAL,
-        CATEGORY_INCOMMING_SUBMIT
+        CATEGORY_INCOMING_TCT,
+        CATEGORY_INCOMING,
+        CATEGORY_INCOMING_INTERNAL,
+        CATEGORY_INCOMING_SUBMIT
       ]
     );
   }

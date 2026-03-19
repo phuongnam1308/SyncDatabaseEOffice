@@ -7,7 +7,7 @@ const StreamTaskMigrationModel = require('../sync-tasks/migrate/StreamTaskMigrat
 const StreamSocialMigrationModel = require('../sync-social-resource/migrate/StreamSocialMigrationModel');
 const SyncIncomingDocumentModel = require('../sync-incoming-document/migrate/SyncIncomingDocumentModel');
 const StreamMeetingMigrationModel = require('../sync-meeting/migrate/StreamMeetingMigrationModel');
-const InCommingDocumentModel = require('../sync-incoming-document/migrate/StreamIncomingIncrementalModel');
+const IncomingDocumentModel = require('../sync-incoming-document/migrate/StreamIncomingIncrementalModel');
 const StreamDepartmentMigrationModel = require('../sync-department/migrate/StreamDepartmentMigrationModel');
 const StreamNewsAspxPageIncrementalModel = require('../sync-news-aspx-page/models/StreamNewsAspxPageIncrementalModel');
 const MODEL_DEFINITIONS = [
@@ -57,7 +57,7 @@ const MODEL_DEFINITIONS = [
     key: '3_incoming',
     label: 'Đồng bộ văn bản đến',
     section: 'realtime',
-    ModelClass: InCommingDocumentModel,
+    ModelClass: IncomingDocumentModel,
   },
   {
     key: 'UNIT_TEST_STREAM_MEETING_MIGRATION',

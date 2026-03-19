@@ -1,0 +1,8 @@
+{
+  "ignore": [
+    "tintucraw/*",
+    "auth/*",
+    "logs/*"
+  ],
+  "ext": "js,mjs,cjs,json"
+}

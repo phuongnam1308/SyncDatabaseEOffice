@@ -29,7 +29,7 @@ function detectFileType(buffer) {
 
 const SyncCommentModel = require('../../sync-document-comment/SyncCommentModel');
 const SyncAuditModel = require('../../sync-audit/SyncAuditModel');
-const StreamInCommingMigrationModel = require('./SyncIncomingDocumentModel');
+const StreamIncomingMigrationModel = require('./SyncIncomingDocumentModel');
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
@@ -132,9 +132,9 @@ const COMMENT_TABLES = [
   'Comments_YTE'
 ];
 
-class InCommingDocumentModel extends BaseIncrementalSyncInterface {
+class IncomingDocumentModel extends BaseIncrementalSyncInterface {
   /**
-   * Configures source/staging tables and nested migration models for InComming incremental sync.
+   * Configures source/staging tables and nested migration models for Incoming incremental sync.
    */
   constructor() {
     super({ modelName: '3_incoming' });
@@ -142,11 +142,11 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
     this.oldDbSchema = 'dbo';
     this.oldDbTable = 'VanBanDen';
     this.newDbSchema = 'dbo';
-    this.newTableSync = 'incomming_documents_sync';
+    this.newTableSync = 'incoming_documents_sync';
 
     this._syncAuditModel = [];
     this._syncCommentModel = [];
-    this._InCommingMigrationModels = null;
+    this._IncomingMigrationModels = null;
     this._fileService = null;
   }
 
@@ -163,8 +163,8 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
       this._syncAuditModel = [];
       this._syncCommentModel = [];
 
-      this._InCommingMigrationModels = new StreamInCommingMigrationModel();
-      await this._InCommingMigrationModels.initialize();
+      this._IncomingMigrationModels = new StreamIncomingMigrationModel();
+      await this._IncomingMigrationModels.initialize();
 
       this._fileService = new FileService(this.newPool);
 
@@ -181,16 +181,16 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
       }
 
       logger.info(
-        `[InCommingDocumentModel] Initialized with auditTables=${this._syncAuditModel.length}, commentTables=${this._syncCommentModel.length}`
+        `[IncomingDocumentModel] Initialized with auditTables=${this._syncAuditModel.length}, commentTables=${this._syncAuditModel.length}`
       );
     } catch (error) {
-      logger.error(`[InCommingDocumentModel.initialize] Failed to initialize: ${error.message}`, { stack: error.stack });
+      logger.error(`[IncomingDocumentModel.initialize] Failed to initialize: ${error.message}`, { stack: error.stack });
       throw error;
     }
   }
 
   /**
-   * Tự động tạo bảng trung gian `incomming_documents_sync` trong DB mới nếu chưa tồn tại.
+   * Tự động tạo bảng trung gian `incoming_documents_sync` trong DB mới nếu chưa tồn tại.
    * Cấu trúc bảng được clone từ `VanBanDen` (DB cũ) qua IF NOT EXISTS + SELECT TOP 0 * INTO.
    */
     async ensureStagingTableExists() {
@@ -256,9 +256,9 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
 
         await this.queryNewDb(createQuery);
 
-        logger.info(`[InCommingDocumentModel] Staging table ready`);
+        logger.info(`[IncomingDocumentModel] Staging table ready`);
       } catch (err) {
-        logger.error(`[InCommingDocumentModel.ensureStagingTableExists] Failed to create or verify staging table: ${err.message}`, { stack: err.stack });
+        logger.error(`[IncomingDocumentModel.ensureStagingTableExists] Failed to create or verify staging table: ${err.message}`, { stack: err.stack });
         throw err;
       }
     }
@@ -392,7 +392,7 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
         lastSyncId: Number(lastSyncId || 0)
       });
     } catch (error) {
-      logger.error(`[InCommingDocumentModel.fetchListFromOldDb] Failed to fetch list from old DB with lastSyncTime=${lastSyncTime}, lastSyncId=${lastSyncId}: ${error.message}`, { stack: error.stack });
+      logger.error(`[IncomingDocumentModel.fetchListFromOldDb] Failed to fetch list from old DB with lastSyncTime=${lastSyncTime}, lastSyncId=${lastSyncId}: ${error.message}`, { stack: error.stack });
       throw error;
     }
   }
@@ -458,7 +458,7 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
         await this.queryNewDbTx(query, params, transaction);
       }
     } catch (error) {
-      logger.error(`[InCommingDocumentModel.syncOldToStaging] Failed to sync to staging table: ${error.message}`, { stack: error.stack });
+      logger.error(`[IncomingDocumentModel.syncOldToStaging] Failed to sync to staging table: ${error.message}`, { stack: error.stack });
       throw error;
     }
 
@@ -507,7 +507,7 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
         lastSyncId: nextSyncId
       };
     } catch (error) {
-      logger.error(`[InCommingDocumentModel.getList] Failed to get list for syncJobId=${syncJobId}: ${error.message}`, { stack: error.stack });
+      logger.error(`[IncomingDocumentModel.getList] Failed to get list for syncJobId=${syncJobId}: ${error.message}`, { stack: error.stack });
       throw error;
     }
   }
@@ -541,7 +541,7 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
 
       return rows?.[0] || null;
     } catch (error) {
-      logger.error(`[InCommingDocumentModel.getSyncJobState] Failed to get sync job state for syncJobId=${syncJobId}: ${error.message}`, { stack: error.stack });
+      logger.error(`[IncomingDocumentModel.getSyncJobState] Failed to get sync job state for syncJobId=${syncJobId}: ${error.message}`, { stack: error.stack });
       throw error;
     }
   }
@@ -567,7 +567,7 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
           : (jobState?.total_processed || 0)
       );
     } catch (error) {
-      logger.error(`[InCommingDocumentModel.processOne] Failed to get job state or determine item index for syncJobId=${syncJobId}: ${error.message}`, { stack: error.stack });
+      logger.error(`[IncomingDocumentModel.processOne] Failed to get job state or determine item index for syncJobId=${syncJobId}: ${error.message}`, { stack: error.stack });
       throw error;
     }
 
@@ -616,9 +616,9 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
       try {
         await transaction.rollback();
       } catch (rollbackError) {
-        logger.error(`[InCommingDocumentModel.processOne] Rollback failed for syncJobId=${syncJobId}, itemIndex=${itemIndex}:`, rollbackError);
+        logger.error(`[IncomingDocumentModel.processOne] Rollback failed for syncJobId=${syncJobId}, itemIndex=${itemIndex}:`, rollbackError);
       }
-      logger.error(`[InCommingDocumentModel.processOne] Failed to process item for syncJobId=${syncJobId}, itemIndex=${itemIndex}: ${error.message}`, { stack: error.stack });
+      logger.error(`[IncomingDocumentModel.processOne] Failed to process item for syncJobId=${syncJobId}, itemIndex=${itemIndex}: ${error.message}`, { stack: error.stack });
       throw error;
     }
   }
@@ -685,13 +685,13 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
       delete row.rn;
       return row;
     } catch (error) {
-      logger.error(`[InCommingDocumentModel.fetchOneFromStaging] Failed to fetch itemIndex=${itemIndex} with lastSyncTime=${lastSyncTime}, lastSyncId=${lastSyncId}: ${error.message}`, { stack: error.stack });
+      logger.error(`[IncomingDocumentModel.fetchOneFromStaging] Failed to fetch itemIndex=${itemIndex} with lastSyncTime=${lastSyncTime}, lastSyncId=${lastSyncId}: ${error.message}`, { stack: error.stack });
       throw error;
     }
   }
 
   /**
-   * Validates and applies one InComming row into destination aggregates.
+   * Validates and applies one Incoming row into destination aggregates.
    * @param {object} rowData
    * @param {{transaction?: object}} [context]
    * @returns {Promise<{action:string,backupId:string,affected:number}>}
@@ -721,7 +721,7 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
       };
     } catch (error) {
       const backupId = rowData?.ID || 'unknown';
-      logger.error(`[InCommingDocumentModel.processRowData] Failed to process row with ID=${backupId}: ${error.message}`, { stack: error.stack, rowData });
+      logger.error(`[IncomingDocumentModel.processRowData] Failed to process row with ID=${backupId}: ${error.message}`, { stack: error.stack, rowData });
       throw error;
     }
   }
@@ -801,17 +801,17 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
           version: 1,
           id_bak: fileIdBak,
           table_bak: 'VanBanDen',
-          type_doc: 'incommingdocument',
+          type_doc: 'incomingDocument',
           isBak: 1
         };
 
         const relationRecord = {
-          object_type: 'incommingdocument',
+          object_type: 'incomingDocument',
           object_id: String(documentId),
           object_id_bak: oldRecord?.ID,
           file_id_bak: fileIdBak,
           table_bak: 'VanBanDen',
-          type_doc: 'incommingdocument',
+          type_doc: 'incomingDocument',
         };
 
         const result = await fileSvc.uploadAndInsert({
@@ -889,7 +889,7 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
 
 
   /**
-   * Upserts one InComming document and its related audit/comment entities.
+   * Upserts one Incoming document and its related audit/comment entities.
    * @param {object} oldRecord
    * @param {{transaction?: object}} [context]
    * @returns {Promise<{action:string,affected:number}>}
@@ -901,13 +901,13 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
         return { action: 'none', affected: 0 };
       }
 
-      if (!this._InCommingMigrationModels) {
+      if (!this._IncomingMigrationModels) {
         throw new Error(`[upsertDocumentAggregateById] Model not initialized for ID=${id}`);
       }
 
       let totalAffected = 0;
 
-      const documentResult = await this._InCommingMigrationModels.processSingleRecord(
+      const documentResult = await this._IncomingMigrationModels.processSingleRecord(
         oldRecord,
         transaction
       );
@@ -936,7 +936,7 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
       for (const auditModel of this._syncAuditModel || []) {
         try {
           const rawAudits =
-            await auditModel.fetchByInCommingDocumentId(
+            await auditModel.fetchByIncomingDocumentId(
               id
             );
 
@@ -1001,10 +1001,10 @@ class InCommingDocumentModel extends BaseIncrementalSyncInterface {
         affected: Number(totalAffected || 0)
       };
     } catch (error) {
-      logger.error(`[InCommingDocumentModel.upsertDocumentAggregateById] Failed to upsert document aggregate for ID=${id}: ${error.message}`, { stack: error.stack, oldRecord });
+      logger.error(`[IncomingDocumentModel.upsertDocumentAggregateById] Failed to upsert document aggregate for ID=${id}: ${error.message}`, { stack: error.stack, oldRecord });
       throw error;
     }
   }
 }
 
-module.exports = InCommingDocumentModel;
+module.exports = IncomingDocumentModel;

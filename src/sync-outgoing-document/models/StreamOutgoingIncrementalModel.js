@@ -269,7 +269,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         abstract_note               NVARCHAR(MAX),
         recipient_ids               NVARCHAR(MAX),
         internal_receiving_unit     NVARCHAR(MAX),
-        reply_incomming_doc         NVARCHAR(MAX),
+        reply_incoming_doc         NVARCHAR(MAX),
         created_at                  NVARCHAR(MAX),
         updated_at                  NVARCHAR(MAX),
         draft_signer                NVARCHAR(MAX),

@@ -12,8 +12,8 @@ class BaseModel {
   async initialize() {
     try {
       await dbConnection.connectAll();
-      this.oldPool = dbConnection.getOldPool();
-      this.newPool = dbConnection.getNewPool();
+    this.oldPool = dbConnection.getOldPool();
+    this.newPool = dbConnection.getNewPool();
     } catch (error) {
       console.log('Lỗi khởi tạo BaseModel:', error);
       logger.error('Lỗi khởi tạo BaseModel:', error);
@@ -25,7 +25,7 @@ class BaseModel {
   async queryOldDb(query, params = {}) {
     try {
       const request = this.oldPool.request();
-      
+
       // Bind parameters
       Object.keys(params).forEach(key => {
         request.input(key, params[key]);
@@ -43,7 +43,7 @@ class BaseModel {
   async queryNewDb(query, params = {}) {
     try {
       const request = this.newPool.request();
-      
+
       // Bind parameters
       Object.keys(params).forEach(key => {
         request.input(key, params[key]);
@@ -79,7 +79,7 @@ class BaseModel {
   async executeNewDb(query, params = {}) {
     try {
       const request = this.newPool.request();
-      
+
       // Bind parameters
       Object.keys(params).forEach(key => {
         request.input(key, params[key]);
@@ -136,7 +136,7 @@ class BaseModel {
       const fields = Object.keys(data);
       const values = fields.map((_, i) => `@param${i}`).join(', ');
       const query = `INSERT INTO ${schema}.${tableName} (${fields.join(', ')}) VALUES (${values})`;
-      
+
       const request = this.newPool.request();
       fields.forEach((field, i) => {
         request.input(`param${i}`, data[field]);

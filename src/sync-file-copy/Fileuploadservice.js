@@ -6,6 +6,9 @@ const FileModel = require('./FileModel');
 const FileRelationsModel = require('./FileRelationsModel');
 const fs = require('fs/promises');
 const fsSync = require('fs');
+const axios = require('axios');
+const FormData = require('form-data');
+const { getAccessToken, TOKEN_FILE_PATH: NEW_SYSTEM_TOKEN_FILE } = require('../../auth/newSortAccess');
 
 // ══════════════════════════════════════════════
 //  KHỞI TẠO MINIO CLIENT TỪ ENV
@@ -44,10 +47,10 @@ function resolveMinioConfig() {
     ` | SSL(trong URL)=${sslFromUrl}`
   );
   logger.info(
-    `[FileUploadService][MinIO] Áp dụng cấu hình kết nối thực tế (theo yêu cầu)` +
+    `[FileUploadService][MinIO] Áp dụng cấu hình kết nối thực tế` +
     ` | host=${hostFromUrl}` +
-    ` | port=443 (cố định, bỏ qua port trong URL nếu có)` +
-    ` | SSL=true (cố định, bỏ qua protocol trong URL nếu có)` +
+    ` | port=${portFromUrl || (sslFromUrl ? 443 : 80)}` +
+    ` | SSL=${sslFromUrl}` +
     ` | user=${process.env.MINIO_USER ? '[ĐÃ CÓ]' : '[CHƯA CÓ]'}` +
     ` | password=${process.env.MINIO_PASSWORD ? '[ĐÃ CÓ]' : '[CHƯA CÓ]'}`
   );
@@ -56,10 +59,9 @@ function resolveMinioConfig() {
     urlVarName,
     rawUrl,
     endPoint: hostFromUrl,
-    // fix cứng theo yêu cầu
-    port: 443,
-    useSSL: true,
-    // fix cứng theo yêu cầu
+    // Use port from URL if available, otherwise default based on protocol
+    port: portFromUrl || (sslFromUrl ? 443 : 80),
+    useSSL: sslFromUrl,
     accessKey: process.env.MINIO_USER,
     secretKey: process.env.MINIO_PASSWORD,
   };
@@ -120,6 +122,71 @@ class FileUploadService {
     if (pool) {
       this.fileModel.newPool          = pool;
       this.fileRelationsModel.newPool = pool;
+    }
+  }
+
+  /**
+   * Lấy token của hệ thống mới từ file cache hoặc login lại nếu cần
+   */
+  async _getNewSystemToken() {
+    try {
+      // Thử đọc từ file trước
+      if (fsSync.existsSync(NEW_SYSTEM_TOKEN_FILE)) {
+        const token = await fs.readFile(NEW_SYSTEM_TOKEN_FILE, 'utf-8');
+        if (token && token.trim()) return token.trim();
+      }
+      
+      // Nếu không có hoặc lỗi, gọi login để lấy mới
+      logger.info('[FileUploadService] Token hệ thống mới không tìm thấy, đang thực hiện login...');
+      const newToken = await getAccessToken();
+      return newToken;
+    } catch (error) {
+      logger.error(`[FileUploadService] Lỗi khi lấy token hệ thống mới: ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Upload file lên hệ thống mới (Lifetex API)
+   */
+  async uploadToNewSystem({ fileBuffer, originalName, objectType, objectId }) {
+    const url = process.env.NEW_SYSTEM_UPLOAD_URL;
+    if (!url) {
+      logger.warn('[FileUploadService] NEW_SYSTEM_UPLOAD_URL chưa được cấu hình, bỏ qua upload hệ thống mới.');
+      return null;
+    }
+
+    const token = await this._getNewSystemToken();
+    if (!token) {
+      logger.error('[FileUploadService] Không có token hệ thống mới, không thể upload.');
+      return null;
+    }
+
+    const formData = new FormData();
+    formData.append('file', fileBuffer, {
+      filename: originalName,
+      contentType: 'application/octet-stream' // Sẽ để detect tự động hoặc pass từ ngoài
+    });
+    formData.append('object_type', objectType || '');
+    formData.append('object_id', String(objectId || ''));
+
+    logger.info(`[FileUploadService] Đang upload lên hệ thống mới: ${url} | object_type=${objectType} | object_id=${objectId}`);
+
+    try {
+      const response = await axios.post(url, formData, {
+        headers: {
+          ...formData.getHeaders(),
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json, text/plain, */*'
+        }
+      });
+
+      logger.info(`[FileUploadService] Upload hệ thống mới thành công: ${JSON.stringify(response.data)}`);
+      return response.data;
+    } catch (error) {
+      const errorDetail = error.response ? JSON.stringify(error.response.data) : error.message;
+      logger.error(`[FileUploadService] Upload hệ thống mới thất bại: ${errorDetail}`);
+      return null;
     }
   }
 
@@ -213,14 +280,13 @@ class FileUploadService {
 
     const targetBucket = bucket || DEFAULT_BUCKET;
     const objectName   = this._buildObjectName(originalName, folder);
-    const fileSize = fileBuffer.length;
-    const mime = mimeType || fileRecord?.mime_type || null;
+    const fileSize     = fileBuffer.length;
+    const mime         = mimeType || fileRecord?.mime_type || null;
 
     // ── (Optional) save local copy before DB insert ──
-    // localFolder: 'incoming' | 'outgoing' | ...
     let localFullPath = null;
     if (localFolder) {
-      const uniqueFileName = path.basename(objectName); // keep same uuid-name as MinIO object
+      const uniqueFileName = path.basename(objectName);
       const targetLocalFolder = path.join(LOCAL_STORAGE_PATH, localFolder);
       localFullPath = path.join(targetLocalFolder, uniqueFileName);
       if (!fsSync.existsSync(targetLocalFolder)) {
@@ -228,147 +294,101 @@ class FileUploadService {
         logger.info(`[FileUploadService][Local] Đã tạo thư mục cục bộ: ${targetLocalFolder}`);
       }
       await fs.writeFile(localFullPath, fileBuffer);
-      logger.info(
-        `[FileUploadService][Local] Lưu file cục bộ thành công: ${localFullPath}` +
-        ` | dung lượng=${fileSize} bytes` +
-        ` | object=${objectName}`
-      );
     }
 
-    // ── BƯỚC 1: Đảm bảo bucket tồn tại ──
-    logger.info(
-      `[FileUploadService][MinIO] Kiểm tra/tạo bucket` +
-      ` | bucket=${targetBucket}` +
-      ` | object=${objectName}` +
-      ` | dung lượng=${fileSize} bytes` +
-      (mime ? ` | mime=${mime}` : '')
-    );
-    try {
-      await this._ensureBucket(targetBucket);
-    } catch (err) {
-      logger.error(
-        `[FileUploadService][MinIO] Lỗi khi kiểm tra/tạo bucket` +
-        ` | bucket=${targetBucket}` +
-        ` | host=${MINIO_CONFIG.endPoint}` +
-        ` | port=${MINIO_CONFIG.port}` +
-        ` | SSL=${MINIO_CONFIG.useSSL}` +
-        ` | lỗi=${err?.message}`,
-        { detail: formatAggregateError(err), stack: err?.stack }
-      );
-      throw err;
-    }
+    // ── BƯỚC 1: Chọn phương thức upload (Hệ thống mới hoặc MinIO cũ) ──
+    let uploadSuccess = false;
+    let apiResponse = null;
+    let storagePath = null;
 
-    // ── BƯỚC 2: Upload lên MinIO ──
-    //    Từ đây nếu DB fail → phải xóa file này khỏi MinIO
-    const uploadStart = Date.now();
-    logger.info(
-      `[FileUploadService][MinIO] Bắt đầu upload lên MinIO` +
-      ` | bucket=${targetBucket}` +
-      ` | object=${objectName}` +
-      ` | dung lượng=${fileSize} bytes`
-    );
-    let storagePath;
-    try {
-      storagePath = await this._upload(targetBucket, objectName, fileBuffer, mime);
-    } catch (err) {
-      logger.error(
-        `[FileUploadService][MinIO] Upload lên MinIO thất bại` +
-        ` | bucket=${targetBucket}` +
-        ` | object=${objectName}` +
-        ` | host=${MINIO_CONFIG.endPoint}` +
-        ` | port=${MINIO_CONFIG.port}` +
-        ` | SSL=${MINIO_CONFIG.useSSL}` +
-        ` | dung lượng=${fileSize} bytes` +
-        (mime ? ` | mime=${mime}` : '') +
-        ` | lỗi=${err?.message}`,
-        { detail: formatAggregateError(err), stack: err?.stack }
-      );
-
-      // rollback local copy too (if written) — vì upload fail thì DB chưa insert
-      if (localFullPath) {
-        try {
-          logger.info(`[FileUploadService][Local] Đang rollback: xóa file cục bộ ${localFullPath}`);
-          await fs.unlink(localFullPath);
-          logger.info(`[FileUploadService][Local] Rollback OK: đã xóa file cục bộ ${localFullPath}`);
-        } catch (rollbackErr) {
-          logger.error(
-            `[FileUploadService] ⚠ ROLLBACK FILE CỤC BỘ THẤT BẠI — file rác tồn tại! Path: ${localFullPath}. Lỗi rollback: ${rollbackErr.message}`
-          );
+    // Ưu tiên upload lên hệ thống mới nếu được cấu hình và có thông tin relation
+    if (process.env.NEW_SYSTEM_UPLOAD_URL && relationRecord && relationRecord.object_id) {
+      try {
+        apiResponse = await this.uploadToNewSystem({
+          fileBuffer,
+          originalName,
+          objectType: relationRecord.object_type,
+          objectId: relationRecord.object_id
+        });
+        if (apiResponse && apiResponse.id) {
+          uploadSuccess = true;
+          storagePath = apiResponse.file_path; // VD: "TCSG/docDraft/1773913432785_docjson7.zip"
+          logger.info(`[FileUploadService] Upload lên hệ thống mới OK. Sử dụng metadata từ API.`);
         }
+      } catch (err) {
+        logger.error(`[FileUploadService] Upload lên hệ thống mới lỗi: ${err.message}. Đang thử fallback sang MinIO cũ...`);
       }
-      throw err;
     }
-    const uploadMs = Date.now() - uploadStart;
-    logger.info(
-      `[FileUploadService][MinIO] Upload lên MinIO thành công` +
-      ` | storagePath=${storagePath}` +
-      ` | dung lượng=${fileSize} bytes` +
-      ` | thời gian=${uploadMs}ms`
-    );
 
-    // ── BƯỚC 3 & 4: Insert files + file_relations, bọc chung try-catch ──
-    //    Bất kỳ lỗi nào trong 2 bước này → rollback MinIO ngay
+    // Nếu không upload lên hệ thống mới hoặc upload lỗi, dùng MinIO cũ
+    if (!uploadSuccess) {
+      logger.info(`[FileUploadService][MinIO] Đang thực hiện upload lên MinIO cũ (fallback)...`);
+      try {
+        await this._ensureBucket(targetBucket);
+        storagePath = await this._upload(targetBucket, objectName, fileBuffer, mime);
+        uploadSuccess = true;
+      } catch (err) {
+        logger.error(`[FileUploadService][MinIO] Upload lên MinIO cũ thất bại: ${err.message}`);
+        
+        if (localFullPath) {
+          try { await fs.unlink(localFullPath); } catch (_) {}
+        }
+        throw err;
+      }
+    }
+
+    // ── BƯỚC 2 & 3: Insert files + file_relations ──
     let fileId     = null;
     let relationId = null;
 
     try {
-      // BƯỚC 3: Insert vào bảng files
+      // BƯỚC 2: Insert vào bảng files
+      const enrichedFileRecord = {
+        ...fileRecord,
+        file_name:    apiResponse?.file_name || fileRecord.file_name || originalName,
+        mime_type:    fileRecord.mime_type || mime || null,
+        file_size:    fileRecord.file_size ?? fileSize,
+        storage_path: storagePath, 
+        storage_type: apiResponse?.storage_type || 'minio',
+        id_bak:       apiResponse?.id ? String(apiResponse.id) : (fileRecord.id_bak || null), // Lưu ID từ hệ thống mới
+      };
+
       logger.info(
         `[FileUploadService][DB] Bắt đầu ghi bảng files` +
         ` | storagePath=${storagePath}` +
-        ` | storageType=minio` +
-        ` | file_name=${fileRecord?.file_name || originalName}`
+        ` | storageType=${enrichedFileRecord.storage_type}` +
+        ` | id_bak=${enrichedFileRecord.id_bak}`
       );
-      const enrichedFileRecord = {
-        ...fileRecord,
-        file_name:    fileRecord.file_name || originalName,
-        mime_type:    fileRecord.mime_type || mime || null,
-        file_size:    fileRecord.file_size ?? fileBuffer.length,
-        storage_path: storagePath,   // ghi đè bằng path thực tế trên MinIO
-        storage_type: 'minio',
-      };
 
       const fileResult = await this.fileModel.insert(enrichedFileRecord, transaction);
       fileId = fileResult.newId;
-      logger.info(`[FileUploadService][DB] Ghi bảng files thành công | fileId=${fileId}`);
 
-      // BƯỚC 4: Insert vào bảng file_relations (nếu có truyền relationRecord)
+      // BƯỚC 3: Insert vào bảng file_relations
       if (relationRecord && typeof relationRecord === 'object') {
-        logger.info(
-          `[FileUploadService][DB] Bắt đầu ghi bảng file_relations` +
-          ` | fileId=${fileId}` +
-          ` | object_type=${relationRecord?.object_type}` +
-          ` | object_id=${relationRecord?.object_id}`
-        );
         const enrichedRelationRecord = {
           ...relationRecord,
-          file_id: fileId,   // gắn file_id vừa có từ bước 3
+          file_id: fileId,
         };
 
         const relationResult = await this.fileRelationsModel.insert(enrichedRelationRecord, transaction);
         relationId = relationResult.newId;
-        logger.info(`[FileUploadService][DB] Ghi bảng file_relations thành công | relationId=${relationId}`);
       }
 
     } catch (dbError) {
-      // Một trong 2 bước DB fail → rollback MinIO ngay lập tức
-      logger.error(
-        `[FileUploadService] Lỗi ghi DB, đang rollback MinIO` +
-        ` | bucket=${targetBucket}` +
-        ` | object=${objectName}` +
-        ` | lỗi=${dbError.message}`
-      );
-
-      try {
-        logger.info(`[FileUploadService][MinIO] Đang rollback: xóa object trên MinIO | bucket=${targetBucket} | object=${objectName}`);
-        await minioClient.removeObject(targetBucket, objectName);
-        logger.info(`[FileUploadService][MinIO] Rollback OK: đã xóa object trên MinIO | bucket=${targetBucket} | object=${objectName}`);
-      } catch (rollbackErr) {
-        // Rollback MinIO cũng fail → log cảnh báo để admin vào xóa tay
-        logger.error(
-          `[FileUploadService] ⚠ ROLLBACK MINIO THẤT BẠI — file rác tồn tại trên MinIO!` +
-          ` bucket=${targetBucket}, object=${objectName}. Lỗi rollback: ${rollbackErr.message}`
-        );
+      logger.error(`[FileUploadService] Lỗi ghi DB: ${dbError.message}.`);
+      
+      // Rollback MinIO if we uploaded it ourselves
+      if (!apiResponse && storagePath) { // Only rollback if it was MinIO and we have a storagePath
+        try {
+          logger.info(`[FileUploadService][MinIO] Đang rollback: xóa object trên MinIO | bucket=${targetBucket} | object=${objectName}`);
+          await minioClient.removeObject(targetBucket, objectName);
+          logger.info(`[FileUploadService][MinIO] Rollback OK: đã xóa object trên MinIO | bucket=${targetBucket} | object=${objectName}`);
+        } catch (rollbackErr) {
+          logger.error(
+            `[FileUploadService] ⚠ ROLLBACK MINIO THẤT BẠI — file rác tồn tại trên MinIO!` +
+            ` bucket=${targetBucket}, object=${objectName}. Lỗi rollback: ${rollbackErr.message}`
+          );
+        }
       }
 
       // rollback local copy too (if written)
@@ -450,7 +470,7 @@ class FileUploadService {
     // ── BƯỚC 2: Lưu file vào thư mục ──
     await fs.writeFile(fullPath, fileBuffer);
     logger.info(`[FileUploadService] Lưu file cục bộ OK: ${fullPath}`);
-    
+
     // ── BƯỚC 3 & 4: Insert files + file_relations, bọc chung try-catch ──
     let fileId = null;
     let relationId = null;

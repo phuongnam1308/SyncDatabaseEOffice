@@ -4,12 +4,15 @@
   "description": "Hệ thống migration dữ liệu từ SQL Server cũ sang mới",
   "main": "index.js",
   "scripts": {
-    "start": "node auth/login.js && nodemon index.js",
+    "start": "nodemon index.js",
     "dev": "nodemon index.js",
     "login": "node auth/login.js",
+    "sync:html": "node src/sync-news-aspx-page/migrate/runHtmlMigration.js",
+    "sync:images": "node src/sync-news-aspx-page/migrate/runDownloadImagesFromJson.js",
     "swagger:gen": "node generate-swagger.js",
     "build": "npm run swagger:gen && webpack",
     "start:dist": "node dist/app.js",
+    "login:new-system": "node auth/newSortAccess.js",
     "start:session-refresher": "node auth/session-refresher.js"
   },
   "keywords": [
@@ -26,6 +29,7 @@
     "axios-ntlm": "^1.4.6",
     "bcrypt": "^6.0.0",
     "bootstrap-icons": "^1.13.1",
+    "cheerio": "^1.2.0",
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",
     "express": "^4.18.2",
@@ -34,6 +38,7 @@
     "mime-types": "^3.0.2",
     "minio": "^8.0.7",
     "mssql": "^10.0.1",
+    "playwright": "^1.58.2",
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-dist": "^5.31.0",
     "swagger-ui-express": "^5.0.1",
@@ -43,7 +48,7 @@
   "devDependencies": {
     "archiver": "^7.0.1",
     "copy-webpack-plugin": "^13.0.1",
-    "nodemon": "^3.0.2",
+    "nodemon": "^3.1.14",
     "webpack": "^5.104.1",
     "webpack-cli": "^6.0.1"
   }

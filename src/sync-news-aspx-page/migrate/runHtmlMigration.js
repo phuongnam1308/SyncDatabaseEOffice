@@ -54,12 +54,14 @@ async function run() {
             const slug = path.basename(file, '.aspx');
             const jsonFilePath = path.join(jsonOutDir, `${slug}.json`);
 
+            /*
             // Kiểm tra xem đã parse chưa, nếu có file JSON rồi thì skip
             if (fs.existsSync(jsonFilePath)) {
                 console.log(`  [SKIP] Đã tồn tại file JSON: ${slug}.json`);
                 // Vẫn có thể insert vào DB nếu cần từ cục JSON cũ, nhưng hiện tại skip hoàn toàn
                 continue; 
             }
+            */
 
             try {
                 // 1. Quét HTML, tải ảnh, trả về object data
