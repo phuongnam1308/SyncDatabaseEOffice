@@ -24,7 +24,7 @@ class MigrationDocumentCommentsService {
       // Thử tìm trong incoming_documents trước
       const incomingQuery = `
         SELECT TOP 1 document_id
-        FROM ${process.env.NEW_DB_NAME}.dbo.incomming_documents2
+        FROM ${process.env.NEW_DB_NAME}.dbo.incomming_documents
         WHERE id_incoming_bak = @documentIdBak
       `;
       

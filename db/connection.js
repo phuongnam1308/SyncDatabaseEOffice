@@ -203,6 +203,25 @@ class DatabaseConnection {
           ONLINE = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON);
   END
 
+  -- sync_job_buffers table
+  IF NOT EXISTS (
+    SELECT 1 FROM sys.tables
+    WHERE name = 'sync_job_buffers' AND schema_id = SCHEMA_ID('dbo')
+  )
+  BEGIN
+    CREATE TABLE dbo.sync_job_buffers (
+      sync_job_id nvarchar(200) COLLATE SQL_Latin1_General_CP1_CI_AS NOT NULL,
+      model_name nvarchar(255) COLLATE SQL_Latin1_General_CP1_CI_AS NOT NULL,
+      last_sync_time datetime2 NULL,
+      total_count int DEFAULT 0 NOT NULL,
+      processing_item int DEFAULT 0 NOT NULL,
+      status nvarchar(30) COLLATE SQL_Latin1_General_CP1_CI_AS DEFAULT 'READY' NOT NULL,
+      created_at datetime2 DEFAULT sysdatetime() NOT NULL,
+      updated_at datetime2 DEFAULT sysdatetime() NOT NULL,
+      CONSTRAINT PK__sync_job__46A76B0394CFDEBA PRIMARY KEY (sync_job_id)
+    );
+  END
+
   -- cron_sync_config table
   IF NOT EXISTS (
     SELECT 1 FROM sys.tables

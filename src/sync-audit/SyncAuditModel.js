@@ -430,6 +430,7 @@ class SyncAuditModel extends BaseModel {
     const query = `
       UPDATE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable}
       SET
+        document_id = @document_id,
         display_name = @display_name,
         action_code = @action_code,
         details = @details,
@@ -450,6 +451,7 @@ class SyncAuditModel extends BaseModel {
       query,
       {
         id: existingId,
+        document_id: data.document_id,
         display_name: data.display_name ?? null,
         action_code: data.action_code ?? null,
         details: data.details ?? null,

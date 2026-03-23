@@ -14,8 +14,8 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         this.oldDbSchema = 'dbo';
         this.oldDbTable = 'VanBanDen';
         this.newDbSchema = 'dbo';
-        this.newTableSync = 'incoming_documents_sync'; //Bảng trung gian lưu data raw dùng để sync dần vào bảng chính `user_clone_for_sync`
-        this.newDbTable = 'incoming_documents';
+        this.newTableSync = 'incomming_documents_sync'; //Bảng trung gian lưu data raw dùng để sync dần vào bảng chính `user_clone_for_sync`
+        this.newDbTable = 'incomming_documents';
         // Properties for INSERT/UPDATE queries
         this.dbName = this.newDbName;
         this.mainSchema = this.newDbSchema;
@@ -29,7 +29,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         }
         return `${this.newDbSchema}.${this.newTableSync}`;
     }
-    
+
     getMainTableRef() {
         if (this.newDbName) {
             return `${this.newDbName}.${this.mainSchema}.${this.mainTable}`;
@@ -269,7 +269,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         *,
         ISNULL(__sync_id_num, 0) AS __sync_id
     FROM source_rows
-    WHERE 
+    WHERE
         __sync_time IS NOT NULL
         AND (
             __sync_time > @lastSyncTime
@@ -650,13 +650,15 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         parent_doc, type_process_doc, bpmn_version, copy_to_internal,
         resolution_deadline, copy_count, page_count, view_group, directive_comment,
         SoVanBan, id_incoming_bak,
+        CoQuanGui2, CoQuanGuiText,
         DonVi, IsLibrary, ItemVBDTCT, ItemVBPH, ItemVBPHOld,
         BanLanhDao, LanhDaoTCT, LanhDaoTCTDaXuLy, LanhDaoTCTDeBiet, LanhDaoVPDN,
         LinhVuc, SoBan, SoTrang, TrichYeu, VanBanTraLoi, ChenSo,
         YKienLanhDao, YKienLanhDaoTCT, YKienLanhDaoVPDN, YKienCuaLDVPChoVanThu,
         ForwardType, ModuleId, SiteName, ListName, ItemId,
         MigrateFlg, YearMonth, MigrateErrFlg, MigrateErrMess,
-        TrangThai, ModifiedBy, CreatedBy, DGPId, deadline_reply, table_backup
+        TrangThai, ModifiedBy, CreatedBy, DGPId, deadline_reply, table_backup,
+        tb_bak, tb_update, status_code_bef_test, sender_unit_bef_test, receiver_unit_bef_test
       )
       VALUES (
         @document_id, @status_code, @created_at, @updated_at, @book_document_id,
@@ -667,13 +669,15 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         @parent_doc, @type_process_doc, @bpmn_version, @copy_to_internal,
         @resolution_deadline, @copy_count, @page_count, @view_group, @directive_comment,
         @SoVanBan, @id_incoming_bak,
+        @CoQuanGui2, @CoQuanGuiText,
         @DonVi, @IsLibrary, @ItemVBDTCT, @ItemVBPH, @ItemVBPHOld,
         @BanLanhDao, @LanhDaoTCT, @LanhDaoTCTDaXuLy, @LanhDaoTCTDeBiet, @LanhDaoVPDN,
         @LinhVuc, @SoBan, @SoTrang, @TrichYeu, @VanBanTraLoi, @ChenSo,
         @YKienLanhDao, @YKienLanhDaoTCT, @YKienLanhDaoVPDN, @YKienCuaLDVPChoVanThu,
         @ForwardType, @ModuleId, @SiteName, @ListName, @ItemId,
         @MigrateFlg, @YearMonth, @MigrateErrFlg, @MigrateErrMess,
-        @TrangThai, @ModifiedBy, @CreatedBy, @DGPId, @deadline_reply, @table_backup
+        @TrangThai, @ModifiedBy, @CreatedBy, @DGPId, @deadline_reply, @table_backup,
+        @tb_bak, @tb_update, @status_code_bef_test, @sender_unit_bef_test, @receiver_unit_bef_test
       )
     `;
 
@@ -687,7 +691,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
       UPDATE ${mainTableRef}
       SET
         status_code = @status_code,
-        updated_at = GETDATE(),
+        updated_at = @updated_at,
         book_document_id = @book_document_id,
         abstract_note = @abstract_note,
         to_book = @to_book,
@@ -718,6 +722,8 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         view_group = @view_group,
         directive_comment = @directive_comment,
         SoVanBan = @SoVanBan,
+        CoQuanGui2 = @CoQuanGui2,
+        CoQuanGuiText = @CoQuanGuiText,
         DonVi = @DonVi,
         IsLibrary = @IsLibrary,
         ItemVBDTCT = @ItemVBDTCT,
@@ -752,7 +758,12 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         CreatedBy = @CreatedBy,
         DGPId = @DGPId,
         deadline_reply = @deadline_reply,
-        table_backup = @table_backup
+        table_backup = @table_backup,
+        tb_bak = @tb_bak,
+        tb_update = @tb_update,
+        status_code_bef_test = @status_code_bef_test,
+        sender_unit_bef_test = @sender_unit_bef_test,
+        receiver_unit_bef_test = @receiver_unit_bef_test
       WHERE id_incoming_bak = @id_incoming_bak
     `;
 
@@ -847,9 +858,9 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         const privateLevel = await this.helper.processPrivateLevel(oldRecord.DoMat);
 
         const senderUnit = await this.helper.mapSenderUnitId(
-            oldRecord.CoQuanGui || oldRecord.CoQuanGuiText,
+            oldRecord.CoQuanGui2 || oldRecord.CoQuanGui || oldRecord.CoQuanGuiText,
             transaction);
-        
+
         const drafter = await this.helper.mapUserName(
             oldRecord.CreatedBy || oldRecord.NguoiSoanThaoText,
             transaction
@@ -861,31 +872,35 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         );
 
         // Map đơn vị nhận
-        const units = this.helper.splitStringSplitBySemicolon(oldRecord.NoiNhan);
-        const internalReceivingDeptIds = [];
+        const units = this.helper.splitStringSplitBySemicolon(oldRecord.DonVi);
+        let receiverUnit = null;
         for (const unit of units) {
             const id = await this.helper.mapSenderUnitId(unit, transaction);
             if (id) {
-                internalReceivingDeptIds.push(id);
+                receiverUnit = id;
+                break;
             }
         }
-        const receiverUnitStr = JSON.stringify(internalReceivingDeptIds);
+
+        if (!receiverUnit) {
+            receiverUnit = (process.env.DEFAULT_RECEIVER_UNIT_ID || "17736403455966351");
+        }
 
         const statusInfo = this._mapStatus(oldRecord.TrangThai);
         const statusCode = statusInfo.statusCode;
         const bpmnVersion = statusInfo.bpmnVersion;
-        
-        const createdAt = this.safeDate(oldRecord.Created);
-        const updatedAt = this.safeDate(oldRecord.Modified || oldRecord.modifiedBy);
+
+        const createdAt = this.safeDate(oldRecord.Created || oldRecord.NgayTao);
+        const updatedAt = this.safeDate(oldRecord.Modified) || createdAt;
         const abstractNote = this.safeString(oldRecord.TrichYeu);
         const toBook = bookDocumentObj?.count ?? null;
         const documentDate = this.safeDate(oldRecord.NgayTrenVB);
         const receiveDate = this.safeDate(oldRecord.NgayDen);
         const deadline = this.safeDate(oldRecord.ThoiHanGQ);
-        const documentField = await this.helper.documentField(oldRecord.LinhVuc);
+        const documentField = await this.helper.processDocumentField(oldRecord.LinhVuc);
         const pageCount = this.safeNumber(oldRecord.SoTrang, null);
         const soBan = this.safeNumber(oldRecord.SoBan, null);
-        
+
         return {
             // Core fields
             document_id: `${Date.now()}${Math.floor(Math.random() * 10000)}`,
@@ -896,10 +911,10 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
             abstract_note: abstractNote,
             to_book: toBook,
             sender_unit: senderUnit,
-            receiver_unit: receiverUnitStr,
+            receiver_unit: receiverUnit,
             document_date: documentDate,
             receive_date: receiveDate,
-            to_book_date: null,
+            to_book_date: receiveDate, // Gán tạm bằng ngày đến
             deadline: deadline,
             second_book: null,
             receive_method: null,
@@ -908,7 +923,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
             document_type: documentType,
             document_field: documentField,
             signer: null,
-            to_book_code: null,
+            to_book_code: this.safeString(oldRecord.SoDen),
             fileids: this.safeString(oldRecord.Files),
             status: statusCode,
             isStar: 0,
@@ -962,7 +977,12 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
             CreatedBy: drafter,
             DGPId: this.safeNumber(oldRecord.DGPId, null),
             deadline_reply: this.safeString(oldRecord.ThoiHanGQ),
-            table_backup: 'data_sync',
+            table_backup: 'VanBanDen',
+            tb_bak: 1,
+            tb_update: 0,
+            status_code_bef_test: statusCode,
+            sender_unit_bef_test: this.safeString(oldRecord.CoQuanGui2 || oldRecord.CoQuanGuiText),
+            receiver_unit_bef_test: this.safeString(oldRecord.DonVi),
         }
     }
 
@@ -1042,9 +1062,14 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
             CreatedBy: record.CreatedBy ?? null,
             DGPId: record.DGPId ?? null,
             deadline_reply: record.deadline_reply ?? null,
-            table_backup: record.table_backup ?? 'data_sync',
+            table_backup: record.table_backup ?? 'VanBanDen',
+            tb_bak: record.tb_bak ?? 0,
+            tb_update: record.tb_update ?? 0,
+            status_code_bef_test: record.status_code_bef_test ?? null,
+            sender_unit_bef_test: record.sender_unit_bef_test ?? null,
+            receiver_unit_bef_test: record.receiver_unit_bef_test ?? null,
         }
     }
-    
+
 }
 module.exports = SyncIncomingDocumentModel;

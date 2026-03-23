@@ -26,6 +26,38 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
   async initialize() {
     await super.initialize();
     await this.ensureStagingTableExists();
+
+    // Tự động chuyển cột id sang NVARCHAR để chấp nhận ID dạng bình thường (Mã NV)
+    try {
+        const tableRef = this.newDbName
+          ? `${this.newDbName}.${this.newDbSchema}.${this.newDbTable}`
+          : `${this.newDbSchema}.${this.newDbTable}`;
+          
+        await this.queryNewDb(`
+            BEGIN TRY
+                -- 1. Tìm và xóa Khóa chính (Primary Key) hiện hữu để có thể sửa cột id
+                DECLARE @pkname NVARCHAR(200);
+                SELECT @pkname = name FROM sys.key_constraints WHERE type = 'PK' AND parent_object_id = OBJECT_ID('${tableRef}');
+                IF @pkname IS NOT NULL
+                    EXEC('ALTER TABLE ${tableRef} DROP CONSTRAINT ' + @pkname);
+
+                -- 2. Đổi kiểu cột id sang NVARCHAR
+                ALTER TABLE ${tableRef} ALTER COLUMN id NVARCHAR(100) NOT NULL;
+
+                -- 3. Tạo lại Khóa chính trên cột id mới
+                IF NOT EXISTS (SELECT 1 FROM sys.key_constraints WHERE type = 'PK' AND parent_object_id = OBJECT_ID('${tableRef}'))
+                    EXEC('ALTER TABLE ${tableRef} ADD CONSTRAINT PK_${this.newDbTable}_id PRIMARY KEY (id)');
+            END TRY
+            BEGIN CATCH
+                -- Dự phòng: Nếu là lỗi nhỏ, in cảnh báo, nếu lỗi nặng, ném ra
+                IF ERROR_NUMBER() = 50000 -- Lỗi tùy chỉnh
+                    THROW;
+            END CATCH
+        `);
+        logger.info(`[StreamUserMigrationModel] ID column in ${this.newDbTable} ensured to be NVARCHAR with PK reset.`);
+    } catch (e) {
+        logger.warn(`[StreamUserMigrationModel] Failed to alter id column: ${e.message}`);
+    }
   }
 
   /**
@@ -302,7 +334,7 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
     const position = this.safeString(oldRecord.Position);
 
     return {
-      id: oldRecord.ID,
+      id: code_nd || oldRecord.ID, // Dùng Mã NV làm ID chính thay vì GUID
       password: process.env.DEFAULT_PASSWORD ||'$2b$10$Ohcqw9J1YStppJHeYdoD5.yWjnCm5Mt7MQxWoIMNc0LBwbFRW1DU2',
       name,
       avatar: oldRecord.Image || '[]',

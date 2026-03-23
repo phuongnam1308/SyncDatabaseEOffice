@@ -2,6 +2,7 @@ const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '../../../.env') });
 const sql = require('mssql');
 const { newDbConfig } = require('../../../config/database');
+const MigrationHelper = require('../../helpers/MigrationHelper');
 
 async function run() {
     let pool = null;
@@ -10,11 +11,62 @@ async function run() {
         pool = await sql.connect(newDbConfig);
         console.log('✅ Connected to target database.');
 
-        // 1. Get a default topic
-        console.log('Fetching default topic...');
-        const topicResult = await pool.request().query('SELECT TOP 1 id FROM dbo.topics WHERE status = 1 OR status IS NULL');
-        const defaultTopicId = topicResult.recordset.length > 0 ? topicResult.recordset[0].id : null;
-        console.log(`Using default topic ID: ${defaultTopicId}`);
+        // Khởi tạo Helper với query function
+        const helper = new MigrationHelper(async (sqlStr, params) => {
+            const request = pool.request();
+            if (params) {
+                for (const key in params) {
+                    request.input(key, params[key]);
+                }
+            }
+            const result = await request.query(sqlStr);
+            return result.recordset;
+        });
+
+        // 0. Đảm bảo các bảng có đầy đủ các cột cần thiết
+        console.log('\n--- SCHEMA CHECK & AUTO UPDATE ---');
+        const schemaChecks = [
+            { table: 'dbo.topics', column: 'tb_bak', type: 'INT DEFAULT 0' },
+            { table: 'dbo.news', column: 'viewCount', type: 'INT DEFAULT 0' },
+            { table: 'dbo.news', column: 'tags', type: 'NVARCHAR(MAX) NULL' },
+            { table: 'dbo.news', column: 'nameThumbnail', type: 'NVARCHAR(MAX) NULL' },
+            { table: 'dbo.news', column: 'sizeSmall', type: 'NVARCHAR(MAX) NULL' },
+            { table: 'dbo.news', column: 'sizeMedium', type: 'NVARCHAR(MAX) NULL' },
+            { table: 'dbo.news', column: 'sizeBig', type: 'NVARCHAR(MAX) NULL' }
+        ];
+
+        for (const check of schemaChecks) {
+            try {
+                const tableName = check.table.split('.')[1];
+                const checkColumnQuery = `
+                    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('${check.table}') AND name = '${check.column}')
+                    BEGIN
+                        PRINT '[Schema Check] Dang them cot ${check.column} vao bang ${check.table}...';
+                        ALTER TABLE ${check.table} ADD ${check.column} ${check.type};
+                        SELECT 1 AS added;
+                    END
+                    ELSE SELECT 0 AS added;
+                `;
+                const result = await pool.request().query(checkColumnQuery);
+                if (result.recordset && result.recordset[0] && result.recordset[0].added === 1) {
+                    console.log(`✅ [Schema Check] Đã tự động thêm cột [${check.column}] vào bảng [${check.table}].`);
+                } else {
+                    console.log(`ℹ️ [Schema Check] Cột [${check.column}] đã tồn tại trong bảng [${check.table}].`);
+                }
+            } catch (e) {
+                console.error(`❌ [Schema Check] Lỗi khi kiểm tra/cập nhật cột [${check.column}] tại [${check.table}]:`, e.message);
+            }
+        }
+        console.log('--- SCHEMA CHECK COMPLETED ---\n');
+
+        // 1. Get all topics for mapping by name
+        console.log('Fetching topics for mapping...');
+        const topicsResult = await pool.request().query('SELECT id, name FROM dbo.topics WHERE status = 1');
+        const topicMap = {};
+        topicsResult.recordset.forEach(t => {
+            if (t.name) topicMap[t.name.trim().toLowerCase()] = t.id;
+        });
+        console.log(`Available topics count: ${Object.keys(topicMap).length}`);
 
         // 2. Get a fallback admin User ID
         const adminResult = await pool.request().query("SELECT TOP 1 id FROM dbo.users WHERE username = 'admin-tancang'");
@@ -36,20 +88,27 @@ async function run() {
                 BEGIN
                     UPDATE dbo.news SET 
                         title = @title,
+                        summary = @summary,
                         content = @content,
                         authorName = @authorName,
                         publishedAt = @publishedAt,
                         status = @status,
                         updatedAt = GETDATE(),
                         topic = @topic,
-                        authorId = @authorId
+                        authorId = @authorId,
+                        nameThumbnail = @thumbnail,
+                        sizeSmall = @thumbnail,
+                        sizeMedium = @thumbnail,
+                        sizeBig = @thumbnail,
+                        tags = @tags,
+                        viewCount = @viewCount
                     WHERE slug = @slug;
                     SELECT @NewsId = id FROM dbo.news WHERE slug = @slug;
                 END
                 ELSE
                 BEGIN
-                    INSERT INTO dbo.news (title, slug, content, authorName, publishedAt, status, createdAt, updatedAt, topic, authorId, isComment, isSpecial, isImportant)
-                    VALUES (@title, @slug, @content, @authorName, @publishedAt, @status, GETDATE(), GETDATE(), @topic, @authorId, 1, 0, 0);
+                    INSERT INTO dbo.news (title, slug, summary, content, authorName, publishedAt, status, createdAt, updatedAt, topic, authorId, isComment, isSpecial, isImportant, nameThumbnail, sizeSmall, sizeMedium, sizeBig, tags, viewCount)
+                    VALUES (@title, @slug, @summary, @content, @authorName, @publishedAt, @status, GETDATE(), GETDATE(), @topic, @authorId, 1, 0, 0, @thumbnail, @thumbnail, @thumbnail, @thumbnail, @tags, @viewCount);
                     SELECT @NewsId = SCOPE_IDENTITY();
                 END
                 SELECT @NewsId AS NewsId;
@@ -57,15 +116,23 @@ async function run() {
 
             const status = row.isActive ? 1 : 0; // Assuming 1 is active/published
             
+            // Determine the topic ID based on newsType name comparison (Sử dụng Helper xử lý trùng lặp và tạo mới)
+            const topicId = await helper.getOrCreateTopic(row.newsType || 'Tin tức', topicMap);
+            console.log(`[Topic Mapping] bài viết [${row.title}] -> Topic ID: ${topicId}`);
+            
             const newsRequest = pool.request();
             newsRequest.input('title', sql.NVarChar, row.title);
             newsRequest.input('slug', sql.NVarChar, row.slug);
+            newsRequest.input('summary', sql.NVarChar, row.summary);
             newsRequest.input('content', sql.NVarChar, row.content);
             newsRequest.input('authorName', sql.NVarChar, row.authorName);
             newsRequest.input('publishedAt', sql.DateTime2, row.publishedAt);
             newsRequest.input('status', sql.Int, status);
-            newsRequest.input('topic', sql.NVarChar, String(defaultTopicId));
+            newsRequest.input('topic', sql.NVarChar, String(topicId));
             newsRequest.input('authorId', sql.NVarChar, adminId);
+            newsRequest.input('thumbnail', sql.NVarChar, row.thumbnail);
+            newsRequest.input('tags', sql.NVarChar, row.tags);
+            newsRequest.input('viewCount', sql.Int, row.view_count || 0);
 
             const newsResult = await newsRequest.query(newsQuery);
             const newsId = newsResult.recordset[0].NewsId;

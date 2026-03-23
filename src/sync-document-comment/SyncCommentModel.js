@@ -152,7 +152,7 @@ class StreamCommentMigrationModel extends BaseModel {
         [type] = @type,
         file_id = @fileId,
         likes = @likes,
-        updated_at = GETDATE(),
+        updated_at = GETDATE()
       WHERE id_comments_bak = @idCommentsBak AND table_bak = @tableBackup
     `;
     await this.queryNewDbTx(query, {

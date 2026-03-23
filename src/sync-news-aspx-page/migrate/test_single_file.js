@@ -8,21 +8,25 @@ async function testSingleFile() {
     
     console.log('Allowed IMG Paths:', migrator.allowedImgPaths);
 
-    const filePath = path.resolve(__dirname, '../../../tintucraw/tintuc/Pages/cac-kien-thuc-can-biet-ve-benh-tang-huyet-ap.aspx');
+    const filePath = path.resolve(__dirname, '../../../tintucraw/tintuc/Pages/ke-hoach-don-doan-cbam-ngay-18-04.aspx');
     
     if (!fs.existsSync(filePath)) { console.error('File not found:', filePath); return; }
 
     try {
-        console.log('\n--- TESTING (WITH WHITELIST FILTER) ---');
+        console.log('\n--- TESTING EXTRACTION ---');
         const data = await migrator.parseHtmlFile(filePath);
+        console.log('Title (Vietnamese):', data.title);
+        console.log('Summary:', data.summary);
+        console.log('Category (newsType):', data.newsType);
+        console.log('Thumbnail:', data.thumbnail);
+        console.log('Tags:', data.tags);
+        console.log('Published At:', data.publishedAt);
         console.log('isActive:', data.isActive);
         console.log('itemId:', data.itemId);
-        console.log('newsType:', data.newsType);
-        console.log('Images:', JSON.stringify(data.images, null, 2));
         
         const jsonFilePath = path.join(migrator.jsonOutputPath, `${data.slug}.json`);
         fs.writeFileSync(jsonFilePath, JSON.stringify(data, null, 2), 'utf-8');
-        console.log('\n✅ JSON saved to:', jsonFilePath);
+        console.log('\n✅ JSON result saved to:', jsonFilePath);
     } catch (err) {
         console.error('Test failed:', err);
     }

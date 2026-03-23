@@ -127,9 +127,16 @@ class FileUploadService {
 
   /**
    * Lấy token của hệ thống mới từ file cache hoặc login lại nếu cần
+   * @param {boolean} forceRefresh - Nếu true, sẽ xóa token cũ và lấy lại từ đầu
    */
-  async _getNewSystemToken() {
+  async _getNewSystemToken(forceRefresh = false) {
     try {
+      // Nếu forceRefresh, xóa file trước
+      if (forceRefresh && fsSync.existsSync(NEW_SYSTEM_TOKEN_FILE)) {
+        logger.info('[FileUploadService] Đang xóa token cũ để lấy token mới...');
+        try { await fs.unlink(NEW_SYSTEM_TOKEN_FILE); } catch (_) {}
+      }
+
       // Thử đọc từ file trước
       if (fsSync.existsSync(NEW_SYSTEM_TOKEN_FILE)) {
         const token = await fs.readFile(NEW_SYSTEM_TOKEN_FILE, 'utf-8');
@@ -137,7 +144,7 @@ class FileUploadService {
       }
       
       // Nếu không có hoặc lỗi, gọi login để lấy mới
-      logger.info('[FileUploadService] Token hệ thống mới không tìm thấy, đang thực hiện login...');
+      logger.info('[FileUploadService] Token hệ thống mới không tìm thấy hoặc bị bắt buộc lấy mới, đang thực hiện login...');
       const newToken = await getAccessToken();
       return newToken;
     } catch (error) {
@@ -147,9 +154,16 @@ class FileUploadService {
   }
 
   /**
+   * Helper: Sleep for ms
+   */
+  async _sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
    * Upload file lên hệ thống mới (Lifetex API)
    */
-  async uploadToNewSystem({ fileBuffer, originalName, objectType, objectId }) {
+  async uploadToNewSystem({ fileBuffer, originalName, objectType, objectId }, retryCount = 0) {
     const url = process.env.NEW_SYSTEM_UPLOAD_URL;
     if (!url) {
       logger.warn('[FileUploadService] NEW_SYSTEM_UPLOAD_URL chưa được cấu hình, bỏ qua upload hệ thống mới.');
@@ -170,7 +184,11 @@ class FileUploadService {
     formData.append('object_type', objectType || '');
     formData.append('object_id', String(objectId || ''));
 
-    logger.info(`[FileUploadService] Đang upload lên hệ thống mới: ${url} | object_type=${objectType} | object_id=${objectId}`);
+    if (retryCount === 0) {
+      logger.info(`[FileUploadService] Đang upload lên hệ thống mới: ${url} | object_type=${objectType} | object_id=${objectId}`);
+    } else {
+      logger.info(`[FileUploadService] Đang upload lại (lần ${retryCount}): ${url} | object_type=${objectType} | object_id=${objectId}`);
+    }
 
     try {
       const response = await axios.post(url, formData, {
@@ -184,8 +202,34 @@ class FileUploadService {
       logger.info(`[FileUploadService] Upload hệ thống mới thành công: ${JSON.stringify(response.data)}`);
       return response.data;
     } catch (error) {
+      const isRateLimit = error.response && (
+        error.response.status === 429 || 
+        (error.response.data && error.response.data.message === 'API rate limit exceeded')
+      );
+
+      // Nếu là lỗi 401 (Unauthorized), thử xóa token và login lại 1 lần duy nhất
+      const isUnauthorized = error.response && error.response.status === 401;
+      
+      const maxRetries = parseInt(process.env.NEW_SYSTEM_UPLOAD_RETRY_COUNT || '5', 10);
+      const retryDelay = parseInt(process.env.NEW_SYSTEM_UPLOAD_RETRY_DELAY_MS || '3000', 10);
+
+      if (isUnauthorized && retryCount === 0) {
+        logger.warn('[FileUploadService] Bị lỗi 401 (Unauthorized). Đang xóa token cũ và thử lại với token mới...');
+        // Force refresh token
+        await this._getNewSystemToken(true);
+        return this.uploadToNewSystem({ fileBuffer, originalName, objectType, objectId }, retryCount + 1);
+      }
+
+      if (isRateLimit && retryCount < maxRetries) {
+        // Sử dụng exponential backoff: 2^retryCount * baseDelay (ví dụ: 3s, 6s, 12s, 24s, 48s)
+        const delay = Math.pow(2, retryCount) * retryDelay; 
+        logger.warn(`[FileUploadService] Bị rate limit (429). Đang chờ ${delay}ms trước khi thử lại lần ${retryCount + 1}/${maxRetries}...`);
+        await this._sleep(delay);
+        return this.uploadToNewSystem({ fileBuffer, originalName, objectType, objectId }, retryCount + 1);
+      }
+
       const errorDetail = error.response ? JSON.stringify(error.response.data) : error.message;
-      logger.error(`[FileUploadService] Upload hệ thống mới thất bại: ${errorDetail}`);
+      logger.error(`[FileUploadService] Upload he thong moi (MinIO API) THAT BAI (retry=${retryCount}): ${errorDetail}`);
       return null;
     }
   }
@@ -296,45 +340,29 @@ class FileUploadService {
       await fs.writeFile(localFullPath, fileBuffer);
     }
 
-    // ── BƯỚC 1: Chọn phương thức upload (Hệ thống mới hoặc MinIO cũ) ──
+    // ── BƯỚC 1: Chọn phương thức upload (CHỈ DÙNG HỆ THỐNG MỚI) ──
     let uploadSuccess = false;
     let apiResponse = null;
     let storagePath = null;
 
-    // Ưu tiên upload lên hệ thống mới nếu được cấu hình và có thông tin relation
     if (process.env.NEW_SYSTEM_UPLOAD_URL && relationRecord && relationRecord.object_id) {
-      try {
-        apiResponse = await this.uploadToNewSystem({
-          fileBuffer,
-          originalName,
-          objectType: relationRecord.object_type,
-          objectId: relationRecord.object_id
-        });
-        if (apiResponse && apiResponse.id) {
-          uploadSuccess = true;
-          storagePath = apiResponse.file_path; // VD: "TCSG/docDraft/1773913432785_docjson7.zip"
-          logger.info(`[FileUploadService] Upload lên hệ thống mới OK. Sử dụng metadata từ API.`);
-        }
-      } catch (err) {
-        logger.error(`[FileUploadService] Upload lên hệ thống mới lỗi: ${err.message}. Đang thử fallback sang MinIO cũ...`);
-      }
-    }
-
-    // Nếu không upload lên hệ thống mới hoặc upload lỗi, dùng MinIO cũ
-    if (!uploadSuccess) {
-      logger.info(`[FileUploadService][MinIO] Đang thực hiện upload lên MinIO cũ (fallback)...`);
-      try {
-        await this._ensureBucket(targetBucket);
-        storagePath = await this._upload(targetBucket, objectName, fileBuffer, mime);
+      apiResponse = await this.uploadToNewSystem({
+        fileBuffer,
+        originalName,
+        objectType: relationRecord.object_type,
+        objectId: relationRecord.object_id
+      });
+      
+      if (apiResponse && apiResponse.id) {
         uploadSuccess = true;
-      } catch (err) {
-        logger.error(`[FileUploadService][MinIO] Upload lên MinIO cũ thất bại: ${err.message}`);
-        
-        if (localFullPath) {
-          try { await fs.unlink(localFullPath); } catch (_) {}
-        }
-        throw err;
+        storagePath = apiResponse.file_path; 
+        logger.info(`[FileUploadService] THANH CONG: Da upload qua API hệ thống mới. storagePath: ${storagePath}`);
+      } else {
+        throw new Error(`[FileUploadService] Upload qua API thất bại: ${JSON.stringify(apiResponse)}`);
       }
+    } else {
+      // Nếu không có cấu hình hệ thống mới, lỗi luôn vì người dùng không muốn dùng MinIO cũ
+      throw new Error('[FileUploadService] NEW_SYSTEM_UPLOAD_URL chưa được cấu hình hoặc thiếu thông tin relationRecord.objectId. (Cơ chế MinIO cũ đã bị tắt)');
     }
 
     // ── BƯỚC 2 & 3: Insert files + file_relations ──

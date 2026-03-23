@@ -142,7 +142,7 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
     this.oldDbSchema = 'dbo';
     this.oldDbTable = 'VanBanDen';
     this.newDbSchema = 'dbo';
-    this.newTableSync = 'incoming_documents_sync';
+    this.newTableSync = 'incomming_documents_sync';
 
     this._syncAuditModel = [];
     this._syncCommentModel = [];
@@ -728,8 +728,10 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
 
   async ThemFileDinhKem(oldRecord, newDocumentRecord, documentId) {
     const files = oldRecord?.Files || '';
+    logger.info(`[DEBUG][ThemFileDinhKem] Dang kiem tra file cho ban ghi ID: ${oldRecord?.ID}. Gia tri cot Files: "${files}"`);
+    
     if (!files) {
-      // This is normal, just return
+      logger.info(`[DEBUG][ThemFileDinhKem] Ban ghi ID ${oldRecord?.ID} KHONG co file đính kèm (cot Files trong DB cũ trống).`);
       return false;
     }
 
@@ -750,25 +752,21 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
       const firstPartIsLikelyFile = /\.(pdf|docx?|xlsx?|jpe?g|png|gif|bmp)$/i.test(parts[0]);
 
       if (firstPartIsLikelyFile) {
-        // FORMAT 1: "path/to/file.pdf|other_data..."
-        // Assume the first part is the full relative path to the file.
-        // The current logic handles only this first file found.
+        logger.info(`[DEBUG][ThemFileDinhKem] Phat hien FORMAT 1 (relativePath truc tiep): ${parts[0]}`);
         const relativePath = parts[0];
         filesToProcess.push(relativePath);
-
       } else {
-        // FORMAT 2: "path/to/dir/|file1.pdf|file2.docx"
-        // The first part is the directory, subsequent parts are filenames.
         const directory = parts[0];
         const names = parts.slice(1);
+        logger.info(`[DEBUG][ThemFileDinhKem] Phat hien FORMAT 2 (directory + multiple files). Directory: "${directory}", Files count: ${names.length}`);
         for (const name of names) {
-          if (!name) continue; // Sanity check
+          if (!name) continue;
           const relativePath = directory.endsWith('/') ? `${directory}${name}` : `${directory}/${name}`;
           filesToProcess.push(relativePath);
         }
       }
 
-      console.log(`[ThemFileDinhKem] Record ${oldRecord.ID}: Found files to process:`, filesToProcess);
+      logger.info(`[DEBUG][ThemFileDinhKem] Record ${oldRecord.ID}: Found ${filesToProcess.length} files to process: ${filesToProcess.join(', ')}`);
 
       for (const relativePath of filesToProcess) {
         if (!relativePath.includes('/')) {
@@ -781,9 +779,13 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
 
         let buffer;
         try {
+          logger.info(`[DEBUG][ThemFileDinhKem] Dang tai file tu SharePoint: ${fullUrl}`);
           // spDownload uses authentication cookies managed by SharePointAuthService
           buffer = await spDownload(fullUrl);
-          console.log(`[ThemFileDinhKem] Successfully downloaded: ${fileName}`);
+          if (!buffer || buffer.length === 0) {
+            throw new Error(`Buffer tải về trống cho file ${fileName}`);
+          }
+          logger.info(`[DEBUG][ThemFileDinhKem] Tai file thanh cong: ${fileName} | Dung luong: ${buffer.length} bytes`);
         } catch (downloadErr) {
           logger.error(`[ThemFileDinhKem] Failed to download file from ${fullUrl}: ${downloadErr.message}`);
           continue; // Skip this file and continue with the next one.
@@ -801,19 +803,20 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
           version: 1,
           id_bak: fileIdBak,
           table_bak: 'VanBanDen',
-          type_doc: 'incomingDocument',
+          type_doc: 'IncomingDocument',
           isBak: 1
         };
 
         const relationRecord = {
-          object_type: 'incomingDocument',
+          object_type: 'IncomingDocument',
           object_id: String(documentId),
           object_id_bak: oldRecord?.ID,
           file_id_bak: fileIdBak,
           table_bak: 'VanBanDen',
-          type_doc: 'incomingDocument',
+          type_doc: 'IncomingDocument',
         };
 
+        logger.info(`[DEBUG][ThemFileDinhKem] [BUOC 4] Chuan bi metadata de upload. fileName=${fileName}, relativePath=${relativePath}, mimeType=${mimeType}`);
         const result = await fileSvc.uploadAndInsert({
           fileBuffer: buffer,
           originalName: fileName,
@@ -824,11 +827,10 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
           localFolder: 'incoming'
         });
 
-        console.log(`[ThemFileDinhKem] Inserted file for record ${oldRecord.ID}, new file ID: ${result.fileId}`);
+        logger.info(`[DEBUG][ThemFileDinhKem] [KET QUA] Da hoan tat upload cho file ${fileName}. result: ${JSON.stringify(result)}`);
       }
 
       return true;
-
     } catch (error) {
       logger.error(`[ThemFileDinhKem] Unexpected error while migrating files for record ID ${oldRecord?.ID}: ${error.message}`, { stack: error.stack });
       return false;
@@ -930,6 +932,7 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
       }
 
       const newRrecord = await this.getByIdFromStaging(id, transaction);
+      logger.info(`[DEBUG][upsertDocumentAggregateById] Bat dau goi ThemFileDinhKem cho documentId: ${documentId}`);
       await this.ThemFileDinhKem(oldRecord, newRrecord, documentId);
 
 

@@ -251,6 +251,30 @@ class MigrationHelper {
     }
   }
 
+  async processDocumentField(value) {
+    try {
+      if (typeof value !== "string" || value.trim() === "") {
+        return null;
+      }
+
+      const normalized = this.normalizeText(value);
+      if (!normalized) return null;
+
+      const sourceId = await this.getSourceId("S22");
+      if (!sourceId) {
+        logger.warn("[processDocumentField] Không tìm thấy source_id cho S22");
+        return normalized;
+      }
+
+      const title = value.trim();
+      const result = await this.checkOrInsertSourceData(sourceId, normalized, title);
+      return result;
+    } catch (error) {
+      logger.error("[processDocumentField] Error:", error);
+      return null;
+    }
+  }
+
   splitStringSplitBySemicolon(input) {
     if (!input || typeof input !== 'string') {
       return [];
@@ -319,13 +343,13 @@ class MigrationHelper {
       const selectQuery = `
         SELECT TOP 1 id
         FROM ${process.env.NEW_DB_NAME}.dbo.organization_units
-        WHERE LTRIM(RTRIM(name)) LIKE @name
+        WHERE LTRIM(RTRIM(name)) = @name
           AND status = 1
       `;
 
       let result = await this.queryNewDbTx(
         selectQuery,
-        { name: `N'${normalizedName}'` },
+        { name: normalizedName },
         transaction,
       );
 
@@ -337,11 +361,11 @@ class MigrationHelper {
       const oldDeptQuery = `
         SELECT TOP 1 *
         FROM ${process.env.OLD_DB_NAME}.dbo.Department
-        WHERE LTRIM(RTRIM(Title)) LIKE @name
+        WHERE LTRIM(RTRIM(Title)) = @name
           AND (Status = 1 OR Status IS NULL)
       `;
 
-      const oldDept = await this.queryOldDb(oldDeptQuery, { name: `N'${normalizedName}'` });
+      const oldDept = await this.queryOldDb(oldDeptQuery, { name: normalizedName });
       if (oldDept?.length) {
         const dept = oldDept[0];
         const oldId = dept.ID;
@@ -484,6 +508,72 @@ class MigrationHelper {
     }
   }
 
+  /**
+   * Ánh xạ Tên chủ đề sang ID (GUID), tự động tạo mới nếu chưa tồn tại.
+   * Chống trùng lặp tuyệt đối bằng cách kiểm tra tên trong DB.
+   */
+  async getOrCreateTopic(topicName, topicMap, transaction = null) {
+    if (!topicName || typeof topicName !== 'string') return null;
+
+    const normalizedName = topicName.trim();
+    if (!normalizedName) return null;
+    const lowerName = normalizedName.toLowerCase();
+
+    // 1. Kiểm tra trong cache để tăng tốc xử lý
+    const safeTopicMap = topicMap || {};
+    if (safeTopicMap[lowerName]) {
+      return safeTopicMap[lowerName];
+    }
+
+    try {
+      // 1.5 Đảm bảo Schema bảng topics có tb_bak (Self-healing on call)
+      const checkBakQuery = `
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'topics' AND COLUMN_NAME = 'tb_bak')
+            ALTER TABLE dbo.topics ADD tb_bak INT DEFAULT 0;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'topics' AND COLUMN_NAME = 'href')
+            ALTER TABLE dbo.topics ADD href NVARCHAR(255) NULL;
+      `;
+      await this.queryNewDbTx(checkBakQuery, {}, transaction);
+
+      // 2. Kiểm tra trùng lặp trong Database
+      const selectQuery = `
+        SELECT TOP 1 id
+        FROM dbo.topics
+        WHERE LTRIM(RTRIM(name)) = @name
+      `;
+      const result = await this.queryNewDbTx(selectQuery, { name: normalizedName }, transaction);
+
+      if (result?.length) {
+        const existingId = result[0].id;
+        if (topicMap) topicMap[lowerName] = existingId;
+        return existingId;
+      }
+
+      // 3. Tạo mới nếu chưa tồn tại (Dùng UUID cho uniqueidentifier)
+      const id = uuidv4();
+      const insertQuery = `
+        INSERT INTO dbo.topics (
+            id, name, display_order, status, requires_approval, 
+            created_at, updated_at, tb_bak
+        )
+        VALUES (
+            @id, @name, 0, 1, 0, 
+            GETDATE(), GETDATE(), 1
+        )
+      `;
+
+      await this.queryNewDbTx(insertQuery, { id, name: normalizedName }, transaction);
+
+      if (topicMap) topicMap[lowerName] = id; 
+      logger.info(`[getOrCreateTopic] Đã tự động tạo Danh mục mới: "${normalizedName}" (ID: ${id})`);
+      return id;
+
+    } catch (error) {
+      logger.error(`[getOrCreateTopic] Lỗi ánh xạ Danh mục "${topicName}": ${error.message}`);
+      return null;
+    }
+  }
+
   async mapUserName(userIdOrName, transaction = null) {
     try {
       if (!userIdOrName || typeof userIdOrName !== 'string') {
@@ -590,6 +680,53 @@ class MigrationHelper {
         }
     } catch (error) {
       logger.warn("[mapUserName] Error:", error);
+      return null;
+    }
+  }
+
+  /**
+   * Tìm mã nhân viên (username) dựa trên tên đầy đủ
+   * @param {string} fullName Tên đầy đủ (có thể kèm chức danh)
+   */
+  async findUserCodeByName(fullName) {
+    try {
+      if (!fullName) return null;
+      const displayName = this.extractDisplayName(fullName);
+      if (!displayName) return null;
+
+      const query = `
+        SELECT TOP 1 username
+        FROM ${process.env.NEW_DB_NAME}.dbo.users
+        WHERE LTRIM(RTRIM(name)) = @name 
+           OR LTRIM(RTRIM(username)) = @name
+      `;
+      const result = await this.queryNewDbTx(query, { name: displayName });
+      return result?.length ? result[0].username : null;
+    } catch (error) {
+      logger.error(`[findUserCodeByName] Lỗi tìm mã NV cho "${fullName}":`, error.message);
+      return null;
+    }
+  }
+
+  /**
+   * Tìm ID người dùng dựa trên tên đầy đủ
+   */
+  async findUserIdByName(fullName) {
+    try {
+      if (!fullName) return null;
+      const displayName = this.extractDisplayName(fullName);
+      if (!displayName) return null;
+
+      const query = `
+        SELECT TOP 1 id
+        FROM ${process.env.NEW_DB_NAME}.dbo.users
+        WHERE LTRIM(RTRIM(name)) = @name 
+           OR LTRIM(RTRIM(username)) = @name
+      `;
+      const result = await this.queryNewDbTx(query, { name: displayName });
+      return result?.length ? result[0].id : null;
+    } catch (error) {
+      logger.error(`[findUserIdByName] Lỗi tìm ID cho "${fullName}":`, error.message);
       return null;
     }
   }
@@ -848,7 +985,7 @@ class MigrationHelper {
 
     return onlineMeetingId;
   }
-  
+
   async createRecurrenceKhong(meetingId, startDate, transaction = null) {
 
     const checkQuery = `
@@ -1699,7 +1836,7 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
           actionCode = outsideText || null;
           blocksToProcess = parsedBlocks || [];
         }
-        
+
         if (actionCode && typeof actionCode === 'string') {
           const acNormalized = actionCode.toLowerCase().trim();
           action = acNormalized;
@@ -1933,7 +2070,7 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
         type_doc: typeDoc,
         created_at: this.parseDate(record.created_at) || null,
       };
-      
+
       return mapped;
 
     } catch (error) {
@@ -1941,7 +2078,7 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
       return null;
     }
   }
-  
+
   async documentField(value) {
     try {
       if (typeof value !== "string") return null;

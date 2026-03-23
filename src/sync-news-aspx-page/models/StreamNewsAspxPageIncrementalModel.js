@@ -6,6 +6,7 @@ const path = require('path');
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 const { downloadFile: spDownload } = require('../../sync-file-copy/SharePointAuthService');
 const HtmlFileMigrationModel = require('../migrate/HtmlFileMigrationModel');
+const MigrationHelper = require('../../helpers/MigrationHelper');
 
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 
@@ -20,18 +21,80 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
     // local output
     this.outputRoot =
       process.env.RAW_DOWNLOAD_DIR ||
-      process.env.TINTUCRAW_DIR || 
+      process.env.TINTUCRAW_DIR ||
       'tintucraw';
-    
+
     // Parser for JSON extraction
     this.htmlParser = new HtmlFileMigrationModel();
+    this.migrationHelper = new MigrationHelper(
+        (...args) => this.queryNewDbTx(...args),
+        (...args) => this.queryOldDb?.(...args) ?? null
+    );
     this.topicIds = [];
+    this.topicMap = {};
     this.adminId = null;
   }
 
   async initialize() {
     await super.initialize();
     await this.ensureStagingTableExists();
+
+    // Đảm bảo bảng News chính có đầy đủ các cột cần thiết
+    try {
+        await this.queryNewDb(`
+            -- 1. Đảm bảo cột tóm tắt (summary) đủ lớn để không bị truncated
+            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'summary')
+                ALTER TABLE dbo.news ADD summary NVARCHAR(MAX) NULL;
+            ELSE
+                ALTER TABLE dbo.news ALTER COLUMN summary NVARCHAR(MAX) NULL;
+
+            -- 2. Đảm bảo các cột tiêu đề/tags cũng đủ lớn
+            IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'title')
+                ALTER TABLE dbo.news ALTER COLUMN title NVARCHAR(500) NULL;
+            IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'tags')
+                ALTER TABLE dbo.news ALTER COLUMN tags NVARCHAR(MAX) NULL;
+
+            -- 3. Cột phòng ban tác giả
+            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'authorDepartment')
+                ALTER TABLE dbo.news ADD authorDepartment NVARCHAR(255) NULL;
+            ELSE
+                ALTER TABLE dbo.news ALTER COLUMN authorDepartment NVARCHAR(255) NULL;
+
+            -- 4. Các trường khác
+            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'isBak')
+                ALTER TABLE dbo.news ADD isBak INT DEFAULT 0;
+            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'nameThumbnail')
+                ALTER TABLE dbo.news ADD nameThumbnail NVARCHAR(500) NULL;
+            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'topic')
+                ALTER TABLE dbo.news ADD topic NVARCHAR(255) NULL;
+            -- 4. Cập nhật các cột ID sang NVARCHAR để tránh lỗi Conversion failed (uniqueidentifier)
+            IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'authorId' AND DATA_TYPE = 'uniqueidentifier')
+                ALTER TABLE dbo.news ALTER COLUMN authorId NVARCHAR(100) NULL;
+            IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'DocId' AND DATA_TYPE = 'uniqueidentifier')
+                ALTER TABLE dbo.news ALTER COLUMN DocId NVARCHAR(100) NULL;
+            IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'topic' AND DATA_TYPE = 'uniqueidentifier')
+                ALTER TABLE dbo.news ALTER COLUMN topic NVARCHAR(255) NULL;
+            IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'reviewerId' AND DATA_TYPE = 'uniqueidentifier')
+                ALTER TABLE dbo.news ALTER COLUMN reviewerId NVARCHAR(100) NULL;
+
+            -- 5. Đảm bảo cột DocId tồn tại
+            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'DocId')
+                ALTER TABLE dbo.news ADD DocId NVARCHAR(100) NULL;
+
+            -- 6. Cột người tạo (created_by)
+            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'created_by')
+                ALTER TABLE dbo.news ADD created_by NVARCHAR(100) NULL;
+
+            -- 7. Đảm bảo bảng topics có các cột cần thiết cho migration
+            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'topics' AND COLUMN_NAME = 'tb_bak')
+                ALTER TABLE dbo.topics ADD tb_bak INT DEFAULT 0;
+            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'topics' AND COLUMN_NAME = 'href')
+                ALTER TABLE dbo.topics ADD href NVARCHAR(255) NULL;
+        `);
+        logger.info('[StreamNewsAspxPageIncrementalModel] Schema widened (NVARCHAR(MAX)) for dbo.news.');
+    } catch(e) {
+        logger.warn(`[StreamNewsAspxPageIncrementalModel] Lỗi khi mở rộng schema bảng news: ${e.message}`);
+    }
 
     // Link parser to the same pool
     this.htmlParser.newPool = this.newPool;
@@ -44,8 +107,19 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
         console.log(`[StreamNewsAspxPageIncrementalModel] Loaded ${this.topicIds.length} topic IDs.`);
 
         const adminRows = await this.queryNewDb(`SELECT id FROM ${this.newDbName}.dbo.users WHERE username = 'admin-tancang'`);
-        this.adminId = adminRows?.[0]?.id || '6926bd32994b706c8b25118a';
-        console.log(`[StreamNewsAspxPageIncrementalModel] Admin ID: ${this.adminId}`);
+        if (adminRows && adminRows.length > 0) {
+            this.adminId = adminRows[0].id;
+            logger.info(`[StreamNewsAspxPageIncrementalModel] Loaded admin ID: ${this.adminId}`);
+        } else {
+            // Fallback: Lấy user đầu tiên có ID dạng GUID để tránh lỗi uniqueidentifier conversion
+            const fallbackRows = await this.queryNewDb(`SELECT TOP 1 id FROM ${this.newDbName}.dbo.users`);
+            this.adminId = fallbackRows?.[0]?.id || null;
+            if (this.adminId) {
+                logger.warn(`[StreamNewsAspxPageIncrementalModel] 'admin-tancang' not found, fallback to first user ID: ${this.adminId}`);
+            } else {
+                logger.error('[StreamNewsAspxPageIncrementalModel] No users found in new DB! Sync might fail if authorId is required.');
+            }
+        }
     } catch (error) {
         console.error('[StreamNewsAspxPageIncrementalModel] Failed to load topics/admin:', error.message);
     }
@@ -513,7 +587,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
         ABS(
           CAST(
             SUBSTRING(
-              HASHBYTES('SHA1', CONVERT(nvarchar(36), DocId)),
+              HASHBYTES('SHA1', ISNULL(CONVERT(nvarchar(36), DocId), '')),
               1,
               8
             ) AS bigint
@@ -630,11 +704,21 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
     fs.writeFileSync(localPath, html, 'utf8');
 
     // Step 2: Parse and Sync to intermediary staging table (news_aspx_new_sync)
-    const isNewsArticle = docPath.endsWith('.aspx') 
+    const isNewsArticle = docPath.endsWith('.aspx')
         && !docPath.includes('/Forms/')
         && !docPath.includes('SitePages/')
         && !docPath.includes('SiteAssets/')
-        && !docPath.includes('_catalogs/');
+        && !docPath.includes('_catalogs/')
+        && !docPath.toLowerCase().includes('allitems.aspx')
+        && !docPath.toLowerCase().includes('dispform.aspx')
+        && !docPath.toLowerCase().includes('newform.aspx')
+        && !docPath.toLowerCase().includes('editform.aspx')
+        && !docPath.toLowerCase().includes('active.aspx')
+        && !docPath.toLowerCase().includes('byowner.aspx')
+        && !docPath.toLowerCase().includes('myitems.aspx')
+        && !docPath.toLowerCase().includes('duetoday.aspx')
+        && !docPath.toLowerCase().includes('mygrtsks.aspx')
+        && !docPath.toLowerCase().includes('viewnews.aspx');
 
     let parsedData = null;
     if (isNewsArticle) {
@@ -674,47 +758,129 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
       downloadedAt: new Date()
     });
 
-    return { 
-        action: 'processed', 
+    return {
+        action: 'processed',
         localPath,
-        logs: actionLogs 
+        logs: actionLogs
     };
   }
 
   async upsertToProduction(data, transaction) {
-    const topic = this.topicIds.length > 0 
-        ? String(this.topicIds[Math.floor(Math.random() * this.topicIds.length)]) 
-        : null;
-    const authorId = this.adminId;
+    // Debug & Self-healing: Đảm bảo migrationHelper luôn tồn tại
+    if (!this.migrationHelper) {
+        logger.warn(`[WARN] this.migrationHelper bi undefined tai ${data.slug || 'unknown'}. Dang khoi tao lai...`);
+        this.migrationHelper = new MigrationHelper(
+            (...args) => this.queryNewDbTx(...args),
+            (...args) => this.queryOldDb?.(...args) ?? null
+        );
+    }
 
-    const query = `
-        DECLARE @nid INT;
-        IF EXISTS (SELECT 1 FROM dbo.news WHERE slug = @slug)
-        BEGIN
-            UPDATE dbo.news SET 
-                title = @title, content = @content, authorName = @authorName, 
-                publishedAt = @publishedAt, status = @status, updatedAt = GETDATE(),
-                topic = @topic, authorId = @authorId
-            WHERE slug = @slug;
-            SELECT @nid = id FROM dbo.news WHERE slug = @slug;
-            SELECT 'updated' AS action, @nid AS newsId;
-        END
-        ELSE
-        BEGIN
-            INSERT INTO dbo.news (title, slug, content, authorName, publishedAt, status, createdAt, updatedAt, topic, authorId, isComment, isSpecial, isImportant)
-            VALUES (@title, @slug, @content, @authorName, @publishedAt, @status, GETDATE(), GETDATE(), @topic, @authorId, 1, 0, 0);
-            SELECT SCOPE_IDENTITY() AS newsId, 'inserted' AS action;
-        END
-    `;
+    if (!this.migrationHelper) {
+        logger.error(`[CRITICAL] Khong the khoi tao MigrationHelper tai ${data.slug}. Bo qua bai nay.`);
+        return null;
+    }
+
+    // Topic mapping: Text to ID (GUID)
+    let topicId = null;
+    try {
+        if (this.migrationHelper && typeof this.migrationHelper.getOrCreateTopic === 'function') {
+            topicId = await this.migrationHelper.getOrCreateTopic(data.topic, this.topicMap, transaction);
+        } else {
+            logger.warn(`[DIAGNOSTIC] migrationHelper is ${typeof this.migrationHelper}. getOrCreateTopic: ${this.migrationHelper ? typeof this.migrationHelper.getOrCreateTopic : 'N/A'}`);
+            // Force re-init if somehow missing
+            this.migrationHelper = new MigrationHelper(
+                (...args) => this.queryNewDbTx(...args),
+                (...args) => this.queryOldDb?.(...args) ?? null
+            );
+            topicId = await this.migrationHelper.getOrCreateTopic(data.topic, this.topicMap, transaction);
+        }
+    } catch (topicErr) {
+        logger.error(`[CRITICAL ERROR] Topic Mapping failed for ${data.slug}: ${topicErr.message}`);
+        // Fallback to random or default topic to keep the sync ALIVE
+    }
+
+    const topic = topicId || (this.topicIds.length > 0 
+        ? String(this.topicIds[Math.floor(Math.random() * this.topicIds.length)]) 
+        : null);
+
+    const authorId = data.created_by || this.adminId || 'admin-tancang';
+    const submitterId = data.submitterId || authorId;
+    // authorName: Giữ nguyên tên gốc trích xuất được
+    const authorName = data.authorName || 'E-Office Admin';
+
+    const authorCode = data.authorCode || null;
+    const authorDepartment = data.authorDepartment || null;
+
+        const query = `
+            DECLARE @nid INT = NULL;
+            -- Tìm bài viết cũ (theo DocId hoặc slug)
+            IF @DocId IS NOT NULL AND @DocId <> ''
+                SELECT @nid = id FROM dbo.news WHERE DocId = @DocId OR DocId = TRY_CAST(@DocId AS UNIQUEIDENTIFIER);
+
+            IF @nid IS NULL AND @slug IS NOT NULL
+                SELECT @nid = id FROM dbo.news WHERE slug = @slug;
+
+            IF @nid IS NOT NULL
+            BEGIN
+                UPDATE dbo.news SET
+                    title = @title,
+                    content = @content,
+                    summary = @summary,
+                    authorName = @authorName,
+                    authorId = @authorId,
+                    submitterId = @submitterId,
+                    submitterName = @authorName,
+                    authorDepartment = @authorDepartment,
+                    authorCode = @authorCode,
+                    publishedAt = @publishedAt,
+                    status = @status,
+                    updatedAt = GETDATE(),
+                    topic = @topic,
+                    nameThumbnail = @nameThumbnail,
+                    tags = @tags,
+                    isBak = 1,
+                    created_by = @authorId,
+                    DocId = @DocId,
+                    reviewerId = @authorId,
+                    reviewerName = @authorName,
+                    approvedAt = GETDATE()
+                WHERE id = @nid;
+                SELECT 'updated' AS action, @nid AS newsId;
+            END
+            ELSE
+            BEGIN
+                INSERT INTO dbo.news (
+                    title, slug, content, summary, authorName, authorDepartment, authorId,
+                    publishedAt, status, createdAt, updatedAt, topic, nameThumbnail,
+                    isComment, isSpecial, isImportant, tags, isBak, DocId, created_by,
+                    reviewerId, reviewerName, approvedAt, submitterId, submitterName, submittedAt
+                )
+                VALUES (
+                    @title, @slug, @content, @summary, @authorName, @authorDepartment, @authorId,
+                    @publishedAt, @status, GETDATE(), GETDATE(), @topic, @nameThumbnail,
+                    1, 0, 0, @tags, 1, @DocId, @authorId,
+                    @authorId, @authorName, GETDATE(), @submitterId, @authorName, GETDATE()
+                );
+                SELECT SCOPE_IDENTITY() AS newsId, 'inserted' AS action;
+            END
+        `;
     const res = await this.queryNewDbTx(query, {
         title: data.title,
         slug: data.slug,
         content: data.content,
-        authorName: data.authorName,
+        summary: data.summary,
+        authorName: authorName, // Dùng biến tên gốc đã xử lý ở trên
+        authorDepartment: authorDepartment,
+        authorId: authorId,
+        submitterId: submitterId,
+        authorCode: authorCode,
         publishedAt: data.publishedAt || new Date(),
         status: data.isActive ? 1 : 0,
         topic,
-        authorId
+        nameThumbnail: data.nameThumbnail,
+        tags: data.tags,
+        DocId: data.DocId,
+        created_by: authorId
     }, transaction);
 
     return {
@@ -739,11 +905,16 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
             );
         END
     `;
-    await this.queryNewDbTx(query, {
-        newsId: String(newsId),
-        time: isNaN(date.getTime()) ? new Date() : date,
-        userId: this.adminId
-    }, transaction);
+    try {
+        await this.queryNewDbTx(query, {
+            newsId: String(newsId),
+            time: isNaN(date.getTime()) ? new Date() : date,
+            userId: this.adminId ? String(this.adminId) : null
+        }, transaction);
+    } catch (e) {
+        logger.warn(`[StreamNewsAspxPageIncrementalModel] Không thể tạo audit record cho bài viết ${newsId} (có thể do sai kiểu dữ liệu document_id): ${e.message}`);
+        // Không throw lỗi ở đây để tránh làm cả quá trình đồng bộ thất bại
+    }
   }
 
   async _markDownloadResult(docId, { status, error, downloadedAt }, transaction = null) {
@@ -751,9 +922,14 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
     const q = `
       UPDATE ${table}
       SET DownloadStatus = @status, DownloadError = @error, DownloadedAt = @downloadedAt
-      WHERE DocId = @docId
+      WHERE CONVERT(nvarchar(36), DocId) = @docId
     `;
-    const params = { docId, status: status || null, error: error || null, downloadedAt: downloadedAt || null };
+    const params = {
+        docId: docId ? String(docId) : null,
+        status: status || null,
+        error: error ? String(error).substring(0, 1000) : null,
+        downloadedAt: downloadedAt || null
+    };
     if (transaction) {
         await this.queryNewDbTx(q, params, transaction);
     } else {
