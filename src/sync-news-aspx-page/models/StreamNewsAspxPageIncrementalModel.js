@@ -8,7 +8,7 @@ const { downloadFile: spDownload } = require('../../sync-file-copy/SharePointAut
 const HtmlFileMigrationModel = require('../migrate/HtmlFileMigrationModel');
 const MigrationHelper = require('../../helpers/MigrationHelper');
 
-const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
+const DEFAULT_SYNC_TIME = '9999-12-31T23:59:59.000Z';
 
 class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
   constructor() {
@@ -186,10 +186,10 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
       SELECT COUNT(1) AS total
       FROM src
       WHERE (
-        __sync_time > @lastSyncTime
+        __sync_time < @lastSyncTime
         OR (
           __sync_time = @lastSyncTime
-          AND __sync_id > @lastSyncId
+          AND __sync_id < @lastSyncId
         )
       )
     `;
@@ -415,16 +415,16 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
       SELECT *
       FROM src
       WHERE (
-        __sync_time > @lastSyncTime
+        __sync_time < @lastSyncTime
         OR (
           __sync_time = @lastSyncTime
-          AND __sync_id > @lastSyncId
+          AND __sync_id < @lastSyncId
         )
       )
       ORDER BY
-        __sync_time ASC,
-        __sync_id ASC,
-        DocId ASC
+        __sync_time DESC,
+        __sync_id DESC,
+        DocId DESC
       ${safeTake ? 'OFFSET @offset ROWS FETCH NEXT @take ROWS ONLY' : ''}
     `;
 
@@ -541,7 +541,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
       if (!rowTime) continue;
       const ta = new Date(rowTime).getTime();
       const tb = new Date(nextSyncTime).getTime();
-      if (ta > tb || (ta === tb && rowId > nextSyncId)) {
+      if (ta < tb || (ta === tb && rowId < nextSyncId)) {
         nextSyncTime = rowTime;
         nextSyncId = rowId;
       }
@@ -609,16 +609,16 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
           *,
           ROW_NUMBER() OVER (
             ORDER BY
-              __sync_time ASC,
-              __sync_id_num ASC,
-              DocId ASC
+              __sync_time DESC,
+              __sync_id_num DESC,
+              DocId DESC
           ) AS rn
         FROM source_rows
         WHERE (
-          __sync_time > @lastSyncTime
+          __sync_time < @lastSyncTime
           OR (
             __sync_time = @lastSyncTime
-            AND __sync_id_num > @lastSyncId
+            AND __sync_id_num < @lastSyncId
           )
         )
       )
