@@ -799,8 +799,8 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
         // Fallback to random or default topic to keep the sync ALIVE
     }
 
-    const topic = topicId || (this.topicIds.length > 0 
-        ? String(this.topicIds[Math.floor(Math.random() * this.topicIds.length)]) 
+    const topic = topicId || (this.topicIds.length > 0
+        ? String(this.topicIds[Math.floor(Math.random() * this.topicIds.length)])
         : null);
 
     const authorId = data.created_by || this.adminId || 'admin-tancang';

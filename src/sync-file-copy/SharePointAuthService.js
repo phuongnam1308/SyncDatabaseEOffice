@@ -1,4 +1,5 @@
 const axios = require('axios');
+const { NtlmClient } = require('axios-ntlm');
 const https = require('https');
 const fs    = require('fs');
 const path  = require('path');
@@ -66,10 +67,10 @@ async function downloadFile(url) {
   // Kiểm tra nếu nội dung trả về là trang đăng nhập thì tức là cookie đã hết hạn
   if (response.status === 200 && response.headers['content-type']?.includes('text/html')) {
     const htmlSnippet = Buffer.from(response.data).toString('utf8').substring(0, 5000).toLowerCase();
-    
-    const isLoginPage = 
-        htmlSnippet.includes('signincontrol_username') || 
-        htmlSnippet.includes('login.aspx') || 
+
+    const isLoginPage =
+        htmlSnippet.includes('signincontrol_username') ||
+        htmlSnippet.includes('login.aspx') ||
         htmlSnippet.includes('forms/default.aspx?returnurl=') ||
         htmlSnippet.includes('id="login"');
 
