@@ -156,6 +156,227 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     await super.initialize();
     await this.ensureStagingTableExists();
 
+    try {
+      await this.queryNewDb(`
+        -- 1. Đảm bảo bảng chính tồn tại
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'outgoing_documents')
+        BEGIN
+            CREATE TABLE dbo.outgoing_documents (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                document_id VARCHAR(100) NOT NULL UNIQUE
+            );
+        END
+
+        -- 2. Bổ sung các cột tiêu chuẩn và mở rộng
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'status_code')
+            ALTER TABLE dbo.outgoing_documents ADD status_code VARCHAR(20) DEFAULT '1' NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'sender_unit')
+            ALTER TABLE dbo.outgoing_documents ADD sender_unit VARCHAR(100) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'drafter')
+            ALTER TABLE dbo.outgoing_documents ADD drafter VARCHAR(100) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'document_type')
+            ALTER TABLE dbo.outgoing_documents ADD document_type VARCHAR(100) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'urgency_level')
+            ALTER TABLE dbo.outgoing_documents ADD urgency_level VARCHAR(100) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'private_level')
+            ALTER TABLE dbo.outgoing_documents ADD private_level VARCHAR(100) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'document_field')
+            ALTER TABLE dbo.outgoing_documents ADD document_field VARCHAR(100) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'report_signer')
+            ALTER TABLE dbo.outgoing_documents ADD report_signer VARCHAR(100) NULL;
+
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'type_doc')
+            ALTER TABLE dbo.outgoing_documents ADD type_doc INT DEFAULT 1 NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'bpmn_version')
+            ALTER TABLE dbo.outgoing_documents ADD bpmn_version VARCHAR(24) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'vieweds')
+            ALTER TABLE dbo.outgoing_documents ADD vieweds NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'know_receivers')
+            ALTER TABLE dbo.outgoing_documents ADD know_receivers NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'type_of_process')
+            ALTER TABLE dbo.outgoing_documents ADD type_of_process VARCHAR(100) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'replaced_documents')
+            ALTER TABLE dbo.outgoing_documents ADD replaced_documents NVARCHAR(MAX) NULL;
+
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'reply_incoming_doc')
+            ALTER TABLE dbo.outgoing_documents ADD reply_incoming_doc NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'internal_receiving_dept_old')
+            ALTER TABLE dbo.outgoing_documents ADD internal_receiving_dept_old NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'from_create_draf')
+            ALTER TABLE dbo.outgoing_documents ADD from_create_draf BIT DEFAULT 0 NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'replaced')
+            ALTER TABLE dbo.outgoing_documents ADD replaced BIT DEFAULT 0 NOT NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'sign_type')
+            ALTER TABLE dbo.outgoing_documents ADD sign_type BIT NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'id_outgoing_bak')
+            ALTER TABLE dbo.outgoing_documents ADD id_outgoing_bak NVARCHAR(255) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'tb_bak')
+            ALTER TABLE dbo.outgoing_documents ADD tb_bak BIT DEFAULT 0 NOT NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'table_backups')
+            ALTER TABLE dbo.outgoing_documents ADD table_backups NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'table_backup')
+            ALTER TABLE dbo.outgoing_documents ADD table_backup NVARCHAR(255) NULL;
+
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'Title')
+            ALTER TABLE dbo.outgoing_documents ADD Title NVARCHAR(255) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'BanLanhDao')
+            ALTER TABLE dbo.outgoing_documents ADD BanLanhDao NVARCHAR(1000) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'ChenSo')
+            ALTER TABLE dbo.outgoing_documents ADD ChenSo BIT NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'TrangThai')
+            ALTER TABLE dbo.outgoing_documents ADD TrangThai NVARCHAR(100) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'IsLibrary')
+            ALTER TABLE dbo.outgoing_documents ADD IsLibrary BIT NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'ChucVu')
+            ALTER TABLE dbo.outgoing_documents ADD ChucVu NVARCHAR(255) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'DocNum')
+            ALTER TABLE dbo.outgoing_documents ADD DocNum NVARCHAR(50) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'NguoiSoanThaoText')
+            ALTER TABLE dbo.outgoing_documents ADD NguoiSoanThaoText NVARCHAR(255) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'FolderLocation')
+            ALTER TABLE dbo.outgoing_documents ADD FolderLocation NVARCHAR(500) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'DonVi')
+            ALTER TABLE dbo.outgoing_documents ADD DonVi NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'HoSoXuLyLink')
+            ALTER TABLE dbo.outgoing_documents ADD HoSoXuLyLink NVARCHAR(500) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'InfoVBDi')
+            ALTER TABLE dbo.outgoing_documents ADD InfoVBDi NVARCHAR(150) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'ItemVBPH')
+            ALTER TABLE dbo.outgoing_documents ADD ItemVBPH NVARCHAR(500) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'NguoiKyVanBan')
+            ALTER TABLE dbo.outgoing_documents ADD NguoiKyVanBan NVARCHAR(255) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'NguoiKyVanBanText')
+            ALTER TABLE dbo.outgoing_documents ADD NguoiKyVanBanText NVARCHAR(255) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'PhanCong')
+            ALTER TABLE dbo.outgoing_documents ADD PhanCong BIT NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'TraLoiVBDen')
+            ALTER TABLE dbo.outgoing_documents ADD TraLoiVBDen NVARCHAR(2000) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'SoBan')
+            ALTER TABLE dbo.outgoing_documents ADD SoBan INT NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'SoTrang')
+            ALTER TABLE dbo.outgoing_documents ADD SoTrang INT NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'NoiLuuTru')
+            ALTER TABLE dbo.outgoing_documents ADD NoiLuuTru NVARCHAR(1000) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'BanLanhDaoTCT')
+            ALTER TABLE dbo.outgoing_documents ADD BanLanhDaoTCT NVARCHAR(4000) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'YKien')
+            ALTER TABLE dbo.outgoing_documents ADD YKien NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'YKienChiHuy')
+            ALTER TABLE dbo.outgoing_documents ADD YKienChiHuy NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'ModuleId')
+            ALTER TABLE dbo.outgoing_documents ADD ModuleId INT NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'SiteName')
+            ALTER TABLE dbo.outgoing_documents ADD SiteName VARCHAR(50) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'ListName')
+            ALTER TABLE dbo.outgoing_documents ADD ListName NVARCHAR(50) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'ItemId')
+            ALTER TABLE dbo.outgoing_documents ADD ItemId INT NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'YearMonth')
+            ALTER TABLE dbo.outgoing_documents ADD YearMonth VARCHAR(20) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'Modified')
+            ALTER TABLE dbo.outgoing_documents ADD Modified DATETIME NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'Created')
+            ALTER TABLE dbo.outgoing_documents ADD Created DATETIME NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'ModifiedBy')
+            ALTER TABLE dbo.outgoing_documents ADD ModifiedBy UNIQUEIDENTIFIER NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'CreatedBy')
+            ALTER TABLE dbo.outgoing_documents ADD CreatedBy UNIQUEIDENTIFIER NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'MigrateFlg')
+            ALTER TABLE dbo.outgoing_documents ADD MigrateFlg INT DEFAULT 0 NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'MigrateErrFlg')
+            ALTER TABLE dbo.outgoing_documents ADD MigrateErrFlg INT DEFAULT 0 NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'MigrateErrMess')
+            ALTER TABLE dbo.outgoing_documents ADD MigrateErrMess NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'LoaiMoc')
+            ALTER TABLE dbo.outgoing_documents ADD LoaiMoc NVARCHAR(200) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'KySoFiles')
+            ALTER TABLE dbo.outgoing_documents ADD KySoFiles NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'DGPId')
+            ALTER TABLE dbo.outgoing_documents ADD DGPId INT NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'Workflow')
+            ALTER TABLE dbo.outgoing_documents ADD Workflow NVARCHAR(255) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'IsKyQuyChe')
+            ALTER TABLE dbo.outgoing_documents ADD IsKyQuyChe BIT NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'DocSignType')
+            ALTER TABLE dbo.outgoing_documents ADD DocSignType SMALLINT NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'IsConverting')
+            ALTER TABLE dbo.outgoing_documents ADD IsConverting BIT NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'CodeItemId')
+            ALTER TABLE dbo.outgoing_documents ADD CodeItemId BIGINT NULL;
+
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'report_document_symbol')
+            ALTER TABLE dbo.outgoing_documents ADD report_document_symbol NVARCHAR(255) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'to_book_text_symbols')
+            ALTER TABLE dbo.outgoing_documents ADD to_book_text_symbols NVARCHAR(255) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'viewers')
+            ALTER TABLE dbo.outgoing_documents ADD viewers NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'deadline_reply')
+            ALTER TABLE dbo.outgoing_documents ADD deadline_reply DATETIME2 NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'abstract_note')
+            ALTER TABLE dbo.outgoing_documents ADD abstract_note NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'recipient_ids')
+            ALTER TABLE dbo.outgoing_documents ADD recipient_ids NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'internal_receiving_unit')
+            ALTER TABLE dbo.outgoing_documents ADD internal_receiving_unit NVARCHAR(255) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'created_at')
+            ALTER TABLE dbo.outgoing_documents ADD created_at DATETIME2 NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'updated_at')
+            ALTER TABLE dbo.outgoing_documents ADD updated_at DATETIME2 NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'draft_signer')
+            ALTER TABLE dbo.outgoing_documents ADD draft_signer NVARCHAR(255) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'book_document_id')
+            ALTER TABLE dbo.outgoing_documents ADD book_document_id NVARCHAR(255) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'status')
+            ALTER TABLE dbo.outgoing_documents ADD status INT DEFAULT 1 NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'code_commanders')
+            ALTER TABLE dbo.outgoing_documents ADD code_commanders NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'commanders')
+            ALTER TABLE dbo.outgoing_documents ADD commanders NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'current_note')
+            ALTER TABLE dbo.outgoing_documents ADD current_note NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'to_book')
+            ALTER TABLE dbo.outgoing_documents ADD to_book INT NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'release_no')
+            ALTER TABLE dbo.outgoing_documents ADD release_no NVARCHAR(255) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'release_date')
+            ALTER TABLE dbo.outgoing_documents ADD release_date DATETIME2 NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'text_symbols')
+            ALTER TABLE dbo.outgoing_documents ADD text_symbols NVARCHAR(255) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'doc_work_files')
+            ALTER TABLE dbo.outgoing_documents ADD doc_work_files NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'doc_proposal')
+            ALTER TABLE dbo.outgoing_documents ADD doc_proposal NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'doc_draft')
+            ALTER TABLE dbo.outgoing_documents ADD doc_draft NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'doc_attachments')
+            ALTER TABLE dbo.outgoing_documents ADD doc_attachments NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'doc_recall')
+            ALTER TABLE dbo.outgoing_documents ADD doc_recall NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'doc_replacement')
+            ALTER TABLE dbo.outgoing_documents ADD doc_replacement NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'doc_answer')
+            ALTER TABLE dbo.outgoing_documents ADD doc_answer NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'external_receiving_unit')
+            ALTER TABLE dbo.outgoing_documents ADD external_receiving_unit NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'internal_receiving_dept')
+            ALTER TABLE dbo.outgoing_documents ADD internal_receiving_dept NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'processor')
+            ALTER TABLE dbo.outgoing_documents ADD processor NVARCHAR(255) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'files')
+            ALTER TABLE dbo.outgoing_documents ADD files NVARCHAR(MAX) NULL;
+
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'send_id_bak_bef_test')
+            ALTER TABLE dbo.outgoing_documents ADD send_id_bak_bef_test NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'status_code_bak_bef_test')
+            ALTER TABLE dbo.outgoing_documents ADD status_code_bak_bef_test NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'drafter_bak_bef_test')
+            ALTER TABLE dbo.outgoing_documents ADD drafter_bak_bef_test NVARCHAR(MAX) NULL;
+      `);
+      logger.info('[OutGoingDocumentModel] Checked and added missing columns (reply_incoming_doc, sign_type, table_backups...) for dbo.outgoing_documents');
+    } catch(err) {
+      logger.warn(`[OutGoingDocumentModel] Failed to alter table outgoing_documents schema: ${err.message}`);
+    }
+
     this._syncAuditModel = [];
     this._syncCommentModel = [];
 
@@ -171,15 +392,57 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       this._syncAuditModel.push(model);
     }
 
-    for (const table of COMMENT_TABLES) {
-      const model = new SyncCommentModel(table);
-      await model.initialize();
-      this._syncCommentModel.push(model);
-    }
+    // for (const table of COMMENT_TABLES) {
+    //   const model = new SyncCommentModel(table);
+    //   await model.initialize();
+    //   this._syncCommentModel.push(model);
+    // }
 
     logger.info(
       `[OutGoingDocumentModel] Initialized with auditTables=${this._syncAuditModel.length}, commentTables=${this._syncCommentModel.length}`
     );
+  }
+
+  /**
+   * Tính tổng số bản ghi cần đồng bộ, cap theo COMPLETED_LIMIT nếu có
+   */
+  async getCount(lastSyncTime, lastSyncId = 0) {
+    const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
+    const normalizedLastSyncId = Number(lastSyncId || 0);
+    const limit = Number(process.env.COMPLETED_LIMIT || 0);
+
+    const syncTimeExpr = this.getSyncTimeExpression();
+    const query = `
+      ;WITH source_rows AS (
+        SELECT
+          ${syncTimeExpr} AS __sync_time,
+          TRY_CONVERT(
+            BIGINT,
+            NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
+          ) AS __sync_id_num
+        FROM ${this.oldDbSchema}.${this.oldDbTable}
+      )
+      SELECT COUNT(1) AS total
+      FROM source_rows
+      WHERE (
+        __sync_time > @lastSyncTime
+        OR (
+          __sync_time = @lastSyncTime
+          AND ISNULL(__sync_id_num, -9223372036854775808) > @lastSyncId
+        )
+      )
+    `;
+
+    const rows = await this.queryOldDb(query, {
+      lastSyncTime: normalizedLastSyncTime,
+      lastSyncId: normalizedLastSyncId
+    });
+
+    const total = Number(rows?.[0]?.total || 0);
+    if (Number.isFinite(limit) && limit > 0) {
+      return Math.min(total, limit);
+    }
+    return total;
   }
 
   /**
@@ -460,8 +723,10 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
    * @param {number} [lastSyncId=0]
    * @returns {Promise<object[]>}
    */
-  async fetchListFromOldDb(lastSyncTime, lastSyncId = 0) {
+  async fetchListFromOldDb(lastSyncTime, lastSyncId = 0, take = null, offset = null) {
     const syncTimeExpr = this.getSyncTimeExpression();
+    const safeTake = Number.isFinite(Number(take)) && Number(take) > 0 ? Number(take) : null;
+    const safeOffset = Number.isFinite(Number(offset)) && Number(offset) >= 0 ? Number(offset) : 0;
     const query = `
       ;WITH source_rows AS (
         SELECT
@@ -488,11 +753,13 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         __sync_time ASC,
         ISNULL(__sync_id_num, -9223372036854775808) ASC,
         ID ASC
+      ${safeTake ? 'OFFSET @offset ROWS FETCH NEXT @take ROWS ONLY' : ''}
     `;
 
     return this.queryOldDb(query, {
       lastSyncTime,
-      lastSyncId: Number(lastSyncId || 0)
+      lastSyncId: Number(lastSyncId || 0),
+      ...(safeTake ? { take: safeTake, offset: safeOffset } : {})
     });
   }
 
@@ -573,7 +840,16 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
 
     const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
     const normalizedLastSyncId = Number(lastSyncId || 0);
-    const rows = await this.fetchListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId);
+
+    const stageBatchSize = Number(process.env.COMPLETED_LIMIT || 0);
+    const stageOffset = Number(process.env.BEGIN_LIMIT || 0);
+
+    const rows = await this.fetchListFromOldDb(
+      normalizedLastSyncTime,
+      normalizedLastSyncId,
+      Number.isFinite(stageBatchSize) && stageBatchSize > 0 ? stageBatchSize : null,
+      Number.isFinite(stageOffset) && stageOffset >= 0 ? stageOffset : 0
+    );
     const stageResult = await this.syncOldToStaging(rows);
 
     let nextSyncTime = normalizedLastSyncTime;
@@ -906,7 +1182,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
           logger.warn(`[upsertDocumentAggregateById] Không lấy được old record ID=${id}: ${err.message}`);
           return null;
         })
-      : null;    
+      : null;
     if (!this._outGoingMigrationModels) {
       throw new Error(`[upsertDocumentAggregateById] Model not initialized for ID=${id}`);
     }
@@ -961,6 +1237,45 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       );
     }
 
+    /* ====== Phân tách bình luận từ HTML (Ý kiến lãnh đạo SP cũ) ====== */
+    try {
+      let totalParsedComments = 0;
+      if (oldRecord?.YKien) {
+         totalParsedComments += await this._outGoingMigrationModels.helper.parseAndInsertHtmlComments(
+            oldRecord.YKien, documentId, id, 'VanBanBanHanh', 'YKien', transaction
+         );
+      }
+      if (oldRecord?.YKienChiHuy) {
+         totalParsedComments += await this._outGoingMigrationModels.helper.parseAndInsertHtmlComments(
+            oldRecord.YKienChiHuy, documentId, id, 'VanBanBanHanh', 'YKienChiHuy', transaction
+         );
+      }
+      if (oldRecord?.YKienLanhDao) {
+         totalParsedComments += await this._outGoingMigrationModels.helper.parseAndInsertHtmlComments(
+            oldRecord.YKienLanhDao, documentId, id, 'VanBanBanHanh', 'YKienLanhDao', transaction
+         );
+      }
+      if (oldRecord?.YKienLanhDaoTCT) {
+         totalParsedComments += await this._outGoingMigrationModels.helper.parseAndInsertHtmlComments(
+            oldRecord.YKienLanhDaoTCT, documentId, id, 'VanBanBanHanh', 'YKienLanhDaoTCT', transaction
+         );
+      }
+      if (oldRecord?.YKienLanhDaoVPDN) {
+         totalParsedComments += await this._outGoingMigrationModels.helper.parseAndInsertHtmlComments(
+            oldRecord.YKienLanhDaoVPDN, documentId, id, 'VanBanBanHanh', 'YKienLanhDaoVPDN', transaction
+         );
+      }
+      if (oldRecord?.YKienCuaLDVPChoVanThu) {
+         totalParsedComments += await this._outGoingMigrationModels.helper.parseAndInsertHtmlComments(
+            oldRecord.YKienCuaLDVPChoVanThu, documentId, id, 'VanBanBanHanh', 'YKienCuaLDVPChoVanThu', transaction
+         );
+      }
+      if (totalParsedComments > 0) {
+        logger.info(`[AggregateSync][ParsedHTMLComments] documentId=${documentId} newly extracted comments=${totalParsedComments}`);
+      }
+    } catch (htmlCommentErr) {
+      logger.warn(`[upsertDocumentAggregateById] Lỗi parse HTML YKien ID=${id}: ${htmlCommentErr.message}`);
+    }
 
     for (const auditModel of this._syncAuditModel || []) {
       try {
@@ -995,37 +1310,117 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       }
     }
 
-    for (const commentModel of this._syncCommentModel || []) {
-      try {
-        const rawComments = await commentModel.fetchByDocumentId(id);
-        
-        if (!Array.isArray(rawComments) || !rawComments.length) {
-          continue;
-        }
+    // ══════════════════════════════════════════════════════════════
+    // AUTO-CREATE AUDIT: Nếu document_id chưa có audit nào → tạo 1 bản ghi CREATE
+    // ══════════════════════════════════════════════════════════════
+    try {
+      const existingAudit = await this.queryNewDbTx(
+        `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.audit WHERE document_id = @docId`,
+        { docId: documentId },
+        transaction
+      );
 
-        for (const rawComment of rawComments) {
+      if (!existingAudit || existingAudit.length === 0) {
+        // Lấy thông tin người tạo từ bản ghi cũ
+        const creatorName = oldRecord.CreatedBy || oldRecord.NguoiSoanThaoText || oldRecord.NguoiSoanThao || '';
+        const parsedDate = this.helper
+          ? this.helper.parseDate(oldRecord.Created)
+          : null;
+        const createdDate = parsedDate || new Date();
+
+        // Resolve creator ID qua MigrationHelper.mapUserName
+        let creatorId = process.env.VANTHU_USER_ID;
+        let displayName = creatorName;
+        if (this.helper && creatorName) {
           try {
-            const result = await commentModel.processSingleRecord(rawComment, documentId, transaction);
-            if (!result) continue;
-            logger.info(
-              `[AggregateSync][Comment] table=${commentModel?.oldDbTable} documentId=${documentResult.documentId} inserted=${result?.inserted || 0} updated=${result?.updated || 0}`
-            );
-            totalAffected += Number(result.inserted || 0);
-            totalAffected += Number(result.updated || 0);
-          } catch (error) {
-            logger.warn(
-              `[upsertDocumentAggregateById] Comment migrate failed table=${commentModel?.oldDbTable} ID=${id}: ${error.message}`
-            );
+            const cleanName = this.helper.extractDisplayName
+              ? this.helper.extractDisplayName(creatorName)
+              : creatorName;
+            displayName = cleanName || creatorName;
+            const resolvedId = await this.helper.mapUserName(cleanName, transaction);
+            if (resolvedId) creatorId = resolvedId;
+          } catch (mapErr) {
+            logger.warn(`[AutoCreateAudit] mapUserName failed for "${creatorName}": ${mapErr.message}`);
           }
         }
-      } catch (error) {
-        logger.warn(
-          `[upsertDocumentAggregateById] Fetch comment failed table=${commentModel?.oldDbTable} ID=${id}: ${error.message}`
-        );
+
+        // Xác định type_document dựa trên loại
+        const typeDoc = 'OutgoingDocument';
+
+        const insertQuery = `
+          INSERT INTO ${process.env.NEW_DB_NAME}.dbo.audit (
+            document_id, [time], user_id, display_name,
+            action_code, details, origin_id, created_by,
+            receiver, receiver_unit, group_, roleProcess,
+            [action], stage_status, created_at, updated_at,
+            type_document, table_backups
+          ) VALUES (
+            @document_id, @time, @user_id, @display_name,
+            @action_code, @details, @origin_id, @created_by,
+            @receiver, @receiver_unit, @group_, @roleProcess,
+            @action, @stage_status, @created_at, GETDATE(),
+            @type_document, @table_backups
+          )
+        `;
+
+        await this.queryNewDbTx(insertQuery, {
+          document_id: documentId,
+          time: createdDate || new Date(),
+          user_id: creatorId,
+          display_name: displayName || null,
+          action_code: 'CREATE',
+          details: JSON.stringify({ note: 'Tạo văn bản (tự động tạo từ migration)', isTransferOption: false }),
+          origin_id: `auto_create_${String(oldRecord.ID || '').substring(0, 80)}`,
+          created_by: creatorId,
+          receiver: creatorId,
+          receiver_unit: null,
+          group_: null,
+          roleProcess: 'VANTHU',
+          action: 'Tạo văn bản',
+          stage_status: 'DA_XU_LY',
+          created_at: createdDate || new Date(),
+          type_document: typeDoc,
+          table_backups: 'auto_create'
+        }, transaction);
+
+        logger.info(`[AutoCreateAudit] Created initial CREATE audit for documentId=${documentId} creator=${displayName}`);
+        totalAffected++;
       }
+    } catch (autoAuditErr) {
+      logger.warn(`[AutoCreateAudit] Failed for documentId=${documentId}: ${autoAuditErr.message}`);
     }
+
+    // for (const commentModel of this._syncCommentModel || []) {
+    //   try {
+    //     const rawComments = await commentModel.fetchByDocumentId(id);
+    //
+    //     if (!Array.isArray(rawComments) || !rawComments.length) {
+    //       continue;
+    //     }
+    //
+    //     for (const rawComment of rawComments) {
+    //       try {
+    //         const result = await commentModel.processSingleRecord(rawComment, documentId, transaction);
+    //         if (!result) continue;
+    //         logger.info(
+    //           `[AggregateSync][Comment] table=${commentModel?.oldDbTable} documentId=${documentResult.documentId} inserted=${result?.inserted || 0} updated=${result?.updated || 0}`
+    //         );
+    //         totalAffected += Number(result.inserted || 0);
+    //         totalAffected += Number(result.updated || 0);
+    //       } catch (error) {
+    //         logger.warn(
+    //           `[upsertDocumentAggregateById] Comment migrate failed table=${commentModel?.oldDbTable} ID=${id}: ${error.message}`
+    //         );
+    //       }
+    //     }
+    //   } catch (error) {
+    //     logger.warn(
+    //       `[upsertDocumentAggregateById] Fetch comment failed table=${commentModel?.oldDbTable} ID=${id}: ${error.message}`
+    //     );
+    //   }
+    // }
     // logic xu
-  
+
     return {
       action: documentResult.action || 'upsert',
       affected: Number(totalAffected || 0)

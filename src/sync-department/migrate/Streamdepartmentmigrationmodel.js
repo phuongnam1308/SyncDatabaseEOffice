@@ -33,6 +33,17 @@ class StreamDepartmentMigrationModel extends BaseIncrementalSyncInterface {
   async initialize() {
     await super.initialize();
     await this.ensureStagingTable();
+    
+    try {
+      await this.queryNewDb(`
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'organization_units' AND COLUMN_NAME = 'table_backups')
+            ALTER TABLE dbo.organization_units ADD table_backups NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'organization_units' AND COLUMN_NAME = 'Id_backups')
+            ALTER TABLE dbo.organization_units ADD Id_backups NVARCHAR(MAX) NULL;
+      `);
+    } catch(e) {
+      console.warn('[StreamDepartmentMigrationModel] Failed to auto-alter organization_units schema:', e.message);
+    }
   }
 
   // ─── Helpers ──────────────────────────────────────────────────────────────

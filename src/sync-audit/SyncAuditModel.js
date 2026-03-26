@@ -2,6 +2,7 @@
 const BaseModel = require("../../models/BaseModel");
 const logger = require("../../utils/logger");
 const MigrationHelper = require("../helpers/MigrationHelper");
+const ReceiverParserService = require("./ReceiverParserService");
 const sql = require("mssql");
 
 // Định nghĩa các hằng số cho danh mục (Category) của văn bản đi
@@ -50,6 +51,38 @@ class SyncAuditModel extends BaseModel {
 
     // Khởi tạo helper để hỗ trợ các tác vụ chuyển đổi dữ liệu
     this.helper = new MigrationHelper(this.queryNewDbTx.bind(this), this.queryOldDb.bind(this));
+
+    // Khởi tạo ReceiverParser để bóc tách receiver theo quy tắc nghiệp vụ
+    // Truyền thêm helper để dùng mapUserName tra cứu ID chính xác
+    this.receiverParser = new ReceiverParserService(
+      this.queryNewDbTx.bind(this),
+      this.queryOldDb.bind(this),
+      this.helper
+    );
+  }
+
+  /**
+   * Khởi tạo kết nối và các cấu trúc dữ liệu nếu cần
+   */
+  async initialize() {
+    if (typeof super.initialize === 'function') {
+      await super.initialize();
+    }
+
+    try {
+      await this.queryNewDb(`
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'table_backups')
+            ALTER TABLE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} ADD table_backups NVARCHAR(255) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'type_document')
+            ALTER TABLE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} ADD type_document VARCHAR(100) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'processed_by')
+            ALTER TABLE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} ADD processed_by VARCHAR(100) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'acting_as')
+            ALTER TABLE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} ADD acting_as VARCHAR(100) NULL;
+      `);
+    } catch(e) {
+      logger.warn(`[SyncAuditModel] Lỗi khởi tạo cấu trúc cột (table_backups, type_document): ${e.message}`);
+    }
   }
 
   /**
@@ -212,7 +245,7 @@ class SyncAuditModel extends BaseModel {
       if (!mapped) {
         return null;
       }
-      
+
       // 2. Một số bản ghi cũ có thể được mở rộng thành nhiều bản ghi audit mới
       const audits = this.helper._expandMappedRecords(mapped);
 
@@ -375,7 +408,7 @@ class SyncAuditModel extends BaseModel {
         @table_backups
       )
     `;
-    
+
     // Thực thi câu lệnh INSERT
     await this.queryNewDbTx(
       query,
@@ -445,7 +478,7 @@ class SyncAuditModel extends BaseModel {
         updated_at = GETDATE() -- Cập nhật thời gian update
       WHERE id = @id
     `;
-    
+
     // Thực thi câu lệnh UPDATE
     await this.queryNewDbTx(
       query,
@@ -486,7 +519,7 @@ class SyncAuditModel extends BaseModel {
   async _mapSingleRecord(record, documentId, transaction) {
     if (!record?.ID || !documentId)
       return null;
-    
+
     // Chuyển đổi chuỗi ngày tháng từ CSDL cũ sang đối tượng Date
     const parsedTime =
       this.helper.parseDate(record.NgayTao);
@@ -495,11 +528,11 @@ class SyncAuditModel extends BaseModel {
 
     // Map tên người dùng từ CSDL cũ sang user_id trong CSDL mới
     const user_id =
-      await this.helper.mapUserName(
+      (await this.helper.mapUserName(
         record.NguoiXuLy,
         transaction
-      );
-    
+      )) || process.env.VANTHU_USER_ID;
+
     // Trích xuất tên hiển thị từ chuỗi người xử lý
     const displayName =
       this.helper.extractDisplayName(
@@ -513,19 +546,17 @@ class SyncAuditModel extends BaseModel {
         record.HanhDong
       ) || {};
     
-    // Map danh sách người nhận sang ID người dùng mới
-    const receiver =
-      await this._mapReceiverUsers(
-        actionParsed.receiver,
-        transaction
-      );
-    // Map danh sách đơn vị nhận sang ID đơn vị mới
-    const receiverUnit =
-      await this._mapReceiverUnits(
-        actionParsed.receiver_unit,
-        transaction
-      );
-    
+    // ── SỬ DỤNG ReceiverParserService ĐỂ BÓC TÁCH RECEIVER THEO QUY TẮC NGHIỆP VỤ ──
+    const parsed = await this.receiverParser.determineReceivers(record, transaction);
+    let receiver = parsed.receiverIds || [];
+    const receiverUnit = parsed.receiverUnitIds || [];
+    const parsedRoleProcess = parsed.roleProcess || actionParsed.roleProcess || 'VANTHU';
+
+    // ── FALLBACK: Nếu receiver rỗng → tự động lấy ID người xử lý (user_id) đắp vào ──
+    if ((!receiver || receiver.length === 0) && user_id) {
+      receiver = [user_id];
+    }
+
     // Chuẩn hóa chuỗi hành động thô và tạo đối tượng JSON cho cột 'details'
     const rawAction = this._normalizeTextField(record.HanhDong);
     const actionStr = JSON.stringify({
@@ -557,7 +588,7 @@ class SyncAuditModel extends BaseModel {
         record.ID,
         100
       ),
-      created_by: user_id ?? null,
+      created_by: user_id || process.env.VANTHU_USER_ID,
       receiver,
       receiver_unit: receiverUnit,
       group_: this._normalizeTextField(
@@ -567,7 +598,7 @@ class SyncAuditModel extends BaseModel {
       display_name: displayName ?? null,
       user_id: user_id ?? null,
       roleProcess:
-        actionParsed.roleProcess ?? null,
+        parsedRoleProcess ?? actionParsed.roleProcess ?? null,
       action: actionParsed.action || this._normalizeTextField(
         rawAction,
         255
@@ -629,7 +660,7 @@ class SyncAuditModel extends BaseModel {
   async _mapReceiverUnits(receiverUnitValues, transaction) {
     if (!Array.isArray(receiverUnitValues))
       return [];
-    
+
     // Lọc ra các giá trị rỗng và trùng lặp
     const normalized = [
       ...new Set(

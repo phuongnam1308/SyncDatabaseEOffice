@@ -10,6 +10,85 @@ class FileRelationsModel extends BaseModel {
     this.newSchema    = 'dbo';
     this.mainTable    = 'file_relations';   // bảng chính: strict types, có FK ràng buộc với files
     this.stagingTable = 'file_relations2';  // bảng staging: toàn bộ nvarchar(MAX), không có FK
+    this._ensureColumnsDone = false;
+  }
+
+  /**
+   * Tự động tạo các cột bị thiếu nếu cần
+   */
+  async ensureColumns(transaction = null) {
+    if (this._ensureColumnsDone) return;
+    try {
+      const dbName = process.env.NEW_DB_NAME;
+      
+      // 1. Kiểm tra và tạo bảng chính file_relations nếu chưa có
+      await this.queryDb(`
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '${this.mainTable}')
+        BEGIN
+            CREATE TABLE ${dbName}.dbo.${this.mainTable} (
+                id BIGINT IDENTITY(1,1) PRIMARY KEY,
+                object_type VARCHAR(50) NULL,
+                object_id VARCHAR(50) NULL,
+                file_id BIGINT NULL,
+                created_at DATETIME DEFAULT GETDATE(),
+                status INT DEFAULT 1,
+                is_certified_copy INT DEFAULT 0
+            );
+        END
+      `, {}, transaction);
+
+      // 2. Kiểm tra và bổ sung các cột missing cho bảng chính
+      await this.queryDb(`
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.mainTable}' AND COLUMN_NAME = 'is_certified_copy')
+            ALTER TABLE ${dbName}.dbo.${this.mainTable} ADD is_certified_copy INT DEFAULT 0 NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.mainTable}' AND COLUMN_NAME = 'object_id_bak')
+            ALTER TABLE ${dbName}.dbo.${this.mainTable} ADD object_id_bak NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.mainTable}' AND COLUMN_NAME = 'file_id_bak')
+            ALTER TABLE ${dbName}.dbo.${this.mainTable} ADD file_id_bak NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.mainTable}' AND COLUMN_NAME = 'table_bak')
+            ALTER TABLE ${dbName}.dbo.${this.mainTable} ADD table_bak NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.mainTable}' AND COLUMN_NAME = 'type_doc')
+            ALTER TABLE ${dbName}.dbo.${this.mainTable} ADD type_doc NVARCHAR(MAX) NULL;
+      `, {}, transaction);
+
+      // 3. Kiểm tra và tạo bảng staging file_relations2 nếu chưa có
+      await this.queryDb(`
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '${this.stagingTable}')
+        BEGIN
+            CREATE TABLE ${dbName}.dbo.${this.stagingTable} (
+                id BIGINT IDENTITY(1,1) PRIMARY KEY,
+                object_type NVARCHAR(MAX) NULL,
+                object_id NVARCHAR(MAX) NULL,
+                file_id NVARCHAR(MAX) NULL,
+                created_at NVARCHAR(MAX) NULL,
+                status NVARCHAR(MAX) NULL,
+                object_id_bak NVARCHAR(MAX) NULL,
+                file_id_bak NVARCHAR(MAX) NULL,
+                file_id_bak2 NVARCHAR(MAX) NULL,
+                table_bak NVARCHAR(MAX) NULL,
+                type_doc NVARCHAR(MAX) NULL
+            );
+        END
+      `, {}, transaction);
+
+      // 4. Kiểm tra và bổ sung các cột missing cho bảng staging (phòng hờ bảng đã có nhưng thiếu cột)
+      await this.queryDb(`
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.stagingTable}' AND COLUMN_NAME = 'object_id_bak')
+            ALTER TABLE ${dbName}.dbo.${this.stagingTable} ADD object_id_bak NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.stagingTable}' AND COLUMN_NAME = 'file_id_bak')
+            ALTER TABLE ${dbName}.dbo.${this.stagingTable} ADD file_id_bak NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.stagingTable}' AND COLUMN_NAME = 'file_id_bak2')
+            ALTER TABLE ${dbName}.dbo.${this.stagingTable} ADD file_id_bak2 NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.stagingTable}' AND COLUMN_NAME = 'table_bak')
+            ALTER TABLE ${dbName}.dbo.${this.stagingTable} ADD table_bak NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.stagingTable}' AND COLUMN_NAME = 'type_doc')
+            ALTER TABLE ${dbName}.dbo.${this.stagingTable} ADD type_doc NVARCHAR(MAX) NULL;
+      `, {}, transaction);
+
+      this._ensureColumnsDone = true;
+    } catch(err) {
+      logger.warn(`[FileRelationsModel] ensureColumns failed: ${err.message}`);
+    }
   }
 
   /**
@@ -124,6 +203,7 @@ class FileRelationsModel extends BaseModel {
    */
   async insert(record, transaction = null) {
     try {
+      await this.ensureColumns(transaction);
       const tableRef = this.getMainTableRef();
 
       const query = `
@@ -161,6 +241,7 @@ class FileRelationsModel extends BaseModel {
    */
   async update(id, record, transaction = null) {
     try {
+      await this.ensureColumns(transaction);
       const tableRef = this.getMainTableRef();
       const params = { ...this._mapMainParams(record), id: Number(id) };
 
@@ -234,6 +315,7 @@ class FileRelationsModel extends BaseModel {
    */
   async insertStaging(record, transaction = null) {
     try {
+      await this.ensureColumns(transaction);
       const tableRef = this.getStagingTableRef();
 
       const request = transaction
@@ -277,6 +359,7 @@ class FileRelationsModel extends BaseModel {
    */
   async updateStaging(id, record, transaction = null) {
     try {
+      await this.ensureColumns(transaction);
       const tableRef = this.getStagingTableRef();
 
       const request = transaction

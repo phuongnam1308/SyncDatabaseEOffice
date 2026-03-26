@@ -78,6 +78,9 @@ class StreamOutgoingMigrationModel extends BaseModel {
 
     const promulgationDate = this.helper.parseDate(oldRecord.NgayBanHanh);
 
+    const documentField = (await this.helper.processDocumentField(
+      oldRecord.LinhVuc
+    )) || process.env.DEFAULT_DOCUMENT_FIELD || 'vn-bn-hnh-chnh';
     const documentType = await this.helper.processDocumentType(
       oldRecord.LoaiVanBan || oldRecord.LoaiBanHanh
     );
@@ -85,15 +88,15 @@ class StreamOutgoingMigrationModel extends BaseModel {
     const urgencyLevel = await this.helper.processUrgencyLevel(oldRecord.DoKhan);
     const privateLevel = await this.helper.processPrivateLevel(oldRecord.DoMat);
 
-    const senderUnit = await this.helper.mapSenderUnitId(
+    const senderUnit = (await this.helper.mapSenderUnitId(
       oldRecord.DonVi,
-      transaction);
-    const drafter = await this.helper.mapUserName(
-      oldRecord.CreatedBy || oldRecord.NguoiSoanThaoText,
+      transaction)) || process.env.DEFAULT_RECEIVER_UNIT_ID;
+    const drafter = (await this.helper.mapUserDrafter(
+      oldRecord.NguoiSoanThaoText || oldRecord.CreatedBy,
       transaction
-    );
+    )) || process.env.VANTHU_USER_ID;
 
-    const reportSigner = await this.helper.mapUserName(
+    const reportSigner = await this.helper.mapUserDrafter(
       oldRecord.NguoiKyVanBanText,
       transaction
     );
@@ -105,13 +108,58 @@ class StreamOutgoingMigrationModel extends BaseModel {
     // Map đơn vị nhận internalReceivingDeptIds
     const units = this.helper.splitStringSplitBySemicolon(oldRecord.NoiNhan);
     const internalReceivingDeptIds = [];
+    const externalReceivingUnits = [];
+    const allReceiverUserIds = new Set(); // Tổng hợp user IDs cho know_receivers & vieweds
+
     for (const unit of units) {
-      const id = await this.helper.mapSenderUnitId(unit, transaction);
-      if (id) {
-        internalReceivingDeptIds.push(id);
+      if (!unit) continue;
+      // Thử tìm đơn vị
+      const unitId = await this.helper.mapSenderUnitId(unit, transaction);
+      if (unitId) {
+        internalReceivingDeptIds.push(unitId);
+        // Tìm tất cả user thuộc đơn vị đó qua Department
+        try {
+          const deptUsers = await this.helper.queryNewDbTx(
+            `SELECT [id] FROM ${process.env.NEW_DB_NAME}.dbo.users WHERE [Department] LIKE @dept OR [organization_name] LIKE @dept`,
+            { dept: `%${unit.trim()}%` },
+            transaction
+          );
+          if (Array.isArray(deptUsers)) {
+            deptUsers.forEach(u => { if (u.id) allReceiverUserIds.add(String(u.id)); });
+          }
+        } catch (deptErr) {
+          // Bỏ qua lỗi tìm user theo đơn vị
+        }
+      } else {
+        // Thử tìm như một người dùng (name/username)
+        const cleanName = unit.trim();
+        if (cleanName.length >= 2) {
+          try {
+            const userId = await this.helper.mapUserName(cleanName, transaction);
+            if (userId) {
+              allReceiverUserIds.add(String(userId));
+            } else {
+              externalReceivingUnits.push(unit);
+            }
+          } catch (userErr) {
+            externalReceivingUnits.push(unit);
+          }
+        } else {
+          externalReceivingUnits.push(unit);
+        }
       }
     }
     const internalReceivingDeptIdsStr = JSON.stringify(internalReceivingDeptIds);
+    const externalReceivingUnitsStr = externalReceivingUnits.length > 0 ? externalReceivingUnits.join("; ") : null;
+
+    // Tổng hợp mảng IDs cho know_receivers & vieweds (user + unit IDs)
+    const allReceiverArr = Array.from(allReceiverUserIds);
+    const knowReceiversStr = allReceiverArr.length > 0 ? JSON.stringify(allReceiverArr) : null;
+    const viewedsStr = knowReceiversStr; // vieweds = know_receivers (cùng danh sách người nhận)
+
+    // text_symbols = "dữ liệu văn bản đi đồng bộ" + timestamp
+    const syncTimestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    const textSymbols = `dữ liệu văn bản đi đồng bộ ${syncTimestamp}`;
 
     return {
       document_id: `${Date.now()}${Math.floor(Math.random() * 10000)}`,
@@ -119,6 +167,8 @@ class StreamOutgoingMigrationModel extends BaseModel {
       status_code: this.helper.mapStatus(oldRecord.TrangThai),
       sender_unit: senderUnit,
       internal_receiving_dept: internalReceivingDeptIdsStr,
+      external_receiving_unit: externalReceivingUnitsStr,
+      internal_receiving_unit: internalReceivingDeptIds.length > 0 ? JSON.stringify(internalReceivingDeptIds) : null,
       drafter,
       document_type: documentType,
       urgency_level: urgencyLevel,
@@ -128,15 +178,65 @@ class StreamOutgoingMigrationModel extends BaseModel {
       release_no: this.helper.cleanText(oldRecord.Title),
       release_date: promulgationDate ?? null,
       abstract_note: this.helper.cleanText(oldRecord.TrichYeu),
+      document_field: documentField,
       to_book: bookDocumentObj?.count ?? null,
       reply_incoming_doc: this.helper.cleanText(oldRecord.TraLoiVBDen),
       type_doc: 1,
       bpmn_version: "SOANTHAO_PHATHANH_VBD",
       type_of_process: "SOANTHAO_PHATHANH_VBD",
+      know_receivers: knowReceiversStr,
+      vieweds: viewedsStr,
+      text_symbols: textSymbols,
+      to_book_text_symbols: textSymbols,
       created_at: this.helper.parseDate(oldRecord.Created),
       updated_at: this.helper.parseDate(oldRecord.Modified),
       replaced: 0,
-      tb_bak: 1
+      tb_bak: 1,
+      // Original Backup Columns (Passthrough)
+      Title: oldRecord.Title,
+      BanLanhDao: oldRecord.BanLanhDao,
+      ChenSo: oldRecord.ChenSo,
+      TrangThai: oldRecord.TrangThai,
+      IsLibrary: oldRecord.IsLibrary,
+      ChucVu: oldRecord.ChucVu,
+      DocNum: oldRecord.DocNum,
+      NguoiSoanThaoText: oldRecord.NguoiSoanThaoText,
+      FolderLocation: oldRecord.FolderLocation,
+      DonVi: oldRecord.DonVi,
+      HoSoXuLyLink: oldRecord.HoSoXuLyLink,
+      InfoVBDi: oldRecord.InfoVBDi,
+      ItemVBPH: oldRecord.ItemVBPH,
+      NguoiKyVanBan: oldRecord.NguoiKyVanBan,
+      NguoiKyVanBanText: oldRecord.NguoiKyVanBanText,
+      PhanCong: oldRecord.PhanCong,
+      TraLoiVBDen: oldRecord.TraLoiVBDen,
+      SoBan: oldRecord.SoBan,
+      SoTrang: oldRecord.SoTrang,
+      NoiLuuTru: oldRecord.NoiLuuTru,
+      BanLanhDaoTCT: oldRecord.BanLanhDaoTCT,
+      YKien: oldRecord.YKien,
+      YKienChiHuy: oldRecord.YKienChiHuy,
+      ModuleId: oldRecord.ModuleId,
+      SiteName: oldRecord.SiteName,
+      ListName: oldRecord.ListName,
+      ItemId: oldRecord.ItemId,
+      YearMonth: oldRecord.YearMonth,
+      Modified: oldRecord.Modified,
+      Created: oldRecord.Created,
+      ModifiedBy: oldRecord.ModifiedBy,
+      CreatedBy: oldRecord.CreatedBy,
+      MigrateFlg: oldRecord.MigrateFlg,
+      MigrateErrFlg: oldRecord.MigrateErrFlg,
+      MigrateErrMess: oldRecord.MigrateErrMess,
+      LoaiMoc: oldRecord.LoaiMoc,
+      KySoFiles: oldRecord.KySoFiles,
+      DGPId: oldRecord.DGPId,
+      Workflow: oldRecord.Workflow,
+      IsKyQuyChe: oldRecord.IsKyQuyChe,
+      DocSignType: oldRecord.DocSignType,
+      IsConverting: oldRecord.IsConverting,
+      CodeItemId: oldRecord.CodeItemId,
+      table_backup: "VanBanBanHanh"
     };
   }
 
@@ -194,7 +294,51 @@ class StreamOutgoingMigrationModel extends BaseModel {
         sign_type,
         from_create_draf,
         replaced,
-        tb_bak
+        tb_bak,
+        Title,
+        BanLanhDao,
+        ChenSo,
+        TrangThai,
+        IsLibrary,
+        ChucVu,
+        DocNum,
+        NguoiSoanThaoText,
+        FolderLocation,
+        DonVi,
+        HoSoXuLyLink,
+        InfoVBDi,
+        ItemVBPH,
+        NguoiKyVanBan,
+        NguoiKyVanBanText,
+        PhanCong,
+        TraLoiVBDen,
+        SoBan,
+        SoTrang,
+        NoiLuuTru,
+        BanLanhDaoTCT,
+        YKien,
+        YKienChiHuy,
+        ModuleId,
+        SiteName,
+        ListName,
+        ItemId,
+        YearMonth,
+        Modified,
+        Created,
+        ModifiedBy,
+        CreatedBy,
+        MigrateFlg,
+        MigrateErrFlg,
+        MigrateErrMess,
+        LoaiMoc,
+        KySoFiles,
+        DGPId,
+        Workflow,
+        IsKyQuyChe,
+        DocSignType,
+        IsConverting,
+        CodeItemId,
+        table_backup
       )
       VALUES (
         @document_id,
@@ -248,7 +392,51 @@ class StreamOutgoingMigrationModel extends BaseModel {
         @sign_type,
         @from_create_draf,
         @replaced,
-        @tbBak
+        @tb_bak,
+        @Title,
+        @BanLanhDao,
+        @ChenSo,
+        @TrangThai,
+        @IsLibrary,
+        @ChucVu,
+        @DocNum,
+        @NguoiSoanThaoText,
+        @FolderLocation,
+        @DonVi,
+        @HoSoXuLyLink,
+        @InfoVBDi,
+        @ItemVBPH,
+        @NguoiKyVanBan,
+        @NguoiKyVanBanText,
+        @PhanCong,
+        @TraLoiVBDen,
+        @SoBan,
+        @SoTrang,
+        @NoiLuuTru,
+        @BanLanhDaoTCT,
+        @YKien,
+        @YKienChiHuy,
+        @ModuleId,
+        @SiteName,
+        @ListName,
+        @ItemId,
+        @YearMonth,
+        @Modified,
+        @Created,
+        @ModifiedBy,
+        @CreatedBy,
+        @MigrateFlg,
+        @MigrateErrFlg,
+        @MigrateErrMess,
+        @LoaiMoc,
+        @KySoFiles,
+        @DGPId,
+        @Workflow,
+        @IsKyQuyChe,
+        @DocSignType,
+        @IsConverting,
+        @CodeItemId,
+        @table_backup
       )
     `;
 
@@ -308,7 +496,51 @@ class StreamOutgoingMigrationModel extends BaseModel {
         sign_type = @sign_type,
         from_create_draf = @from_create_draf,
         replaced = @replaced,
-        tb_bak = @tbBak
+        tb_bak = @tb_bak,
+        Title = @Title,
+        BanLanhDao = @BanLanhDao,
+        ChenSo = @ChenSo,
+        TrangThai = @TrangThai,
+        IsLibrary = @IsLibrary,
+        ChucVu = @ChucVu,
+        DocNum = @DocNum,
+        NguoiSoanThaoText = @NguoiSoanThaoText,
+        FolderLocation = @FolderLocation,
+        DonVi = @DonVi,
+        HoSoXuLyLink = @HoSoXuLyLink,
+        InfoVBDi = @InfoVBDi,
+        ItemVBPH = @ItemVBPH,
+        NguoiKyVanBan = @NguoiKyVanBan,
+        NguoiKyVanBanText = @NguoiKyVanBanText,
+        PhanCong = @PhanCong,
+        TraLoiVBDen = @TraLoiVBDen,
+        SoBan = @SoBan,
+        SoTrang = @SoTrang,
+        NoiLuuTru = @NoiLuuTru,
+        BanLanhDaoTCT = @BanLanhDaoTCT,
+        YKien = @YKien,
+        YKienChiHuy = @YKienChiHuy,
+        ModuleId = @ModuleId,
+        SiteName = @SiteName,
+        ListName = @ListName,
+        ItemId = @ItemId,
+        YearMonth = @YearMonth,
+        Modified = @Modified,
+        Created = @Created,
+        ModifiedBy = @ModifiedBy,
+        CreatedBy = @CreatedBy,
+        MigrateFlg = @MigrateFlg,
+        MigrateErrFlg = @MigrateErrFlg,
+        MigrateErrMess = @MigrateErrMess,
+        LoaiMoc = @LoaiMoc,
+        KySoFiles = @KySoFiles,
+        DGPId = @DGPId,
+        Workflow = @Workflow,
+        IsKyQuyChe = @IsKyQuyChe,
+        DocSignType = @DocSignType,
+        IsConverting = @IsConverting,
+        CodeItemId = @CodeItemId,
+        table_backup = @table_backup
       WHERE id_outgoing_bak = @id_outgoing_bak
     `;
 
@@ -373,7 +605,51 @@ class StreamOutgoingMigrationModel extends BaseModel {
       sign_type: record.sign_type ?? null,
       from_create_draf: record.from_create_draf ?? null,
       replaced: record.replaced ?? null,
-      tbBak: record.tbBak ?? record.tb_bak ?? null,
+      tb_bak: record.tb_bak ?? 1,
+      Title: record.Title ?? null,
+      BanLanhDao: record.BanLanhDao ?? null,
+      ChenSo: record.ChenSo ?? null,
+      TrangThai: record.TrangThai ?? null,
+      IsLibrary: record.IsLibrary ?? null,
+      ChucVu: record.ChucVu ?? null,
+      DocNum: record.DocNum ?? null,
+      NguoiSoanThaoText: record.NguoiSoanThaoText ?? null,
+      FolderLocation: record.FolderLocation ?? null,
+      DonVi: record.DonVi ?? null,
+      HoSoXuLyLink: record.HoSoXuLyLink ?? null,
+      InfoVBDi: record.InfoVBDi ?? null,
+      ItemVBPH: record.ItemVBPH ?? null,
+      NguoiKyVanBan: record.NguoiKyVanBan ?? null,
+      NguoiKyVanBanText: record.NguoiKyVanBanText ?? null,
+      PhanCong: record.PhanCong ?? null,
+      TraLoiVBDen: record.TraLoiVBDen ?? null,
+      SoBan: record.SoBan ?? null,
+      SoTrang: record.SoTrang ?? null,
+      NoiLuuTru: record.NoiLuuTru ?? null,
+      BanLanhDaoTCT: record.BanLanhDaoTCT ?? null,
+      YKien: record.YKien ?? null,
+      YKienChiHuy: record.YKienChiHuy ?? null,
+      ModuleId: record.ModuleId ?? null,
+      SiteName: record.SiteName ?? null,
+      ListName: record.ListName ?? null,
+      ItemId: record.ItemId ?? null,
+      YearMonth: record.YearMonth ?? null,
+      Modified: record.Modified ?? null,
+      Created: record.Created ?? null,
+      ModifiedBy: record.ModifiedBy ?? null,
+      CreatedBy: record.CreatedBy ?? null,
+      MigrateFlg: record.MigrateFlg ?? null,
+      MigrateErrFlg: record.MigrateErrFlg ?? null,
+      MigrateErrMess: record.MigrateErrMess ?? null,
+      LoaiMoc: record.LoaiMoc ?? null,
+      KySoFiles: record.KySoFiles ?? null,
+      DGPId: record.DGPId ?? null,
+      Workflow: record.Workflow ?? null,
+      IsKyQuyChe: record.IsKyQuyChe ?? null,
+      DocSignType: record.DocSignType ?? null,
+      IsConverting: record.IsConverting ?? null,
+      CodeItemId: record.CodeItemId ?? null,
+      table_backup: record.table_backup ?? null
     };
   }
 }

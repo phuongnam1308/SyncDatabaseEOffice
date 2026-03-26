@@ -1,6 +1,8 @@
+const logger = require('../../../utils/logger');
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 const { roleMapping } = require('./roleMapping');
 const MigrationHelper = require('../../helpers/MigrationHelper');
+const { v4: uuidv4 } = require('uuid');
 
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 
@@ -55,8 +57,30 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
             END CATCH
         `);
         logger.info(`[StreamUserMigrationModel] ID column in ${this.newDbTable} ensured to be NVARCHAR with PK reset.`);
+        // Đảm bảo các cột mới có trong bảng (resilience)
+        const columnsToAdd = [
+          { name: 'id_user_del_bak', type: 'nvarchar(255) COLLATE SQL_Latin1_General_CP1_CI_AS NULL' },
+          { name: 'contentSignImage', type: 'int NULL' },
+          { name: 'paraphSignImage', type: 'int NULL' },
+          { name: 'paraphSignTransparentImage', type: 'int NULL' },
+          { name: 'contentSignTransparentImage', type: 'int NULL' },
+          { name: 'stampSignImage', type: 'int NULL' },
+          { name: 'table_backups', type: 'nvarchar(255) COLLATE SQL_Latin1_General_CP1_CI_AS NULL' }
+        ];
+
+        for (const col of columnsToAdd) {
+            await this.queryNewDb(`
+                IF NOT EXISTS (
+                    SELECT * FROM sys.columns 
+                    WHERE object_id = OBJECT_ID('${tableRef}') AND name = '${col.name}'
+                )
+                BEGIN
+                    ALTER TABLE ${tableRef} ADD ${col.name} ${col.type};
+                END
+            `);
+        }
     } catch (e) {
-        logger.warn(`[StreamUserMigrationModel] Failed to alter id column: ${e.message}`);
+        logger.warn(`[StreamUserMigrationModel] Failed to alter id column or ensure columns: ${e.message}`);
     }
   }
 
@@ -334,7 +358,7 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
     const position = this.safeString(oldRecord.Position);
 
     return {
-      id: code_nd || oldRecord.ID, // Dùng Mã NV làm ID chính thay vì GUID
+      id: uuidv4(), // Tự động sinh ra UUID cho user mới
       password: process.env.DEFAULT_PASSWORD ||'$2b$10$Ohcqw9J1YStppJHeYdoD5.yWjnCm5Mt7MQxWoIMNc0LBwbFRW1DU2',
       name,
       avatar: oldRecord.Image || '[]',
@@ -378,7 +402,13 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
       ImagePath: this.safeString(oldRecord.ImagePath),
       SignImage: this.safeString(oldRecord.SignImage),
       SignImageSmall: this.safeString(oldRecord.SignImageSmall),
-      table_backups: 'PersonalProfile'
+      table_backups: 'PersonalProfile',
+      id_user_del_bak: null,
+      contentSignImage: null,
+      paraphSignImage: null,
+      paraphSignTransparentImage: null,
+      contentSignTransparentImage: null,
+      stampSignImage: null
     };
   }
 
@@ -729,7 +759,7 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
       : `${this.newDbSchema}.${this.newDbTable}`;
 
     const query = `
-      IF EXISTS (SELECT 1 FROM ${tableRef} WHERE id = @id)
+      IF EXISTS (SELECT 1 FROM ${tableRef} WHERE id_user_bak = @id_user_bak)
       BEGIN
         UPDATE ${tableRef}
         SET password = @password,
@@ -761,7 +791,6 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
             role_group_source_authorized = @role_group_source_authorized,
             updated_at = @updated_at,
             name_authorized = @name_authorized,
-            id_user_bak = @id_user_bak,
             AccountID = @AccountID,
             FullName = @FullName,
             Department = @Department,
@@ -774,8 +803,14 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
             ImagePath = @ImagePath,
             SignImage = @SignImage,
             SignImageSmall = @SignImageSmall,
-            table_backups = @table_backups
-        WHERE id = @id;
+            table_backups = @table_backups,
+            id_user_del_bak = @id_user_del_bak,
+            contentSignImage = @contentSignImage,
+            paraphSignImage = @paraphSignImage,
+            paraphSignTransparentImage = @paraphSignTransparentImage,
+            contentSignTransparentImage = @contentSignTransparentImage,
+            stampSignImage = @stampSignImage
+        WHERE id_user_bak = @id_user_bak;
         SELECT @@ROWCOUNT AS affected, 'updated' AS action;
       END
       ELSE
@@ -788,7 +823,8 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
           status, author, role_group_source_authorized, created_at, updated_at,
           name_authorized, id_user_bak, AccountID, FullName, Department, DepartmentId,
           PhongBanID, SimKySo1, SimKySo2, DepartmentManager, IsTCT, ImagePath, SignImage,
-          SignImageSmall, table_backups
+          SignImageSmall, table_backups, id_user_del_bak, contentSignImage, paraphSignImage,
+          paraphSignTransparentImage, contentSignTransparentImage, stampSignImage
         )
         VALUES (
           @id, @password, @name, @avatar, @code_nd, @username, @email_user, @phone_number_user,
@@ -798,7 +834,8 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
           @status, @author, @role_group_source_authorized, @created_at, @updated_at,
           @name_authorized, @id_user_bak, @AccountID, @FullName, @Department, @DepartmentId,
           @PhongBanID, @SimKySo1, @SimKySo2, @DepartmentManager, @IsTCT, @ImagePath, @SignImage,
-          @SignImageSmall, @table_backups
+          @SignImageSmall, @table_backups, @id_user_del_bak, @contentSignImage, @paraphSignImage,
+          @paraphSignTransparentImage, @contentSignTransparentImage, @stampSignImage
         );
         SELECT @@ROWCOUNT AS affected, 'inserted' AS action;
       END

@@ -9,6 +9,52 @@ class FileModel extends BaseModel {
     this.newDbName = process.env.NEW_DB_NAME;
     this.newSchema = 'dbo';
     this.newTable  = 'files';
+    this._ensureColumnsDone = false;
+  }
+
+  /**
+   * Tự động tạo các cột bị thiếu nếu cần
+   */
+  async ensureColumns(transaction = null) {
+    if (this._ensureColumnsDone) return;
+    try {
+      const dbName = process.env.NEW_DB_NAME;
+      await this.queryDb(`
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'nguoikyvanban')
+            ALTER TABLE ${dbName}.dbo.${this.newTable} ADD nguoikyvanban NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'id_bak')
+            ALTER TABLE ${dbName}.dbo.${this.newTable} ADD id_bak NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'table_bak')
+            ALTER TABLE ${dbName}.dbo.${this.newTable} ADD table_bak NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'type_doc')
+            ALTER TABLE ${dbName}.dbo.${this.newTable} ADD type_doc NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'isBak')
+            ALTER TABLE ${dbName}.dbo.${this.newTable} ADD isBak NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'isNumbered')
+            ALTER TABLE ${dbName}.dbo.${this.newTable} ADD isNumbered TINYINT DEFAULT 0 NOT NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'typeSize')
+            ALTER TABLE ${dbName}.dbo.${this.newTable} ADD typeSize NVARCHAR(100) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'is_important')
+            ALTER TABLE ${dbName}.dbo.${this.newTable} ADD is_important BIT DEFAULT 0 NOT NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'file_type')
+            ALTER TABLE ${dbName}.dbo.${this.newTable} ADD file_type NVARCHAR(100) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'version')
+            ALTER TABLE ${dbName}.dbo.${this.newTable} ADD version VARCHAR(100) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'is_signed_file')
+            ALTER TABLE ${dbName}.dbo.${this.newTable} ADD is_signed_file BIGINT NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'number_of_signed_file')
+            ALTER TABLE ${dbName}.dbo.${this.newTable} ADD number_of_signed_file BIGINT NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'storage_path')
+            ALTER TABLE ${dbName}.dbo.${this.newTable} ADD storage_path NVARCHAR(255) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'storage_type')
+            ALTER TABLE ${dbName}.dbo.${this.newTable} ADD storage_type VARCHAR(100) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'status')
+            ALTER TABLE ${dbName}.dbo.${this.newTable} ADD status INT NULL;
+      `, {}, transaction);
+      this._ensureColumnsDone = true;
+    } catch(err) {
+      logger.warn(`[FileModel] ensureColumns failed: ${err.message}`);
+    }
   }
 
   /**
@@ -129,11 +175,13 @@ class FileModel extends BaseModel {
    * @param {number}  [record.isBak=0]            - Có phải bản backup không
    * @param {string}  record.nguoikyvanban        - Người ký văn bản
    * @param {number}  [record.is_important=0]     - Có phải tài liệu quan trọng không
+   * @param {string}  record.file_type            - Loại file (Word/PDF/...)
    * @param {sql.Transaction} transaction - Transaction (nếu có)
    * @returns {Promise<{action: string, newId: number}>}
    */
   async insert(record, transaction = null) {
     try {
+      await this.ensureColumns(transaction);
       const tableRef = this.getTableRef();
 
       const query = `
@@ -142,7 +190,7 @@ class FileModel extends BaseModel {
           parent_id, created_by, created_at, updated_at, status, version,
           is_signed_file, number_of_signed_file, storage_path, storage_type,
           isNumbered, typeSize, id_bak, table_bak, type_doc, isBak,
-          nguoikyvanban, is_important
+          nguoikyvanban, is_important, file_type
         )
         VALUES (
           @file_name, @file_path, @mime_type, @file_size, @description, @is_directory,
@@ -152,7 +200,7 @@ class FileModel extends BaseModel {
           @status, @version,
           @is_signed_file, @number_of_signed_file, @storage_path, @storage_type,
           @isNumbered, @typeSize, @id_bak, @table_bak, @type_doc, @isBak,
-          @nguoikyvanban, @is_important
+          @nguoikyvanban, @is_important, @file_type
         );
         -- Trả về id vừa được SQL Server tự sinh
         SELECT SCOPE_IDENTITY() AS new_id;
@@ -183,6 +231,7 @@ class FileModel extends BaseModel {
    */
   async update(id, record, transaction = null) {
     try {
+      await this.ensureColumns(transaction);
       const tableRef = this.getTableRef();
       const params = { ...this._mapParams(record), id: Number(id) };
 
@@ -210,7 +259,8 @@ class FileModel extends BaseModel {
           type_doc              = @type_doc,
           isBak                 = @isBak,
           nguoikyvanban         = @nguoikyvanban,
-          is_important          = @is_important
+          is_important          = @is_important,
+          file_type             = @file_type
         WHERE id = @id
       `;
 
@@ -282,6 +332,7 @@ class FileModel extends BaseModel {
       isBak:                 record.isBak                 ?? 0,       // mặc định: không phải bản backup
       nguoikyvanban:         record.nguoikyvanban         ?? null,
       is_important:          record.is_important          ?? 0,       // mặc định: không quan trọng
+      file_type:             record.file_type             ?? null,
     };
   }
 }

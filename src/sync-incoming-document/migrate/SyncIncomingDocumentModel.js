@@ -21,8 +21,185 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         this.mainSchema = this.newDbSchema;
         this.mainTable = this.newDbTable;
         this.helper = new MigrationHelper(this.queryNewDbTx.bind(this), this.queryOldDb.bind(this));
-
     }
+
+    async initialize() {
+        await super.initialize();
+        await this.ensureStagingTableExists();
+        await this.ensureMainTableExists();
+    }
+
+    async ensureStagingTableExists() {
+        const stagingTableRef = this.getStagingTableRef();
+        const query = `
+        IF OBJECT_ID('${stagingTableRef}', 'U') IS NULL
+        BEGIN
+            CREATE TABLE ${stagingTableRef} (
+                ID NVARCHAR(255) PRIMARY KEY,
+                Title NVARCHAR(MAX) NULL,
+                SoDen NVARCHAR(MAX) NULL,
+                CoQuanGui2 NVARCHAR(MAX) NULL,
+                CoQuanGuiText NVARCHAR(MAX) NULL,
+                DonVi NVARCHAR(MAX) NULL,
+                IsLibrary NVARCHAR(MAX) NULL,
+                DoKhan NVARCHAR(MAX) NULL,
+                DoMat NVARCHAR(MAX) NULL,
+                Files NVARCHAR(MAX) NULL,
+                ThoiHanGQ NVARCHAR(MAX) NULL,
+                ItemVBDTCT NVARCHAR(MAX) NULL,
+                ItemVBPH NVARCHAR(MAX) NULL,
+                BanLanhDao NVARCHAR(MAX) NULL,
+                LanhDaoTCT NVARCHAR(MAX) NULL,
+                LanhDaoTCTDaXuLy NVARCHAR(MAX) NULL,
+                LanhDaoTCTDeBiet NVARCHAR(MAX) NULL,
+                LanhDaoVPDN NVARCHAR(MAX) NULL,
+                LinhVuc NVARCHAR(MAX) NULL,
+                LoaiVanBan NVARCHAR(MAX) NULL,
+                NgayDen NVARCHAR(MAX) NULL,
+                NgayTrenVB NVARCHAR(MAX) NULL,
+                SoBan NVARCHAR(MAX) NULL,
+                SoTrang NVARCHAR(MAX) NULL,
+                SoVanBan NVARCHAR(MAX) NULL,
+                TrangThai NVARCHAR(MAX) NULL,
+                TrichYeu NVARCHAR(MAX) NULL,
+                VanBanTraLoi NVARCHAR(MAX) NULL,
+                ChenSo NVARCHAR(MAX) NULL,
+                YKienLanhDao NVARCHAR(MAX) NULL,
+                YKienLanhDaoTCT NVARCHAR(MAX) NULL,
+                YKienLanhDaoVPDN NVARCHAR(MAX) NULL,
+                YKienCuaLDVPChoVanThu NVARCHAR(MAX) NULL,
+                ForwardType NVARCHAR(MAX) NULL,
+                Modified NVARCHAR(MAX) NULL,
+                Created NVARCHAR(MAX) NULL,
+                ModifiedBy NVARCHAR(MAX) NULL,
+                CreatedBy NVARCHAR(MAX) NULL,
+                ModuleId NVARCHAR(MAX) NULL,
+                SiteName NVARCHAR(MAX) NULL,
+                ListName NVARCHAR(MAX) NULL,
+                ItemId NVARCHAR(MAX) NULL,
+                MigrateFlg NVARCHAR(MAX) NULL,
+                YearMonth NVARCHAR(MAX) NULL,
+                MigrateErrFlg NVARCHAR(MAX) NULL,
+                MigrateErrMess NVARCHAR(MAX) NULL,
+                ItemVBPHOld NVARCHAR(MAX) NULL,
+                DGPId NVARCHAR(MAX) NULL
+            )
+        END
+        `;
+        await this.queryNewDb(query);
+    }
+
+    async ensureMainTableExists() {
+        const mainTableRef = this.getMainTableRef();
+        const query = `
+        IF OBJECT_ID('${mainTableRef}', 'U') IS NULL
+        BEGIN
+            CREATE TABLE ${mainTableRef} (
+                document_id NVARCHAR(50) PRIMARY KEY,
+                status_code NVARCHAR(10) NULL,
+                created_at DATETIME2 NULL,
+                updated_at DATETIME2 NULL,
+                book_document_id NVARCHAR(50) NULL,
+                abstract_note NVARCHAR(MAX) NULL,
+                to_book INT NULL,
+                sender_unit NVARCHAR(MAX) NULL,
+                receiver_unit NVARCHAR(MAX) NULL,
+                document_date DATETIME2 NULL,
+                receive_date DATETIME2 NULL,
+                to_book_date DATETIME2 NULL,
+                deadline DATETIME2 NULL,
+                second_book NVARCHAR(MAX) NULL,
+                receive_method NVARCHAR(MAX) NULL,
+                private_level NVARCHAR(MAX) NULL,
+                urgency_level NVARCHAR(MAX) NULL,
+                document_type NVARCHAR(MAX) NULL,
+                document_field NVARCHAR(MAX) NULL,
+                signer NVARCHAR(MAX) NULL,
+                to_book_code NVARCHAR(MAX) NULL,
+                fileids NVARCHAR(MAX) NULL,
+                status NVARCHAR(10) NULL,
+                isStar INT DEFAULT 0,
+                parent_doc NVARCHAR(50) NULL,
+                type_process_doc NVARCHAR(MAX) NULL,
+                bpmn_version NVARCHAR(MAX) NULL,
+                copy_to_internal NVARCHAR(MAX) NULL,
+                resolution_deadline DATETIME2 NULL,
+                copy_count INT NULL,
+                page_count INT NULL,
+                view_group NVARCHAR(MAX) NULL,
+                directive_comment NVARCHAR(MAX) NULL,
+                SoVanBan NVARCHAR(MAX) NULL,
+                id_incoming_bak NVARCHAR(255) NULL,
+                CoQuanGui2 NVARCHAR(MAX) NULL,
+                CoQuanGuiText NVARCHAR(MAX) NULL,
+                DonVi NVARCHAR(MAX) NULL,
+                IsLibrary INT NULL,
+                ItemVBDTCT NVARCHAR(MAX) NULL,
+                ItemVBPH NVARCHAR(MAX) NULL,
+                ItemVBPHOld NVARCHAR(MAX) NULL,
+                BanLanhDao NVARCHAR(MAX) NULL,
+                LanhDaoTCT NVARCHAR(MAX) NULL,
+                LanhDaoTCTDaXuLy NVARCHAR(MAX) NULL,
+                LanhDaoTCTDeBiet NVARCHAR(MAX) NULL,
+                LanhDaoVPDN NVARCHAR(MAX) NULL,
+                LinhVuc NVARCHAR(MAX) NULL,
+                SoBan INT NULL,
+                SoTrang INT NULL,
+                TrichYeu NVARCHAR(MAX) NULL,
+                VanBanTraLoi NVARCHAR(MAX) NULL,
+                ChenSo NVARCHAR(MAX) NULL,
+                YKienLanhDao NVARCHAR(MAX) NULL,
+                YKienLanhDaoTCT NVARCHAR(MAX) NULL,
+                YKienLanhDaoVPDN NVARCHAR(MAX) NULL,
+                YKienCuaLDVPChoVanThu NVARCHAR(MAX) NULL,
+                ForwardType NVARCHAR(MAX) NULL,
+                ModuleId NVARCHAR(MAX) NULL,
+                SiteName NVARCHAR(MAX) NULL,
+                ListName NVARCHAR(MAX) NULL,
+                ItemId NVARCHAR(MAX) NULL,
+                MigrateFlg NVARCHAR(MAX) NULL,
+                YearMonth NVARCHAR(MAX) NULL,
+                MigrateErrFlg NVARCHAR(MAX) NULL,
+                MigrateErrMess NVARCHAR(MAX) NULL,
+                TrangThai NVARCHAR(MAX) NULL,
+                ModifiedBy NVARCHAR(MAX) NULL,
+                CreatedBy NVARCHAR(MAX) NULL,
+                DGPId NVARCHAR(MAX) NULL,
+                deadline_reply DATETIME2 NULL,
+                table_backup NVARCHAR(255) DEFAULT 'VanBanDen',
+                tb_bak INT DEFAULT 0,
+                tb_update INT DEFAULT 0,
+                status_code_bef_test NVARCHAR(10) NULL,
+                sender_unit_bef_test NVARCHAR(MAX) NULL,
+                receiver_unit_bef_test NVARCHAR(MAX) NULL,
+                table_backups NVARCHAR(MAX) NULL,
+                stage_status NVARCHAR(50) NULL,
+                curStatusCode NVARCHAR(10) NULL
+            );
+            CREATE INDEX idx_id_incoming_bak ON ${mainTableRef}(id_incoming_bak);
+        END
+        ELSE
+        BEGIN
+            -- Ensure table_backups column exists if table already existed
+            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'table_backups')
+                ALTER TABLE ${mainTableRef} ADD table_backups NVARCHAR(MAX) NULL;
+
+            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'tb_bak')
+                ALTER TABLE ${mainTableRef} ADD tb_bak INT DEFAULT 0;
+
+            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'tb_update')
+                ALTER TABLE ${mainTableRef} ADD tb_update INT DEFAULT 0;
+
+            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'stage_status')
+                ALTER TABLE ${mainTableRef} ADD stage_status NVARCHAR(50) NULL;
+
+            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'curStatusCode')
+                ALTER TABLE ${mainTableRef} ADD curStatusCode NVARCHAR(10) NULL;
+        END
+        `;
+        await this.queryNewDb(query);
+    }
+
     getStagingTableRef() {
         if (this.newDbName) {
             return `${this.newDbName}.${this.newDbSchema}.${this.newTableSync}`;
@@ -658,7 +835,8 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         ForwardType, ModuleId, SiteName, ListName, ItemId,
         MigrateFlg, YearMonth, MigrateErrFlg, MigrateErrMess,
         TrangThai, ModifiedBy, CreatedBy, DGPId, deadline_reply, table_backup,
-        tb_bak, tb_update, status_code_bef_test, sender_unit_bef_test, receiver_unit_bef_test
+        tb_bak, tb_update, status_code_bef_test, sender_unit_bef_test, receiver_unit_bef_test,
+        stage_status, curStatusCode
       )
       VALUES (
         @document_id, @status_code, @created_at, @updated_at, @book_document_id,
@@ -677,7 +855,8 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         @ForwardType, @ModuleId, @SiteName, @ListName, @ItemId,
         @MigrateFlg, @YearMonth, @MigrateErrFlg, @MigrateErrMess,
         @TrangThai, @ModifiedBy, @CreatedBy, @DGPId, @deadline_reply, @table_backup,
-        @tb_bak, @tb_update, @status_code_bef_test, @sender_unit_bef_test, @receiver_unit_bef_test
+        @tb_bak, @tb_update, @status_code_bef_test, @sender_unit_bef_test, @receiver_unit_bef_test,
+        @stage_status, @curStatusCode
       )
     `;
 
@@ -715,6 +894,8 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         parent_doc = @parent_doc,
         type_process_doc = @type_process_doc,
         bpmn_version = @bpmn_version,
+        stage_status = @stage_status,
+        curStatusCode = @curStatusCode,
         copy_to_internal = @copy_to_internal,
         resolution_deadline = @resolution_deadline,
         copy_count = @copy_count,
@@ -773,76 +954,40 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
 
     _mapStatus(trangThai) {
         const safeTrangThai = this.safeString(trangThai);
-        if (!safeTrangThai) {
-            return {
-                statusCode: String(this.parseStatus(trangThai)),
-                bpmnVersion: 'PHUC_DAP_DV'
-            };
+        const defaultResult = {
+            statusCode: String(this.parseStatus(trangThai)),
+            bpmnVersion: 'PHUC_DAP_DV',
+            stageStatus: 'CHUA_XU_LY',
+            curStatusCode: String(this.parseStatus(trangThai))
+        };
+
+        if (!safeTrangThai || !process.env.STATUS_MAP_INCOMING) {
+            return defaultResult;
         }
 
-        const statusMap = [
-            {
-                trangthais: ['Trình chỉ huy'],
-                statusCode: '1',
-                bpmnVersion: 'PHUC_DAP_DV',
-            },
-            {
-                trangthais: ['Văn bản từ cơ quan, đơn vị', 'Văn bản từ TCT'],
-                statusCode: '6',
-                bpmnVersion: 'PHUC_DAP_DV',
-            },
-            {
-                trangthais: ['Tổ chức thực hiện'],
-                statusCode: '6',
-                bpmnVersion: 'PHUC_DAP_DV',
-            },
-            {
-                trangthais: ['Trình lãnh đạo TCT'],
-                statusCode: '6',
-                bpmnVersion: 'PHUC_DAP_DV',
-            },
-            {
-                trangthais: ['Chuyển đơn vị'],
-                statusCode: '7',
-                bpmnVersion: 'PHOIHOP_NHANDEBIET',
-            },
-            {
-                trangthais: ['Chuyển văn thư'],
-                statusCode: '5',
-                bpmnVersion: 'HOAN_THANH_VAN_BAN',
-            },
-            {
-                trangthais: ['Thu hồi'],
-                statusCode: '10',
-                bpmnVersion: 'PHUC_DAP_DV',
-            },
-            {
-                trangthais: ['Trình Chỉ huy VP'],
-                statusCode: '3',
-                bpmnVersion: 'PHUC_DAP_DV_CON',
-            },
-            {
-                trangthais: ['Hoàn tất'],
-                statusCode: '13',
-                bpmnVersion: 'LUONG_PHONG',
-            },
-        ];
-
-        for (const mapping of statusMap) {
-            for (const t of mapping.trangthais) {
-                if (safeTrangThai.includes(t)) {
-                    return {
-                        statusCode: mapping.statusCode,
-                        bpmnVersion: mapping.bpmnVersion,
-                    };
+        try {
+            const statusMap = JSON.parse(process.env.STATUS_MAP_INCOMING);
+            if (Array.isArray(statusMap)) {
+                for (const mapping of statusMap) {
+                    if (Array.isArray(mapping.trangthais)) {
+                        for (const t of mapping.trangthais) {
+                            if (safeTrangThai.toLowerCase().includes(t.toLowerCase())) {
+                                return {
+                                    statusCode: mapping.status_code || defaultResult.statusCode,
+                                    bpmnVersion: mapping.bpmn_version || defaultResult.bpmnVersion,
+                                    stageStatus: mapping.stage_status || defaultResult.stageStatus,
+                                    curStatusCode: mapping.curStatusCode || defaultResult.curStatusCode
+                                };
+                            }
+                        }
+                    }
                 }
             }
+        } catch (e) {
+            logger.warn(`[SyncIncomingDocumentModel] Error parsing STATUS_MAP_INCOMING: ${e.message}`);
         }
 
-        return {
-            statusCode: String(this.parseStatus(trangThai)),
-            bpmnVersion: 'PHUC_DAP_DV'
-        };
+        return defaultResult;
     }
 
     async _mapSingleRecord(oldRecord, transaction) {
@@ -889,6 +1034,8 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         const statusInfo = this._mapStatus(oldRecord.TrangThai);
         const statusCode = statusInfo.statusCode;
         const bpmnVersion = statusInfo.bpmnVersion;
+        const stageStatus = statusInfo.stageStatus;
+        const curStatusCode = statusInfo.curStatusCode;
 
         const createdAt = this.safeDate(oldRecord.Created || oldRecord.NgayTao);
         const updatedAt = this.safeDate(oldRecord.Modified) || createdAt;
@@ -905,6 +1052,8 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
             // Core fields
             document_id: `${Date.now()}${Math.floor(Math.random() * 10000)}`,
             status_code: statusCode,
+            stage_status: stageStatus,
+            curStatusCode: curStatusCode,
             created_at: createdAt,
             updated_at: updatedAt,
             book_document_id: bookDocumentObj?.id ?? null,
@@ -1022,6 +1171,8 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
             page_count: record.page_count ?? null,
             view_group: record.view_group ?? null,
             directive_comment: record.directive_comment ?? null,
+            stage_status: record.stage_status ?? null,
+            curStatusCode: record.curStatusCode ?? null,
 
             // Legacy/backup columns
             SoVanBan: record.SoVanBan ?? null,

@@ -160,6 +160,15 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
       await super.initialize();
       await this.ensureStagingTableExists();
 
+      try {
+        await this.queryNewDb(`
+            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'incoming_documents' AND COLUMN_NAME = 'table_backups')
+                ALTER TABLE dbo.incoming_documents ADD table_backups NVARCHAR(MAX) NULL;
+        `);
+      } catch(e) {
+        logger.warn(`[IncomingDocumentModel] Failed to auto alter table incoming_documents: ${e.message}`);
+      }
+
       this._syncAuditModel = [];
       this._syncCommentModel = [];
 
@@ -174,14 +183,14 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
         this._syncAuditModel.push(model);
       }
 
-      for (const table of COMMENT_TABLES) {
-        const model = new SyncCommentModel(table);
-        await model.initialize();
-        this._syncCommentModel.push(model);
-      }
+      // for (const table of COMMENT_TABLES) {
+      //   const model = new SyncCommentModel(table);
+      //   await model.initialize();
+      //   this._syncCommentModel.push(model);
+      // }
 
       logger.info(
-        `[IncomingDocumentModel] Initialized with auditTables=${this._syncAuditModel.length}, commentTables=${this._syncAuditModel.length}`
+        `[IncomingDocumentModel] Initialized with auditTables=${this._syncAuditModel.length}, commentTables=${this._syncCommentModel.length}`
       );
     } catch (error) {
       logger.error(`[IncomingDocumentModel.initialize] Failed to initialize: ${error.message}`, { stack: error.stack });
@@ -729,7 +738,7 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
   async ThemFileDinhKem(oldRecord, newDocumentRecord, documentId) {
     const files = oldRecord?.Files || '';
     logger.info(`[DEBUG][ThemFileDinhKem] Dang kiem tra file cho ban ghi ID: ${oldRecord?.ID}. Gia tri cot Files: "${files}"`);
-    
+
     if (!files) {
       logger.info(`[DEBUG][ThemFileDinhKem] Ban ghi ID ${oldRecord?.ID} KHONG co file đính kèm (cot Files trong DB cũ trống).`);
       return false;
@@ -773,7 +782,7 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
             logger.warn(`[ThemFileDinhKem] Skipping invalid path part: "${relativePath}" for record ${oldRecord.ID}`);
             continue;
         }
-        
+
         const fullUrl = `${baseUrl}${relativePath}`;
         const fileName = relativePath.substring(relativePath.lastIndexOf('/') + 1);
 
@@ -935,6 +944,35 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
       logger.info(`[DEBUG][upsertDocumentAggregateById] Bat dau goi ThemFileDinhKem cho documentId: ${documentId}`);
       await this.ThemFileDinhKem(oldRecord, newRrecord, documentId);
 
+      /* ====== Phân tách bình luận từ HTML (Ý kiến lãnh đạo SP cũ) ====== */
+      try {
+        let totalParsedComments = 0;
+        if (oldRecord?.YKienLanhDao) {
+           totalParsedComments += await this._IncomingMigrationModels.helper.parseAndInsertHtmlComments(
+              oldRecord.YKienLanhDao, documentId, id, 'VanBanDen', 'YKienLanhDao', transaction
+           );
+        }
+        if (oldRecord?.YKienLanhDaoTCT) {
+           totalParsedComments += await this._IncomingMigrationModels.helper.parseAndInsertHtmlComments(
+              oldRecord.YKienLanhDaoTCT, documentId, id, 'VanBanDen', 'YKienLanhDaoTCT', transaction
+           );
+        }
+        if (oldRecord?.YKienLanhDaoVPDN) {
+           totalParsedComments += await this._IncomingMigrationModels.helper.parseAndInsertHtmlComments(
+              oldRecord.YKienLanhDaoVPDN, documentId, id, 'VanBanDen', 'YKienLanhDaoVPDN', transaction
+           );
+        }
+        if (oldRecord?.YKienCuaLDVPChoVanThu) {
+           totalParsedComments += await this._IncomingMigrationModels.helper.parseAndInsertHtmlComments(
+              oldRecord.YKienCuaLDVPChoVanThu, documentId, id, 'VanBanDen', 'YKienCuaLDVPChoVanThu', transaction
+           );
+        }
+        if (totalParsedComments > 0) {
+          logger.info(`[AggregateSync][ParsedHTMLComments] documentId=${documentId} newly extracted comments=${totalParsedComments}`);
+        }
+      } catch (htmlCommentErr) {
+        logger.warn(`[upsertDocumentAggregateById] Lỗi parse HTML YKien ID=${id}: ${htmlCommentErr.message}`);
+      }
 
       for (const auditModel of this._syncAuditModel || []) {
         try {
@@ -969,35 +1007,110 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
         }
       }
 
-      for (const commentModel of this._syncCommentModel || []) {
-        try {
-          const rawComments = await commentModel.fetchByDocumentId(id);
+      // ══════════════════════════════════════════════════════════════
+      // AUTO-CREATE AUDIT: Nếu document_id chưa có audit nào → tạo 1 bản ghi CREATE
+      // ══════════════════════════════════════════════════════════════
+      try {
+        const existingAudit = await this.queryNewDbTx(
+          `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.audit WHERE document_id = @docId`,
+          { docId: documentId },
+          transaction
+        );
 
-          if (!Array.isArray(rawComments) || !rawComments.length) {
-            continue;
-          }
+        if (!existingAudit || existingAudit.length === 0) {
+          const creatorName = oldRecord.CreatedBy || oldRecord.NguoiSoanThaoText || '';
+          const parsedDate = this.helper
+            ? this.helper.parseDate(oldRecord.Created)
+            : null;
+          const createdDate = parsedDate || new Date();
 
-          for (const rawComment of rawComments) {
+          let creatorId = process.env.VANTHU_USER_ID;
+          let displayName = creatorName;
+          if (this.helper && creatorName) {
             try {
-              const result = await commentModel.processSingleRecord(rawComment, documentId, transaction);
-              if (!result) continue;
-              logger.info(
-                `[AggregateSync][Comment] table=${commentModel?.oldDbTable} documentId=${documentResult.documentId} inserted=${result?.inserted || 0} updated=${result?.updated || 0}`
-              );
-              totalAffected += Number(result.inserted || 0);
-              totalAffected += Number(result.updated || 0);
-            } catch (error) {
-              logger.warn(
-                `[upsertDocumentAggregateById] Comment migrate failed for table=${commentModel?.oldDbTable}, source ID=${id}, target documentId=${documentId}: ${error.message}`, { stack: error.stack }
-              );
+              const cleanName = this.helper.extractDisplayName
+                ? this.helper.extractDisplayName(creatorName)
+                : creatorName;
+              displayName = cleanName || creatorName;
+              const resolvedId = await this.helper.mapUserName(cleanName, transaction);
+              if (resolvedId) creatorId = resolvedId;
+            } catch (mapErr) {
+              logger.warn(`[AutoCreateAudit][Incoming] mapUserName failed for "${creatorName}": ${mapErr.message}`);
             }
           }
-        } catch (error) {
-          logger.warn(
-            `[upsertDocumentAggregateById] Fetch comment failed for table=${commentModel?.oldDbTable}, source ID=${id}: ${error.message}`, { stack: error.stack }
-          );
+
+          const insertQuery = `
+            INSERT INTO ${process.env.NEW_DB_NAME}.dbo.audit (
+              document_id, [time], user_id, display_name,
+              action_code, details, origin_id, created_by,
+              receiver, receiver_unit, group_, roleProcess,
+              [action], stage_status, created_at, updated_at,
+              type_document, table_backups
+            ) VALUES (
+              @document_id, @time, @user_id, @display_name,
+              @action_code, @details, @origin_id, @created_by,
+              @receiver, @receiver_unit, @group_, @roleProcess,
+              @action, @stage_status, @created_at, GETDATE(),
+              @type_document, @table_backups
+            )
+          `;
+
+          await this.queryNewDbTx(insertQuery, {
+            document_id: documentId,
+            time: createdDate || new Date(),
+            user_id: creatorId,
+            display_name: displayName || null,
+            action_code: 'CREATE',
+            details: JSON.stringify({ note: 'Tạo văn bản (tự động tạo từ migration)', isTransferOption: false }),
+            origin_id: `auto_create_${String(id).substring(0, 80)}`,
+            created_by: creatorId,
+            receiver: creatorId,
+            receiver_unit: null,
+            group_: null,
+            roleProcess: 'VANTHU',
+            action: 'Tạo văn bản',
+            stage_status: 'DA_XU_LY',
+            created_at: createdDate || new Date(),
+            type_document: 'IncomingDocument',
+            table_backups: 'auto_create'
+          }, transaction);
+
+          logger.info(`[AutoCreateAudit][Incoming] Created initial CREATE audit for documentId=${documentId} creator=${displayName}`);
+          totalAffected++;
         }
+      } catch (autoAuditErr) {
+        logger.warn(`[AutoCreateAudit][Incoming] Failed for documentId=${documentId}: ${autoAuditErr.message}`);
       }
+
+      // for (const commentModel of this._syncCommentModel || []) {
+      //   try {
+      //     const rawComments = await commentModel.fetchByDocumentId(id);
+      //
+      //     if (!Array.isArray(rawComments) || !rawComments.length) {
+      //       continue;
+      //     }
+      //
+      //     for (const rawComment of rawComments) {
+      //       try {
+      //         const result = await commentModel.processSingleRecord(rawComment, documentId, transaction);
+      //         if (!result) continue;
+      //         logger.info(
+      //           `[AggregateSync][Comment] table=${commentModel?.oldDbTable} documentId=${documentResult.documentId} inserted=${result?.inserted || 0} updated=${result?.updated || 0}`
+      //         );
+      //         totalAffected += Number(result.inserted || 0);
+      //         totalAffected += Number(result.updated || 0);
+      //       } catch (error) {
+      //         logger.warn(
+      //           `[upsertDocumentAggregateById] Comment migrate failed for table=${commentModel?.oldDbTable}, source ID=${id}, target documentId=${documentId}: ${error.message}`, { stack: error.stack }
+      //         );
+      //       }
+      //     }
+      //   } catch (error) {
+      //     logger.warn(
+      //       `[upsertDocumentAggregateById] Fetch comment failed for table=${commentModel?.oldDbTable}, source ID=${id}: ${error.message}`, { stack: error.stack }
+      //     );
+      //   }
+      // }
 
       return {
         action: documentResult.action || 'upsert',

@@ -120,13 +120,23 @@ class MigrationHelper {
       }
       const normalized = status.trim().toLowerCase();
       if (!normalized) return 10;
-      if (normalized === "phát hành" || normalized === "đã phát hành") {
-        return 7;
+
+      // Map dựa trên bảng trạng thái người dùng cung cấp
+      if (normalized === "dự thảo") return 1;
+      if (normalized === "chờ xử lý") return 2;
+      if (normalized === "chờ ban hành vbbc") return 4;
+      if (normalized === "đã ban hành vbbc" || normalized === "phát hành" || normalized === "đã phát hành") {
+        return 5;
       }
-      if (normalized === "chờ phát hành") {
-        return 6;
-      }
-      return 10;
+      if (normalized === "chờ đề nghị ban hành") return 8;
+      if (normalized === "chờ ban hành vbdt") return 9;
+      if (normalized === "đã ban hành vbdt") return 10;
+
+      // Fallback cho các trường hợp khác
+      if (normalized.includes("ban hành")) return 5;
+      if (normalized.includes("đã xl")) return 10;
+
+      return 10; // Mặc định là Hoàn tất/Đã ban hành
     } catch (err) {
       logger.warn("[mapStatus] invalid status:", status);
       return 10;
@@ -278,6 +288,21 @@ class MigrationHelper {
   splitStringSplitBySemicolon(input) {
     if (!input || typeof input !== 'string') {
       return [];
+    }
+
+    // Hỗ trợ định dạng SharePoint Multi-lookup: id;#name;#id;#name
+    if (input.includes(";#")) {
+      const parts = input.split(/;#?|#;/).map(p => p.trim()).filter(Boolean);
+      const names = [];
+      // Trong chuỗi id;#name;#id;#name, tên thường nằm ở các vị trí lẻ (1, 3, 5...)
+      // Tuy nhiên có trường hợp chỉ có tên hoặc format lạ, ta ưu tiên lấy các chuỗi không phải ID số
+      for (const p of parts) {
+        if (!/^\d+$/.test(p)) {
+          names.push(p);
+        }
+      }
+      if (names.length > 0) return names;
+      return parts;
     }
 
     return input
@@ -553,18 +578,18 @@ class MigrationHelper {
       const id = uuidv4();
       const insertQuery = `
         INSERT INTO dbo.topics (
-            id, name, display_order, status, requires_approval, 
+            id, name, display_order, status, requires_approval,
             created_at, updated_at, tb_bak
         )
         VALUES (
-            @id, @name, 0, 1, 0, 
+            @id, @name, 0, 1, 0,
             GETDATE(), GETDATE(), 1
         )
       `;
 
       await this.queryNewDbTx(insertQuery, { id, name: normalizedName }, transaction);
 
-      if (topicMap) topicMap[lowerName] = id; 
+      if (topicMap) topicMap[lowerName] = id;
       logger.info(`[getOrCreateTopic] Đã tự động tạo Danh mục mới: "${normalizedName}" (ID: ${id})`);
       return id;
 
@@ -598,36 +623,59 @@ class MigrationHelper {
         if (existedNew?.length) {
           return existedNew[0].id;
         }
+        const isGuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed);
+
         const checkOldQuery = `
           SELECT TOP 1 *
           FROM dbo.PersonalProfile
-          WHERE ID = @id
+          WHERE
+            (TRY_CONVERT(uniqueidentifier, @id) IS NOT NULL AND ID = TRY_CONVERT(uniqueidentifier, @id))
+            OR AccountID = @id
+            OR StaffID = @id
         `;
 
-        const existedOld = await this.queryOldDb(
-          checkOldQuery,
-          { id: trimmed }
-        );
-        if (!existedOld?.length) {
-          return trimmed;
-        }
-        if (!this._streamUserMigrationModel) {
-          const StreamUserMigrationModel = require('../sync-user-copy/migrate/StreamUserMigrationModel');
-          this._streamUserMigrationModel = new StreamUserMigrationModel();
-          await this._streamUserMigrationModel.initialize();
-        }
-        const syncResult =
-          await this._streamUserMigrationModel.upsertUserById(
-            existedOld[0],
-            transaction
+        let existedOld = [];
+        try {
+          existedOld = await this.queryOldDb(
+            checkOldQuery,
+            { id: trimmed }
           );
-        if (!syncResult?.affected) {
-          logger.warn(`[mapUserName] Sync user failed ID = ${trimmed}`);
-        } else if (syncResult.action === 'inserted') {
-          logger.warn(`[mapUserName] Created new userID = ${trimmed}`);
+        } catch (oldDbErr) {
+          // Bỏ qua lỗi ép kiểu/conversion nếu vẫn còn
+          logger.warn(`[mapUserName] Failed to query PersonalProfile for ID=${trimmed}: ${oldDbErr.message}`);
         }
 
-        return trimmed;
+        if (!existedOld?.length) {
+          // Nếu không tìm thấy bằng ID/AccountID/StaffID, thử tìm theo tên nếu ID có dạng text
+          if (!/^\d+$/.test(trimmed) && !isGuid) {
+             // Để nó trôi xuống phần tìm theo displayName bên dưới
+          } else {
+             return trimmed;
+          }
+        } else {
+          if (!this._streamUserMigrationModel) {
+            const StreamUserMigrationModel = require('../sync-user-copy/migrate/StreamUserMigrationModel');
+            this._streamUserMigrationModel = new StreamUserMigrationModel();
+            await this._streamUserMigrationModel.initialize();
+          }
+          const syncResult =
+            await this._streamUserMigrationModel.upsertUserById(
+              existedOld[0],
+              transaction
+            );
+
+          // Trả về ID mới sau khi đã upsert/sync
+          if (syncResult?.backupId) {
+             // Cần truy vấn lại ID mới từ bảng users
+             const refreshed = await this.queryNewDbTx(
+                `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users WHERE id_user_bak = @bakId`,
+                { bakId: String(existedOld[0].ID) },
+                transaction
+             );
+             if (refreshed?.length) return refreshed[0].id;
+          }
+          return trimmed;
+        }
       }
 
       if (!/[a-zA-ZÀ-ỹ]/.test(trimmed)) {
@@ -685,6 +733,46 @@ class MigrationHelper {
   }
 
   /**
+   * Chuyên dùng để ánh xạ trường người soạn thảo/người ký.
+   * Ưu tiên tìm theo ID backup, sau đó mới dùng đến logic mapUserName (tên/sync).
+   */
+  async mapUserDrafter(userIdOrName, transaction = null) {
+    if (!userIdOrName) return null;
+    const trimmed = String(userIdOrName).trim();
+    if (!trimmed) return null;
+
+    // 1. Thử tìm nhanh theo mã id_user_bak hoặc ID thật (dùng hàm chuyên biệt)
+    const user = await this.findUserByBakId(trimmed, transaction);
+    if (user) return user.id;
+
+    // 2. Không thấy thì dùng logic mapUserName (xử lý tên, sync từ old DB...)
+    return await this.mapUserName(trimmed, transaction);
+  }
+
+  /**
+   * Tìm kiếm user dựa trên id_user_bak hoặc id hiện tại.
+   * Lấy đầy đủ các cột theo yêu cầu.
+   */
+  async findUserByBakId(bakId, transaction = null) {
+    if (!bakId) return null;
+    try {
+      const query = `
+        SELECT id, password, name, avatar, code_nd, username, email_user, phone_number_user, [position], leader, address_user, description, [role], roles_by_process, organization_name, organization_code, organization_type, orders, birthday, gender, identification_card, contact_time, parent, wso2_user_id, keycloak_user_id, status, name_authorized, role_group_source_authorized, created_at, updated_at, contentSignImage, paraphSignImage, author, id_user_bak, AccountID, FullName, Department, DepartmentId, PhongBanID, SimKySo1, SimKySo2, DepartmentManager, IsTCT, ImagePath, SignImage, SignImageSmall, table_backups, id_user_del_bak, paraphSignTransparentImage, contentSignTransparentImage, stampSignImage
+        FROM ${process.env.NEW_DB_NAME || 'app_tancang'}.dbo.users
+        WHERE id_user_bak = @bakId OR id = @bakId;
+      `;
+      const result = await this.queryNewDbTx(query, { bakId }, transaction);
+      if (result?.length > 0) {
+        return result[0];
+      }
+      return null;
+    } catch (error) {
+      logger.error(`[findUserByBakId] Lỗi cho bakId "${bakId}":`, error.message);
+      return null;
+    }
+  }
+
+  /**
    * Tìm mã nhân viên (username) dựa trên tên đầy đủ
    * @param {string} fullName Tên đầy đủ (có thể kèm chức danh)
    */
@@ -697,7 +785,7 @@ class MigrationHelper {
       const query = `
         SELECT TOP 1 username
         FROM ${process.env.NEW_DB_NAME}.dbo.users
-        WHERE LTRIM(RTRIM(name)) = @name 
+        WHERE LTRIM(RTRIM(name)) = @name
            OR LTRIM(RTRIM(username)) = @name
       `;
       const result = await this.queryNewDbTx(query, { name: displayName });
@@ -720,7 +808,7 @@ class MigrationHelper {
       const query = `
         SELECT TOP 1 id
         FROM ${process.env.NEW_DB_NAME}.dbo.users
-        WHERE LTRIM(RTRIM(name)) = @name 
+        WHERE LTRIM(RTRIM(name)) = @name
            OR LTRIM(RTRIM(username)) = @name
       `;
       const result = await this.queryNewDbTx(query, { name: displayName });
@@ -2118,6 +2206,93 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
     const statusStr = String(value || '');
     if (statusStr === '-1') return 3;
     return 1;
+  }
+
+  /**
+   * Bóc tách các bình luận từ mã HTML cũ của SP (như YKienLanhDao, YKienChiHuy)
+   * Tạo bản ghi mới vào thẳng bảng document_comments kèm tb_bak = 1
+   */
+  async parseAndInsertHtmlComments(htmlString, newDocumentId, oldDocumentId, oldTableName, columnName = null, transaction = null) {
+    if (!htmlString || typeof htmlString !== 'string') return 0;
+
+    try {
+      const dbName = process.env.NEW_DB_NAME;
+      await this.queryNewDbTx(`
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'document_comments' AND COLUMN_NAME = 'tb_bak')
+            ALTER TABLE ${dbName}.dbo.document_comments ADD tb_bak INT DEFAULT 0;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'document_comments' AND COLUMN_NAME = 'user_id_bak')
+            ALTER TABLE ${dbName}.dbo.document_comments ADD user_id_bak NVARCHAR(255) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'document_comments' AND COLUMN_NAME = 'parent_id_bak')
+            ALTER TABLE ${dbName}.dbo.document_comments ADD parent_id_bak NVARCHAR(255) NULL;
+      `, {}, transaction);
+    } catch (err) {
+      logger.warn(`[parseAndInsertHtmlComments] Khoi tao tb_bak loi: ${err.message}`);
+    }
+
+    let count = 0;
+    // Tìm các cụm có dạng: <span ...>Nguyễn Văn Phương - CVP (03/03/2014 13:09)</span>...<div ...>Nội dung</div>
+    const regex = /<span[^>]*noidung[^>]*>(.*?)<\/span>[\s\S]*?<div[^>]*noidung[^>]*>([\s\S]*?)<\/div>/gi;
+    let match;
+
+    while ((match = regex.exec(htmlString)) !== null) {
+      const headerRaw = match[1].replace(/<[^>]+>/g, '').trim();
+      const contentRaw = match[2].replace(/<[^>]+>/g, '').trim();
+
+      if (!headerRaw && !contentRaw) continue;
+
+      let userNameExtracted = headerRaw;
+      let dateExtracted = null;
+      let createdAt = new Date();
+
+      const dateMatch = headerRaw.match(/\(([^)]+)\)$/);
+      if (dateMatch) {
+         dateExtracted = dateMatch[1];
+         userNameExtracted = headerRaw.replace(/\([^)]+\)$/, '').trim();
+         const parsedDt = this.parseDate(dateExtracted);
+         if (parsedDt) createdAt = parsedDt;
+      }
+
+      const cleanName = this.extractDisplayName(userNameExtracted) || userNameExtracted;
+      const userId = await this.mapUserName(cleanName, transaction);
+      const { v4: uuidv4 } = require("uuid");
+      const commentId = uuidv4();
+
+      const formattedContent = columnName ? `${columnName} : ${contentRaw}` : contentRaw;
+
+      const insertQuery = `
+        INSERT INTO ${process.env.NEW_DB_NAME}.dbo.document_comments (
+          id, document_id, parent_id, user_id, user_name, content, [type],
+          is_edited, created_at, updated_at, fileId, likes, is_leader_suggestion,
+          id_comments_bak, ItemTitle, ItemUrl, ItemImage, DocumentID_bak,
+          Category, Type_bak, Email, Author, CommentID, EmailReplyTo, ReplyTo,
+          Files, LikeNumber, table_bak, parent_id_bak, user_id_bak, org_id, tb_bak
+        ) VALUES (
+          @id, @docId, NULL, @userId, @userName, @content, 1,
+          0, @createdAt, @createdAt, NULL, NULL, 1,
+          NULL, NULL, NULL, NULL, @docBak,
+          NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+          NULL, NULL, @tableBak, NULL, NULL, NULL, 1
+        )
+      `;
+
+      try {
+        await this.queryNewDbTx(insertQuery, {
+          id: commentId,
+          docId: newDocumentId,
+          userId: userId || null,
+          userName: cleanName || null,
+          content: formattedContent || '',
+          createdAt: createdAt,
+          docBak: String(oldDocumentId),
+          tableBak: String(oldTableName)
+        }, transaction);
+        count++;
+      } catch (insertErr) {
+        logger.warn(`[parseAndInsertHtmlComments] Lỗi insert comment ID=${commentId}: ${insertErr.message}`);
+      }
+    }
+
+    return count;
   }
 }
 

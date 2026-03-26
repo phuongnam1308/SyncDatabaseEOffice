@@ -29,9 +29,10 @@ const MODEL_DEFINITIONS = [
     section: 'realtime',
     ModelClass: StreamDepartmentMigrationModel,
   },
-{
-    key: 'UNIT_TEST_STREAM_USER_COPY_MIGRATION111',
+  {
+    key: 'UNIT_TEST_STREAM_USER_COPY_MIGRATION',
     label: 'Đồng bộ người dùng',  
+    section: 'realtime',
     ModelClass: StreamUserMigrationModel
   },
   {
