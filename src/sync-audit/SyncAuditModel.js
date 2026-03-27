@@ -30,10 +30,373 @@ const OUTGOING_CATEGORIES = new Set([
 ]);
 
 
-/**
- * Lớp SyncAuditModel dùng để đồng bộ hóa dữ liệu audit (lịch sử xử lý) từ
- * cơ sở dữ liệu cũ sang cơ sở dữ liệu mới.
- */
+// --- CẤU HÌNH QUY TRÌNH (WORKFLOW PROCESS) ---
+const WORKFLOW_PROCESS_CONFIG = [
+  {
+    "role": "VANTHU",
+    "keywords": ["văn thư", "vt", "văn thư cục", "văn thư bảo mật", "bảo mật lưu trữ", "văn thư lưu trữ"],
+    "screens": [
+      {
+        "screen_name": "Màn phát hành - chờ phát hành",
+        "trangthais": ["chờ phát hành"],
+        "status_code": 16,
+        "bpmn_version": "SOANTHAO_PHATHANH_CQD",
+        "type_of_process": "SOANTHAO_PHATHANH_CQD",
+        "curStatusCode": 3,
+        "stage_status": "DA_XU_LY",
+        "role": "VAN_THU",
+        "action_code": "TRINH_KY"
+      },
+      {
+        "screen_name": "Màn phát hành - Đã phát hành",
+        "trangthais": ["đã phát hành", "phát hành"],
+        "status_code": 9,
+        "bpmn_version": "SOANTHAO_PHATHANH_VBD",
+        "type_of_process": "SOANTHAO_PHATHANH_VBD",
+        "curStatusCode": 9,
+        "stage_status": "BAN_HANH_DU_THAO",
+        "role": "VAN_THU",
+        "action_code": "DONG_DAU"
+      },
+      {
+        "screen_name": "Màn xử lý - Chờ xử lý",
+        "trangthais": ["chờ xử lý"],
+        "status_code": 2,
+        "bpmn_version": "SOANTHAO_PHATHANH_VBD",
+        "type_of_process": "SOANTHAO_PHATHANH_VBD",
+        "curStatusCode": 2,
+        "stage_status": "CHUA_XU_LY",
+        "role": "NGUOI_SOAN_THAO",
+        "action_code": "TRINH_KIEM_TRA_TT"
+      },
+      {
+        "screen_name": "Màn xử lý - Đã xử lý",
+        "trangthais": ["đã xử lý"],
+        "status_code": 6,
+        "bpmn_version": "SOANTHAO_PHATHANH_VBD",
+        "type_of_process": "SOANTHAO_PHATHANH_VBD",
+        "curStatusCode": 3,
+        "stage_status": "DA_XU_LY",
+        "role": "VAN_THU",
+        "action_code": "TRINH_KY"
+      },
+      {
+        "screen_name": "Màn xử lý - Đã phát hành",
+        "trangthais": ["đã ban hành"],
+        "status_code": 9,
+        "bpmn_version": "SOANTHAO_PHATHANH_VBD",
+        "type_of_process": "SOANTHAO_PHATHANH_VBD",
+        "curStatusCode": 9,
+        "stage_status": "DA_BAN_HANH",
+        "role": "VAN_THU",
+        "action_code": "BAN_HANH"
+      },
+      {
+        "screen_name": "Màn đóng dấu - chờ đóng dấu",
+        "trangthais": ["chờ đóng dấu"],
+        "status_code": 100,
+        "bpmn_version": "KY_SO_HS_VBD",
+        "type_of_process": "KY_SO_HS_VBD",
+        "curStatusCode": 100,
+        "stage_status": "CHO_DONG_DAU",
+        "role": "NGUOI_KY_PHE_DUYET",
+        "action_code": "KY_SO"
+      },
+      {
+        "screen_name": "Màn đóng dấu - đã đóng dấu",
+        "trangthais": ["đã đóng dấu"],
+        "status_code": 6,
+        "bpmn_version": "SOANTHAO_PHATHANH_VBD",
+        "type_of_process": "SOANTHAO_PHATHANH_VBD",
+        "curStatusCode": 3,
+        "stage_status": "DA_XU_LY",
+        "role": "VAN_THU",
+        "action_code": "TRINH_KY"
+      }
+    ]
+  },
+  {
+    "role": "Giám đốc",
+    "keywords": [
+      "giám đốc", "tổng giám đốc", "giám đốc cn", "giám đốc trung tâm", "giám đốc nhân sự", 
+      "chủ tịch kiêm giám đốc", "chủ tịch hđqt", "chủ tịch hội đồng quản trị", "chủ tịch", 
+      "chính ủy", "tham mưu trưởng", "tmt", "phó tổng giám đốc", "cn chính trị", "đại phó", 
+      "hải đoàn trưởng", "phó chủ tịch hội đồng thành viên", "phó chủ tịch hđtv", 
+      "thành viên hđtv", "thành viên hội đồng thành viên", "thư ký thường trực hội đồng thành viên", 
+      "thư ký tổng giám đốc"
+    ],
+    "screens": [
+      {
+        "screen_name": "Màn xử lý - chờ xử lý",
+        "trangthais": ["trình ký", "chờ ký", "chờ xử lý"],
+        "status_code": 6,
+        "bpmn_version": "QUY_TRINH_KY_UQ",
+        "type_of_process": "QUY_TRINH_KY_UQ",
+        "curStatusCode": 6,
+        "stage_status": "CHO_KY_BAN_HANH",
+        "role": "NGUOI_KY_THE_THUC",
+        "action_code": "KY_NHAY_THE_THUC"
+      },
+      {
+        "screen_name": "Màn xử lý - đã xử lý",
+        "trangthais": ["đã ký", "đã duyệt", "đã xử lý"],
+        "status_code": 16,
+        "bpmn_version": "SOANTHAO_PHATHANH_VBD",
+        "type_of_process": "SOANTHAO_PHATHANH_VBD",
+        "curStatusCode": 7,
+        "stage_status": "CHUA_XU_LY",
+        "role": "NGUOI_KY_BAN_HANH",
+        "action_code": "KY_SO"
+      },
+      {
+        "screen_name": "Màn xử lý - đã phát hành",
+        "trangthais": ["đã ban hành", "đã phát hành", "phát hành"],
+        "status_code": 9,
+        "bpmn_version": "SOANTHAO_PHATHANH_CQD",
+        "type_of_process": "SOANTHAO_PHATHANH_CQD",
+        "curStatusCode": 15,
+        "stage_status": "BAN_HANH_DU_THAO",
+        "role": "NGUOI_KY_BAN_HANH",
+        "action_code": "KY_SO"
+      }
+    ]
+  },
+  {
+    "role": "Chánh văn phòng",
+    "keywords": ["chánh văn phòng", "cvp"],
+    "screens": [
+      {
+        "screen_name": "Màn xử lý - chờ xử lý",
+        "trangthais": ["chờ xử lý"],
+        "status_code": 5,
+        "bpmn_version": "SOANTHAO_PHATHANH_VBD",
+        "type_of_process": "SOANTHAO_PHATHANH_VBD",
+        "curStatusCode": 5,
+        "stage_status": "CHO_KY_THE_THUC",
+        "role": "NGUOI_KY_NOI_DUNG",
+        "action_code": "KY_NHAY_NOI_DUNG"
+      },
+      {
+        "screen_name": "Màn xử lý - đã xử lý",
+        "trangthais": ["đã xử lý"],
+        "status_code": 16,
+        "bpmn_version": "SOANTHAO_PHATHANH_VBD",
+        "type_of_process": "SOANTHAO_PHATHANH_VBD",
+        "curStatusCode": 16,
+        "stage_status": "VAN_THU",
+        "role": "VAN_THU",
+        "action_code": "DONG_DAU"
+      },
+      {
+        "screen_name": "Màn xử lý - đã phát hành",
+        "trangthais": ["đã ban hành"],
+        "status_code": 9,
+        "bpmn_version": "SOANTHAO_PHATHANH_VBD",
+        "type_of_process": "SOANTHAO_PHATHANH_VBD",
+        "curStatusCode": 9,
+        "stage_status": "DA_BAN_HANH",
+        "role": "VAN_THU",
+        "action_code": "BAN_HANH"
+      }
+    ]
+  },
+  {
+    "role": "Phó giám đốc",
+    "keywords": ["phó giám đốc", "phó gđ", "phó gd", "phó chính ủy", "phó tham mưu trưởng"],
+    "screens": []
+  },
+  {
+    "role": "Phó chánh văn phòng",
+    "keywords": ["phó chánh văn phòng"],
+    "screens": []
+  },
+  {
+    "role": "Trưởng phòng",
+    "keywords": [
+      "trưởng phòng", "tp", "trưởng ban", "trưởng trung tâm", "trưởng chi nhánh", "trưởng ter", 
+      "quản đốc", "kế toán trưởng", "chủ nhiệm", "phụ trách phòng", "tp tài chính", "tp.điều độ", 
+      "tp.tchc", "quyền tpth", "trưởng dp", "dpa", "trưởng khu", "trưởng ban thương vụ", 
+      "trưởng ban giao nhận", "trạm trưởng", "trưởng trạm", "thuyền trưởng", "máy trưởng", 
+      "máy trưởng tàu khách", "xe trưởng", "trưởng depot", "trưởng văn phòng đại diện", 
+      "trưởng ttpp", "trưởng đhsx", "trưởng tmn", "xưởng trưởng", "trung đội trưởng", 
+      "trưởng trực ban", "trưởng khu kho hàng"
+    ],
+    "screens": [
+      {
+        "screen_name": "Dự thảo - dự thảo",
+        "trangthais": ["trả lại", "dự thảo"],
+        "status_code": 1,
+        "bpmn_version": "SOANTHAO_PHATHANH_VBD",
+        "type_of_process": "SOANTHAO_PHATHANH_VBD",
+        "curStatusCode": 1,
+        "stage_status": "CHUA_XU_LY",
+        "role": "NGUOI_KY_NOI_DUNG",
+        "action_code": "TRA_LAI"
+      },
+      {
+        "screen_name": "Xử lý - chờ xử lý",
+        "trangthais": ["chờ xử lý"],
+        "status_code": 3,
+        "bpmn_version": "SOANTHAO_PHATHANH_VBD",
+        "type_of_process": "SOANTHAO_PHATHANH_VBD",
+        "curStatusCode": 3,
+        "stage_status": "CHO_KY_NOI_DUNG",
+        "role": "VAN_THU",
+        "action_code": "TRINH_KY"
+      },
+      {
+        "screen_name": "xử lý - đã xử lý",
+        "trangthais": ["đã xử lý"],
+        "status_code": 16,
+        "bpmn_version": "SOANTHAO_PHATHANH_CQD",
+        "type_of_process": "SOANTHAO_PHATHANH_CQD",
+        "curStatusCode": 4,
+        "stage_status": "DA_XU_LY",
+        "role": "NGUOI_KY_NOI_DUNG",
+        "action_code": "KY_NHAY_NOI_DUNG"
+      },
+      {
+        "screen_name": "xử lý - đã phát hành",
+        "trangthais": ["đã ban hành"],
+        "status_code": 5,
+        "bpmn_version": "QTVBNB",
+        "type_of_process": "QTVBNB",
+        "curStatusCode": 15,
+        "stage_status": "BAN_HANH_DU_THAO",
+        "role": "CHI_HUY_PHONG",
+        "action_code": "KY_SO"
+      },
+      {
+        "screen_name": "ý kiến - chờ cho ý kiến",
+        "trangthais": ["chờ cho ý kiến"],
+        "status_code": 1,
+        "bpmn_version": "SOANTHAO_PHATHANH_VBD",
+        "type_of_process": "SOANTHAO_PHATHANH_VBD",
+        "curStatusCode": 1,
+        "stage_status": "CHUA_XU_LY",
+        "role": "NGUOI_SOAN_THAO",
+        "action_code": "CREATE"
+      },
+      {
+        "screen_name": "nhận để biết - nhận để biết",
+        "trangthais": ["nhận để biết"],
+        "status_code": 16,
+        "bpmn_version": "SOANTHAO_PHATHANH_VBD",
+        "type_of_process": "SOANTHAO_PHATHANH_VBD",
+        "curStatusCode": 5,
+        "stage_status": "DA_XU_LY",
+        "role": "NGUOI_KY_NOI_DUNG",
+        "action_code": "KY_NHAY_NOI_DUNG"
+      }
+    ]
+  },
+  {
+    "role": "Phó trưởng phòng",
+    "keywords": [
+      "phó trưởng phòng", "ptp", "phó phòng", "phó ban", "phó trung tâm", "phó trưởng trung tâm", 
+      "phó trưởng chi nhánh", "phó ter", "phó terminal", "phó chủ nhiệm", "hải đội phó", "phó quản đốc", 
+      "p.hđt", "pp kế toán", "tổ trưởng", "đội trưởng", "trưởng kho", "trưởng ca", "bếp trưởng", 
+      "tiểu đội trưởng", "quản lý bếp", "tbsx", "trưởng tbsx", "trưởng khu kh", "xưởng phó", 
+      "phó chi nhánh", "phó depot", "phó trưởng khu kho hàng", "trung đội phó", "thuyền phó", 
+      "máy phó", "sĩ quan máy", "sĩ quan boong", "giám sát ca", "giám sát công trình", 
+      "giám sát chất lượng", "phó trưởng trực ban"
+    ],
+    "screens": [
+      {
+        "screen_name": "xử lý - chờ xử lý",
+        "trangthais": ["chờ xử lý"],
+        "status_code": 2,
+        "bpmn_version": "KY_SO_HS_VBD",
+        "type_of_process": "KY_SO_HS_VBD",
+        "curStatusCode": 2,
+        "stage_status": "CHO_KY_NOI_DUNG",
+        "role": "NGUOI_SOAN_THAO",
+        "action_code": null
+      },
+      {
+        "screen_name": "xử lý - đã xử lý",
+        "trangthais": ["đã xử lý"],
+        "status_code": 14,
+        "bpmn_version": "SOANTHAO_PHATHANH_VBD",
+        "type_of_process": "SOANTHAO_PHATHANH_VBD",
+        "curStatusCode": 14,
+        "stage_status": "CHUA_XU_LY",
+        "role": "NGUOI_SOAN_THAO",
+        "action_code": "NGUOI_SOAN_THAO"
+      }
+    ]
+  },
+  {
+    "role": "Cán bộ",
+    "keywords": [
+      "nhân viên", "chuyên viên", "kế toán", "trợ lý", "i tá", "y sĩ", "bác sĩ", "bác sỹ", 
+      "dược tá", "quân y", "y tế", "điều dưỡng", "kỹ thuật viên nha khoa", "kỹ thuật viên y học cổ truyền", 
+      "ktv x quang", "cấp phát thuốc", "lái xe", "lái canô", "lái cẩu", "lái máy", "lễ tân", "nhân sự", 
+      "kinh doanh", "logistics", "logistic", "kỹ thuật", "kỹ sư", "tổ phó", "đội phó", "phó kho", 
+      "tiểu đội phó", "phó khu", "thư ký", "thu ngân", "thủ quỹ", "thủ quĩ", "thủ kho", "thống kê", 
+      "điều độ", "điều hành", "kiểm soát", "kiểm soát viên", "thương vụ", "chứng từ", "giao nhận", 
+      "trực ban", "tiền lương", "định mức", "nhân viên kt", "nhân viên kd", "nhân viên tc", 
+      "nhân viên an toàn", "nhân viên kỹ thuật", "nhân viên truyền thông", "nhân viên cảng vụ", 
+      "nhân viên kho vật tư", "nhân viên tiếp liệu", "cán bộ an toàn", "depot", "sales", "marketing", 
+      "kh - kd", "hc - vt", "tclđ", "cnkt", "cnhc", "cnct", "phct", "tl tp", "nv kh - kt", "thư viện", 
+      "tổ chức hành chính", "quản trị mạng", "quản trị hệ thống", "nấu ăn", "bộ phận", "văn phòng", 
+      "hành chính", "pháp chế", "khai thác", "an toàn lao động", "bảo hộ lao động", "công nghệ thông tin", 
+      "lập trình", "điện tử", "điện - điện tử", "an ninh mạng", "bảo vệ", "tạp vụ", "vệ sinh", "phục vụ", 
+      "dọn buồng", "giữ xe", "thuyền viên", "thủy thủ", "hoa tiêu", "chiến sĩ", "học việc", "thử việc", 
+      "tập sự", "công đoàn", "quan hệ", "dịch vụ khách hàng", "chăm sóc khách hàng", "báo giá", "phụ xe", 
+      "thợ", "sửa chữa", "bảo trì", "bảo dưỡng", "thị trường", "kho hàng", "quản lý vật tư", 
+      "quản lý thiết bị", "quản lý tàu thuyền", "quản lý xe máy", "quản lý bếp ăn", "quản lý kỹ thuật", 
+      "quản lý dv", "lao động - chính sách", "lao động - tiền lương", "đầu tư xây dựng", "đầu tư thiết bị", 
+      "tuyên huấn", "nhà hàng", "sản lượng", "sản xuất", "hiện trường", "công vụ", "công tác cầu cảng", 
+      "huấn luyện", "đào tạo", "doanh trại", "điện công nghiệp", "điện - nước", "phòng chống cháy nổ", 
+      "cứu hộ", "tư vấn", "khai báo hq", "phô tô", "thiết bị đầu cuối", "thành viên", "vi tính", "vận hành", 
+      "thanh lý", "kiểm hóa", "nghiệp vụ", "điều tàu", "làm hàng", "đối ngoại", "giám định", "chính sách", 
+      "xử lý đơn hàng", "chấm bay", "vá vỏ xe", "lập sơ đồ", "phân tích", "tổng hợp", "kế hoạch sx", 
+      "cẩu hàng rời", "khối hỗ trợ", "máy ii", "cảng vụ", "phát hành", "tiếp nhận", "vi tính cổng", 
+      "vi tính tổng hợp", "cán bộ"
+    ],
+    "screens": [
+      {
+        "screen_name": "dự thảo - dự thảo",
+        "trangthais": ["dự thảo"]
+      },
+      {
+        "screen_name": "dự thảo - đã trình ký",
+        "trangthais": ["đã trình ký"]
+      },
+      {
+        "screen_name": "dự thảo - chờ phát hành",
+        "trangthais": ["chờ phát hành"]
+      },
+      {
+        "screen_name": "dự thảo - đã phát hành",
+        "trangthais": ["đã ban hành"]
+      },
+      {
+        "screen_name": "xử lý - chờ xử lý",
+        "trangthais": ["chờ xử lý"]
+      },
+      {
+        "screen_name": "xử lý - đã xử lý",
+        "trangthais": ["đã xử lý"]
+      },
+      {
+        "screen_name": "xử lý - đã phát hành",
+        "trangthais": ["đã phát hành"]
+      }
+    ]
+  }
+];
+
+const DEFAULT_WORKFLOW_PROCESS = {
+  "status_code": 2,
+  "bpmn_version": "SOANTHAO_PHATHANH_VBD",
+  "type_of_process": "SOANTHAO_PHATHANH_VBD",
+  "curStatusCode": 1,
+  "stage_status": "CHUA_XU_LY",
+  "role": "NGUOI_SOAN_THAO",
+  "action_code": "CREATE"
+};
 class SyncAuditModel extends BaseModel {
   /**
    * Khởi tạo đối tượng SyncAuditModel.
@@ -79,6 +442,18 @@ class SyncAuditModel extends BaseModel {
             ALTER TABLE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} ADD processed_by VARCHAR(100) NULL;
         IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'acting_as')
             ALTER TABLE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} ADD acting_as VARCHAR(100) NULL;
+        
+        -- Thêm các cột mới cho workflow process
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'status_code')
+            ALTER TABLE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} ADD status_code VARCHAR(50) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'bpmn_version')
+            ALTER TABLE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} ADD bpmn_version VARCHAR(100) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'type_of_process')
+            ALTER TABLE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} ADD type_of_process VARCHAR(100) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'curStatusCode')
+            ALTER TABLE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} ADD curStatusCode INT NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'role')
+            ALTER TABLE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} ADD [role] VARCHAR(100) NULL;
       `);
     } catch(e) {
       logger.warn(`[SyncAuditModel] Lỗi khởi tạo cấu trúc cột (table_backups, type_document): ${e.message}`);
@@ -385,7 +760,12 @@ class SyncAuditModel extends BaseModel {
         created_at,
         updated_at,
         type_document,
-        table_backups
+        table_backups,
+        status_code,
+        bpmn_version,
+        type_of_process,
+        curStatusCode,
+        [role]
       )
       VALUES (
         @document_id,
@@ -405,7 +785,12 @@ class SyncAuditModel extends BaseModel {
         @created_at,
         GETDATE(), -- Tự động lấy ngày giờ hiện tại
         @type_document,
-        @table_backups
+        @table_backups,
+        @status_code,
+        @bpmn_version,
+        @type_of_process,
+        @curStatusCode,
+        @role
       )
     `;
 
@@ -438,6 +823,11 @@ class SyncAuditModel extends BaseModel {
         table_backups:
           data.table_backups ||
           this.oldDbTable,
+        status_code: data.status_code ?? null,
+        bpmn_version: data.bpmn_version ?? null,
+        type_of_process: data.type_of_process ?? null,
+        curStatusCode: data.curStatusCode ?? null,
+        role: data.role ?? null,
       },
       transaction
     );
@@ -474,6 +864,11 @@ class SyncAuditModel extends BaseModel {
         roleProcess = @roleProcess,
         [action] = @action,
         stage_status = @stage_status,
+        status_code = @status_code,
+        bpmn_version = @bpmn_version,
+        type_of_process = @type_of_process,
+        curStatusCode = @curStatusCode,
+        [role] = @role,
         type_document = @type_document,
         updated_at = GETDATE() -- Cập nhật thời gian update
       WHERE id = @id
@@ -501,6 +896,11 @@ class SyncAuditModel extends BaseModel {
           255
         ),
         stage_status: data.stage_status ?? null,
+        status_code: data.status_code ?? null,
+        bpmn_version: data.bpmn_version ?? null,
+        type_of_process: data.type_of_process ?? null,
+        curStatusCode: data.curStatusCode ?? null,
+        role: data.role ?? null,
         type_document: data.type_document, // Logic đã được xử lý ở _mapSingleRecord
       },
       transaction
@@ -578,11 +978,18 @@ class SyncAuditModel extends BaseModel {
     }
     // --- KẾT THÚC LOGIC MỚI ---
 
+    // ── XỬ LÝ MAPPING ROLE VÀ SCREEN DỰA TRÊN CẤU HÌNH DYNAMIC ──
+    const userProfile = await this.helper.findUserByBakId(user_id, transaction);
+    const userPosition = userProfile?.position || '';
+    const currentTrangThai = this._normalizeTextField(record.TrangThai);
+    
+    const workflowMapping = this._determineUserRoleAndScreen(userPosition, currentTrangThai, rawAction);
+
     // Trả về đối tượng đã được map theo cấu trúc của bảng 'audit' mới
     return {
       document_id: documentId,
       time,
-      action_code: actionParsed.action_code ?? null,
+      action_code: workflowMapping.action_code || actionParsed.action_code || null,
       details: actionStr ?? null,
       origin_id: this._normalizeTextField(
         record.ID,
@@ -598,16 +1005,71 @@ class SyncAuditModel extends BaseModel {
       display_name: displayName ?? null,
       user_id: user_id ?? null,
       roleProcess:
-        parsedRoleProcess ?? actionParsed.roleProcess ?? null,
+        workflowMapping.role || parsedRoleProcess || actionParsed.roleProcess || null,
       action: actionParsed.action || this._normalizeTextField(
         rawAction,
         255
       ),
       stage_status:
-        actionParsed.stage_status ?? null,
+        workflowMapping.stage_status || actionParsed.stage_status || null,
+      status_code: workflowMapping.status_code || null,
+      bpmn_version: workflowMapping.bpmn_version || null,
+      type_of_process: workflowMapping.type_of_process || null,
+      curStatusCode: workflowMapping.curStatusCode || null,
+      role: workflowMapping.role || null,
       type_document: type_document, // Sử dụng biến đã được quyết định ở trên
       table_backups: this.oldDbTable,
     };
+  }
+
+  /**
+   * Xác định vai trò và màn hình dựa trên chức danh và trạng thái/hành động.
+   * @param {string} userPosition - Chức danh/vị trí của người dùng.
+   * @param {string} currentTrangThai - Trạng thái hiện tại từ bản ghi cũ.
+   * @param {string} actionText - Nội dung hành động (HanhDong).
+   * @returns {object} - Cấu hình mapping tìm được hoặc mặc định.
+   * @private
+   */
+  _determineUserRoleAndScreen(userPosition, currentTrangThai, actionText) {
+    const pos = (userPosition || '').toLowerCase();
+    const status = (currentTrangThai || '').toLowerCase();
+    const action = (actionText || '').toLowerCase();
+
+    // 1. Tìm vai trò (role) dựa trên keywords
+    let matchedRole = null;
+    for (const roleConf of WORKFLOW_PROCESS_CONFIG) {
+      if (roleConf.keywords.some(kw => pos.includes(kw.toLowerCase()))) {
+        matchedRole = roleConf;
+        break;
+      }
+    }
+
+    if (!matchedRole) {
+      return DEFAULT_WORKFLOW_PROCESS;
+    }
+
+    // 2. Tìm màn hình (screen) dựa trên trangthais
+    let matchedScreen = null;
+    if (matchedRole.screens && matchedRole.screens.length > 0) {
+      for (const screen of matchedRole.screens) {
+        if (screen.trangthais && screen.trangthais.some(st => 
+          status.includes(st.toLowerCase()) || action.includes(st.toLowerCase())
+        )) {
+          matchedScreen = screen;
+          break;
+        }
+      }
+    }
+
+    if (matchedScreen) {
+      return {
+        ...matchedScreen,
+        role: matchedScreen.role || matchedRole.role // Fallback to role name if screen doesn't have it
+      };
+    }
+
+    // Nếu không khớp màn hình nào, trả về mặc định của role đó hoặc hệ thống
+    return DEFAULT_WORKFLOW_PROCESS;
   }
 
   /**

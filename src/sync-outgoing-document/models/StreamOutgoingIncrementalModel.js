@@ -30,7 +30,7 @@ function detectFileType(buffer) {
   if (b[0]===0x52&&b[1]===0x61&&b[2]===0x72&&b[3]===0x21) return { mime:'application/x-rar-compressed', ext:'rar' };
   return { mime:'application/octet-stream', ext:'bin' };
 }
-const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
+const DEFAULT_SYNC_TIME = '9999-12-31T23:59:59.999Z';
 
 const AUDIT_TABLES = [
   'LuanChuyenVanBan',
@@ -307,7 +307,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'report_document_symbol')
             ALTER TABLE dbo.outgoing_documents ADD report_document_symbol NVARCHAR(255) NULL;
         IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'to_book_text_symbols')
-            ALTER TABLE dbo.outgoing_documents ADD to_book_text_symbols NVARCHAR(255) NULL;
+            ALTER TABLE dbo.outgoing_documents ADD to_book_text_symbols NVARCHAR(MAX) NULL;
         IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'viewers')
             ALTER TABLE dbo.outgoing_documents ADD viewers NVARCHAR(MAX) NULL;
         IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'deadline_reply')
@@ -371,6 +371,11 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
             ALTER TABLE dbo.outgoing_documents ADD status_code_bak_bef_test NVARCHAR(MAX) NULL;
         IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'drafter_bak_bef_test')
             ALTER TABLE dbo.outgoing_documents ADD drafter_bak_bef_test NVARCHAR(MAX) NULL;
+
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'stage_status')
+            ALTER TABLE dbo.outgoing_documents ADD stage_status NVARCHAR(50) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'curStatusCode')
+            ALTER TABLE dbo.outgoing_documents ADD curStatusCode NVARCHAR(10) NULL;
       `);
       logger.info('[OutGoingDocumentModel] Checked and added missing columns (reply_incoming_doc, sign_type, table_backups...) for dbo.outgoing_documents');
     } catch(err) {
@@ -425,10 +430,10 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       SELECT COUNT(1) AS total
       FROM source_rows
       WHERE (
-        __sync_time > @lastSyncTime
+        __sync_time < @lastSyncTime
         OR (
           __sync_time = @lastSyncTime
-          AND ISNULL(__sync_id_num, -9223372036854775808) > @lastSyncId
+          AND ISNULL(__sync_id_num, 9223372036854775807) < @lastSyncId
         )
       )
     `;
@@ -571,6 +576,8 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         send_id_bak_bef_test        NVARCHAR(MAX),
         status_code_bak_bef_test    NVARCHAR(MAX),
         drafter_bak_bef_test        NVARCHAR(MAX),
+        stage_status               NVARCHAR(50),
+        curStatusCode              NVARCHAR(10),
 
         CONSTRAINT PK_outgoing_documents_temp PRIMARY KEY (ID)
       );
@@ -608,7 +615,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
    * @returns {string}
    */
   normalizeSyncTime(value) {
-    if (!value) return DEFAULT_SYNC_TIME;
+    if (!value || value === '1970-01-01T00:00:00.000Z') return DEFAULT_SYNC_TIME;
     const dateValue = new Date(value);
     if (Number.isNaN(dateValue.getTime())) return DEFAULT_SYNC_TIME;
     return dateValue.toISOString();
@@ -647,9 +654,9 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
   isCursorAhead(aTime, aId, bTime, bId) {
     const ta = new Date(aTime || DEFAULT_SYNC_TIME).getTime();
     const tb = new Date(bTime || DEFAULT_SYNC_TIME).getTime();
-    if (ta > tb) return true;
-    if (ta < tb) return false;
-    return Number(aId || 0) > Number(bId || 0);
+    if (ta < tb) return true; // Trong DESC sync, thời gian nhỏ hơn (cũ hơn) là "đi trước" (tiến về quá khứ)
+    if (ta > tb) return false;
+    return Number(aId || 0) < Number(bId || 0);
   }
 
   /**
@@ -743,16 +750,16 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         ISNULL(__sync_id_num, 0) AS __sync_id
       FROM source_rows
       WHERE (
-        __sync_time > @lastSyncTime
+        __sync_time < @lastSyncTime
         OR (
           __sync_time = @lastSyncTime
-          AND ISNULL(__sync_id_num, -9223372036854775808) > @lastSyncId
+          AND ISNULL(__sync_id_num, 9223372036854775807) < @lastSyncId
         )
       )
       ORDER BY
-        __sync_time ASC,
-        ISNULL(__sync_id_num, -9223372036854775808) ASC,
-        ID ASC
+        __sync_time DESC,
+        ISNULL(__sync_id_num, 9223372036854775807) DESC,
+        ID DESC
       ${safeTake ? 'OFFSET @offset ROWS FETCH NEXT @take ROWS ONLY' : ''}
     `;
 
@@ -1000,16 +1007,16 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
           *,
           ROW_NUMBER() OVER (
             ORDER BY
-              __sync_time ASC,
-              ISNULL(__sync_id_num, -9223372036854775808) ASC,
-              ID ASC
+              __sync_time DESC,
+              ISNULL(__sync_id_num, 9223372036854775807) DESC,
+              ID DESC
           ) AS rn
         FROM source_rows
         WHERE (
-          __sync_time > @lastSyncTime
+          __sync_time < @lastSyncTime
           OR (
             __sync_time = @lastSyncTime
-            AND ISNULL(__sync_id_num, -9223372036854775808) > @lastSyncId
+            AND ISNULL(__sync_id_num, 9223372036854775807) < @lastSyncId
           )
         )
       )
