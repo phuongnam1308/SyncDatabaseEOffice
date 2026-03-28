@@ -1,0 +1,1039 @@
+{
+  "ROLE_MAPPINGS": {
+    "ADMIN": {
+      "KEYWORDS": ["admin", "quản trị viên"],
+      "ROLES": [
+        {
+          "processKey": "fb28d16e-a59e-492f-ae24-08458114400e",
+          "name": "Console",
+          "roles": [{"roleCode": "26d2916c-27e7-4ad1-ae68-8e4042115eb7", "name": "Administrator"}]
+        },
+        {
+          "processKey": "10084a8d-113f-4211-a0d5-efe36b082211",
+          "name": "Super",
+          "roles": [{"roleCode": "ef010ffb-012c-4ad4-84f0-e304e731f49d", "name": "everyone"}]
+        },
+        {
+          "processKey": "hosoluutru",
+          "name": "hosoluutru",
+          "roles": [{"roleCode": "HHLT_CANBO", "name": "HHLT_CANBO"}, {"roleCode": "HHLT_TRUONGPHONG", "name": "HHLT_TRUONGPHONG"}]
+        },
+        {
+          "processKey": "quanLyCongViec",
+          "name": "quanLyCongViec",
+          "roles": [{"roleCode": "QLCV", "name": "QLCV"}]
+        },
+        {
+          "processKey": "TVTLDC",
+          "name": "TVTLDC",
+          "roles": [{"roleCode": "CB", "name": "CB"}]
+        },
+        {
+          "processKey": "TVHSLT",
+          "name": "TVHSLT",
+          "roles": [{"roleCode": "CB", "name": "CB"}]
+        },
+        {
+          "processKey": "quan_ly_tin_tuc",
+          "name": "quan_ly_tin_tuc",
+          "roles": [{"roleCode": "ADMIN_NEWS", "name": "ADMIN_NEWS"}, {"roleCode": "TK", "name": "TK"}]
+        },
+        {
+          "processKey": "QUY_TRINH_CV_PHONG_BAN",
+          "name": "QUY_TRINH_CV_PHONG_BAN",
+          "roles": [{"roleCode": "NGUOI_PHOI_HOP", "name": "NGƯỜI PHỐI HỢP"}]
+        },
+        {
+          "processKey": "Lichhopphonghop",
+          "name": "Lichhopphonghop",
+          "roles": [{"roleCode": "VT", "name": "VT"}, {"roleCode": "GD", "name": "GD"}]
+        },
+        {
+          "processKey": "QUY_TRINH_PHONG_HOP",
+          "name": "QUY_TRINH_PHONG_HOP",
+          "roles": [{"roleCode": "HHLT_CANBO", "name": "HHLT_CANBO"}]
+        },
+        {
+          "processKey": "thongke",
+          "name": "thongke",
+          "roles": [{"roleCode": "VT", "name": "VT"}]
+        },
+        {
+          "processKey": "QUY_TRINH_THIET_BI",
+          "name": "QUY_TRINH_THIET_BI",
+          "roles": [{"roleCode": "HHLT_CANBO", "name": "HHLT_CANBO"}]
+        },
+        {
+          "processKey": "QUY_TRINH_LICH_HOP",
+          "name": "QUY_TRINH_LICH_HOP",
+          "roles": [{"roleCode": "BAN_QUAN_LY_PHONG_HOP", "name": "BAN_QUAN_LY_PHONG_HOP"}]
+        },
+        {
+          "processKey": "LICH_CONG_TAC",
+          "name": "LICH_CONG_TAC",
+          "roles": [{"roleCode": "HHLT_CANBO", "name": "HHLT_CANBO"}]
+        },
+        {
+          "processKey": "cauHinhQuanLyCongViec",
+          "name": "cauHinhQuanLyCongViec",
+          "roles": [{"roleCode": "VT", "name": "VT"}]
+        },
+        {
+          "processKey": "LICH_TRUC_BAN_LANH_DAO",
+          "name": "LICH_TRUC_BAN_LANH_DAO",
+          "roles": [{"roleCode": "ADMIN", "name": "ADMIN"}]
+        },
+        {
+          "processKey": "CVDAN",
+          "name": "CVDAN",
+          "roles": [{"roleCode": "NGUOI_PHOI_HOP", "name": "NGƯỜI PHỐI HỢP"}]
+        },
+        {
+          "processKey": "thhs",
+          "name": "thhs",
+          "roles": [{"roleCode": "vt", "name": "vt"}]
+        },
+        {
+          "processKey": "QUY_TRINH_PHAN_ANH_KIEN_NGHI",
+          "name": "QUY_TRINH_PHAN_ANH_KIEN_NGHI",
+          "roles": [{"roleCode": "BO_PHAN_CHUYEN_TRACH", "name": "BO_PHAN_CHUYEN_TRACH"}]
+        },
+        {
+          "processKey": "QT_MTHC",
+          "name": "QT_MTHC",
+          "roles": [{"roleCode": "BO_PHAN_CHUYEN_TRACH", "name": "BO_PHAN_CHUYEN_TRACH"}]
+        },
+        {
+          "processKey": "qldb",
+          "name": "qldb",
+          "roles": [{"roleCode": "VT", "name": "VT"}]
+        }
+      ]
+    },
+    "GIAM_DOC": {
+      "KEYWORDS": ["giám đốc", "tổng giám đốc", "giám đốc cn", "giám đốc trung tâm", "giám đốc nhân sự", "chủ tịch kiêm giám đốc", "chủ tịch hđqt", "chủ tịch hội đồng quản trị", "chủ tịch", "chính ủy", "tham mưu trưởng", "tmt", "phó tổng giám đốc", "cn chính trị", "đại phó", "hải đoàn trưởng", "phó chủ tịch hội đồng thành viên", "phó chủ tịch hđtv", "thành viên hđtv", "thành viên hội đồng thành viên", "thư ký thường trực hội đồng thành viên", "thư ký tổng giám đốc"],
+      "ROLES": [
+        {
+          "processKey": "VAN_BAN_DI",
+          "name": "VAN_BAN_DI",
+          "roles": [{"roleCode": "GIAM_DOC", "name": "GIAM_DOC"}, {"roleCode": "GIAM_DOC", "name": "GIAM_DOC", "__groupId": "57e820b6-8951-4555-9552-15645ffc014e"}]
+        },
+        {
+          "processKey": "XIN_Y_KIEN",
+          "name": "XIN_Y_KIEN",
+          "roles": [{"roleCode": "GIAM_DOC", "name": "GIAM_DOC"}]
+        },
+        {
+          "processKey": "PHUC_DAP_DV",
+          "name": "PHUC_DAP_DV",
+          "roles": [{"roleCode": "LANH_DAO_TCT", "name": "LANH_DAO_TCT"}]
+        },
+        {
+          "processKey": "SOANTHAO_PHATHANH_VBD",
+          "name": "SOANTHAO_PHATHANH_VBD",
+          "roles": [{"roleCode": "NGUOI_KY_BAN_HANH", "name": "NGUOI_KY_BAN_HANH"}]
+        },
+        {
+          "processKey": "QUY_TRINH_LICH_HOP",
+          "name": "QUY_TRINH_LICH_HOP",
+          "roles": [{"roleCode": "BAN_QUAN_LY_PHONG_HOP", "name": "BAN_QUAN_LY_PHONG_HOP"}]
+        },
+        {
+          "processKey": "TVTLDC",
+          "name": "TVTLDC",
+          "roles": [{"roleCode": "CB", "name": "CB"}]
+        },
+        {
+          "processKey": "QTT1S",
+          "name": "QTT1S",
+          "roles": [{"roleCode": "VR", "name": "VR"}]
+        },
+        {
+          "processKey": "QUAN_LY_CONG_VIEC",
+          "name": "QUAN_LY_CONG_VIEC",
+          "roles": [{"roleCode": "UNKNOWN", "name": "UNKNOWN"}]
+        },
+        {
+          "processKey": "QUY_TRINH_PHONG_HOP",
+          "name": "QUY_TRINH_PHONG_HOP",
+          "roles": [{"roleCode": "BAN_QUAN_LY_PHONG_HOP", "name": "BAN_QUAN_LY_PHONG_HOP"}, {"roleCode": "BAN_QUAN_LY_PHONG_HOP", "name": "BAN_QUAN_LY_PHONG_HOP", "__groupId": "57e820b6-8951-4555-9552-15645ffc014e"}]
+        },
+        {
+          "processKey": "UY_QUYEN",
+          "name": "UY_QUYEN",
+          "roles": [{"roleCode": "GIAM_DOC", "name": "GIAM_DOC"}]
+        },
+        {
+          "processKey": "QUY_TRINH_CV_VAN_BAN",
+          "name": "QUY_TRINH_CV_VAN_BAN",
+          "roles": [{"roleCode": "TRUONG_PHONG", "name": "TRUONG_PHONG"}]
+        },
+        {
+          "processKey": "LICH_TRUC_BAN_LANH_DAO",
+          "name": "LICH_TRUC_BAN_LANH_DAO",
+          "roles": [{"roleCode": "LANH_DAO", "name": "LANH_DAO"}]
+        },
+        {
+          "processKey": "dev_01",
+          "name": "dev_01",
+          "roles": [{"roleCode": "GD", "name": "Giám đốc", "__groupId": "57e820b6-8951-4555-9552-15645ffc014e"}]
+        },
+        {
+          "processKey": "quytrinhthuthaphoso",
+          "name": "quytrinhthuthaphoso",
+          "roles": [{"roleCode": "LANHDAO", "name": "Lãnh đạo", "__groupId": "57e820b6-8951-4555-9552-15645ffc014e"}]
+        },
+        {
+          "processKey": "PHOIHOP_NHANDEBIET",
+          "name": "PHOIHOP_NHANDEBIET",
+          "roles": [{"roleCode": "GIAM_DOC", "name": "GIAM_DOC"}]
+        },
+        {
+          "processKey": "VAN_BAN_DEN",
+          "name": "VAN_BAN_DEN",
+          "roles": [{"roleCode": "GIAM_DOC", "name": "GIAM_DOC", "__groupId": "57e820b6-8951-4555-9552-15645ffc014e"}]
+        },
+        {
+          "processKey": "so2",
+          "name": "so2",
+          "roles": [{"roleCode": "GD", "name": "Giám đốc", "__groupId": "57e820b6-8951-4555-9552-15645ffc014e"}]
+        },
+        {
+          "processKey": "maquytrinh1",
+          "name": "maquytrinh1",
+          "roles": [{"roleCode": "GIAM_DOC", "name": "GIAM_DOC", "__groupId": "57e820b6-8951-4555-9552-15645ffc014e"}]
+        },
+        {
+          "processKey": "QUY_TRINH_CV_PHONG_BAN",
+          "name": "QUY_TRINH_CV_PHONG_BAN",
+          "roles": [{"roleCode": "NGUOI_GIAO", "name": "NGƯỜI GIAO", "__groupId": "57e820b6-8951-4555-9552-15645ffc014e"}, {"roleCode": "NGUOI_CHU_TRI", "name": "NGƯỜI CHỦ TRÌ", "__groupId": "57e820b6-8951-4555-9552-15645ffc014e"}]
+        },
+        {
+          "processKey": "CVDAN",
+          "name": "CVDAN",
+          "roles": [{"roleCode": "NGUOI_GIAO", "name": "NGƯỜI GIAO"}]
+        },
+        {
+          "processKey": "VBD_GUI_ALL",
+          "name": "VBD_GUI_ALL",
+          "roles": [{"roleCode": "GIAM_DOC", "name": "GIAM_DOC"}]
+        },
+        {
+          "processKey": "QUY_TRINH_KHAI_THAC_HO_SO",
+          "name": "QUY_TRINH_KHAI_THAC_HO_SO",
+          "roles": [{"roleCode": "CHI_HUY_PHONG_KHAI_THAC", "name": "CHI_HUY_PHONG_KHAI_THAC"}]
+        },
+        {
+          "processKey": "thhs",
+          "name": "thhs",
+          "roles": [{"roleCode": "BAN_LANH_DAO", "name": "BAN_LANH_DAO"}]
+        }
+      ]
+    },
+    "PHO_GIAM_DOC": {
+      "KEYWORDS": ["phó giám đốc", "phó gđ", "phó gd", "phó chính ủy", "phó tham mưu trưởng"],
+      "ROLES": [
+        {
+          "processKey": "PHOIHOP_NHANDEBIET",
+          "name": "PHOIHOP_NHANDEBIET",
+          "roles": [{"roleCode": "PHO_GIAM_DOC", "name": "PHO_GIAM_DOC"}]
+        },
+        {
+          "processKey": "VAN_BAN_DI",
+          "name": "VAN_BAN_DI",
+          "roles": [{"roleCode": "PHO_GIAM_DOC", "name": "PHO_GIAM_DOC"}]
+        },
+        {
+          "processKey": "XIN_Y_KIEN",
+          "name": "XIN_Y_KIEN",
+          "roles": [{"roleCode": "PHO_GIAM_DOC", "name": "PHO_GIAM_DOC"}]
+        },
+        {
+          "processKey": "TVTLDC",
+          "name": "TVTLDC",
+          "roles": [{"roleCode": "CB", "name": "CB"}]
+        },
+        {
+          "processKey": "QTT1S",
+          "name": "QTT1S",
+          "roles": [{"roleCode": "VR", "name": "VR"}]
+        },
+        {
+          "processKey": "QUAN_LY_CONG_VIEC",
+          "name": "QUAN_LY_CONG_VIEC",
+          "roles": [{"roleCode": "UNKNOWN", "name": "UNKNOWN"}]
+        },
+        {
+          "processKey": "UY_QUYEN",
+          "name": "UY_QUYEN",
+          "roles": [{"roleCode": "PHO_GIAM_DOC", "name": "PHO_GIAM_DOC"}]
+        },
+        {
+          "processKey": "QUY_TRINH_LICH_HOP",
+          "name": "QUY_TRINH_LICH_HOP",
+          "roles": [{"roleCode": "NGUOI_THAM_GIA", "name": "NGUOI_THAM_GIA"}]
+        },
+        {
+          "processKey": "LICH_TRUC_BAN_LANH_DAO",
+          "name": "LICH_TRUC_BAN_LANH_DAO",
+          "roles": [{"roleCode": "LANH_DAO", "name": "LANH_DAO"}]
+        },
+        {
+          "processKey": "PHUC_DAP_DV",
+          "name": "PHUC_DAP_DV",
+          "roles": [{"roleCode": "PHO_TRUONG_PHONG", "name": "PHO_TRUONG_PHONG"}]
+        },
+        {
+          "processKey": "thhs",
+          "name": "thhs",
+          "roles": [{"roleCode": "BAN_LANH_DAO", "name": "BAN_LANH_DAO"}]
+        },
+        {
+          "processKey": "QUY_TRINH_KHAI_THAC_HO_SO",
+          "name": "QUY_TRINH_KHAI_THAC_HO_SO",
+          "roles": [{"roleCode": "NGUOI_KHAI_THAC", "name": "NGUOI_KHAI_THAC"}]
+        }
+      ]
+    },
+    "TRUONG_PHONG": {
+      "KEYWORDS": ["trưởng phòng", "tp", "trưởng ban", "chánh văn phòng", "trưởng trung tâm", "trưởng chi nhánh", "trưởng ter", "quản đốc", "kế toán trưởng", "chủ nhiệm", "phụ trách phòng", "tp tài chính", "tp.điều độ", "tp.tchc", "quyền tpth", "trưởng dp", "dpa", "trưởng khu", "trưởng ban thương vụ", "trưởng ban giao nhận", "trạm trưởng", "trưởng trạm", "thuyền trưởng", "máy trưởng", "máy trưởng tàu khách", "xe trưởng", "trưởng depot", "trưởng văn phòng đại diện", "trưởng ttpp", "trưởng đhsx", "trưởng tmn", "xưởng trưởng", "trung đội trưởng", "trưởng trực ban", "trưởng khu kho hàng"],
+      "ROLES": [
+        {
+          "processKey": "SOANTHAO_PHATHANH_VBD",
+          "name": "SOANTHAO_PHATHANH_VBD",
+          "roles": [{"roleCode": "NGUOI_KY_NOI_DUNG", "name": "NGUOI_KY_NOI_DUNG"}]
+        },
+        {
+          "processKey": "PHUC_DAP_DV",
+          "name": "PHUC_DAP_DV",
+          "roles": [{"roleCode": "TRUONG_PHONG", "name": "TRUONG_PHONG"}]
+        },
+        {
+          "processKey": "PHUC_DAP_DV_XLC",
+          "name": "PHUC_DAP_DV_XLC",
+          "roles": [{"roleCode": "CHI_HUY_PHONG", "name": "CHI_HUY_PHONG"}]
+        },
+        {
+          "processKey": "VAN_BAN_DI",
+          "name": "VAN_BAN_DI",
+          "roles": [{"roleCode": "TRUONG_PHONG", "name": "TRUONG_PHONG"}]
+        },
+        {
+          "processKey": "XIN_Y_KIEN",
+          "name": "XIN_Y_KIEN",
+          "roles": [{"roleCode": "truongphong", "name": "truongphong"}]
+        },
+        {
+          "processKey": "QUY_TRINH_CV_PHONG_BAN",
+          "name": "QUY_TRINH_CV_PHONG_BAN",
+          "roles": [{"roleCode": "NGUOI_GIAO", "name": "NGƯỜI GIAO"}, {"roleCode": "NGUOI_CHU_TRI", "name": "NGƯỜI CHỦ TRÌ"}]
+        },
+        {
+          "processKey": "Administrator",
+          "name": "Administrator",
+          "roles": [{"roleCode": "TRUONG_PHONG", "name": "TRUONG_PHONG"}]
+        },
+        {
+          "processKey": "PHUC_DAP_DV_CON",
+          "name": "PHUC_DAP_DV_CON",
+          "roles": [{"roleCode": "CHI_HUY_PHONG", "name": "CHI_HUY_PHONG"}]
+        },
+        {
+          "processKey": "UY_QUYEN",
+          "name": "UY_QUYEN",
+          "roles": [{"roleCode": "TRUONG_PHONG", "name": "TRUONG_PHONG"}]
+        },
+        {
+          "processKey": "QUY_TRINH_LICH_HOP",
+          "name": "QUY_TRINH_LICH_HOP",
+          "roles": [{"roleCode": "NGUOI_SOAN_LICH", "name": "NGUOI_SOAN_LICH"}, {"roleCode": "NGUOI_THAM_GIA", "name": "NGUOI_THAM_GIA"}]
+        },
+        {
+          "processKey": "LICH_TRUC_BAN_LANH_DAO",
+          "name": "LICH_TRUC_BAN_LANH_DAO",
+          "roles": [{"roleCode": "LANH_DAO", "name": "LANH_DAO"}]
+        },
+        {
+          "processKey": "PHOIHOP_NHANDEBIET",
+          "name": "PHOIHOP_NHANDEBIET",
+          "roles": [{"roleCode": "TRUONG_PHONG", "name": "TRUONG_PHONG"}, {"roleCode": "TRUONG_PHONG_SL", "name": "TRUONG_PHONG_SL"}]
+        },
+        {
+          "processKey": "quan_ly_tin_tuc",
+          "name": "quan_ly_tin_tuc",
+          "roles": [{"roleCode": "NGUOI_PHE_DUYET", "name": "NGUOI_PHE_DUYET"}]
+        },
+        {
+          "processKey": "CVDAN",
+          "name": "CVDAN",
+          "roles": [{"roleCode": "NGUOI_GIAO", "name": "NGƯỜI GIAO"}, {"roleCode": "NGUOI_CHU_TRI", "name": "NGƯỜI CHỦ TRÌ"}, {"roleCode": "NGUOI_PHOI_HOP", "name": "NGƯỜI PHỐI HỢP"}]
+        },
+        {
+          "processKey": "KY_SO_HS_VBD",
+          "name": "KY_SO_HS_VBD",
+          "roles": [{"roleCode": "NGUOI_KY_PHE_DUYET", "name": "NGUOI_KY_PHE_DUYET"}, {"roleCode": "NGUOI_KY_NHAY", "name": "NGUOI_KY_NHAY"}]
+        },
+        {
+          "processKey": "VBD_GUI_ALL",
+          "name": "VBD_GUI_ALL",
+          "roles": [{"roleCode": "TRUONG_PHONG", "name": "TRUONG_PHONG"}]
+        },
+        {
+          "processKey": "QUY_TRINH_CV_VAN_BAN",
+          "name": "QUY_TRINH_CV_VAN_BAN",
+          "roles": [{"roleCode": "TRUONG_PHONG", "name": "TRUONG_PHONG"}]
+        }
+      ]
+    },
+    "PHO_TRUONG_PHONG": {
+      "KEYWORDS": ["phó trưởng phòng", "ptp", "phó phòng", "phó ban", "phó chánh văn phòng", "phó trung tâm", "phó trưởng trung tâm", "phó trưởng chi nhánh", "phó ter", "phó terminal", "phó chủ nhiệm", "hải đội phó", "phó quản đốc", "p.hđt", "pp kế toán", "tổ trưởng", "đội trưởng", "trưởng kho", "trưởng ca", "bếp trưởng", "tiểu đội trưởng", "quản lý bếp", "tbsx", "trưởng tbsx", "trưởng khu kh", "xưởng phó", "phó chi nhánh", "phó depot", "phó trưởng khu kho hàng", "trung đội phó", "thuyền phó", "máy phó", "sĩ quan máy", "sĩ quan boong", "giám sát ca", "giám sát công trình", "giám sát chất lượng", "phó trưởng trực ban"],
+      "ROLES": [
+        {
+          "processKey": "VAN_BAN_DI",
+          "name": "VAN_BAN_DI",
+          "roles": [{"roleCode": "PHO_TRUONG_PHONG", "name": "PHO_TRUONG_PHONG", "__groupId": "f9809519-2db6-44fe-bb00-936153ff3faf"}]
+        },
+        {
+          "processKey": "XIN_Y_KIEN",
+          "name": "XIN_Y_KIEN",
+          "roles": [{"roleCode": "photruongphong", "name": "photruongphong"}]
+        },
+        {
+          "processKey": "vbdi",
+          "name": "vbdi",
+          "roles": [{"roleCode": "PHOTRUONGPHONG", "name": "PHOTRUONGPHONG", "__groupId": "f9809519-2db6-44fe-bb00-936153ff3faf"}]
+        },
+        {
+          "processKey": "LUONG_PHONG",
+          "name": "LUONG_PHONG",
+          "roles": [{"roleCode": "PHO_TRUONG_PHONG", "name": "PHO_TRUONG_PHONG", "__groupId": "f9809519-2db6-44fe-bb00-936153ff3faf"}]
+        },
+        {
+          "processKey": "Administrator",
+          "name": "Administrator",
+          "roles": [{"roleCode": "PHO_TRUONG_PHONG", "name": "PHO_TRUONG_PHONG", "__groupId": "f9809519-2db6-44fe-bb00-936153ff3faf"}]
+        },
+        {
+          "processKey": "SOANTHAO_PHATHANH_VBD",
+          "name": "SOANTHAO_PHATHANH_VBD",
+          "roles": [{"roleCode": "NGUOI_SOAN_THAO", "name": "NGUOI_SOAN_THAO"}]
+        },
+        {
+          "processKey": "PHUC_DAP_DV",
+          "name": "PHUC_DAP_DV",
+          "roles": [{"roleCode": "PHO_TRUONG_PHONG", "name": "PHO_TRUONG_PHONG"}]
+        },
+        {
+          "processKey": "PHUC_DAP_DV_XLC",
+          "name": "PHUC_DAP_DV_XLC",
+          "roles": [{"roleCode": "NHAN_VIEN_TCT", "name": "NHAN_VIEN_TCT"}]
+        },
+        {
+          "processKey": "QUY_TRINH_CV_PHONG_BAN",
+          "name": "QUY_TRINH_CV_PHONG_BAN",
+          "roles": [{"roleCode": "NGUOI_GIAO", "name": "NGƯỜI GIAO"}, {"roleCode": "NGUOI_CHU_TRI", "name": "NGƯỜI CHỦ TRÌ"}, {"roleCode": "NGUOI_PHOI_HOP", "name": "NGƯỜI PHỐI HỢP"}]
+        },
+        {
+          "processKey": "PHUC_DAP_DV_CON",
+          "name": "PHUC_DAP_DV_CON",
+          "roles": [{"roleCode": "NHAN_VIEN_TCT", "name": "NHAN_VIEN_TCT"}, {"roleCode": "PHO_TRUONG_PHONG", "name": "PHO_TRUONG_PHONG"}]
+        },
+        {
+          "processKey": "UY_QUYEN",
+          "name": "UY_QUYEN",
+          "roles": [{"roleCode": "PHO_TRUONG_PHONG", "name": "PHO_TRUONG_PHONG"}]
+        },
+        {
+          "processKey": "QUY_TRINH_LICH_HOP",
+          "name": "QUY_TRINH_LICH_HOP",
+          "roles": [{"roleCode": "NGUOI_SOAN_LICH", "name": "NGUOI_SOAN_LICH"}, {"roleCode": "NGUOI_THAM_GIA", "name": "NGUOI_THAM_GIA"}]
+        },
+        {
+          "processKey": "LICH_TRUC_BAN_LANH_DAO",
+          "name": "LICH_TRUC_BAN_LANH_DAO",
+          "roles": [{"roleCode": "LANH_DAO", "name": "LANH_DAO"}]
+        },
+        {
+          "processKey": "QUY_TRINH_PHONG_HOP",
+          "name": "QUY_TRINH_PHONG_HOP",
+          "roles": [{"roleCode": "XEM_PHONG_HOP", "name": "XEM_PHONG_HOP"}]
+        },
+        {
+          "processKey": "QUY_TRINH_CV_VAN_BAN",
+          "name": "QUY_TRINH_CV_VAN_BAN",
+          "roles": [{"roleCode": "NGUOI_CHU_TRI", "name": "NGUOI_CHU_TRI"}]
+        },
+        {
+          "processKey": "CVDAN",
+          "name": "CVDAN",
+          "roles": [{"roleCode": "NGUOI_GIAO", "name": "NGƯỜI GIAO"}, {"roleCode": "NGUOI_CHU_TRI", "name": "NGƯỜI CHỦ TRÌ"}, {"roleCode": "NGUOI_PHOI_HOP", "name": "NGƯỜI PHỐI HỢP"}]
+        },
+        {
+          "processKey": "KY_SO_HS_VBD",
+          "name": "KY_SO_HS_VBD",
+          "roles": [{"roleCode": "NGUOI_KY_PHE_DUYET", "name": "NGUOI_KY_PHE_DUYET"}, {"roleCode": "NGUOI_KY_NHAY", "name": "NGUOI_KY_NHAY"}]
+        }
+      ]
+    },
+    "VAN_THU_CUC": {
+      "KEYWORDS": ["văn thư cục"],
+      "ROLES": [
+        {
+          "processKey": "PHOIHOP_NHANDEBIET",
+          "roles": [{"roleCode": "VAN_THU", "name": "VAN_THU"}]
+        },
+        {
+          "processKey": "vbdi",
+          "roles": [{"roleCode": "CANBO", "name": "CANBO"}]
+        },
+        {
+          "processKey": "VAN_BAN_DI",
+          "roles": [{"roleCode": "VAN_THU_CUC", "name": "VAN_THU_CUC"}]
+        },
+        {
+          "processKey": "PHUC_DAP_DV",
+          "name": "PHUC_DAP_DV",
+          "roles": [{"roleCode": "VAN_THU_TCT", "name": "VAN_THU_TCT"}]
+        },
+        {
+          "processKey": "QUY_TRINH_CV_PHONG_BAN",
+          "name": "QUY_TRINH_CV_PHONG_BAN",
+          "roles": [{"roleCode": "NGUOI_GIAO", "name": "NGƯỜI GIAO"}]
+        },
+        {
+          "processKey": "QUY_TRINH_LICH_HOP",
+          "name": "QUY_TRINH_LICH_HOP",
+          "roles": [{"roleCode": "DON_VI_THAM_GIA", "name": "DON_VI_THAM_GIA"}]
+        },
+        {
+          "processKey": "SOANTHAO_PHATHANH_VBD",
+          "name": "SOANTHAO_PHATHANH_VBD",
+          "roles": [{"roleCode": "VAN_THU", "name": "VAN_THU"}]
+        },
+        {
+          "processKey": "QUY_TRINH_CV_VAN_BAN",
+          "name": "QUY_TRINH_CV_VAN_BAN",
+          "roles": [{"roleCode": "VAN_THU", "name": "VAN_THU"}]
+        },
+        {
+          "processKey": "CVDAN",
+          "name": "CVDAN",
+          "roles": [{"roleCode": "NGUOI_GIAO", "name": "NGƯỜI GIAO"}]
+        },
+        {
+          "processKey": "VBD_GUI_ALL",
+          "name": "VBD_GUI_ALL",
+          "roles": [{"roleCode": "VAN_THU_TCT", "name": "VAN_THU_TCT"}]
+        },
+        {
+          "processKey": "cauHinhQuanLyCongViec",
+          "name": "cauHinhQuanLyCongViec",
+          "roles": [{"roleCode": "VT", "name": "VT"}]
+        },
+        {
+          "processKey": "thhs",
+          "name": "thhs",
+          "roles": [{"roleCode": "VAN_THU", "name": "VAN_THU"}]
+        },
+        {
+          "processKey": "hosoluutru",
+          "name": "hosoluutru",
+          "roles": [{"roleCode": "HHLT_CANBO", "name": "HHLT_CANBO"}]
+        },
+        {
+          "processKey": "QUY_TRINH_KHAI_THAC_HO_SO",
+          "name": "QUY_TRINH_KHAI_THAC_HO_SO",
+          "roles": [{"roleCode": "VAN_THU_KHAI_THAC", "name": "VAN_THU_KHAI_THAC"}]
+        }
+      ]
+    },
+    "VAN_THU": {
+      "KEYWORDS": ["văn thư", "văn thư bảo mật", "bảo mật lưu trữ", "văn thư lưu trữ"],
+      "ROLES": [
+        {
+          "processKey": "PHOIHOP_NHANDEBIET",
+          "roles": [{"roleCode": "VAN_THU", "name": "VAN_THU"}]
+        },
+        {
+          "processKey": "vbdi",
+          "roles": [{"roleCode": "CANBO", "name": "CANBO"}]
+        },
+        {
+          "processKey": "VAN_BAN_DI",
+          "roles": [{"roleCode": "VAN_THU_CUC", "name": "VAN_THU_CUC"}]
+        },
+        {
+          "processKey": "PHUC_DAP_DV",
+          "name": "PHUC_DAP_DV",
+          "roles": [{"roleCode": "VAN_THU_TCT", "name": "VAN_THU_TCT"}]
+        },
+        {
+          "processKey": "QUY_TRINH_CV_PHONG_BAN",
+          "name": "QUY_TRINH_CV_PHONG_BAN",
+          "roles": [{"roleCode": "NGUOI_GIAO", "name": "NGƯỜI GIAO"}]
+        },
+        {
+          "processKey": "QUY_TRINH_LICH_HOP",
+          "name": "QUY_TRINH_LICH_HOP",
+          "roles": [{"roleCode": "DON_VI_THAM_GIA", "name": "DON_VI_THAM_GIA"}]
+        },
+        {
+          "processKey": "SOANTHAO_PHATHANH_VBD",
+          "name": "SOANTHAO_PHATHANH_VBD",
+          "roles": [{"roleCode": "VAN_THU", "name": "VAN_THU"}]
+        },
+        {
+          "processKey": "QUY_TRINH_CV_VAN_BAN",
+          "name": "QUY_TRINH_CV_VAN_BAN",
+          "roles": [{"roleCode": "VAN_THU", "name": "VAN_THU"}]
+        },
+        {
+          "processKey": "CVDAN",
+          "name": "CVDAN",
+          "roles": [{"roleCode": "NGUOI_GIAO", "name": "NGƯỜI GIAO"}]
+        },
+        {
+          "processKey": "VBD_GUI_ALL",
+          "name": "VBD_GUI_ALL",
+          "roles": [{"roleCode": "VAN_THU_TCT", "name": "VAN_THU_TCT"}]
+        },
+        {
+          "processKey": "cauHinhQuanLyCongViec",
+          "name": "cauHinhQuanLyCongViec",
+          "roles": [{"roleCode": "VT", "name": "VT"}]
+        },
+        {
+          "processKey": "thhs",
+          "name": "thhs",
+          "roles": [{"roleCode": "VAN_THU", "name": "VAN_THU"}]
+        },
+        {
+          "processKey": "hosoluutru",
+          "name": "hosoluutru",
+          "roles": [{"roleCode": "HHLT_CANBO", "name": "HHLT_CANBO"}]
+        },
+        {
+          "processKey": "QUY_TRINH_KHAI_THAC_HO_SO",
+          "name": "QUY_TRINH_KHAI_THAC_HO_SO",
+          "roles": [{"roleCode": "VAN_THU_KHAI_THAC", "name": "VAN_THU_KHAI_THAC"}]
+        }
+      ]
+    },
+    "NHAN_VIEN": {
+      "KEYWORDS": ["nhân viên", "chuyên viên", "kế toán", "trợ lý", "y tá", "y sĩ", "bác sĩ", "bác sỹ", "dược tá", "quân y", "y tế", "điều dưỡng", "kỹ thuật viên nha khoa", "kỹ thuật viên y học cổ truyền", "ktv x quang", "cấp phát thuốc", "lái xe", "lái canô", "lái cẩu", "lái máy", "lễ tân", "nhân sự", "kinh doanh", "logistics", "logistic", "kỹ thuật", "kỹ sư", "tổ phó", "đội phó", "phó kho", "tiểu đội phó", "phó khu", "thư ký", "thu ngân", "thủ quỹ", "thủ quĩ", "thủ kho", "thống kê", "điều độ", "điều hành", "kiểm soát", "kiểm soát viên", "thương vụ", "chứng từ", "giao nhận", "trực ban", "tiền lương", "định mức", "nhân viên kt", "nhân viên kd", "nhân viên tc", "nhân viên an toàn", "nhân viên kỹ thuật", "nhân viên truyền thông", "nhân viên cảng vụ", "nhân viên kho vật tư", "nhân viên tiếp liệu", "cán bộ an toàn", "depot", "sales", "marketing", "kh - kd", "hc - vt", "tclđ", "cnkt", "cnhc", "cnct", "phct", "tl tp", "nv kh - kt", "thư viện", "tổ chức hành chính", "quản trị mạng", "quản trị hệ thống", "nấu ăn", "bộ phận", "văn phòng", "hành chính", "pháp chế", "khai thác", "an toàn lao động", "bảo hộ lao động", "công nghệ thông tin", "lập trình", "điện tử", "điện - điện tử", "an ninh mạng", "bảo vệ", "tạp vụ", "vệ sinh", "phục vụ", "dọn buồng", "giữ xe", "thuyền viên", "thủy thủ", "hoa tiêu", "chiến sĩ", "học việc", "thử việc", "tập sự", "công đoàn", "quan hệ", "dịch vụ khách hàng", "chăm sóc khách hàng", "báo giá", "phụ xe", "thợ", "sửa chữa", "bảo trì", "bảo dưỡng", "thị trường", "kho hàng", "quản lý vật tư", "quản lý thiết bị", "quản lý tàu thuyền", "quản lý xe máy", "quản lý bếp ăn", "quản lý kỹ thuật", "quản lý dv", "lao động - chính sách", "lao động - tiền lương", "đầu tư xây dựng", "đầu tư thiết bị", "tuyên huấn", "nhà hàng", "sản lượng", "sản xuất", "hiện trường", "công vụ", "công tác cầu cảng", "huấn luyện", "đào tạo", "doanh trại", "điện công nghiệp", "điện - nước", "phòng chống cháy nổ", "cứu hộ", "tư vấn", "khai báo hq", "phô tô", "thiết bị đầu cuối", "thành viên", "vi tính", "vận hành", "thanh lý", "kiểm hóa", "nghiệp vụ", "điều tàu", "làm hàng", "đối ngoại", "giám định", "chính sách", "xử lý đơn hàng", "chấm bay", "vá vỏ xe", "lập sơ đồ", "phân tích", "tổng hợp", "kế hoạch sx", "cẩu hàng rời", "khối hỗ trợ", "máy ii", "cảng vụ", "phát hành", "tiếp nhận", "vi tính cổng", "vi tính tổng hợp"],
+      "ROLES": [
+        {
+          "processKey": "VAN_BAN_DI",
+          "name": "VAN_BAN_DI",
+          "roles": [{"roleCode": "CAN_BO", "name": "CAN_BO", "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"}]
+        },
+        {
+          "processKey": "SOANTHAO_PHATHANH_VBD",
+          "name": "SOANTHAO_PHATHANH_VBD",
+          "roles": [{"roleCode": "NGUOI_SOAN_THAO", "name": "NGUOI_SOAN_THAO"}]
+        },
+        {
+          "processKey": "QUY_TRINH_CV_PHONG_BAN",
+          "name": "QUY_TRINH_CV_PHONG_BAN",
+          "roles": [{"roleCode": "NGUOI_CHU_TRI", "name": "NGƯỜI CHỦ TRÌ"}, {"roleCode": "NGUOI_PHOI_HOP", "name": "NGƯỜI PHỐI HỢP"}]
+        },
+        {
+          "processKey": "quytrinhthuthaphoso1",
+          "name": "quytrinhthuthaphoso1",
+          "roles": [{"roleCode": "canbo", "name": "Cán bộ"}]
+        },
+        {
+          "processKey": "qllsct",
+          "name": "qllsct",
+          "roles": [{"roleCode": "canbo", "name": "Cán bộ"}]
+        },
+        {
+          "processKey": "qtdvlfgttthcid",
+          "name": "qtdvlfgttthcid",
+          "roles": [{"roleCode": "CANBO", "name": "CAN_BO"}]
+        },
+        {
+          "processKey": "dev_01",
+          "name": "dev_01",
+          "roles": [{"roleCode": "CB", "name": "Cán bộ"}]
+        },
+        {
+          "processKey": "qlgttssddn",
+          "name": "qlgttssddn",
+          "roles": [{"roleCode": "CANBO", "name": "CAN_BO"}]
+        },
+        {
+          "processKey": "quytrinhthuthaphoso",
+          "name": "quytrinhthuthaphoso",
+          "roles": [{"roleCode": "CANBO", "name": "CAN_BO"}]
+        },
+        {
+          "processKey": "qtqlapi",
+          "name": "qtqlapi",
+          "roles": [{"roleCode": "CANBO", "name": "CAN_BO"}]
+        },
+        {
+          "processKey": "qtdvdstphstsbnhs",
+          "name": "qtdvdstphstsbnhs",
+          "roles": [{"roleCode": "CANBO", "name": "CAN_BO"}]
+        },
+        {
+          "processKey": "qtqllstthscd",
+          "name": "qtqllstthscd",
+          "roles": [{"roleCode": "canbo", "name": "Cán bộ"}]
+        },
+        {
+          "processKey": "listDetailImport",
+          "name": "listDetailImport",
+          "roles": [{"roleCode": "CANBO", "name": "Cán bộ"}]
+        },
+        {
+          "processKey": "kthsclone",
+          "name": "kthsclone",
+          "roles": [{"roleCode": "CANBO", "name": "Cán bộ"}]
+        },
+        {
+          "processKey": "tthsdn",
+          "name": "tthsdn",
+          "roles": [{"roleCode": "CANBO", "name": "Cán bộ"}]
+        },
+        {
+          "processKey": "qtqllssytl",
+          "name": "qtqllssytl",
+          "roles": [{"roleCode": "CANBO", "name": "CAN_BO"}]
+        },
+        {
+          "processKey": "qlgttssdcd",
+          "name": "qlgttssdcd",
+          "roles": [{"roleCode": "CANBO", "name": "Cán bộ"}]
+        },
+        {
+          "processKey": "qtqlkqgqtthccd",
+          "name": "qtqlkqgqtthccd",
+          "roles": [{"roleCode": "CANBO", "name": "CAN_BO"}]
+        },
+        {
+          "processKey": "exceldoanhnghiep",
+          "name": "exceldoanhnghiep",
+          "roles": [{"roleCode": "canbo", "name": "Cán bộ"}]
+        },
+        {
+          "processKey": "XIN_Y_KIEN",
+          "name": "XIN_Y_KIEN",
+          "roles": [{"roleCode": "CAN_BO", "name": "CAN_BO"}]
+        },
+        {
+          "processKey": "qtdvldldtkqgqtthctsbncss",
+          "name": "qtdvldldtkqgqtthctsbncss",
+          "roles": [{"roleCode": "CANBO", "name": "CAN_BO"}]
+        },
+        {
+          "processKey": "qtdvldstsdcdiddn",
+          "name": "qtdvldstsdcdiddn",
+          "roles": [{"roleCode": "CANBO", "name": "CAN_BO"}]
+        },
+        {
+          "processKey": "qtdvttdtcn",
+          "name": "qtdvttdtcn",
+          "roles": [{"roleCode": "CANBO", "name": "CAN_BO"}]
+        },
+        {
+          "processKey": "qtqltl",
+          "name": "qtqltl",
+          "roles": [{"roleCode": "canbo", "name": "Cán bộ"}]
+        },
+        {
+          "processKey": "qtdvldsidkqgqtthccd",
+          "name": "qtdvldsidkqgqtthccd",
+          "roles": [{"roleCode": "CANBO", "name": "CAN_BO"}]
+        },
+        {
+          "processKey": "so2",
+          "name": "so2",
+          "roles": [{"roleCode": "CB", "name": "Cán bộ"}]
+        },
+        {
+          "processKey": "TVHSLT",
+          "name": "TVHSLT",
+          "roles": [{"roleCode": "CB", "name": "CB"}]
+        },
+        {
+          "processKey": "qtiedldtcd",
+          "name": "qtiedldtcd",
+          "roles": [{"roleCode": "canbo", "name": "Cán bộ"}]
+        },
+        {
+          "processKey": "qldvcc",
+          "name": "qldvcc",
+          "roles": [{"roleCode": "canbo", "name": "Cán bộ"}]
+        },
+        {
+          "processKey": "ldsiqkqgqtthccd",
+          "name": "ldsiqkqgqtthccd",
+          "roles": [{"roleCode": "CANBO", "name": "CAN_BO"}]
+        },
+        {
+          "processKey": "qtqllstths",
+          "name": "qtqllstths",
+          "roles": [{"roleCode": "canbo", "name": "Cán bộ"}]
+        },
+        {
+          "processKey": "qlkqqgtthccd",
+          "name": "qlkqqgtthccd",
+          "roles": [{"roleCode": "canbo", "name": "Cán bộ"}]
+        },
+        {
+          "processKey": "qtth",
+          "name": "qtth",
+          "roles": [{"roleCode": "CANBOCQDV1", "name": "Cán bộ CQDV1"}]
+        },
+        {
+          "processKey": "qtdvttgikqtgqhstthc",
+          "name": "qtdvttgikqtgqhstthc",
+          "roles": [{"roleCode": "CANBO", "name": "CAN_BO"}]
+        },
+        {
+          "processKey": "qlhsdn",
+          "name": "qlhsdn",
+          "roles": [{"roleCode": "canbo", "name": "Cán bộ"}]
+        },
+        {
+          "processKey": "qtqllstthsdn",
+          "name": "qtqllstthsdn",
+          "roles": [{"roleCode": "canbo", "name": "Cán bộ"}]
+        },
+        {
+          "processKey": "qtdvlfkqgqtthcid",
+          "name": "qtdvlfkqgqtthcid",
+          "roles": [{"roleCode": "CANBO", "name": "CAN_BO"}]
+        },
+        {
+          "processKey": "dongbo",
+          "name": "dongbo",
+          "roles": [{"roleCode": "CANBO", "name": "Cán bộ"}]
+        },
+        {
+          "processKey": "qtdldtkqgqtthcid",
+          "name": "qtdldtkqgqtthcid",
+          "roles": [{"roleCode": "CANBO", "name": "CAN_BO"}]
+        },
+        {
+          "processKey": "qtiedldtdn",
+          "name": "qtiedldtdn",
+          "roles": [{"roleCode": "canbo", "name": "Cán bộ"}]
+        },
+        {
+          "processKey": "qllsctcd",
+          "name": "qllsctcd",
+          "roles": [{"roleCode": "canbo", "name": "Cán bộ"}]
+        },
+        {
+          "processKey": "qtqlhth",
+          "name": "qtqlhth",
+          "roles": [{"roleCode": "canbo", "name": "Cán bộ"}]
+        },
+        {
+          "processKey": "qtqlgttsdcd",
+          "name": "qtqlgttsdcd",
+          "roles": [{"roleCode": "CANBO", "name": "CAN_BO"}]
+        },
+        {
+          "processKey": "qtdvldsgttsdcdid",
+          "name": "qtdvldsgttsdcdid",
+          "roles": [{"roleCode": "CANBO", "name": "CAN_BO"}]
+        },
+        {
+          "processKey": "qlkqqgtthcdn",
+          "name": "qlkqqgtthcdn",
+          "roles": [{"roleCode": "canbo", "name": "Cán bộ"}]
+        },
+        {
+          "processKey": "qtdvlfkqgqtthcbnhs",
+          "name": "qtdvlfkqgqtthcbnhs",
+          "roles": [{"roleCode": "CANBO", "name": "CAN_BO"}]
+        },
+        {
+          "processKey": "kths",
+          "name": "kths",
+          "roles": [{"roleCode": "canbokhaithac", "name": "Cán bộ khai thác"}]
+        },
+        {
+          "processKey": "qtdvlddkqgqtthcdn",
+          "name": "qtdvlddkqgqtthcdn",
+          "roles": [{"roleCode": "CANBO", "name": "CAN_BO"}]
+        },
+        {
+          "processKey": "Mã quy trình",
+          "name": "Mã quy trình",
+          "roles": [{"roleCode": "CANBO", "name": "Cán bộ"}]
+        },
+        {
+          "processKey": "importexcel",
+          "name": "importexcel",
+          "roles": [{"roleCode": "canbo", "name": "Cán bộ"}]
+        },
+        {
+          "processKey": "qtdvttkqgqtthc",
+          "name": "qtdvttkqgqtthc",
+          "roles": [{"roleCode": "CANBO", "name": "CAN_BO"}]
+        },
+        {
+          "processKey": "qtdvldldtkqgqtthcid",
+          "name": "qtdvldldtkqgqtthcid",
+          "roles": [{"roleCode": "CANBO", "name": "CAN_BO"}]
+        },
+        {
+          "processKey": "qtttgttsdddkscddn",
+          "name": "qtttgttsdddkscddn",
+          "roles": [{"roleCode": "CANBO", "name": "CAN_BO"}]
+        },
+        {
+          "processKey": "LUONG_PHONG",
+          "name": "LUONG_PHONG",
+          "roles": [{"roleCode": "CAN_BO", "name": "CAN_BO"}]
+        },
+        {
+          "processKey": "qtdvlttdtdn",
+          "name": "qtdvlttdtdn",
+          "roles": [{"roleCode": "CANBO", "name": "CAN_BO"}]
+        },
+        {
+          "processKey": "qtdvlddkqgq1dn",
+          "name": "qtdvlddkqgq1dn",
+          "roles": [{"roleCode": "CANBO", "name": "CAN_BO"}]
+        },
+        {
+          "processKey": "qllsctdn",
+          "name": "qllsctdn",
+          "roles": [{"roleCode": "canbo", "name": "Cán bộ"}]
+        },
+        {
+          "processKey": "qtqltldn",
+          "name": "qtqltldn",
+          "roles": [{"roleCode": "canbo", "name": "Cán bộ"}]
+        },
+        {
+          "processKey": "Administrator",
+          "name": "Administrator",
+          "roles": [{"roleCode": "CAN_BO", "name": "CAN_BO"}]
+        },
+        {
+          "processKey": "PHUC_DAP_DV_CON",
+          "name": "PHUC_DAP_DV_CON",
+          "roles": [{"roleCode": "CAN_BO", "name": "CAN_BO"}]
+        },
+        {
+          "processKey": "QUY_TRINH_LICH_HOP",
+          "name": "QUY_TRINH_LICH_HOP",
+          "roles": [{"roleCode": "BAN_QUAN_LY_PHONG_HOP", "name": "BAN_QUAN_LY_PHONG_HOP"}]
+        },
+        {
+          "processKey": "QUY_TRINH_PHONG_HOP",
+          "name": "QUY_TRINH_PHONG_HOP",
+          "roles": [{"roleCode": "XEM_PHONG_HOP", "name": "XEM_PHONG_HOP"}]
+        },
+        {
+          "processKey": "KY_SO_HS_VBD",
+          "name": "KY_SO_HS_VBD",
+          "roles": [{"roleCode": "NGUOI_SOAN_THAO", "name": "NGUOI_SOAN_THAO"}]
+        },
+        {
+          "processKey": "QUY_TRINH_KHAI_THAC_HO_SO",
+          "name": "QUY_TRINH_KHAI_THAC_HO_SO",
+          "roles": [{"roleCode": "NGUOI_KHAI_THAC", "name": "NGUOI_KHAI_THAC"}]
+        },
+        {
+          "processKey": "PHUC_DAP_DV",
+          "name": "PHUC_DAP_DV",
+          "roles": [{"roleCode": "CAN_BO", "name": "CAN_BO"}]
+        }
+      ]
+    }
+  },
+  "OUTGOING_SYNC_CONFIG": {
+    "USER_PAREN_DEFAULT": "68afb3a1cb36081f0bba5dd6",
+    "BEGIN_LIMIT": 0,
+    "COMPLETED_LIMIT": 10000,
+    "STATUS_TABS": {
+      "TRANG_THAI_KHOI_TAO": {
+        "status_code": "1",
+        "bpmn_version": "PHUC_DAP_DV",
+        "tab": "vanBanDen",
+        "stage_status": "CHUA_XU_LY",
+        "curStatusCode": "1",
+        "trangthai": ["Trình chỉ huy"]
+      },
+      "TRANG_THAI_XU_LY_CHINH_CHI_DAO": {
+        "status_code": "6",
+        "bpmn_version": "PHUC_DAP_DV",
+        "tab": "vanBanDen",
+        "stage_status": "CHUA_XU_LY",
+        "curStatusCode": "6",
+        "trangthai": ["Văn bản từ cơ quan, đơn vị", "Văn bản từ TCT"]
+      },
+      "TRANG_THAI_DA_XU_LY_CHI_DAO": {
+        "status_code": "6",
+        "bpmn_version": "PHUC_DAP_DV",
+        "tab": "vanBanDen",
+        "stage_status": "DA_PHAN_CONG",
+        "curStatusCode": "6",
+        "trangthai": ["Tổ chức thực hiện"]
+      },
+      "TRANG_THAI_CHO_HOAN_THANH_CHI_DAO": {
+        "status_code": "6",
+        "bpmn_version": "PHUC_DAP_DV",
+        "tab": "vanBanDen",
+        "stage_status": "DA_PHAN_CONG",
+        "curStatusCode": "6",
+        "trangthai": ["Trình lãnh đạo TCT"]
+      },
+      "TRANG_THAI_XU_LY_CHINH_XLC": {
+        "status_code": "7",
+        "bpmn_version": "PHOIHOP_NHANDEBIET",
+        "tab": "vanBanDen",
+        "stage_status": "CHUA_XU_LY",
+        "curStatusCode": "7",
+        "trangthai": ["Chuyển đơn vị"]
+      },
+      "TRANG_THAI_HOAN_THANH_CHI_DAO": {
+        "status_code": "5",
+        "bpmn_version": "HOAN_THANH_VAN_BAN",
+        "tab": "vanBanDen",
+        "stage_status": "CHUA_XU_LY",
+        "curStatusCode": "5",
+        "trangthai": ["Chuyển văn thư"]
+      },
+      "TRANG_THAI_THU_HOI": {
+        "status_code": "10",
+        "bpmn_version": "PHUC_DAP_DV",
+        "tab": "vanBanDen",
+        "stage_status": "THU_HOI",
+        "curStatusCode": "10",
+        "trangthai": ["Thu hồi"]
+      },
+      "TRANG_THAI_TRINH_XL_TRUONG_PHONG_SO_LOAI": {
+        "status_code": "3",
+        "bpmn_version": "PHUC_DAP_DV_CON",
+        "tab": "vanBanDen",
+        "stage_status": "DA_XU_LY",
+        "curStatusCode": "2",
+        "trangthai": ["Trình Chỉ huy VP"]
+      },
+      "TRANG_THAI_TRA_LAI": {
+        "status_code": "1",
+        "bpmn_version": "PHUC_DAP_DV_CON",
+        "tab": "vanBanDen",
+        "stage_status": "CHUA_XU_LY",
+        "curStatusCode": "1"
+      },
+      "TRANG_THAI_VAN_THU_TRINH_SL_HOANTHANH": {
+        "status_code": "13",
+        "bpmn_version": "LUONG_PHONG",
+        "tab": "vanBanDen",
+        "stage_status": "HOAN_THANH",
+        "curStatusCode": "13",
+        "trangthai": ["Hoàn tất"]
+      }
+    }
+  }
+}
