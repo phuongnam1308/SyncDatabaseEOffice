@@ -5,9 +5,9 @@ const OutGoingDocumentModel = require('../sync-outgoing-document/models/StreamOu
 const StreamUserMigrationModel = require('../sync-user-copy/migrate/StreamUserMigrationModel');
 const StreamTaskMigrationModel = require('../sync-tasks/migrate/StreamTaskMigrationModel');
 const StreamSocialMigrationModel = require('../sync-social-resource/migrate/StreamSocialMigrationModel');
-const SyncIncomingDocumentModel = require('../sync-incoming-document/migrate/SyncIncomingDocumentModel');
+const SyncIncomingDocumentModel = require('../sync-incoming-document/models/SyncIncomingDocumentModel');
 const StreamMeetingMigrationModel = require('../sync-meeting/migrate/StreamMeetingMigrationModel');
-const IncomingDocumentModel = require('../sync-incoming-document/migrate/StreamIncomingIncrementalModel');
+const IncomingDocumentModel = require('../sync-incoming-document/models/StreamIncomingIncrementalModel');
 const StreamDepartmentMigrationModel = require('../sync-department/migrate/StreamDepartmentMigrationModel');
 const StreamNewsAspxPageIncrementalModel = require('../sync-news-aspx-page/models/StreamNewsAspxPageIncrementalModel');
 
