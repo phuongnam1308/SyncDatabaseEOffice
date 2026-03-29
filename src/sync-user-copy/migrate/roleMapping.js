@@ -15,7 +15,7 @@ const {
   ROLES_VAN_THU,
   NHANVIEN_KEYWORDS,
   ROLES_DEFAULT
-} = require('../../config/sync-config');
+} = require('../../config');
 
 // ── Mapping (thứ tự ưu tiên từ trên xuống) ───────────────────────────────────
 const roleMapping = [

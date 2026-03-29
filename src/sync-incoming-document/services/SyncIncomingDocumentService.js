@@ -1,7 +1,7 @@
 
 const SyncManagerService = require('../../sync-manager/SyncManagerService');
-const IncomingDocumentModel = require('./StreamIncomingIncrementalModel');
-const SyncIncomingDocumentModel = require('./SyncIncomingDocumentModel');
+const IncomingDocumentModel = require('../models/StreamIncomingIncrementalModel');
+const SyncIncomingDocumentModel = require('../models/SyncIncomingDocumentModel');
 
 const UNIT_TEST_MODEL_NAME = '3_incoming';
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';

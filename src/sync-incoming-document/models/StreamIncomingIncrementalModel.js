@@ -28,7 +28,7 @@ function detectFileType(buffer) {
 }
 
 const SyncCommentModel = require('../../sync-document-comment/SyncCommentModel');
-const SyncAuditModel = require('../../sync-audit/SyncAuditModel');
+const SyncIncomingAuditModel = require('../../sync-audit/SyncIncomingAuditModel');
 const StreamIncomingMigrationModel = require('./SyncIncomingDocumentModel');
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 
@@ -178,7 +178,7 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
       this._fileService = new FileService(this.newPool);
 
       for (const table of AUDIT_TABLES) {
-        const model = new SyncAuditModel(table);
+        const model = new SyncIncomingAuditModel(table);
         await model.initialize();
         this._syncAuditModel.push(model);
       }

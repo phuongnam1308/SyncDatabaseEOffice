@@ -1,7 +1,7 @@
 const logger = require('../../../utils/logger');
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 const { roleMapping } = require('./roleMapping');
-const { USER_PAREN_DEFAULT, ROLES_DEFAULT } = require('../../config/sync-config');
+const { USER_PAREN_DEFAULT, ROLES_DEFAULT } = require('../../config');
 const MigrationHelper = require('../../helpers/MigrationHelper');
 const { v4: uuidv4 } = require('uuid');
 

@@ -1,6 +1,6 @@
 const BaseController = require('../../../controllers/BaseController');
 const logger = require('../../../utils/logger');
-const SyncIncomingDocumentService = require('./SyncIncomingDocumentService');
+const SyncIncomingDocumentService = require('../services/SyncIncomingDocumentService');
 
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 

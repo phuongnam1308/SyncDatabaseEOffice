@@ -2,7 +2,7 @@ const logger = require('../../../utils/logger');
 const sql = require('mssql');
 const { v4: uuidv4 } = require("uuid");
 const SyncCommentModel = require('../../sync-document-comment/SyncCommentModel');
-const SyncAuditModel = require('../../sync-audit/SyncAuditModel');
+const SyncOutgoingAuditModel = require('../../sync-audit/SyncOutgoingAuditModel');
 const StreamOutgoingMigrationModel = require('./StreamOutgoingMigrationModel');
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 const FileService = require('../../sync-file-copy/Fileuploadservice');
@@ -392,7 +392,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     this._fileService = new FileService(this.newPool);
 
     for (const table of AUDIT_TABLES) {
-      const model = new SyncAuditModel(table);
+      const model = new SyncOutgoingAuditModel(table);
       await model.initialize();
       this._syncAuditModel.push(model);
     }
