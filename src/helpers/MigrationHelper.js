@@ -743,6 +743,58 @@ class MigrationHelper {
   }
 
   /**
+   * Hàm mới chuyên dành cho Meeting: Tìm kiếm bằng LIKE và KHÔNG tự tạo user mới.
+   */
+  async mapUserWithLikeSearch(userIdOrName, transaction = null) {
+      try {
+          if (!userIdOrName || typeof userIdOrName !== 'string') return userIdOrName;
+          const trimmed = userIdOrName.trim();
+          if (!trimmed) return userIdOrName;
+
+          // 1. Tìm thông thường (Khớp ID hoặc chính xác tên)
+          const coreName = this.extractCoreName(trimmed);
+          if (!coreName) return null;
+
+          const selectQuery = `
+            SELECT TOP 1 id, name, username
+            FROM ${process.env.NEW_DB_NAME}.dbo.users
+            WHERE name = @name OR id = @name OR username = @name
+          `;
+          const existing = await this.queryNewDbTx(selectQuery, { name: coreName }, transaction);
+          if (existing?.length) {
+              logger.info(`[mapUserWithLikeSearch] KHỚP CHÍNH XÁC: "${coreName}" -> User: ${existing[0].name} (ID: ${existing[0].id})`);
+              return existing[0].id;
+          }
+
+          // 2. Nếu không thấy, tìm kiếm bằng LIKE
+          const likeQuery = `
+            SELECT TOP 1 id, name, username
+            FROM ${process.env.NEW_DB_NAME}.dbo.users
+            WHERE name LIKE '%' + @name + '%'
+          `;
+          const likeResult = await this.queryNewDbTx(likeQuery, { name: coreName }, transaction);
+          if (likeResult?.length) {
+              logger.info(`[mapUserWithLikeSearch] KHỚP LIKE: "${coreName}" -> User: ${likeResult[0].name} (ID: ${likeResult[0].id})`);
+              return likeResult[0].id;
+          }
+
+          logger.warn(`[mapUserWithLikeSearch] KHÔNG TÌM THẤY: "${coreName}". Trả về null.`);
+          return null;
+      } catch (err) {
+          logger.error(`[mapUserWithLikeSearch] Lỗi: ${err.message}`);
+          return null;
+      }
+  }
+
+  extractCoreName(value) {
+      let name = this.extractDisplayName(value);
+      if (!name) return null;
+      // Loại bỏ tiền tố danh xưng Việt Nam
+      name = name.replace(/^(Đ\/c\.|Đ\/c|Ông|Bà|Anh|Chị|Đồng chí)\s+/i, "").trim();
+      return name;
+  }
+
+  /**
    * Chuyên dùng để ánh xạ trường người soạn thảo/người ký.
    * Ưu tiên tìm theo ID backup, sau đó mới dùng đến logic mapUserName (tên/sync).
    */

@@ -14,8 +14,8 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         this.oldDbSchema = 'dbo';
         this.oldDbTable = 'VanBanDen';
         this.newDbSchema = 'dbo';
-        this.newTableSync = 'incomming_documents_sync'; //Bảng trung gian lưu data raw dùng để sync dần vào bảng chính `user_clone_for_sync`
-        this.newDbTable = 'incomming_documents';
+        this.newTableSync = 'incoming_documents_sync'; //Bảng trung gian lưu data raw dùng để sync dần vào bảng chính `user_clone_for_sync`
+        this.newDbTable = 'incoming_documents';
         // Properties for INSERT/UPDATE queries
         this.dbName = this.newDbName;
         this.mainSchema = this.newDbSchema;

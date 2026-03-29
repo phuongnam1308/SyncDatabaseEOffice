@@ -10,6 +10,13 @@ const StreamMeetingMigrationModel = require('../sync-meeting/migrate/StreamMeeti
 const IncomingDocumentModel = require('../sync-incoming-document/migrate/StreamIncomingIncrementalModel');
 const StreamDepartmentMigrationModel = require('../sync-department/migrate/StreamDepartmentMigrationModel');
 const StreamNewsAspxPageIncrementalModel = require('../sync-news-aspx-page/models/StreamNewsAspxPageIncrementalModel');
+
+// 5 Specialized Sync Modules
+const StreamMeetingCopyMigrationModel = require('../sync-meeting copy/migrate/StreamMeetingMigrationModel');
+const StreamEventMigrationModel = require('../sync-event/migrate/StreamEventMigrationModel');
+const StreamTgdScheduleMigrationModel = require('../sync-tgd-schedule/migrate/StreamTgdScheduleMigrationModel');
+const StreamMissionMigrationModel = require('../sync-mission-schedule/migrate/StreamMissionMigrationModel');
+const StreamCarBookingMigrationModel = require('../sync-car-booking/migrate/StreamCarBookingMigrationModel');
 const MODEL_DEFINITIONS = [
   {
     key: 'UNIT_TEST_STREAM_OUTGOING_INCREMENTAL',
@@ -31,7 +38,7 @@ const MODEL_DEFINITIONS = [
   },
   {
     key: 'UNIT_TEST_STREAM_USER_COPY_MIGRATION',
-    label: 'Đồng bộ người dùng',  
+    label: 'Đồng bộ người dùng',
     section: 'realtime',
     ModelClass: StreamUserMigrationModel
   },
@@ -41,16 +48,16 @@ const MODEL_DEFINITIONS = [
     section: 'realtime',
     ModelClass: StreamTaskMigrationModel,
   },
-  {
-    key: 'UNIT_TEST_STREAM_SOCIAL_RESOURCE_MIGRATION1',
-    label: 'Đồng bộ tin tức ',
-    section: 'realtime',
-    ModelClass: StreamSocialMigrationModel,
-    // ModelClass: StreamUserMigrationModel
-  },
+  // {
+  //   key: 'UNIT_TEST_STREAM_SOCIAL_RESOURCE_MIGRATION1',
+  //   label: 'Đồng bộ tin tức ',
+  //   section: 'realtime',
+  //   ModelClass: StreamSocialMigrationModel,
+  //   // ModelClass: StreamUserMigrationModel
+  // },
   {
     key: 'UNIT_TEST_STREAM_NEWS_ASPX_PAGE_INCREMENTAL',
-    label: 'Đồng bộ tintuc raw (aspx)',
+    label: 'Đồng bộ tin tức ',
     section: 'realtime',
     ModelClass: StreamNewsAspxPageIncrementalModel
   },
@@ -60,11 +67,41 @@ const MODEL_DEFINITIONS = [
     section: 'realtime',
     ModelClass: IncomingDocumentModel,
   },
+  // {
+  //   key: 'UNIT_TEST_STREAM_MEETING_MIGRATION',
+  //   label: 'Đồng bộ Lịch họp ',
+  //   section: 'realtime',
+  //   ModelClass: StreamMeetingMigrationModel,
+  // },
   {
-    key: 'UNIT_TEST_STREAM_MEETING_MIGRATION',
-    label: 'Đồng bộ Lịch họp ',
+    key: 'STREAM_MEETING_COPY_MIGRATION',
+    label: 'Đồng bộ lịch họp',
     section: 'realtime',
-    ModelClass: StreamMeetingMigrationModel,
+    ModelClass: StreamMeetingCopyMigrationModel,
+  },
+  {
+    key: 'STREAM_EVENT_MIGRATION',
+    label: 'Đồng bộ lịch sự kiện',
+    section: 'realtime',
+    ModelClass: StreamEventMigrationModel,
+  },
+  {
+    key: 'STREAM_TGD_SCHEDULE_MIGRATION',
+    label: 'Đồng bộ lịch trực ban TGĐ',
+    section: 'realtime',
+    ModelClass: StreamTgdScheduleMigrationModel,
+  },
+  {
+    key: 'STREAM_MISSION_MIGRATION',
+    label: 'Đồng bộ lịch công tác',
+    section: 'realtime',
+    ModelClass: StreamMissionMigrationModel,
+  },
+  {
+    key: 'STREAM_CAR_BOOKING_MIGRATION',
+    label: 'Đồng bộ lịch đặt xe',
+    section: 'realtime',
+    ModelClass: StreamCarBookingMigrationModel,
   },
 ];
 
