@@ -116,6 +116,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
                 document_field NVARCHAR(MAX) NULL,
                 signer NVARCHAR(MAX) NULL,
                 to_book_code NVARCHAR(MAX) NULL,
+                to_book_text_symbols NVARCHAR(MAX) NULL,
                 fileids NVARCHAR(MAX) NULL,
                 status NVARCHAR(10) NULL,
                 isStar INT DEFAULT 0,
@@ -195,6 +196,9 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
 
             IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'curStatusCode')
                 ALTER TABLE ${mainTableRef} ADD curStatusCode NVARCHAR(10) NULL;
+
+            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'to_book_text_symbols')
+                ALTER TABLE ${mainTableRef} ADD to_book_text_symbols NVARCHAR(MAX) NULL;
         END
         `;
         await this.queryNewDb(query);
@@ -826,7 +830,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         signer, to_book_code, fileids, status, isStar,
         parent_doc, type_process_doc, bpmn_version, copy_to_internal,
         resolution_deadline, copy_count, page_count, view_group, directive_comment,
-        SoVanBan, id_incoming_bak,
+        SoVanBan, id_incoming_bak, to_book_text_symbols,
         CoQuanGui2, CoQuanGuiText,
         DonVi, IsLibrary, ItemVBDTCT, ItemVBPH, ItemVBPHOld,
         BanLanhDao, LanhDaoTCT, LanhDaoTCTDaXuLy, LanhDaoTCTDeBiet, LanhDaoVPDN,
@@ -846,7 +850,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         @signer, @to_book_code, @fileids, @status, @isStar,
         @parent_doc, @type_process_doc, @bpmn_version, @copy_to_internal,
         @resolution_deadline, @copy_count, @page_count, @view_group, @directive_comment,
-        @SoVanBan, @id_incoming_bak,
+        @SoVanBan, @id_incoming_bak, @to_book_text_symbols,
         @CoQuanGui2, @CoQuanGuiText,
         @DonVi, @IsLibrary, @ItemVBDTCT, @ItemVBPH, @ItemVBPHOld,
         @BanLanhDao, @LanhDaoTCT, @LanhDaoTCTDaXuLy, @LanhDaoTCTDeBiet, @LanhDaoVPDN,
@@ -888,6 +892,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         document_field = @document_field,
         signer = @signer,
         to_book_code = @to_book_code,
+        to_book_text_symbols = @to_book_text_symbols,
         fileids = @fileids,
         status = @status,
         isStar = @isStar,
@@ -1073,6 +1078,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
             document_field: documentField,
             signer: null,
             to_book_code: this.safeString(oldRecord.SoDen),
+            to_book_text_symbols: this.safeString(oldRecord.SoDen),
             fileids: this.safeString(oldRecord.Files),
             status: statusCode,
             isStar: 0,
@@ -1159,6 +1165,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
             document_field: record.document_field ?? null,
             signer: record.signer ?? null,
             to_book_code: record.to_book_code ?? null,
+            to_book_text_symbols: record.to_book_text_symbols ?? null,
             fileids: record.fileids ?? null,
             status: record.status ?? 1,
             isStar: record.isStar ?? 0,

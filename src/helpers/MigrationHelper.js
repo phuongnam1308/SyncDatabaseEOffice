@@ -13,6 +13,13 @@ class MigrationHelper {
   constructor(dbQueryFn, queryOldDbFn = null) {
     this.queryNewDbTx = dbQueryFn;
     this.queryOldDb = queryOldDbFn;
+    this.mapStatus = this.mapStatusOutgoing.bind(this);
+  }
+
+  safeString(value) {
+    if (value == null) return null;
+    const str = String(value).trim();
+    return str === "" ? null : str;
   }
 
   cleanText(text) {
@@ -108,39 +115,42 @@ class MigrationHelper {
     }
   }
 
-  mapStatus(status) {
-    try {
-      if (!status) return 10;
-      if (Array.isArray(status)) {
-        if (!status.length) return 10;
-        status = status[0];
-      }
-      if (typeof status !== "string") {
-        status = String(status);
-      }
-      const normalized = status.trim().toLowerCase();
-      if (!normalized) return 10;
+  mapStatusOutgoing(trangThai) {
+    const safeTrangThai = this.safeString(trangThai);
+    const defaultResult = {
+      statusCode: "2",
+      bpmnVersion: 'SOANTHAO_PHATHANH_VBD',
+      stageStatus: 'DA_XU_LY',
+      curStatusCode: "1"
+    };
 
-      // Map dựa trên bảng trạng thái người dùng cung cấp
-      if (normalized === "dự thảo") return 1;
-      if (normalized === "chờ xử lý") return 2;
-      if (normalized === "chờ ban hành vbbc") return 4;
-      if (normalized === "đã ban hành vbbc" || normalized === "phát hành" || normalized === "đã phát hành") {
-        return 5;
-      }
-      if (normalized === "chờ đề nghị ban hành") return 8;
-      if (normalized === "chờ ban hành vbdt") return 9;
-      if (normalized === "đã ban hành vbdt") return 10;
-
-      // Fallback cho các trường hợp khác
-      if (normalized.includes("ban hành")) return 5;
-      if (normalized.includes("đã xl")) return 10;
-
-      return 10; // Mặc định là Hoàn tất/Đã ban hành
-    } catch (err) {
-      logger.warn("[mapStatus] invalid status:", status);
-      return 10;
+    if (!safeTrangThai || !process.env.STATUS_MAP_OUTGOING) {
+      return defaultResult;
     }
+
+    try {
+      const statusMap = JSON.parse(process.env.STATUS_MAP_OUTGOING);
+      if (Array.isArray(statusMap)) {
+        for (const mapping of statusMap) {
+          if (Array.isArray(mapping.trangthais)) {
+            for (const t of mapping.trangthais) {
+              if (safeTrangThai.toLowerCase().includes(t.toLowerCase())) {
+                return {
+                  statusCode: mapping.status_code || defaultResult.statusCode,
+                  bpmnVersion: mapping.bpmn_version || defaultResult.bpmnVersion,
+                  stageStatus: mapping.stage_status || defaultResult.stageStatus,
+                  curStatusCode: mapping.curStatusCode || defaultResult.curStatusCode
+                };
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      logger.warn(`[MigrationHelper] Error parsing STATUS_MAP_OUTGOING: ${e.message}`);
+    }
+
+    return defaultResult;
   }
 
   normalizeText(text) {
