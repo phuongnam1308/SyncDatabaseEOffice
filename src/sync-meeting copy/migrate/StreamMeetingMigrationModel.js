@@ -89,7 +89,6 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
         // 2. Danh sách các cột cần đảm bảo (Tự động thêm nếu thiếu)
         const columnsToAdd = [
             { name: 'ListName', type: 'NVARCHAR(500)' },
-            { name: 'ID', type: 'BIGINT' },
             { name: 'CreatedDate', type: 'NVARCHAR(500)' },
             { name: 'ModifiedDate', type: 'NVARCHAR(500)' },
             { name: 'tp_Created', type: 'NVARCHAR(500)' },
@@ -109,7 +108,7 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
 
         for (const col of columnsToAdd) {
             const alterQuery = `
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${table}' AND COLUMN_NAME = '${col.name}')
+            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${table}' AND TABLE_SCHEMA = '${schema}' AND COLUMN_NAME = '${col.name}')
             BEGIN
                 ALTER TABLE ${stagingTableRef} ADD [${col.name}] ${col.type} NULL;
             END
@@ -366,7 +365,7 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
         if (typeof rowData.Location === 'string' && rowData.Location.toLowerCase().includes('zoom')) {
             await this.helper.createOnlineMeeting(meetingId, 'ZOOM', transaction);
         }
-        await this.helper.createRecurrenceKhong(meetingId, rowData.BatDau, transaction);
+        await this.helper.createRecurrenceKhong(meetingId, rowData.StartDate, transaction);
         await this.createDefaultAuditForMigration(meetingId, transaction);
     }
 

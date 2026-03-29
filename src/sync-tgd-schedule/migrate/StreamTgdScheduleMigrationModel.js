@@ -67,7 +67,6 @@ class StreamTgdScheduleMigrationModel extends BaseIncrementalSyncInterface {
       // 2. Danh sách các cột cần đảm bảo (Đã chuyển sang tiếng Anh cho đồng bộ)
       const columnsToAdd = [
           { name: 'ListName', type: 'NVARCHAR(500)' },
-          { name: 'ID', type: 'BIGINT' },
           { name: 'CreatedDate', type: 'NVARCHAR(500)' },
           { name: 'ModifiedDate', type: 'NVARCHAR(500)' },
           { name: 'tp_Created', type: 'NVARCHAR(500)' },
@@ -87,7 +86,7 @@ class StreamTgdScheduleMigrationModel extends BaseIncrementalSyncInterface {
 
       for (const col of columnsToAdd) {
           const alterQuery = `
-          IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${table}' AND COLUMN_NAME = '${col.name}')
+          IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${table}' AND TABLE_SCHEMA = '${schema}' AND COLUMN_NAME = '${col.name}')
           BEGIN
               ALTER TABLE ${stagingTableRef} ADD [${col.name}] ${col.type} NULL;
           END
