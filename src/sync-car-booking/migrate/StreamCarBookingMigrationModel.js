@@ -64,18 +64,25 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
       `;
       await this.queryNewDb(createQuery);
 
+      // 2. Danh sách các cột cần đảm bảo (Đã chuyển sang tiếng Anh cho đồng bộ)
       const columnsToAdd = [
           { name: 'ListName', type: 'NVARCHAR(500)' },
+          { name: 'ID', type: 'BIGINT' },
+          { name: 'CreatedDate', type: 'NVARCHAR(500)' },
+          { name: 'ModifiedDate', type: 'NVARCHAR(500)' },
           { name: 'tp_Created', type: 'NVARCHAR(500)' },
           { name: 'tp_Modified', type: 'NVARCHAR(500)' },
-          { name: 'TieuDe', type: 'NVARCHAR(500)' },
-          { name: 'BatDau', type: 'NVARCHAR(500)' },
-          { name: 'KetThuc', type: 'NVARCHAR(500)' },
-          { name: 'DiaDiem', type: 'NVARCHAR(500)' },
-          { name: 'ChuTri', type: 'NVARCHAR(500)' },
-          { name: 'NoiDung', type: 'NVARCHAR(MAX)' },
+          { name: 'Title', type: 'NVARCHAR(MAX)' },
+          { name: 'StartDate', type: 'NVARCHAR(500)' },
+          { name: 'EndDate', type: 'NVARCHAR(500)' },
+          { name: 'Location', type: 'NVARCHAR(MAX)' },
+          { name: 'Description', type: 'NVARCHAR(MAX)' },
+          { name: 'Organizer', type: 'NVARCHAR(500)' },
           { name: 'AuthorName', type: 'NVARCHAR(500)' },
-          { name: 'AuthorAccount', type: 'NVARCHAR(500)' }
+          { name: 'AuthorAccount', type: 'NVARCHAR(500)' },
+          { name: 'AuthorEmail', type: 'NVARCHAR(500)' },
+          { name: 'EditorName', type: 'NVARCHAR(500)' },
+          { name: 'EditorAccount', type: 'NVARCHAR(500)' }
       ];
 
       for (const col of columnsToAdd) {
