@@ -12,7 +12,8 @@ const KEYWORDS = {
     "tmt", "phó tổng giám đốc", "cn chính trị", "đại phó", "hải đoàn trưởng",
     "phó chủ tịch hội đồng thành viên", "phó chủ tịch hđtv",
     "thành viên hđtv", "thành viên hội đồng thành viên",
-    "thư ký thường trực hội đồng thành viên", "thư ký tổng giám đốc"
+    "thư ký thường trực hội đồng thành viên", "thư ký tổng giám đốc",
+    "lãnh đạo", "tgđ"
   ],
   PHO_GIAM_DOC: [
     "phó giám đốc", "phó gđ", "phó gd", "phó chính ủy", "phó tham mưu trưởng"
@@ -117,6 +118,10 @@ class ReceiverParserService {
     const receiverIds = new Set();
     const receiverUnitIds = new Set();
     let roleProcess = "VANTHU";
+    let parsedRole = null; // Role của người nhận được bóc tách từ text
+
+    // Bóc tách role mục tiêu từ HanhDong
+    parsedRole = this._determineTargetRole(hanhDongLower);
 
     try {
       // ══════════════════════════════════════════════════════════════
@@ -257,17 +262,59 @@ class ReceiverParserService {
       return {
         receiverIds: Array.from(receiverIds),
         receiverUnitIds: Array.from(receiverUnitIds),
-        roleProcess
+        roleProcess,
+        parsedRole
       };
-
-    } catch (error) {
-      logger.warn(`[ReceiverParser] Error parsing record ID=${record?.ID}: ${error.message}`);
+    } catch (err) {
+      logger.error(`[ReceiverParserService] Error in determineReceivers: ${err.message}`);
       return {
         receiverIds: [],
         receiverUnitIds: [],
-        roleProcess: "VANTHU"
+        roleProcess: "VANTHU",
+        parsedRole: null
       };
     }
+  }
+
+  /**
+   * Xác định role mục tiêu (receiver role) dựa trên từ khóa trong hành động.
+   * @param {string} hanhDongLower - Nội dung hành động đã chuyển thường.
+   * @returns {string|null} - Key của role (GIAM_DOC, VANTHU, ...)
+   * @private
+   */
+  _determineTargetRole(hanhDongLower) {
+    if (!hanhDongLower) return null;
+
+    // Ưu tiên 1: Chuyển/Trình cho lãnh đạo cao nhất
+    const isGiamDoc = KEYWORDS.GIAM_DOC.some(kw => hanhDongLower.includes(kw));
+    if (isGiamDoc && (hanhDongLower.includes("trình") || hanhDongLower.includes("chuyển"))) {
+      return "GIAM_DOC";
+    }
+
+    // Ưu tiên 2: Văn thư
+    const isVanThu = KEYWORDS.VAN_THU.some(kw => hanhDongLower.includes(kw));
+    if (isVanThu) {
+      return "VANTHU";
+    }
+
+    // Ưu tiên 3: Phó giám đốc
+    const isPhoGiamDoc = KEYWORDS.PHO_GIAM_DOC.some(kw => hanhDongLower.includes(kw));
+    if (isPhoGiamDoc && (hanhDongLower.includes("trình") || hanhDongLower.includes("chuyển"))) {
+      return "PHO_GIAM_DOC";
+    }
+
+    // Ưu tiên 4: Chánh văn phòng
+    if (hanhDongLower.includes("chánh văn phòng") || hanhDongLower.includes("cvp")) {
+      return "CHANH_VAN_PHONG";
+    }
+
+    // Ưu tiên 5: Trưởng phòng
+    const isTruongPhong = KEYWORDS.TRUONG_PHONG.some(kw => hanhDongLower.includes(kw));
+    if (isTruongPhong && hanhDongLower.includes("chuyển")) {
+      return "TRUONG_PHONG";
+    }
+
+    return null;
   }
 
   // ═══════════════════════════════════════════════════════════════════

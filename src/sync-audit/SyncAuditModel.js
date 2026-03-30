@@ -280,6 +280,11 @@ class SyncAuditModel extends BaseModel {
             await this._insert(audit, transaction);
             inserted++;
           }
+
+          // 5c. Cập nhật status_code cho bảng văn bản tương ứng (IncomingDocument/OutgoingDocument)
+          if (audit.status_code && audit.document_id) {
+            await this._updateDocumentStatusCode(audit.document_id, audit.type_document, audit.status_code, transaction);
+          }
         } catch (auditErr) {
           logger.warn(
             `[AuditSyncModel.processSingleRecord] single audit failed table=${this.oldDbTable} ID=${rawRecord?.ID}: ${auditErr.message}`
@@ -586,6 +591,7 @@ class SyncAuditModel extends BaseModel {
     let receiver = parsed.receiverIds || [];
     const receiverUnit = parsed.receiverUnitIds || [];
     const parsedRoleProcess = parsed.roleProcess || actionParsed.roleProcess || 'VANTHU';
+    const parsedRole = parsed.parsedRole || null; // Role của người nhận bóc từ text
 
     // ── FALLBACK: Nếu receiver rỗng → tự động lấy ID người xử lý (user_id) đắp vào ──
     if ((!receiver || receiver.length === 0) && user_id) {
@@ -618,7 +624,17 @@ class SyncAuditModel extends BaseModel {
     const userPosition = userProfile?.position || '';
     const currentTrangThai = this._normalizeTextField(record.TrangThai);
     
-    const workflowMapping = this._determineUserRoleAndScreen(userPosition, currentTrangThai, rawAction, type_document);
+    // Sử dụng action_code từ parseActionString làm action_code mục tiêu
+    const parsedActionCode = actionParsed.action_code || null;
+
+    const workflowMapping = this._determineUserRoleAndScreen(
+      userPosition, 
+      currentTrangThai, 
+      rawAction, 
+      type_document,
+      parsedRole,
+      parsedActionCode
+    );
 
     // Trả về đối tượng đã được map theo cấu trúc của bảng 'audit' mới
     return {
@@ -665,7 +681,7 @@ class SyncAuditModel extends BaseModel {
    * @returns {object} - Cấu hình mapping tìm được hoặc mặc định.
    * @private
    */
-  _determineUserRoleAndScreen(userPosition, currentTrangThai, actionText, type_document = 'OutgoingDocument') {
+  _determineUserRoleAndScreen(userPosition, currentTrangThai, actionText, type_document = 'OutgoingDocument', parsedRole = null, parsedActionCode = null) {
     const pos = (userPosition || '').toLowerCase();
     const status = (currentTrangThai || '').toLowerCase();
     const action = (actionText || '').toLowerCase();
@@ -676,12 +692,29 @@ class SyncAuditModel extends BaseModel {
     const PROCESS_CONFIG = workflowConfig.WORKFLOW_PROCESS_CONFIG || [];
     const DEFAULT_CONFIG = workflowConfig.DEFAULT_WORKFLOW_PROCESS || {};
 
-    // 1. Tìm vai trò (role) dựa trên keywords
+    // 1. Tìm vai trò (role)
     let matchedRole = null;
-    for (const roleConf of PROCESS_CONFIG) {
-      if (roleConf.keywords.some(kw => pos.includes(kw.toLowerCase()))) {
-        matchedRole = roleConf;
-        break;
+
+    // Ưu tiên 1: Sử dụng parsedRole bóc được từ text người nhận
+    if (parsedRole) {
+      matchedRole = PROCESS_CONFIG.find(r => r.role === parsedRole);
+      // Nếu role key trong config khác với text bóc được, cần mapping thêm ở đây bộ lọc
+      if (!matchedRole) {
+         // Thử tìm role có tên khớp hoặc keyword khớp
+         matchedRole = PROCESS_CONFIG.find(r => 
+            (r.role && r.role.toLowerCase() === parsedRole.toLowerCase()) ||
+            (r.name && r.name.toLowerCase() === parsedRole.toLowerCase())
+         );
+      }
+    }
+
+    // Ưu tiên 2: Tìm vai trò dựa trên chức danh người xử lý (fallback)
+    if (!matchedRole) {
+      for (const roleConf of PROCESS_CONFIG) {
+        if (roleConf.keywords && roleConf.keywords.some(kw => pos.includes(kw.toLowerCase()))) {
+          matchedRole = roleConf;
+          break;
+        }
       }
     }
 
@@ -689,15 +722,23 @@ class SyncAuditModel extends BaseModel {
       return DEFAULT_CONFIG;
     }
 
-    // 2. Tìm màn hình (screen) dựa trên trangthais
+    // 2. Tìm màn hình (screen)
     let matchedScreen = null;
     if (matchedRole.screens && matchedRole.screens.length > 0) {
-      for (const screen of matchedRole.screens) {
-        if (screen.trangthais && screen.trangthais.some(st => 
-          status.includes(st.toLowerCase()) || action.includes(st.toLowerCase())
-        )) {
-          matchedScreen = screen;
-          break;
+      // Ưu tiên 1: Khớp theo action_code đã bóc tách
+      if (parsedActionCode) {
+        matchedScreen = matchedRole.screens.find(s => s.action_code === parsedActionCode);
+      }
+
+      // Ưu tiên 2: Khớp theo trangthais (keywords)
+      if (!matchedScreen) {
+        for (const screen of matchedRole.screens) {
+          if (screen.trangthais && screen.trangthais.some(st => 
+            status.includes(st.toLowerCase()) || action.includes(st.toLowerCase())
+          )) {
+            matchedScreen = screen;
+            break;
+          }
         }
       }
     }
@@ -711,6 +752,35 @@ class SyncAuditModel extends BaseModel {
 
     // Nếu không khớp màn hình nào, trả về mặc định của role đó hoặc hệ thống
     return DEFAULT_CONFIG;
+  }
+
+  /**
+   * Cập nhật status_code cho bảng văn bản tương ứng.
+   * @param {number} documentId - ID của văn bản trong CSDL mới.
+   * @param {string} typeDocument - Loại văn bản (IncomingDocument/OutgoingDocument).
+   * @param {string} statusCode - Mã trạng thái mới.
+   * @param {object} transaction - Transaction.
+   * @private
+   */
+  async _updateDocumentStatusCode(documentId, typeDocument, statusCode, transaction) {
+    if (!documentId || !statusCode) return;
+
+    const tableName = typeDocument === 'IncommingDocument' ? 'incoming_documents' : 'outgoing_documents';
+    const query = `
+      UPDATE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${tableName}
+      SET status_code = @status_code,
+          updated_at = GETDATE()
+      WHERE id = @id
+    `;
+
+    try {
+      await this.queryNewDbTx(query, {
+        status_code: statusCode,
+        id: documentId
+      }, transaction);
+    } catch (err) {
+      logger.warn(`[SyncAuditModel] Không thể cập nhật status_code cho ${tableName} ID=${documentId}: ${err.message}`);
+    }
   }
 
   /**
