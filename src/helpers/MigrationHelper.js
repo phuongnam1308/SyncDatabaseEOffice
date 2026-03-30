@@ -19,7 +19,15 @@ class MigrationHelper {
   safeString(value) {
     if (value == null) return null;
     const str = String(value).trim();
-    return str === "" ? null : str;
+    if (str === "" || str.toUpperCase() === "NULL") return null;
+    return str;
+  }
+
+  mapBit(value) {
+    if (value == null) return 0;
+    const s = String(value).trim();
+    if (s === "1" || s.toLowerCase() === "true") return 1;
+    return 0;
   }
 
   cleanText(text) {

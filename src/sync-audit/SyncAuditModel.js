@@ -243,6 +243,7 @@ class SyncAuditModel extends BaseModel {
 
     let inserted = 0;
     let updated = 0;
+    const results = [];
 
     try {
       // 1. Chuyển đổi (map) dữ liệu từ bản ghi cũ sang cấu trúc mới
@@ -263,6 +264,14 @@ class SyncAuditModel extends BaseModel {
         return null;
       }
 
+      // ── ĐẢM BẢO THỨ TỰ DETERMINISTIC ──
+      // Sắp xếp theo receiver và receiver_unit để đảm bảo thứ tự luôn giống nhau
+      audits.sort((a, b) => {
+        const keyA = String(a.receiver || "") + String(a.receiver_unit || "");
+        const keyB = String(b.receiver || "") + String(b.receiver_unit || "");
+        return keyA.localeCompare(keyB);
+      });
+
       // 3. Lặp qua từng bản ghi audit đã được chuyển đổi
       for (const audit of audits) {
         if (!audit) continue;
@@ -271,15 +280,19 @@ class SyncAuditModel extends BaseModel {
           // 4. Kiểm tra xem bản ghi audit này đã tồn tại trong CSDL mới chưa
           const existed = await this._getExistingAudit(audit, transaction);
 
+          let auditId;
           if (existed) {
             // 5a. Nếu đã tồn tại, cập nhật lại thông tin
-            await this._update(audit, existed.id, transaction);
+            auditId = await this._update(audit, existed.id, transaction);
             updated++;
           } else {
             // 5b. Nếu chưa tồn tại, thêm mới
-            await this._insert(audit, transaction);
+            auditId = await this._insert(audit, transaction);
             inserted++;
           }
+
+          // Lưu kết quả để subclass sử dụng
+          results.push({ audit, id: auditId });
 
           // 5c. Cập nhật status_code cho bảng văn bản tương ứng (IncomingDocument/OutgoingDocument)
           if (audit.status_code && audit.document_id) {
@@ -293,7 +306,7 @@ class SyncAuditModel extends BaseModel {
         }
       }
 
-      return { inserted, updated };
+      return { inserted, updated, results };
 
     } catch (error) {
       logger.error(
@@ -407,6 +420,7 @@ class SyncAuditModel extends BaseModel {
         curStatusCode,
         [role]
       )
+      OUTPUT INSERTED.id
       VALUES (
         @document_id,
         @time,
@@ -435,7 +449,7 @@ class SyncAuditModel extends BaseModel {
     `;
 
     // Thực thi câu lệnh INSERT
-    await this.queryNewDbTx(
+    const result = await this.queryNewDbTx(
       query,
       {
         document_id: data.document_id,
@@ -471,6 +485,8 @@ class SyncAuditModel extends BaseModel {
       },
       transaction
     );
+
+    return result?.[0]?.id || null;
   }
 
   /**
@@ -481,7 +497,7 @@ class SyncAuditModel extends BaseModel {
    * @private
    */
   async _update(data, existingId, transaction) {
-    if (!existingId) return;
+    if (!existingId) return null;
 
     const receiver =
       this._normalizeArrayField(data.receiver, 100);
@@ -545,6 +561,8 @@ class SyncAuditModel extends BaseModel {
       },
       transaction
     );
+
+    return existingId;
   }
 
   /**
@@ -768,7 +786,7 @@ class SyncAuditModel extends BaseModel {
 
     const isIncoming = ['IncomingDocument', 'IncommingDocument'].includes(typeDocument);
     const tableName = isIncoming ? 'incomming_documents' : 'outgoing_documents';
-    const idColumn = isIncoming ? 'document_id' : 'id';
+    const idColumn = 'document_id';
     const query = `
       UPDATE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${tableName}
       SET status_code = @status_code,

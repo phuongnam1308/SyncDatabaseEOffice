@@ -212,97 +212,6 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
             ALTER TABLE dbo.outgoing_documents ADD id_outgoing_bak NVARCHAR(255) NULL;
         IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'tb_bak')
             ALTER TABLE dbo.outgoing_documents ADD tb_bak BIT DEFAULT 0 NOT NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'table_backups')
-            ALTER TABLE dbo.outgoing_documents ADD table_backups NVARCHAR(MAX) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'table_backup')
-            ALTER TABLE dbo.outgoing_documents ADD table_backup NVARCHAR(255) NULL;
-
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'Title')
-            ALTER TABLE dbo.outgoing_documents ADD Title NVARCHAR(255) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'BanLanhDao')
-            ALTER TABLE dbo.outgoing_documents ADD BanLanhDao NVARCHAR(1000) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'ChenSo')
-            ALTER TABLE dbo.outgoing_documents ADD ChenSo BIT NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'TrangThai')
-            ALTER TABLE dbo.outgoing_documents ADD TrangThai NVARCHAR(100) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'IsLibrary')
-            ALTER TABLE dbo.outgoing_documents ADD IsLibrary BIT NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'ChucVu')
-            ALTER TABLE dbo.outgoing_documents ADD ChucVu NVARCHAR(255) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'DocNum')
-            ALTER TABLE dbo.outgoing_documents ADD DocNum NVARCHAR(50) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'NguoiSoanThaoText')
-            ALTER TABLE dbo.outgoing_documents ADD NguoiSoanThaoText NVARCHAR(255) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'FolderLocation')
-            ALTER TABLE dbo.outgoing_documents ADD FolderLocation NVARCHAR(500) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'DonVi')
-            ALTER TABLE dbo.outgoing_documents ADD DonVi NVARCHAR(MAX) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'HoSoXuLyLink')
-            ALTER TABLE dbo.outgoing_documents ADD HoSoXuLyLink NVARCHAR(500) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'InfoVBDi')
-            ALTER TABLE dbo.outgoing_documents ADD InfoVBDi NVARCHAR(150) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'ItemVBPH')
-            ALTER TABLE dbo.outgoing_documents ADD ItemVBPH NVARCHAR(500) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'NguoiKyVanBan')
-            ALTER TABLE dbo.outgoing_documents ADD NguoiKyVanBan NVARCHAR(255) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'NguoiKyVanBanText')
-            ALTER TABLE dbo.outgoing_documents ADD NguoiKyVanBanText NVARCHAR(255) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'PhanCong')
-            ALTER TABLE dbo.outgoing_documents ADD PhanCong BIT NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'TraLoiVBDen')
-            ALTER TABLE dbo.outgoing_documents ADD TraLoiVBDen NVARCHAR(2000) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'SoBan')
-            ALTER TABLE dbo.outgoing_documents ADD SoBan INT NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'SoTrang')
-            ALTER TABLE dbo.outgoing_documents ADD SoTrang INT NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'NoiLuuTru')
-            ALTER TABLE dbo.outgoing_documents ADD NoiLuuTru NVARCHAR(1000) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'BanLanhDaoTCT')
-            ALTER TABLE dbo.outgoing_documents ADD BanLanhDaoTCT NVARCHAR(4000) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'YKien')
-            ALTER TABLE dbo.outgoing_documents ADD YKien NVARCHAR(MAX) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'YKienChiHuy')
-            ALTER TABLE dbo.outgoing_documents ADD YKienChiHuy NVARCHAR(MAX) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'ModuleId')
-            ALTER TABLE dbo.outgoing_documents ADD ModuleId INT NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'SiteName')
-            ALTER TABLE dbo.outgoing_documents ADD SiteName VARCHAR(50) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'ListName')
-            ALTER TABLE dbo.outgoing_documents ADD ListName NVARCHAR(50) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'ItemId')
-            ALTER TABLE dbo.outgoing_documents ADD ItemId INT NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'YearMonth')
-            ALTER TABLE dbo.outgoing_documents ADD YearMonth VARCHAR(20) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'Modified')
-            ALTER TABLE dbo.outgoing_documents ADD Modified DATETIME NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'Created')
-            ALTER TABLE dbo.outgoing_documents ADD Created DATETIME NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'ModifiedBy')
-            ALTER TABLE dbo.outgoing_documents ADD ModifiedBy UNIQUEIDENTIFIER NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'CreatedBy')
-            ALTER TABLE dbo.outgoing_documents ADD CreatedBy UNIQUEIDENTIFIER NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'MigrateFlg')
-            ALTER TABLE dbo.outgoing_documents ADD MigrateFlg INT DEFAULT 0 NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'MigrateErrFlg')
-            ALTER TABLE dbo.outgoing_documents ADD MigrateErrFlg INT DEFAULT 0 NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'MigrateErrMess')
-            ALTER TABLE dbo.outgoing_documents ADD MigrateErrMess NVARCHAR(MAX) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'LoaiMoc')
-            ALTER TABLE dbo.outgoing_documents ADD LoaiMoc NVARCHAR(200) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'KySoFiles')
-            ALTER TABLE dbo.outgoing_documents ADD KySoFiles NVARCHAR(MAX) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'DGPId')
-            ALTER TABLE dbo.outgoing_documents ADD DGPId INT NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'Workflow')
-            ALTER TABLE dbo.outgoing_documents ADD Workflow NVARCHAR(255) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'IsKyQuyChe')
-            ALTER TABLE dbo.outgoing_documents ADD IsKyQuyChe BIT NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'DocSignType')
-            ALTER TABLE dbo.outgoing_documents ADD DocSignType SMALLINT NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'IsConverting')
-            ALTER TABLE dbo.outgoing_documents ADD IsConverting BIT NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'CodeItemId')
-            ALTER TABLE dbo.outgoing_documents ADD CodeItemId BIGINT NULL;
 
         IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'report_document_symbol')
             ALTER TABLE dbo.outgoing_documents ADD report_document_symbol NVARCHAR(255) NULL;
@@ -414,7 +323,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
   async getCount(lastSyncTime, lastSyncId = 0) {
     const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
     const normalizedLastSyncId = Number(lastSyncId || 0);
-    const limit = Number(process.env.COMPLETED_LIMIT || 0);
+    const limit = Number(process.env.COMPLETED_LIMIT || 1000);
 
     const syncTimeExpr = this.getSyncTimeExpression();
     const query = `
@@ -848,7 +757,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
     const normalizedLastSyncId = Number(lastSyncId || 0);
 
-    const stageBatchSize = Number(process.env.COMPLETED_LIMIT || 0);
+    const stageBatchSize = 1000; // Giới hạn 1000 bản ghi trước
     const stageOffset = Number(process.env.BEGIN_LIMIT || 0);
 
     const rows = await this.fetchListFromOldDb(

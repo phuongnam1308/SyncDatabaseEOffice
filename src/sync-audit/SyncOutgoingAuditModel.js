@@ -31,112 +31,67 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
   async processSingleRecord(rawRecord, documentId, transaction = null) {
     if (!rawRecord || !documentId) return null;
 
-    // 1. Gọi parent thực hiện upsert vào bảng audit (không thay đổi)
+    // 1. Gọi parent thực hiện upsert vào bảng audit (trả về { inserted, updated, results })
     const result = await super.processSingleRecord(rawRecord, documentId, transaction);
 
-    // 2. Lấy audit row vừa được insert/update để lấy id thực tế từ DB
-    //    (parent trả về { inserted, updated } chứ không return id,
-    //     nên ta tự query lại dựa trên origin_id)
-    try {
-      const auditId = await this._getAuditIdByOrigin(String(rawRecord.ID), transaction);
-      const mapped  = await this._buildMappedForOutgoing(rawRecord, documentId, transaction);
+    // 2. Nếu có kết quả audit, tiếp tục cập nhật các bảng phụ
+    if (result && Array.isArray(result.results) && result.results.length > 0) {
+      try {
+        // Lưu vết các receiver đã xử lý trong record này để tránh duplicate assignment (nếu có)
+        const processedReceivers = new Set();
 
-      if (mapped) {
-        await this._syncToAssignment(mapped, auditId, transaction);
-        await this._syncToCurrentState(mapped, auditId, transaction);
+        for (const res of result.results) {
+          const { audit, id: auditId } = res;
+          if (!audit || !auditId) continue;
+
+          // 2a. Sync vào bảng assignment cho từng receiver đơn lẻ
+          // audit ở đây đã được expand nên receiver/receiver_unit là giá trị đơn
+          const recKey = `${audit.receiver}|${audit.receiver_unit}|${audit.roleProcess}`;
+          if (!processedReceivers.has(recKey)) {
+            await this._syncToAssignment(audit, auditId, transaction);
+            processedReceivers.add(recKey);
+          }
+
+          // 2b. Sync vào current_state. Vì MERGE trong _syncToCurrentState có check @audit_time >= last_audit_time
+          // nên row cuối cùng (hoặc row có time lớn nhất) sẽ được giữ lại làm trạng thái hiện tại.
+          await this._syncToCurrentState(audit, auditId, transaction);
+        }
+      } catch (err) {
+        // Lỗi bảng phụ không được làm hỏng toàn bộ luồng
+        logger.warn(
+          `[SyncOutgoingAuditModel] sync phụ thất bại doc=${documentId} originId=${rawRecord?.ID}: ${err.message}`
+        );
       }
-    } catch (err) {
-      // Lỗi bảng phụ không được làm hỏng toàn bộ luồng
-      logger.warn(
-        `[SyncOutgoingAuditModel] sync phụ thất bại doc=${documentId} originId=${rawRecord?.ID}: ${err.message}`
-      );
     }
 
     return result;
   }
 
-  // ---------------------------------------------------------------------------
-  // Tìm audit.id bằng origin_id (ID gốc từ CSDL cũ)
-  // ---------------------------------------------------------------------------
-  async _getAuditIdByOrigin(originId, transaction) {
-    if (!originId) return null;
-    const rows = await this.queryNewDbTx(
-      `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.${this.newDbSchema}.audit
-       WHERE origin_id = @origin_id AND table_backups = @table_backups`,
-      { origin_id: originId, table_backups: this.oldDbTable },
-      transaction
-    );
-    return rows?.[0]?.id ?? null;
-  }
-
-  // ---------------------------------------------------------------------------
-  // Build mapped object chứa những trường cần thiết cho 2 bảng phụ.
-  // Tái dụng logic từ parent._mapSingleRecord nhưng không insert lại audit.
-  // ---------------------------------------------------------------------------
-  async _buildMappedForOutgoing(rawRecord, documentId, transaction) {
-    if (!rawRecord?.ID || !documentId) return null;
-
-    const parsedTime     = this.helper.parseDate(rawRecord.NgayTao);
-    const time           = parsedTime || new Date();
-    const user_id        = (await this.helper.mapUserName(rawRecord.NguoiXuLy, transaction))
-                           || process.env.VANTHU_USER_ID;
-    const rawAction      = this._normalizeTextField(rawRecord.HanhDong);
-    const currentTrangThai = this._normalizeTextField(rawRecord.TrangThai);
-    const parsed         = await this.receiverParser.determineReceivers(rawRecord, transaction);
-    const receiverIds    = parsed.receiverIds || [];
-    const receiverUnitIds = parsed.receiverUnitIds || [];
-    const roleProcess    = parsed.roleProcess || 'VANTHU';
-
-    const userProfile  = await this.helper.findUserByBakId(user_id, transaction);
-    const userPosition = userProfile?.position || '';
-    const workflowMap  = this._determineUserRoleAndScreen(userPosition, currentTrangThai, rawAction);
-    const actionParsed = this.helper.parseActionString(user_id, rawRecord.HanhDong) || {};
-
-    return {
-      document_id:   documentId,
-      time,
-      receiver:      receiverIds,
-      receiver_unit: receiverUnitIds,
-      roleProcess:   workflowMap.role || roleProcess || actionParsed.roleProcess || null,
-      stage_status:  workflowMap.stage_status || actionParsed.stage_status || null,
-      action_code:   workflowMap.action_code  || actionParsed.action_code  || null,
-      deadline:      rawRecord.HanXuLy ? this.helper.parseDate(rawRecord.HanXuLy) : null,
-      user_id,
-    };
-  }
 
   // ---------------------------------------------------------------------------
   // _syncToAssignment
   // Upsert vào outgoing_assignment cho mỗi receiver và receiver_unit.
   // PK: (document_id, receiver, role_process)
   // ---------------------------------------------------------------------------
-  async _syncToAssignment(mapped, auditId, transaction) {
+  async _syncToAssignment(audit, auditId, transaction) {
     const {
       document_id, time, receiver, receiver_unit,
-      roleProcess, stage_status, deadline, action_code
-    } = mapped;
+      roleProcess, stage_status, action_code
+    } = audit;
 
     if (!document_id || !stage_status || !roleProcess) return;
 
     const isCreator = CREATOR_ACTION_CODES.has(action_code) ? 1 : 0;
 
-    // Tập hợp tất cả receiver cần ghi (cá nhân + đơn vị)
-    const individualReceivers = Array.isArray(receiver)      ? receiver      : [];
-    const unitReceivers       = Array.isArray(receiver_unit) ? receiver_unit : [];
-
-    // Gộp xử lý: cá nhân với receiver_unit = null, đơn vị với receiver_unit = chính nó
-    const assignments = [
-      ...individualReceivers.map(r => ({ rec: r, unit: unitReceivers[0] || null })),
-      ...unitReceivers.map(u => ({ rec: u, unit: u })),
+    // Gộp xử lý: cá nhân hoặc đơn vị. 
+    // audit đã được expand nên receiver/receiver_unit thường chỉ có 1 cái hoặc cả 2 nếu cùng một row
+    const allReceivers = [
+      ...(receiver ? [{ rec: receiver, unit: receiver_unit || null }] : []),
+      ...(receiver_unit && receiver_unit !== receiver ? [{ rec: receiver_unit, unit: receiver_unit }] : [])
     ];
 
-    // Bỏ trùng dựa trên (rec, roleProcess)
-    const seen = new Set();
-    for (const { rec, unit } of assignments) {
+    for (const { rec, unit } of allReceivers) {
       if (!rec) continue;
-      const key = `${rec}|${roleProcess}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
 
       await this.queryNewDbTx(
         `MERGE ${process.env.NEW_DB_NAME}.dbo.outgoing_assignment AS tgt
@@ -151,23 +106,21 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
          WHEN MATCHED THEN
            UPDATE SET
              stage_status   = @stage_status,
-             deadline       = @deadline,
              last_audit_id  = @last_audit_id,
              receiver_unit  = COALESCE(@receiver_unit, tgt.receiver_unit),
              is_creator     = CASE WHEN @is_creator = 1 THEN 1 ELSE tgt.is_creator END,
              updated_at     = SYSDATETIME()
          WHEN NOT MATCHED THEN
            INSERT (document_id, receiver, role_process, stage_status,
-                   deadline, created_at, last_audit_id, receiver_unit, is_creator)
+                   created_at, last_audit_id, receiver_unit, is_creator)
            VALUES (@document_id, @receiver, @role_process, @stage_status,
-                   @deadline, @created_at, @last_audit_id, @receiver_unit, @is_creator);`,
+                   @created_at, @last_audit_id, @receiver_unit, @is_creator);`,
         {
           document_id,
           receiver:      String(rec).substring(0, 100),
           role_process:  String(roleProcess).substring(0, 50),
           stage_status:  String(stage_status).substring(0, 50),
-          deadline:      deadline || null,
-          created_at:    time,
+          created_at:    time || new Date(),
           last_audit_id: auditId || null,
           receiver_unit: unit ? String(unit).substring(0, 100) : null,
           is_creator:    isCreator,
@@ -183,11 +136,11 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
   // Chỉ cập nhật nếu audit này là MỚI HƠN bản hiện tại (theo time).
   // Flags tích luỹ: has_ban_hanh, has_da_xu_ly, has_ht_vbtt không bao giờ reset về 0.
   // ---------------------------------------------------------------------------
-  async _syncToCurrentState(mapped, auditId, transaction) {
+  async _syncToCurrentState(audit, auditId, transaction) {
     const {
       document_id, time, receiver, receiver_unit,
-      roleProcess, stage_status, action_code, deadline
-    } = mapped;
+      roleProcess, stage_status, action_code
+    } = audit;
 
     if (!document_id || !stage_status) return;
 
@@ -197,8 +150,7 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
     const isHtVbtt   = (stageUp === STAGE.HT_VBTT || stageUp === STAGE.BAN_HANH_DU_THAO) ? 1 : 0;
     const isCompleted = isBanHanh;
 
-    const receiverStr = Array.isArray(receiver)      ? (receiver[0]      || null) : (receiver || null);
-    const unitStr     = Array.isArray(receiver_unit) ? (receiver_unit[0] || null) : (receiver_unit || null);
+    const currentReceiver = receiver || receiver_unit;
 
     await this.queryNewDbTx(
       `MERGE ${process.env.NEW_DB_NAME}.dbo.outgoing_current_state AS tgt
@@ -210,7 +162,6 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
            current_action_code   = @action_code,
            current_receiver      = @receiver,
            current_role_process  = @role_process,
-           current_deadline      = @deadline,
            last_audit_id         = @last_audit_id,
            last_audit_time       = @audit_time,
            -- flags tích luỹ: chỉ set lên 1, không reset về 0
@@ -227,7 +178,7 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
        WHEN NOT MATCHED THEN
          INSERT (
            document_id, current_stage_status, current_action_code,
-           current_receiver, current_role_process, current_deadline,
+           current_receiver, current_role_process,
            last_audit_id, last_audit_time,
            has_ban_hanh, has_da_xu_ly, has_ht_vbtt,
            is_completed_doc, last_da_xu_ly_audit_id, has_tra_lai_after_da_xu_ly,
@@ -235,7 +186,7 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
          )
          VALUES (
            @document_id, @stage_status, @action_code,
-           @receiver, @role_process, @deadline,
+           @receiver, @role_process,
            @last_audit_id, @audit_time,
            @has_ban_hanh, @has_da_xu_ly, @has_ht_vbtt,
            @is_completed, CASE WHEN @has_da_xu_ly = 1 THEN @last_audit_id ELSE NULL END, 0,
@@ -245,9 +196,8 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
         document_id,
         stage_status:  String(stage_status).substring(0, 100),
         action_code:   action_code ? String(action_code).substring(0, 100) : null,
-        receiver:      receiverStr ? String(receiverStr).substring(0, 100) : null,
+        receiver:      currentReceiver ? String(currentReceiver).substring(0, 100) : null,
         role_process:  roleProcess ? String(roleProcess).substring(0, 100) : null,
-        deadline:      deadline || null,
         last_audit_id: auditId || null,
         audit_time:    time,
         has_ban_hanh:  isBanHanh,
