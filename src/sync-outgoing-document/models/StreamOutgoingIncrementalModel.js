@@ -140,7 +140,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     this.oldDbSchema = 'dbo';
     this.oldDbTable = 'VanBanBanHanh';
     this.newDbSchema = 'dbo';
-    this.newTableSync = 'outgoing_documents_temp';
+    this.newTableSync = 'outgoing_documents_sync';
 
     this._syncAuditModel = [];
     this._syncCommentModel = [];
@@ -451,7 +451,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
   }
 
   /**
-   * Tự động tạo bảng staging `outgoing_documents_temp` trong DB mới nếu chưa tồn tại.
+   * Tự động tạo bảng staging `outgoing_documents_sync` trong DB mới nếu chưa tồn tại.
    * Clone cấu trúc từ `VanBanBanHanh` (DB cũ) qua SELECT TOP 0 * INTO.
    */
     async ensureStagingTableExists() {

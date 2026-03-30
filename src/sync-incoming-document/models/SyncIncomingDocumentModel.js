@@ -129,7 +129,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
                 page_count INT NULL,
                 view_group varchar(100) NULL,
                 directive_comment NVARCHAR(MAX) NULL,
-                // SoVanBan NVARCHAR(MAX) NULL,
+                /* SoVanBan NVARCHAR(MAX) NULL, */
                 id_incoming_bak NVARCHAR(255) NULL,
                 /*
                 CoQuanGui2 NVARCHAR(MAX) NULL,
@@ -179,7 +179,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
                 */
                 table_backups NVARCHAR(MAX) NULL,
                 stage_status NVARCHAR(50) NULL
-                // curStatusCode NVARCHAR(10) NULL
+                /* curStatusCode NVARCHAR(10) NULL */
             );
             CREATE INDEX idx_id_incoming_bak ON ${mainTableRef}(id_incoming_bak);
         END
@@ -850,7 +850,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         signer, to_book_code, fileids, status, isStar,
         parent_doc, type_process_doc, bpmn_version, copy_to_internal,
         resolution_deadline, copy_count, page_count, view_group, directive_comment,
-        SoVanBan, id_incoming_bak, to_book_text_symbols,
+        id_incoming_bak, to_book_text_symbols,
         /*
         CoQuanGui2, CoQuanGuiText,
         DonVi, IsLibrary, ItemVBDTCT, ItemVBPH, ItemVBPHOld,
@@ -861,12 +861,8 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         MigrateFlg, YearMonth, MigrateErrFlg, MigrateErrMess,
         TrangThai, ModifiedBy, CreatedBy, DGPId, deadline_reply, table_backup,
         */
-        tb_bak, tb_update, 
-        /*
-        status_code_bef_test, sender_unit_bef_test, receiver_unit_bef_test,
-        */
-        stage_status
-        // curStatusCode
+        tb_bak, tb_update, stage_status, table_backups
+        /* curStatusCode */
       )
       VALUES (
         @document_id, @status_code, @created_at, @updated_at, @book_document_id,
@@ -876,7 +872,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         @signer, @to_book_code, @fileids, @status, @isStar,
         @parent_doc, @type_process_doc, @bpmn_version, @copy_to_internal,
         @resolution_deadline, @copy_count, @page_count, @view_group, @directive_comment,
-        @SoVanBan, @id_incoming_bak, @to_book_text_symbols,
+        @id_incoming_bak, @to_book_text_symbols,
         /*
         @CoQuanGui2, @CoQuanGuiText,
         @DonVi, @IsLibrary, @ItemVBDTCT, @ItemVBPH, @ItemVBPHOld,
@@ -887,12 +883,8 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         @MigrateFlg, @YearMonth, @MigrateErrFlg, @MigrateErrMess,
         @TrangThai, @ModifiedBy, @CreatedBy, @DGPId, @deadline_reply, @table_backup,
         */
-        @tb_bak, @tb_update, 
-        /*
-        @status_code_bef_test, @sender_unit_bef_test, @receiver_unit_bef_test,
-        */
-        @stage_status
-        // @curStatusCode
+        @tb_bak, @tb_update, @stage_status, @table_backups
+        /* @curStatusCode */
       )
     `;
 
@@ -932,14 +924,14 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         type_process_doc = @type_process_doc,
         bpmn_version = @bpmn_version,
         stage_status = @stage_status,
-        // curStatusCode = @curStatusCode,
+        /* curStatusCode = @curStatusCode, */
         copy_to_internal = @copy_to_internal,
         resolution_deadline = @resolution_deadline,
         copy_count = @copy_count,
         page_count = @page_count,
         view_group = @view_group,
         directive_comment = @directive_comment,
-        SoVanBan = @SoVanBan,
+        /* SoVanBan = @SoVanBan, */
         /*
         CoQuanGui2 = @CoQuanGui2,
         CoQuanGuiText = @CoQuanGuiText,
@@ -980,7 +972,8 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         table_backup = @table_backup,
         */
         tb_bak = @tb_bak,
-        tb_update = @tb_update
+        tb_update = @tb_update,
+        table_backups = @table_backups
         /*
         status_code_bef_test = @status_code_bef_test,
         sender_unit_bef_test = @sender_unit_bef_test,
@@ -1199,6 +1192,10 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
             to_book_date: record.to_book_date ?? null,
             deadline: record.deadline ?? null,
             second_book: record.second_book ?? null,
+            receive_method: record.receive_method ?? null,
+            private_level: record.private_level ?? null,
+            urgency_level: record.urgency_level ?? null,
+            document_type: record.document_type ?? null,
             document_field: record.document_field ?? null,
             signer: record.signer ?? null,
             to_book_code: record.to_book_code ?? null,
