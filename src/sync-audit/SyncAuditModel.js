@@ -686,8 +686,9 @@ class SyncAuditModel extends BaseModel {
     const status = (currentTrangThai || '').toLowerCase();
     const action = (actionText || '').toLowerCase();
 
-    // Lấy cấu hình workflow chuẩn dựa trên loại văn bản
-    const docTypeKey = type_document === 'IncomingDocument' ? 'incoming' : 'outgoing';
+    // Lấy cấu hình workflow chuẩn dựa trên loại văn bản (Hỗ trợ cả Incomming và Incoming)
+    const isIncoming = ['IncomingDocument', 'IncommingDocument'].includes(type_document);
+    const docTypeKey = isIncoming ? 'incoming' : 'outgoing';
     const workflowConfig = config.getWorkflowConfig(docTypeKey);
     const PROCESS_CONFIG = workflowConfig.WORKFLOW_PROCESS_CONFIG || [];
     const DEFAULT_CONFIG = workflowConfig.DEFAULT_WORKFLOW_PROCESS || {};
@@ -765,12 +766,14 @@ class SyncAuditModel extends BaseModel {
   async _updateDocumentStatusCode(documentId, typeDocument, statusCode, transaction) {
     if (!documentId || !statusCode) return;
 
-    const tableName = typeDocument === 'IncommingDocument' ? 'incoming_documents' : 'outgoing_documents';
+    const isIncoming = ['IncomingDocument', 'IncommingDocument'].includes(typeDocument);
+    const tableName = isIncoming ? 'incomming_documents' : 'outgoing_documents';
+    const idColumn = isIncoming ? 'document_id' : 'id';
     const query = `
       UPDATE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${tableName}
       SET status_code = @status_code,
           updated_at = GETDATE()
-      WHERE id = @id
+      WHERE ${idColumn} = @id
     `;
 
     try {

@@ -162,11 +162,11 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
 
       try {
         await this.queryNewDb(`
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'incoming_documents' AND COLUMN_NAME = 'table_backups')
-                ALTER TABLE dbo.incoming_documents ADD table_backups NVARCHAR(MAX) NULL;
+            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'incomming_documents' AND COLUMN_NAME = 'table_backups')
+                ALTER TABLE dbo.incomming_documents ADD table_backups NVARCHAR(MAX) NULL;
         `);
       } catch(e) {
-        logger.warn(`[IncomingDocumentModel] Failed to auto alter table incoming_documents: ${e.message}`);
+        logger.warn(`[IncomingDocumentModel] Failed to auto alter table incomming_documents: ${e.message}`);
       }
 
       this._syncAuditModel = [];
@@ -199,7 +199,7 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
   }
 
   /**
-   * Tự động tạo bảng trung gian `incoming_documents_sync` trong DB mới nếu chưa tồn tại.
+   * Tự động tạo bảng trung gian `incomming_documents_sync` trong DB mới nếu chưa tồn tại.
    * Cấu trúc bảng được clone từ `VanBanDen` (DB cũ) qua IF NOT EXISTS + SELECT TOP 0 * INTO.
    */
     async ensureStagingTableExists() {
@@ -393,7 +393,7 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
         __sync_time ASC,
         ISNULL(__sync_id_num, -9223372036854775808) ASC,
         ID ASC
-      OFFSET ${process.env.BEGIN_LIMIT || 0} ROWS FETCH NEXT ${process.env.COMPLETED_LIMIT} ROWS ONLY
+      OFFSET ${Number(process.env.BEGIN_LIMIT || 0)} ROWS FETCH NEXT ${Number(process.env.COMPLETED_LIMIT || 100)} ROWS ONLY
     `;
 
       return await this.queryOldDb(query, {

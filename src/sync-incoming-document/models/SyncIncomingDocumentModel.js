@@ -14,8 +14,8 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         this.oldDbSchema = 'dbo';
         this.oldDbTable = 'VanBanDen';
         this.newDbSchema = 'dbo';
-        this.newTableSync = 'incoming_documents_sync'; //Bảng trung gian lưu data raw dùng để sync dần vào bảng chính `user_clone_for_sync`
-        this.newDbTable = 'incoming_documents';
+        this.newTableSync = 'incomming_documents_sync'; //Bảng trung gian lưu data raw dùng để sync dần vào bảng chính `user_clone_for_sync`
+        this.newDbTable = 'incomming_documents';
         // Properties for INSERT/UPDATE queries
         this.dbName = this.newDbName;
         this.mainSchema = this.newDbSchema;
@@ -127,10 +127,11 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
                 resolution_deadline DATETIME2 NULL,
                 copy_count INT NULL,
                 page_count INT NULL,
-                view_group NVARCHAR(MAX) NULL,
+                view_group varchar(100) NULL,
                 directive_comment NVARCHAR(MAX) NULL,
-                SoVanBan NVARCHAR(MAX) NULL,
+                // SoVanBan NVARCHAR(MAX) NULL,
                 id_incoming_bak NVARCHAR(255) NULL,
+                /*
                 CoQuanGui2 NVARCHAR(MAX) NULL,
                 CoQuanGuiText NVARCHAR(MAX) NULL,
                 DonVi NVARCHAR(MAX) NULL,
@@ -168,14 +169,17 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
                 DGPId NVARCHAR(MAX) NULL,
                 deadline_reply DATETIME2 NULL,
                 table_backup NVARCHAR(255) DEFAULT 'VanBanDen',
+                */
                 tb_bak INT DEFAULT 0,
                 tb_update INT DEFAULT 0,
+                /*
                 status_code_bef_test NVARCHAR(10) NULL,
                 sender_unit_bef_test NVARCHAR(MAX) NULL,
                 receiver_unit_bef_test NVARCHAR(MAX) NULL,
+                */
                 table_backups NVARCHAR(MAX) NULL,
-                stage_status NVARCHAR(50) NULL,
-                curStatusCode NVARCHAR(10) NULL
+                stage_status NVARCHAR(50) NULL
+                // curStatusCode NVARCHAR(10) NULL
             );
             CREATE INDEX idx_id_incoming_bak ON ${mainTableRef}(id_incoming_bak);
         END
@@ -194,11 +198,27 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
             IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'stage_status')
                 ALTER TABLE ${mainTableRef} ADD stage_status NVARCHAR(50) NULL;
 
+            /*
             IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'curStatusCode')
                 ALTER TABLE ${mainTableRef} ADD curStatusCode NVARCHAR(10) NULL;
+            */
 
             IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'to_book_text_symbols')
                 ALTER TABLE ${mainTableRef} ADD to_book_text_symbols NVARCHAR(MAX) NULL;
+
+            -- Fix missing columns for old/new documents sync
+            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'id_incoming_bak')
+            BEGIN
+                ALTER TABLE ${mainTableRef} ADD id_incoming_bak NVARCHAR(255) NULL;
+                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_id_incoming_bak_v2' AND object_id = OBJECT_ID('${mainTableRef}'))
+                    CREATE INDEX idx_id_incoming_bak_v2 ON ${mainTableRef}(id_incoming_bak);
+            END
+            
+            /*
+            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'CoQuanGui2')
+                ALTER TABLE ${mainTableRef} ADD CoQuanGui2 NVARCHAR(MAX) NULL;
+            ... (and all other similar rows)
+            */
         END
         `;
         await this.queryNewDb(query);
@@ -236,12 +256,12 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
             const uuidFields = [];
 
             // Danh sách NVARCHAR(MAX) fields
-            const maxFields = ['CoQuanGui2', 'CoQuanGuiText', 'DonVi', 'abstract_note',
+            const maxFields = [/*'CoQuanGui2', 'CoQuanGuiText', 'DonVi',*/ 'abstract_note',
                 'to_book_code', 'urgency_level', 'private_level', 'document_type',
-                'SoVanBan', 'TrichYeu', 'VanBanTraLoi', 'YKienLanhDao', 'YKienLanhDaoTCT',
-                'YKienLanhDaoVPDN', 'YKienCuaLDVPChoVanThu', 'ForwardType', 'MigrateErrMess',
+                /*'SoVanBan',*/ 'TrichYeu', /*'VanBanTraLoi', 'YKienLanhDao', 'YKienLanhDaoTCT',
+                'YKienLanhDaoVPDN', 'YKienCuaLDVPChoVanThu', 'ForwardType',*/ 'MigrateErrMess',
                 'receiver_unit', 'copy_to_internal', 'view_group', 'directive_comment',
-                'fileids', 'LanhDaoTCT', 'LanhDaoTCTDaXuLy', 'LanhDaoTCTDeBiet', 'Files']; // <-- thêm 'Files'
+                'fileids', /*'LanhDaoTCT', 'LanhDaoTCTDaXuLy', 'LanhDaoTCTDeBiet',*/ 'Files']; // <-- thêm 'Files'
 
             Object.keys(params || {}).forEach(key => {
                 const value = params[key];
@@ -463,7 +483,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         __sync_time ASC,
         ISNULL(__sync_id_num, -9223372036854775808) ASC,
         ID ASC
-        OFFSET ${process.env.BEGIN_LIMIT || 0} ROWS FETCH NEXT ${process.env.COMPLETED_LIMIT} ROWS ONLY
+        OFFSET ${Number(process.env.BEGIN_LIMIT || 0)} ROWS FETCH NEXT ${Number(process.env.COMPLETED_LIMIT || 100)} ROWS ONLY
     `;
 
         const params = {
@@ -831,6 +851,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         parent_doc, type_process_doc, bpmn_version, copy_to_internal,
         resolution_deadline, copy_count, page_count, view_group, directive_comment,
         SoVanBan, id_incoming_bak, to_book_text_symbols,
+        /*
         CoQuanGui2, CoQuanGuiText,
         DonVi, IsLibrary, ItemVBDTCT, ItemVBPH, ItemVBPHOld,
         BanLanhDao, LanhDaoTCT, LanhDaoTCTDaXuLy, LanhDaoTCTDeBiet, LanhDaoVPDN,
@@ -839,8 +860,13 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         ForwardType, ModuleId, SiteName, ListName, ItemId,
         MigrateFlg, YearMonth, MigrateErrFlg, MigrateErrMess,
         TrangThai, ModifiedBy, CreatedBy, DGPId, deadline_reply, table_backup,
-        tb_bak, tb_update, status_code_bef_test, sender_unit_bef_test, receiver_unit_bef_test,
-        stage_status, curStatusCode
+        */
+        tb_bak, tb_update, 
+        /*
+        status_code_bef_test, sender_unit_bef_test, receiver_unit_bef_test,
+        */
+        stage_status
+        // curStatusCode
       )
       VALUES (
         @document_id, @status_code, @created_at, @updated_at, @book_document_id,
@@ -851,6 +877,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         @parent_doc, @type_process_doc, @bpmn_version, @copy_to_internal,
         @resolution_deadline, @copy_count, @page_count, @view_group, @directive_comment,
         @SoVanBan, @id_incoming_bak, @to_book_text_symbols,
+        /*
         @CoQuanGui2, @CoQuanGuiText,
         @DonVi, @IsLibrary, @ItemVBDTCT, @ItemVBPH, @ItemVBPHOld,
         @BanLanhDao, @LanhDaoTCT, @LanhDaoTCTDaXuLy, @LanhDaoTCTDeBiet, @LanhDaoVPDN,
@@ -859,8 +886,13 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         @ForwardType, @ModuleId, @SiteName, @ListName, @ItemId,
         @MigrateFlg, @YearMonth, @MigrateErrFlg, @MigrateErrMess,
         @TrangThai, @ModifiedBy, @CreatedBy, @DGPId, @deadline_reply, @table_backup,
-        @tb_bak, @tb_update, @status_code_bef_test, @sender_unit_bef_test, @receiver_unit_bef_test,
-        @stage_status, @curStatusCode
+        */
+        @tb_bak, @tb_update, 
+        /*
+        @status_code_bef_test, @sender_unit_bef_test, @receiver_unit_bef_test,
+        */
+        @stage_status
+        // @curStatusCode
       )
     `;
 
@@ -900,7 +932,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         type_process_doc = @type_process_doc,
         bpmn_version = @bpmn_version,
         stage_status = @stage_status,
-        curStatusCode = @curStatusCode,
+        // curStatusCode = @curStatusCode,
         copy_to_internal = @copy_to_internal,
         resolution_deadline = @resolution_deadline,
         copy_count = @copy_count,
@@ -908,6 +940,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         view_group = @view_group,
         directive_comment = @directive_comment,
         SoVanBan = @SoVanBan,
+        /*
         CoQuanGui2 = @CoQuanGui2,
         CoQuanGuiText = @CoQuanGuiText,
         DonVi = @DonVi,
@@ -945,11 +978,14 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         DGPId = @DGPId,
         deadline_reply = @deadline_reply,
         table_backup = @table_backup,
+        */
         tb_bak = @tb_bak,
-        tb_update = @tb_update,
+        tb_update = @tb_update
+        /*
         status_code_bef_test = @status_code_bef_test,
         sender_unit_bef_test = @sender_unit_bef_test,
         receiver_unit_bef_test = @receiver_unit_bef_test
+        */
       WHERE id_incoming_bak = @id_incoming_bak
     `;
 
@@ -1058,7 +1094,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
             document_id: `${Date.now()}${Math.floor(Math.random() * 10000)}`,
             status_code: statusCode,
             stage_status: stageStatus,
-            curStatusCode: curStatusCode,
+            // curStatusCode: curStatusCode,
             created_at: createdAt,
             updated_at: updatedAt,
             book_document_id: bookDocumentObj?.id ?? null,
@@ -1093,8 +1129,9 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
             directive_comment: null,
 
             // Legacy/backup columns from old database
-            SoVanBan: this.safeString(oldRecord.SoVanBan),
+            // SoVanBan: this.safeString(oldRecord.SoVanBan),
             id_incoming_bak: String(oldRecord.ID),
+            /*
             CoQuanGui2: this.safeString(oldRecord.CoQuanGui2),
             CoQuanGuiText: this.safeString(oldRecord.CoQuanGuiText),
             DonVi: this.safeString(oldRecord.DonVi),
@@ -1133,11 +1170,15 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
             DGPId: this.safeNumber(oldRecord.DGPId, null),
             deadline_reply: this.safeString(oldRecord.ThoiHanGQ),
             table_backup: 'VanBanDen',
+            */
+            table_backups: 'VanBanDen',
             tb_bak: 1,
             tb_update: 0,
+            /*
             status_code_bef_test: statusCode,
             sender_unit_bef_test: this.safeString(oldRecord.CoQuanGui2 || oldRecord.CoQuanGuiText),
             receiver_unit_bef_test: this.safeString(oldRecord.DonVi),
+            */
         }
     }
 
@@ -1158,10 +1199,6 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
             to_book_date: record.to_book_date ?? null,
             deadline: record.deadline ?? null,
             second_book: record.second_book ?? null,
-            receive_method: record.receive_method ?? null,
-            private_level: record.private_level ?? null,
-            urgency_level: record.urgency_level ?? null,
-            document_type: record.document_type ?? null,
             document_field: record.document_field ?? null,
             signer: record.signer ?? null,
             to_book_code: record.to_book_code ?? null,
@@ -1179,11 +1216,13 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
             view_group: record.view_group ?? null,
             directive_comment: record.directive_comment ?? null,
             stage_status: record.stage_status ?? null,
-            curStatusCode: record.curStatusCode ?? null,
+            // curStatusCode: record.curStatusCode ?? null,
+            table_backups: record.table_backups ?? null,
 
             // Legacy/backup columns
-            SoVanBan: record.SoVanBan ?? null,
+            // SoVanBan: record.SoVanBan ?? null,
             id_incoming_bak: record.id_incoming_bak ?? null,
+            /*
             CoQuanGui2: record.CoQuanGui2 ?? null,
             CoQuanGuiText: record.CoQuanGuiText ?? null,
             DonVi: record.DonVi ?? null,
@@ -1221,13 +1260,15 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
             DGPId: record.DGPId ?? null,
             deadline_reply: record.deadline_reply ?? null,
             table_backup: record.table_backup ?? 'VanBanDen',
+            */
             tb_bak: record.tb_bak ?? 0,
-            tb_update: record.tb_update ?? 0,
+            tb_update: record.tb_update ?? 0
+            /*
             status_code_bef_test: record.status_code_bef_test ?? null,
             sender_unit_bef_test: record.sender_unit_bef_test ?? null,
-            receiver_unit_bef_test: record.receiver_unit_bef_test ?? null,
+            receiver_unit_bef_test: record.receiver_unit_bef_test ?? null
+            */
         }
     }
-
 }
 module.exports = SyncIncomingDocumentModel;

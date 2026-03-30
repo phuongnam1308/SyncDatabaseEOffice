@@ -2283,6 +2283,8 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
       await this.queryNewDbTx(`
         IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'document_comments' AND COLUMN_NAME = 'tb_bak')
             ALTER TABLE ${dbName}.dbo.document_comments ADD tb_bak INT DEFAULT 0;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'document_comments' AND COLUMN_NAME = 'table_bak')
+            ALTER TABLE ${dbName}.dbo.document_comments ADD table_bak NVARCHAR(255) NULL;
         IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'document_comments' AND COLUMN_NAME = 'user_id_bak')
             ALTER TABLE ${dbName}.dbo.document_comments ADD user_id_bak NVARCHAR(255) NULL;
         IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'document_comments' AND COLUMN_NAME = 'parent_id_bak')

@@ -16,12 +16,12 @@ class MigrationDocumentCommentsService {
     await this.model.initialize();
   }
 
-  // Helper: Lấy document_id từ incoming_documents hoặc outgoing_documents bằng DocumentID_bak
+  // Helper: Lấy document_id từ incomming_documents hoặc outgoing_documents bằng DocumentID_bak
   async getDocumentId(documentIdBak) {
     try {
       if (!documentIdBak) return null;
 
-      // Thử tìm trong incoming_documents trước
+      // Thử tìm trong incomming_documents trước
       const incomingQuery = `
         SELECT TOP 1 document_id
         FROM ${process.env.NEW_DB_NAME}.dbo.incomming_documents
