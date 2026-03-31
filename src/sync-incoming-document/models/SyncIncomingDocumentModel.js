@@ -1,4 +1,4 @@
-// sync-outgoing.model.js
+// sync-incoming.model.js
 const BaseModel = require("../../../models/BaseModel");
 const logger = require("../../../utils/logger");
 const sql = require('mssql');

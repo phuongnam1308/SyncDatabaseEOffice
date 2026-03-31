@@ -7,6 +7,11 @@ const StreamOutgoingMigrationModel = require('./StreamOutgoingMigrationModel');
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 const FileService = require('../../sync-file-copy/Fileuploadservice');
 const { downloadFile: spDownload } = require('../../sync-file-copy/SharePointAuthService');
+const {
+  CATEGORY_RELEASE_DV,
+  CATEGORY_RELEASE_TCT,
+  CATEGORY_OUTGOING
+} = require('../../sync-audit/SyncAuditModel');
 
 /**
  * Phát hiện MIME type từ magic bytes — thay thế package file-type (ESM-only)

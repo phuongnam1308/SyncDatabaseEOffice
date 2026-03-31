@@ -29,8 +29,15 @@ function detectFileType(buffer) {
 
 const SyncCommentModel = require('../../sync-document-comment/SyncCommentModel');
 const SyncIncomingAuditModel = require('../../sync-audit/SyncIncomingAuditModel');
-const StreamIncomingMigrationModel = require('./SyncIncomingDocumentModel');
+const SyncIncomingDocumentModel = require('./SyncIncomingDocumentModel');
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
+
+const {
+  CATEGORY_INCOMING_SUBMIT,
+  CATEGORY_INCOMING_TCT,
+  CATEGORY_INCOMING,
+  CATEGORY_INCOMING_INTERNAL
+} = require('../../sync-audit/SyncAuditModel');
 
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 
@@ -172,7 +179,7 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
       this._syncAuditModel = [];
       this._syncCommentModel = [];
 
-      this._IncomingMigrationModels = new StreamIncomingMigrationModel();
+      this._IncomingMigrationModels = new SyncIncomingDocumentModel();
       await this._IncomingMigrationModels.initialize();
 
       this._fileService = new FileService(this.newPool);
