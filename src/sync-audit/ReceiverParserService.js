@@ -1,51 +1,16 @@
+const config = require("../config");
 const logger = require("../../utils/logger");
 
 // ═══════════════════════════════════════════════════════════════════
 // BẢNG KEYWORD CHỨC DANH — Dùng để tra cứu user theo position
 // ═══════════════════════════════════════════════════════════════════
 const KEYWORDS = {
-  ADMIN: ["admin", "quản trị viên"],
-  GIAM_DOC: [
-    "giám đốc", "tổng giám đốc", "giám đốc cn", "giám đốc trung tâm",
-    "giám đốc nhân sự", "chủ tịch kiêm giám đốc", "chủ tịch hđqt",
-    "chủ tịch hội đồng quản trị", "chủ tịch", "chính ủy", "tham mưu trưởng",
-    "tmt", "phó tổng giám đốc", "cn chính trị", "đại phó", "hải đoàn trưởng",
-    "phó chủ tịch hội đồng thành viên", "phó chủ tịch hđtv",
-    "thành viên hđtv", "thành viên hội đồng thành viên",
-    "thư ký thường trực hội đồng thành viên", "thư ký tổng giám đốc",
-    "lãnh đạo", "tgđ"
-  ],
-  PHO_GIAM_DOC: [
-    "phó giám đốc", "phó gđ", "phó gd", "phó chính ủy", "phó tham mưu trưởng"
-  ],
-  TRUONG_PHONG: [
-    "trưởng phòng", "tp", "trưởng ban", "chánh văn phòng",
-    "trưởng trung tâm", "trưởng chi nhánh", "trưởng ter", "quản đốc",
-    "kế toán trưởng", "chủ nhiệm", "phụ trách phòng", "tp tài chính",
-    "tp.điều độ", "tp.tchc", "quyền tpth", "trưởng dp", "dpa",
-    "trưởng khu", "trưởng ban thương vụ", "trưởng ban giao nhận",
-    "trạm trưởng", "trưởng trạm", "thuyền trưởng", "máy trưởng",
-    "máy trưởng tàu khách", "xe trưởng", "trưởng depot",
-    "trưởng văn phòng đại diện", "trưởng ttpp", "trưởng đhsx",
-    "trưởng tmn", "xưởng trưởng", "trung đội trưởng",
-    "trưởng trực ban", "trưởng khu kho hàng"
-  ],
-  PHO_TRUONG_PHONG: [
-    "phó trưởng phòng", "ptp", "phó phòng", "phó ban",
-    "phó chánh văn phòng", "phó trung tâm", "phó trưởng trung tâm",
-    "phó trưởng chi nhánh", "phó ter", "phó terminal", "phó chủ nhiệm",
-    "hải đội phó", "phó quản đốc", "p.hđt", "pp kế toán",
-    "tổ trưởng", "đội trưởng", "trưởng kho", "trưởng ca", "bếp trưởng",
-    "tiểu đội trưởng", "quản lý bếp", "tbsx", "trưởng tbsx",
-    "trưởng khu kh", "xưởng phó", "phó chi nhánh", "phó depot",
-    "phó trưởng khu kho hàng", "trung đội phó", "thuyền phó",
-    "máy phó", "sĩ quan máy", "sĩ quan boong", "giám sát ca",
-    "giám sát công trình", "giám sát chất lượng", "phó trưởng trực ban"
-  ],
-  VAN_THU: [
-    "văn thư", "văn thư cục", "văn thư bảo mật",
-    "bảo mật lưu trữ", "văn thư lưu trữ"
-  ]
+  ADMIN:            config.ROLE_MAPPINGS.ADMIN.KEYWORDS,
+  GIAM_DOC:         config.ROLE_MAPPINGS.GIAM_DOC.KEYWORDS,
+  PHO_GIAM_DOC:     config.ROLE_MAPPINGS.PHO_GIAM_DOC.KEYWORDS,
+  TRUONG_PHONG:     config.ROLE_MAPPINGS.TRUONG_PHONG.KEYWORDS,
+  PHO_TRUONG_PHONG: config.ROLE_MAPPINGS.PHO_TRUONG_PHONG.KEYWORDS,
+  VAN_THU:          config.ROLE_MAPPINGS.VAN_THU.KEYWORDS
 };
 
 // ═══════════════════════════════════════════════════════════════════
