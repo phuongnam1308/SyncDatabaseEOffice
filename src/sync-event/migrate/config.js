@@ -26,10 +26,8 @@ const tableMappings = {
     oldSchema: 'dbo',
     oldDatabase: process.env.SHAREPOINT_DB_NAME || 'WSS_Content_eoffice_khkd',
     oldUserDatabase: 'WSS_Content_eoffice',
-
     listIds: [
-        'C27A522F-FD18-4D74-90C5-B6AC6F70AE42', // Event (Lịch sự kiện)
-        '50654456-9F7A-4436-BFED-F86F1BFDF58D'  // Có thể có thêm list khác
+        'C27A522F-FD18-4D74-90C5-B6AC6F70AE42'  // Chỉ lấy Event theo yêu cầu
     ],
 
     /* ================= NEW DB ================= */

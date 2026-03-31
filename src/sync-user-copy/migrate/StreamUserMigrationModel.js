@@ -378,7 +378,13 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
       address_user: this.safeString(oldRecord.Address),
       description: null,
       role: null,
-      roles_by_process: this.mapPositionToRoles(position) || ROLES_DEFAULT || '[{"processKey":"VAN_BAN_DI","name":"VAN_BAN_DI","roles":[{"roleCode":"CAN_BO","name":"CAN_BO"},{"roleCode":"CAN_BO","name":"CAN_BO"}]},{"processKey":"vbdi","name":"vbdi","roles":[{"roleCode":"CANBO","name":"CANBO"}]},{"processKey":"XIN_Y_KIEN","name":"XIN_Y_KIEN","roles":[{"roleCode":"CAN_BO","name":"CAN_BO"}]},{"processKey":"QUY_TRINH_CV_PHONG_BAN","name":"QUY_TRINH_CV_PHONG_BAN","roles":[{"roleCode":"NGUOI_GIAO","name":"NGƯỜI GIAO"},{"roleCode":"NGUOI_PHOI_HOP","name":"NGƯỜI PHỐI HỢP"}]},{"processKey":"QUY_TRINH_LICH_HOP","name":"QUY_TRINH_LICH_HOP","roles":[{"roleCode":"UNKNOWN","name":"VAN_THU"}]},{"processKey":"quan_ly_tin_tuc","name":"quan_ly_tin_tuc","roles":[{"roleCode":"NGUOI_TAO_TIN","name":"NGUOI_TAO_TIN"}]},{"processKey":"SOANTHAO_PHATHANH_VBD","name":"SOANTHAO_PHATHANH_VBD","roles":[{"roleCode":"NGUOI_SOAN_THAO","name":"NGUOI_SOAN_THAO"}]},{"processKey":"CVDAN","name":"CVDAN","roles":[{"roleCode":"NGUOI_GIAO","name":"NGƯỜI GIAO"},{"roleCode":"NGUOI_PHOI_HOP","name":"NGƯỜI PHỐI HỢP"}]},{"processKey":"SOANTHAO_PHATHANH_CQD","name":"SOANTHAO_PHATHANH_CQD","roles":[{"roleCode":"NGUOI_SOAN_THAO","name":"NGUOI_SOAN_THAO"}]},{"processKey":"KY_SO_HS_VBD","name":"KY_SO_HS_VBD","roles":[{"roleCode":"NGUOI_SOAN_THAO","name":"NGUOI_SOAN_THAO"}]},{"processKey":"QUY_TRINH_DANG_KY_XE","name":"QUY_TRINH_DANG_KY_XE","roles":[{"roleCode":"ALL","name":"ALL"}]},{"processKey":"thhs","name":"thhs","roles":[{"roleCode":"bld","name":"bld"}]},{"processKey":"QUY_TRINH_PHAN_ANH_KIEN_NGHI","name":"QUY_TRINH_PHAN_ANH_KIEN_NGHI","roles":[{"roleCode":"NGUOI_PHAN_ANH","name":"NGUOI_PHAN_ANH"}]}]',
+      roles_by_process: (() => {
+        const mappedRoles = this.mapPositionToRoles(position);
+        if (mappedRoles && mappedRoles !== '[]') return mappedRoles;
+        let envRoles = process.env.ROLES_DEFAULT;
+        if (envRoles && envRoles.trim() !== '') return envRoles;
+        return (ROLES_DEFAULT && ROLES_DEFAULT.length > 0) ? JSON.stringify(ROLES_DEFAULT) : '[]';
+      })(),
       organization_name: null,
       organization_code: null,
       organization_type: null,

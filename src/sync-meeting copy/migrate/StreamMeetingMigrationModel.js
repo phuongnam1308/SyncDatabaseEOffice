@@ -34,6 +34,7 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     await this.ensureStagingTableExists();
     await this.ensureMeetingsColumnsExist();
     await this.ensureDefaultRoomExists();
+    await this.ensureAuditTableExists();
     console.log(`[StreamMeetingMigrationModel] Initialization complete.`);
   }
 
@@ -272,6 +273,64 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
       }
     }
 
+  async ensureAuditTableExists() {
+    const db = this.newDbName || 'app_tancang';
+    const schema = 'dbo';
+    const table = 'audit';
+    const tableRef = `[${db}].[${schema}].[${table}]`;
+
+    console.log(`[StreamMeetingMigrationModel] Checking/Creating Audit table: ${table}`);
+    const createAuditTable = `
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '${table}' AND TABLE_SCHEMA = '${schema}')
+    BEGIN
+        CREATE TABLE ${tableRef} (id bigint IDENTITY(1,1) PRIMARY KEY);
+    END
+    `;
+    await this.queryNewDb(createAuditTable);
+
+    const auditCols = [
+      { name: 'document_id', type: 'nvarchar(64)' },
+      { name: 'time', type: 'datetime', nullable: 'DEFAULT getdate()' },
+      { name: 'user_id', type: 'nvarchar(64)' },
+      { name: 'display_name', type: 'nvarchar(255)' },
+      { name: 'role', type: 'nvarchar(64)' },
+      { name: 'action_code', type: 'nvarchar(64)' },
+      { name: 'from_node_id', type: 'nvarchar(128)' },
+      { name: 'to_node_id', type: 'nvarchar(128)' },
+      { name: 'details', type: 'nvarchar(MAX)' },
+      { name: 'origin_id', type: 'nvarchar(100)' },
+      { name: 'created_by', type: 'nvarchar(100)' },
+      { name: 'receiver', type: 'nvarchar(100)' },
+      { name: 'receiver_unit', type: 'nvarchar(100)' },
+      { name: 'group_', type: 'nvarchar(100)' },
+      { name: 'roleProcess', type: 'nvarchar(100)' },
+      { name: 'action', type: 'nvarchar(255)' },
+      { name: 'deadline', type: 'datetime' },
+      { name: 'stage_status', type: 'nvarchar(100)' },
+      { name: 'curStatusCode', type: 'nvarchar(64)' },
+      { name: 'created_at', type: 'datetime', nullable: 'DEFAULT getdate()' },
+      { name: 'updated_at', type: 'datetime', nullable: 'DEFAULT getdate()' },
+      { name: 'type_document', type: 'varchar(100)' },
+      { name: 'processed_by', type: 'varchar(100)' },
+      { name: 'acting_as', type: 'varchar(100)' },
+      { name: 'table_backups', type: 'nvarchar(255)' },
+      { name: 'status_code', type: 'varchar(50)' },
+      { name: 'bpmn_version', type: 'varchar(100)' },
+      { name: 'type_of_process', type: 'varchar(100)' },
+      { name: 'table_bak', type: 'int' }
+    ];
+
+    for (const col of auditCols) {
+      const query = `
+      IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${table}' AND COLUMN_NAME = '${col.name}')
+      BEGIN
+          ALTER TABLE ${tableRef} ADD [${col.name}] ${col.type} ${col.nullable || 'NULL'};
+      END
+      `;
+      await this.queryNewDb(query);
+    }
+  }
+
   getStagingTableRef() {
     const ref = this.newDbName
       ? `${this.newDbName}.${this.newDbSchema}.${this.newTableSync}`
@@ -509,17 +568,21 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     console.log(`[StreamMeetingMigrationModel] processRowData: recordId=${recordId}`);
     const { externalKey } = this.oldConfig;
 
-    // --- SỬ DỤNG ROBUST RESOLVER MỚI (6 BƯỚC ƯU TIÊN + LOG CHI TIẾT) ---
-    console.log(`[StreamMeetingMigrationModel] --- RESOLVING CREATOR/CHAIRMAN FOR ID: ${recordId} ---`);
-    
-    // Resolve Creator
-    const creatorId = await this.helper.robustUserResolver(rowData, transaction);
-    
-    // Resolve Chairman (Sử dụng cùng logic 6 bước ưu tiên)
-    const chairmanId = await this.helper.robustUserResolver(rowData, transaction);
+    // 1. Resolve Creator (Người tạo) - Ưu tiên AuthorAccount, AuthorName
+    let creatorId = await this.helper.robustUserResolver(rowData, transaction); 
+
+    // 2. Resolve Chairman (Chủ trì) - Theo trường nvarchar10 (ChuTri từ db cũ) hoặc nvarchar4 (Organizer)
+    const chairmanSrc = rowData.nvarchar10 || rowData.ChuTri || rowData.nvarchar4 || rowData.Organizer;
+    let chairmanId = creatorId; // Fallback
+    if (chairmanSrc) {
+        // Chủ trì thường nhập tiếng Việt, dùng LikeSearch để dò ra ID chuẩn nhất
+        const mapped = await this.helper.mapUserWithLikeSearch(chairmanSrc, transaction);
+        if (mapped) chairmanId = mapped;
+    }
 
     console.log(`[StreamMeetingMigrationModel] FINAL DECISION: Creator=${creatorId}, Chairman=${chairmanId}`);
 
+    // Gán dữ liệu vào object chuẩn bị Upsert
     rowData.AuthorAccount = creatorId;
     rowData.chairman_id = chairmanId;
     rowData.created_by = creatorId; 
@@ -681,32 +744,32 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     const quanLyPhongHopId = await this.helper.syncAndMapUser('Quản lý phòng họp', transaction) || finalChairmanId;
 
     const query = `
-      IF NOT EXISTS (SELECT 1 FROM ${auditTable} WHERE document_id = @meetingId AND action_code = 'CREATE')
+        IF NOT EXISTS (SELECT 1 FROM ${auditTable} WHERE document_id = @meetingId AND action_code = 'CREATE')
       BEGIN
           INSERT INTO ${auditTable}
           (
             document_id, [time], user_id, display_name, role, action_code, from_node_id, to_node_id,
             details, origin_id, created_by, receiver, roleProcess, [action], stage_status,
-            curStatusCode, type_document, created_at, updated_at
+            curStatusCode, type_document, created_at, updated_at, table_bak
           )
           VALUES
           (
             @meetingId, SYSUTCDATETIME(), @creatorId, N'Người tạo', 'NGUOI_SOAN_LICH', 'CREATE',
             'Activity_1rl80cg', 'Activity_1rl80cg', '{"transferType":"to_person"}', NULL,
-            @creatorId, @creatorId, 'processor', N'Tạo văn bản', 'DA_XU_LY', '1', 'Meeting',
-            SYSUTCDATETIME(), SYSUTCDATETIME()
+            @creatorId, @creatorId, 'processor', N'Tạo văn bản', 'DA_XU_LY', '1', 'meeting',
+            SYSUTCDATETIME(), SYSUTCDATETIME(), 1
           ),
           (
             @meetingId, SYSUTCDATETIME(), @creatorId, N'Người tạo', 'NGUOI_SOAN_LICH',
             'TRINH_LICH', 'Activity_1rl80cg', 'Gateway_16pjuoq', '{"note":""}', 'migration_origin',
             @creatorId, @quanLyPhongId, 'processor', N'Chuyển Ban quản lý phòng', 'DONG_Y_PHE_DUYET',
-            '2', 'Meeting', SYSUTCDATETIME(), SYSUTCDATETIME()
+            '2', 'meeting', SYSUTCDATETIME(), SYSUTCDATETIME(), 1
           ),
           (
             @meetingId, SYSUTCDATETIME(), @quanLyPhongHopId, N'Quản lý phòng họp', 'BAN_QUAN_LY_PHONG_HOP',
             'PHE_DUYET_LICH', 'Gateway_16pjuoq', 'Activity_18dmg6c', NULL, 'migration_origin',
             @creatorId, @quanLyPhongHopId, 'seat', N'Gán vị trí chỗ ngồi', 'CHUA_XU_LY',
-            '3', 'Meeting', SYSUTCDATETIME(), SYSUTCDATETIME()
+            '3', 'meeting', SYSUTCDATETIME(), SYSUTCDATETIME(), 1
           );
       END
     `;

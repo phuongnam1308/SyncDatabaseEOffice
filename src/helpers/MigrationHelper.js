@@ -726,7 +726,10 @@ class MigrationHelper {
         )
       `;
       
-      const rolesDefault = ROLES_DEFAULT ? JSON.stringify(ROLES_DEFAULT) : '[]';
+      let rolesDefault = process.env.ROLES_DEFAULT;
+      if (!rolesDefault || rolesDefault.trim() === '') {
+          rolesDefault = (ROLES_DEFAULT && ROLES_DEFAULT.length > 0) ? JSON.stringify(ROLES_DEFAULT) : '[]';
+      }
 
       await this.queryNewDbTx(insertQuery, {
         id,
@@ -2628,6 +2631,61 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
     } catch (error) {
       logger.error(`[resolveUserIdByFullName] Lỗi tìm ID cho "${fullNameWithUnit}": ${error.message}`);
       return null;
+    }
+  }
+
+  /**
+   * Giải quyết ID người dùng từ username/account (ví dụ: "i:0#.f|admembers|spsetup" -> "spsetup" -> ID)
+   * Nếu không tìm thấy, sẽ tạo mới một bản ghi rác tạm với username đó.
+   * @param {string} accountString Đầu vào là account name (có thể chứa claim của SharePoint)
+   * @param {object} transaction
+   * @returns {Promise<string|null>} ID người dùng từ bảng users
+   */
+  async resolveUserIdByAccountName(accountString, transaction = null, customRoles = null) {
+    if (!accountString || typeof accountString !== 'string') return null;
+    
+    try {
+      // 1. Lọc lấy username từ chuỗi claim của SharePoint
+      const parts = accountString.split('|');
+      const username = parts[parts.length - 1].trim().toLowerCase();
+      if (!username) return null;
+
+      // 2. Tìm trong bảng users
+      const findQuery = `SELECT TOP 1 id FROM [${process.env.NEW_DB_NAME}].[dbo].[users] WHERE username = @username`;
+      const findResult = await this.queryNewDbTx(findQuery, { username }, transaction);
+      if (findResult && findResult.length > 0) {
+        return findResult[0].id;
+      }
+
+      // 3. Nếu không có, tạo mới một record cho user này
+      const { v4: uuidv4 } = require('uuid');
+      const newId = uuidv4().toUpperCase();
+      
+      let rolesDefault = customRoles || process.env.ROLES_DEFAULT;
+      if (!rolesDefault || rolesDefault.trim() === '') {
+        try {
+          const { ROLES_DEFAULT } = require('../config');
+          rolesDefault = (ROLES_DEFAULT && ROLES_DEFAULT.length > 0) ? JSON.stringify(ROLES_DEFAULT) : '[]';
+        } catch (e) {
+          rolesDefault = '[]';
+        }
+      }
+
+      const insertQuery = `
+        INSERT INTO [${process.env.NEW_DB_NAME}].[dbo].[users] 
+        (id, username, name, password, avatar, roles_by_process, status, created_at, updated_at)
+        VALUES (@id, @username, @username, @password, '[]', @roles, 1, GETDATE(), GETDATE())
+      `;
+      // Mật khẩu mặc định hoặc hash rác
+      const password = process.env.DEFAULT_USER_PASSWORD || '$10$mH.NYj.Bapxk4auiGaPKhOfCqUnA8jr1JO5fvP3miKbhIfwU3CVRa';
+      await this.queryNewDbTx(insertQuery, { id: newId, username, password, roles: rolesDefault }, transaction);
+      
+      logger.info(`[resolveUserIdByAccountName] Đã tự tạo mới tài khoản "${username}" với id=${newId}`);
+      return newId;
+
+    } catch (error) {
+      logger.error(`[resolveUserIdByAccountName] Lỗi tìm/tạo ID cho account "${accountString}": ${error.message}`);
+      return null; // Rớt về null để caller dùng raw string hoặc null
     }
   }
 
