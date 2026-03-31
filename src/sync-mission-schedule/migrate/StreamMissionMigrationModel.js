@@ -355,15 +355,20 @@ class StreamMissionMigrationModel extends BaseIncrementalSyncInterface {
             ud.[tp_ID] AS __sync_id_num
 
         FROM [${this.oldDbName}].[dbo].[AllUserData] ud
-        INNER JOIN [${this.oldDbName}].[dbo].[AllLists] l
+        LEFT JOIN [${this.oldDbName}].[dbo].[AllLists] l
             ON ud.[tp_ListId] = l.[tp_ID]
-        ${cols.hasUserInfo ? `LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_author ON ud.[tp_Author] = ui_author.[tp_ID]` : ''}
-        ${cols.hasUserInfo ? `LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_editor ON ud.[tp_Editor] = ui_editor.[tp_ID]` : ''}
-        LEFT JOIN [DataEOfficeSNP].[SNP].[CodeItem] ci ON ud.[tp_ID] = ci.[SPItemId]
+        ${cols.hasUserInfo ? `OUTER APPLY (SELECT TOP 1 * FROM [${this.oldUserDb}].[dbo].[UserInfo] uia WHERE ud.[tp_Author] = uia.[tp_ID]) ui_author` : ''}
+        ${cols.hasUserInfo ? `OUTER APPLY (SELECT TOP 1 * FROM [${this.oldUserDb}].[dbo].[UserInfo] uie WHERE ud.[tp_Editor] = uie.[tp_ID]) ui_editor` : ''}
+        OUTER APPLY (
+            SELECT TOP 1 * 
+            FROM [DataEOfficeSNP].[SNP].[CodeItem] ci2 
+            WHERE ci2.[SPItemId] = ud.[tp_ID] 
+            ORDER BY ci2.[ID] DESC
+        ) ci
 
         WHERE ud.[tp_ListId] IN (${listIdsStr})
-        AND ud.[tp_IsCurrent] = 1
-        AND ud.[tp_DeleteTransactionId] = 0x0
+        AND ud.tp_RowOrdinal = 0
+        AND ud.[tp_IsCurrentVersion] = 1
         AND (
             ud.[tp_Modified] > @lastSyncTime
             OR (
@@ -371,7 +376,7 @@ class StreamMissionMigrationModel extends BaseIncrementalSyncInterface {
                 AND ud.[tp_ID] > @lastSyncId
             )
         )
-        ORDER BY ud.[tp_Modified] DESC, ud.[tp_ID] DESC
+        ORDER BY ud.[tp_Modified] ASC, ud.[tp_ID] ASC
         OFFSET ${beginLimit} ROWS FETCH NEXT ${completedLimit} ROWS ONLY;
     `;
 
@@ -470,12 +475,12 @@ class StreamMissionMigrationModel extends BaseIncrementalSyncInterface {
         SELECT TOP 1
             ${select.join(',\n            ')}
         FROM [${this.oldDbName}].[dbo].[AllUserData] ud
-        ${cols.hasUserInfo ? `LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_author ON ud.[tp_Author] = ui_author.[tp_ID]` : ''}
+        ${cols.hasUserInfo ? `OUTER APPLY (SELECT TOP 1 * FROM [${this.oldUserDb}].[dbo].[UserInfo] uia WHERE ud.[tp_Author] = uia.[tp_ID]) ui_author` : ''}
         WHERE ud.[tp_ListId] IN (${listIdsStr})
         AND ud.tp_RowOrdinal = 0
         AND ud.[tp_IsCurrentVersion] = 1
         AND (ud.[tp_Modified] > @lastSyncTime OR (ud.[tp_Modified] = @lastSyncTime AND ud.[tp_ID] > @lastSyncId))
-        ORDER BY ud.[tp_Modified] DESC, ud.[tp_ID] DESC
+        ORDER BY ud.[tp_Modified] ASC, ud.[tp_ID] ASC
     `;
     const rows = await this.queryOldDb(query, { lastSyncTime, lastSyncId });
     return rows?.[0] || null;
@@ -519,8 +524,14 @@ class StreamMissionMigrationModel extends BaseIncrementalSyncInterface {
 
     // Mapping Người tạo (Created by)
     if (rowData.AuthorAccount) {
-      console.log(`[StreamMissionMigrationModel] Mapping Author (resolveUserIdByFullName): ${rowData.AuthorAccount}`);
-      const authorId = await this.helper.resolveUserIdByFullName(rowData.AuthorAccount, transaction);
+      console.log(`[StreamMissionMigrationModel] Mapping Author (resolveUserIdByAccountName): ${rowData.AuthorAccount}`);
+      const missionDefaultRole = JSON.stringify([
+        {"processKey":"QUY_TRINH_LICH_HOP","name":"QUY_TRINH_LICH_HOP","roles":[{"roleCode":"BAN_QUAN_LY_PHONG_HOP","name":"BAN_QUAN_LY_PHONG_HOP"},{"roleCode":"ADMIN","name":"ADMIN"}]},
+        {"processKey":"QUY_TRINH_PHONG_HOP","name":"QUY_TRINH_PHONG_HOP","roles":[{"roleCode":"BAN_QUAN_LY_PHONG_HOP","name":"BAN_QUAN_LY_PHONG_HOP"}]},
+        {"processKey":"LICH_TRUC_BAN_LANH_DAO","name":"LICH_TRUC_BAN_LANH_DAO","roles":[{"roleCode":"LANH_DAO","name":"LANH_DAO"}]},
+        {"processKey":"dashboardPage","name":"dashboardPage","roles":[{"roleCode":"VT","name":"VT"}]}
+      ]);
+      const authorId = await this.helper.resolveUserIdByAccountName(rowData.AuthorAccount, transaction, missionDefaultRole);
       if (authorId) rowData.AuthorAccount = authorId;
       console.log(`[StreamMissionMigrationModel] Mapped Author to: ${rowData.AuthorAccount}`);
     }

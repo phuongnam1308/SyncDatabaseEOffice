@@ -211,7 +211,7 @@ class StreamUserMigrationService {
       address_user: this.safeString(oldRecord.Address),
       description: null,
       role: null,
-      roles_by_process:
+      roles_by_process: process.env.ROLES_DEFAULT ||
         '[{"processKey":"PHUC_DAP_DV","name":"PHUC_DAP_DV","roles":[{"roleCode":"LANH_DAO_TCT","name":"LANH_DAO_TCT"}]},{"processKey":"KY_SO_HS_VBD","name":"KY_SO_HS_VBD","roles":[{"roleCode":"NGUOI_KY_PHE_DUYET","name":"NGUOI_KY_PHE_DUYET"}]},{"processKey":"SOANTHAO_PHATHANH_VBD","name":"SOANTHAO_PHATHANH_VBD","roles":[{"roleCode":"NGUOI_KY_NOI_DUNG","name":"NGUOI_KY_NOI_DUNG"}]}]', // Roles mới
       organization_name: null,
       organization_code: null,

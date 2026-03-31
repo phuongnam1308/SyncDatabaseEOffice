@@ -354,15 +354,20 @@ class StreamEventMigrationModel extends BaseIncrementalSyncInterface {
             ud.[tp_ID] AS __sync_id_num
 
         FROM [${this.oldDbName}].[dbo].[AllUserData] ud
-        INNER JOIN [${this.oldDbName}].[dbo].[AllLists] l
+        LEFT JOIN [${this.oldDbName}].[dbo].[AllLists] l
             ON ud.[tp_ListId] = l.[tp_ID]
-        ${cols.hasUserInfo ? `LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_author ON ud.[tp_Author] = ui_author.[tp_ID]` : ''}
-        ${cols.hasUserInfo ? `LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_editor ON ud.[tp_Editor] = ui_editor.[tp_ID]` : ''}
-        LEFT JOIN [DataEOfficeSNP].[SNP].[CodeItem] ci ON ud.[tp_ID] = ci.[SPItemId]
+        ${cols.hasUserInfo ? `OUTER APPLY (SELECT TOP 1 * FROM [${this.oldUserDb}].[dbo].[UserInfo] uia WHERE ud.[tp_Author] = uia.[tp_ID]) ui_author` : ''}
+        ${cols.hasUserInfo ? `OUTER APPLY (SELECT TOP 1 * FROM [${this.oldUserDb}].[dbo].[UserInfo] uie WHERE ud.[tp_Editor] = uie.[tp_ID]) ui_editor` : ''}
+        OUTER APPLY (
+            SELECT TOP 1 * 
+            FROM [DataEOfficeSNP].[SNP].[CodeItem] ci2 
+            WHERE ci2.[SPItemId] = ud.[tp_ID] 
+            ORDER BY ci2.[ID] DESC
+        ) ci
 
         WHERE ud.[tp_ListId] IN (${listIdsStr})
-        AND ud.[tp_IsCurrent] = 1
-        AND ud.[tp_DeleteTransactionId] = 0x0
+        AND ud.tp_RowOrdinal = 0
+        AND ud.[tp_IsCurrentVersion] = 1
         AND (
             ud.[tp_Modified] > @lastSyncTime
             OR (
@@ -512,12 +517,23 @@ class StreamEventMigrationModel extends BaseIncrementalSyncInterface {
     const recordId = String(rowData.ID);
     const { externalKey } = this.oldConfig;
 
+    console.log(`\n\n[StreamEventMigrationModel] ----------------- START PROCESSING RECORD ID: ${recordId} -----------------`);
+    console.log(`[StreamEventMigrationModel] RAW ROW DATA FROM OLD DB:`);
+    console.log(JSON.stringify(rowData, null, 2));
+
     if (rowData.AuthorAccount) {
-      const authorId = await this.helper.resolveUserIdByFullName(rowData.AuthorAccount, transaction);
-      if (authorId) rowData.AuthorAccount = authorId;
+      console.log(`[StreamEventMigrationModel] Resolving AuthorAccount: ${rowData.AuthorAccount}`);
+      const authorId = await this.helper.mapUserName(rowData.AuthorAccount, transaction);
+      if (authorId) {
+          rowData.AuthorAccount = authorId;
+          console.log(`[StreamEventMigrationModel] Resolved AuthorAccount to New UUID: ${authorId}`);
+      } else {
+          console.log(`[StreamEventMigrationModel] Cannot resolve AuthorAccount. Kept as: ${rowData.AuthorAccount}`);
+      }
     }
 
     const result = await this.upsertDataToNewDB(rowData, this.oldConfig, externalKey, recordId, transaction);
+    console.log(`[StreamEventMigrationModel] ----------------- END PROCESSING RECORD ID: ${recordId} -----------------\n\n`);
     return { backupId: recordId, affected: result.affected, logs: [{ table: this.oldConfig.newTable, action: result.action }] };
   }
 
@@ -534,38 +550,63 @@ class StreamEventMigrationModel extends BaseIncrementalSyncInterface {
     const { v4: uuidv4 } = require('uuid');
     const existingCols = await this.getExistingColumns(newTable, newSchema);
 
+    console.log(`[StreamEventMigrationModel] Initiating Upsert for Table: ${newTable}`);
+
     const params = {};
     const insertCols = [];
     const insertVals = [];
     const updateSet = [];
 
-    if (existingCols.has('id') && !params.hasOwnProperty('id')) {
-        const hasIdInMapping = Object.values(fieldMapping).some(v => v.toLowerCase() === 'id') ||
-                              Object.keys(defaultValues || {}).some(v => v.toLowerCase() === 'id');
-        if (!hasIdInMapping) {
-            params['id'] = uuidv4().toUpperCase();
-            insertCols.push('[id]'); insertVals.push('@id');
+    // Track columns (case-insensitive) to prevent duplicates in query
+    const handledCols = new Set();
+    const normalize = (val) => val.toLowerCase();
+
+    // 1. Generate UUID for ID if table has 'id' column and it's not provided
+    const idKey = 'id';
+    if (existingCols.has(idKey)) {
+        const hasIdInMapping = Object.values(fieldMapping).some(v => normalize(v) === idKey) ||
+                              Object.keys(defaultValues || {}).some(v => normalize(v) === idKey);
+        const isInt = (existingCols.get(idKey) || '').includes('int');
+        if (!hasIdInMapping && !isInt) {
+            params[idKey] = uuidv4().toUpperCase();
+            insertCols.push(`[${idKey}]`); insertVals.push(`@${idKey}`);
+            handledCols.add(idKey);
         }
     }
 
-    for (const [oldField, newField] of Object.entries(fieldMapping)) {
-      if (!existingCols.has(newField.toLowerCase())) continue;
+    // 2. Process fieldMapping
+    for (const [oldField, newFieldRaw] of Object.entries(fieldMapping)) {
+      const newField = normalize(newFieldRaw);
+      if (!existingCols.has(newField) || handledCols.has(newField)) continue;
+
       const value = rawData[oldField];
       if (value === undefined || value === null) continue;
+
       params[newField] = value;
       insertCols.push(`[${newField}]`); insertVals.push(`@${newField}`);
-      if (newField.toLowerCase() !== 'id' && newField.toLowerCase() !== 'created_at') updateSet.push(`[${newField}] = @${newField}`);
+      if (newField !== 'id' && newField !== 'created_at' && newField !== 'createdat') {
+          updateSet.push(`[${newField}] = @${newField}`);
+      }
+      handledCols.add(newField);
     }
 
-    for (const [newField, valueFn] of Object.entries(defaultValues || {})) {
-      if (!existingCols.has(newField.toLowerCase()) || params.hasOwnProperty(newField)) continue;
+    // 3. Process defaultValues
+    for (const [newFieldRaw, valueFn] of Object.entries(defaultValues || {})) {
+      const newField = normalize(newFieldRaw);
+      if (!existingCols.has(newField) || handledCols.has(newField)) continue;
+
       params[newField] = typeof valueFn === 'function' ? valueFn(rawData) : valueFn;
       insertCols.push(`[${newField}]`); insertVals.push(`@${newField}`);
-      if (newField.toLowerCase() !== 'id' && newField.toLowerCase() !== 'created_at') updateSet.push(`[${newField}] = @${newField}`);
+      if (newField !== 'id' && newField !== 'created_at' && newField !== 'createdat') {
+          updateSet.push(`[${newField}] = @${newField}`);
+      }
+      handledCols.add(newField);
     }
 
+    // 4. Fallback for other existing database columns
     for (const [col, type] of existingCols.entries()) {
-      if (!params.hasOwnProperty(col)) {
+      if (!handledCols.has(col)) {
+        if (col === 'id') continue; // Prevent IDENTITY_INSERT error
         let fallback = null;
         if (type.includes('char') || type.includes('text')) fallback = 'Chưa xác định';
         else if (type.includes('int') || type.includes('decimal')) fallback = 0;
@@ -575,10 +616,16 @@ class StreamEventMigrationModel extends BaseIncrementalSyncInterface {
         if (fallback !== null) {
           params[col] = fallback;
           insertCols.push(`[${col}]`); insertVals.push(`@${col}`);
-          if (col.toLowerCase() !== 'id' && col.toLowerCase() !== 'created_at') updateSet.push(`[${col}] = @${col}`);
+          if (col !== 'id' && col !== 'created_at' && col !== 'createdat') {
+              updateSet.push(`[${col}] = @${col}`);
+          }
+          handledCols.add(col);
         }
       }
     }
+
+    console.log(`[StreamEventMigrationModel] FINAL MAPPED PARAMS FOR SQL:`);
+    console.log(JSON.stringify(params, null, 2));
 
     params._externalKeyValue = externalKeyValue;
     const tableRef = `[${this.newDbName}].[${newSchema}].[${newTable}]`;
@@ -597,8 +644,11 @@ class StreamEventMigrationModel extends BaseIncrementalSyncInterface {
           SELECT (SELECT TOP 1 id FROM @OutputTable) AS id, @@ROWCOUNT AS affected, 'inserted' AS action;
       END
     `;
+
+    console.log(`[StreamEventMigrationModel] EXECUTING SQL QUERY...`);
     const result = await this.queryNewDbTx(query, params, transaction);
     const row = Array.isArray(result) ? result[0] : result;
+    console.log(`[StreamEventMigrationModel] SQL EXECUTED. Action: ${row?.action}, Affected: ${row?.affected}`);
     return { id: row?.id || null, action: row?.action || 'none', affected: Number(row?.affected || 0) };
   }
 }

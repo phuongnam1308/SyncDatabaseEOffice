@@ -619,7 +619,7 @@ class StreamTgdScheduleMigrationModel extends BaseIncrementalSyncInterface {
 
     if (rowData.AuthorAccount) {
       console.log(`[StreamTgdScheduleMigrationModel] Mapping Author: ${rowData.AuthorAccount}`);
-      const authorId = await this.helper.resolveUserIdByFullName(rowData.AuthorAccount, transaction);
+      const authorId = await this.helper.resolveUserIdByAccountName(rowData.AuthorAccount, transaction);
       if (authorId) rowData.AuthorAccount = authorId;
     }
 

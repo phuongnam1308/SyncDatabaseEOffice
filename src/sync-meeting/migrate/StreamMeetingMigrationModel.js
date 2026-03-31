@@ -492,7 +492,8 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
         curStatusCode,
         type_document,
         created_at,
-        updated_at
+        updated_at,
+        table_bak
       )
       VALUES
       (
@@ -512,9 +513,10 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
         N'Tạo văn bản',
         'DA_XU_LY',
         '1',
-        'Meeting',
+        'meeting',
         SYSUTCDATETIME(),
-        SYSUTCDATETIME()
+        SYSUTCDATETIME(),
+        1
       ),
       (
         @meetingId,
@@ -533,9 +535,10 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
         N'Chuyển Ban quản lý phòng',
         'DONG_Y_PHE_DUYET',
         '2',
-        'Meeting',
+        'meeting',
         SYSUTCDATETIME(),
-        SYSUTCDATETIME()
+        SYSUTCDATETIME(),
+        1
       ),
       (
         @meetingId,
@@ -554,9 +557,10 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
         N'Gán vị trí chỗ ngồi',
         'CHUA_XU_LY',
         '3',
-        'Meeting',
+        'meeting',
         SYSUTCDATETIME(),
-        SYSUTCDATETIME()
+        SYSUTCDATETIME(),
+        1
       )
     `;
     console.log('[StreamMeetingMigrationModel] createDefaultAuditForMigration', { meetingId });
