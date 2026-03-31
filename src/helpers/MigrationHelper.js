@@ -59,7 +59,15 @@ class MigrationHelper {
   safeString(value) {
     if (value == null) return null;
     const str = String(value).trim();
-    return str === "" ? null : str;
+    if (str === "" || str.toUpperCase() === "NULL") return null;
+    return str;
+  }
+
+  mapBit(value) {
+    if (value == null) return 0;
+    const s = String(value).trim();
+    if (s === "1" || s.toLowerCase() === "true") return 1;
+    return 0;
   }
 
   cleanText(text) {
@@ -320,9 +328,9 @@ class MigrationHelper {
       const normalized = this.normalizeText(value);
       if (!normalized) return null;
 
-      const sourceId = await this.getSourceId("S22");
+      const sourceId = await this.getSourceId("S19");
       if (!sourceId) {
-        logger.warn("[processDocumentField] Không tìm thấy source_id cho S22");
+        logger.warn("[processDocumentField] Không tìm thấy source_id cho S19");
         return normalized;
       }
 
@@ -2090,6 +2098,7 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
       }
     }
   }
+
   parseActionString(create_by, value) {
     try {
       if (!value || typeof value !== 'string') {
@@ -2514,12 +2523,14 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
     try {
       const dbName = process.env.NEW_DB_NAME;
       await this.queryNewDbTx(`
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'document_comments' AND COLUMN_NAME = 'tb_bak')
-            ALTER TABLE ${dbName}.dbo.document_comments ADD tb_bak INT DEFAULT 0;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'document_comments' AND COLUMN_NAME = 'table_bak')
+            ALTER TABLE ${dbName}.dbo.document_comments ADD table_bak NVARCHAR(255) NULL;
         IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'document_comments' AND COLUMN_NAME = 'user_id_bak')
             ALTER TABLE ${dbName}.dbo.document_comments ADD user_id_bak NVARCHAR(255) NULL;
         IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'document_comments' AND COLUMN_NAME = 'parent_id_bak')
             ALTER TABLE ${dbName}.dbo.document_comments ADD parent_id_bak NVARCHAR(255) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'document_comments' AND COLUMN_NAME = 'id_comments_bak')
+            ALTER TABLE ${dbName}.dbo.document_comments ADD id_comments_bak NVARCHAR(255) NULL;
       `, {}, transaction);
     } catch (err) {
       logger.warn(`[parseAndInsertHtmlComments] Khoi tao tb_bak loi: ${err.message}`);
@@ -2550,24 +2561,19 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
 
       const cleanName = this.extractDisplayName(userNameExtracted) || userNameExtracted;
       const userId = await this.mapUserName(cleanName, transaction);
-      const { v4: uuidv4 } = require("uuid");
-      const commentId = uuidv4();
+      const commentId = Date.now() * 1000 + Math.floor(Math.random() * 1000);
 
       const formattedContent = columnName ? `${columnName} : ${contentRaw}` : contentRaw;
 
-      const insertQuery = `
+        const insertQuery = `
         INSERT INTO ${process.env.NEW_DB_NAME}.dbo.document_comments (
           id, document_id, parent_id, user_id, user_name, content, [type],
           is_edited, created_at, updated_at, fileId, likes, is_leader_suggestion,
-          id_comments_bak, ItemTitle, ItemUrl, ItemImage, DocumentID_bak,
-          Category, Type_bak, Email, Author, CommentID, EmailReplyTo, ReplyTo,
-          Files, LikeNumber, table_bak, parent_id_bak, user_id_bak, org_id, tb_bak
+          org_id, id_comments_bak, table_bak, parent_id_bak, user_id_bak
         ) VALUES (
           @id, @docId, NULL, @userId, @userName, @content, 1,
           0, @createdAt, @createdAt, NULL, NULL, 1,
-          NULL, NULL, NULL, NULL, @docBak,
-          NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-          NULL, NULL, @tableBak, NULL, NULL, NULL, 1
+          NULL, NULL, @tableBak, NULL, NULL
         )
       `;
 
@@ -2579,7 +2585,6 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
           userName: cleanName || null,
           content: formattedContent || '',
           createdAt: createdAt,
-          docBak: String(oldDocumentId),
           tableBak: String(oldTableName)
         }, transaction);
         count++;

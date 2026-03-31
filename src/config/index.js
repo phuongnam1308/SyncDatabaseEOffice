@@ -1,25 +1,25 @@
-const path = require('path');
-const fs = require('fs');
-
-const configPath = path.join(__dirname, 'sync_config.json');
-const syncConfigRaw = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+const keywordsTable = require('./keywords');
+const permissionsTable = require('./permissions');
+const settings = require('./settings');
+const workflowIncoming = require('./workflows/incoming');
+const workflowOutgoing = require('./workflows/outgoing');
 
 // Helper to get keywords
-const getKeywords = (roleKey) => syncConfigRaw.roles[roleKey]?.keywords || [];
+const getKeywords = (roleKey) => keywordsTable[roleKey]?.keywords || [];
 
 // Constants & Mappings
 const ROLE_MAPPINGS = {
   ADMIN: {
     KEYWORDS: getKeywords('ADMIN') || ["admin", "quản trị viên"],
-    ROLES:    syncConfigRaw.process_mappings.ADMIN.ROLES
+    ROLES:    permissionsTable.ADMIN?.ROLES || []
   },
   GIAM_DOC: {
     KEYWORDS: getKeywords('GIAM_DOC'),
-    ROLES:    syncConfigRaw.process_mappings.GIAM_DOC.ROLES
+    ROLES:    permissionsTable.GIAM_DOC?.ROLES || []
   },
   PHO_GIAM_DOC: {
     KEYWORDS: getKeywords('PHO_GIAM_DOC'),
-    ROLES:    syncConfigRaw.process_mappings.PHO_GIAM_DOC.ROLES
+    ROLES:    permissionsTable.PHO_GIAM_DOC?.ROLES || []
   },
   CHANH_VAN_PHONG: {
     KEYWORDS: getKeywords('CHANH_VAN_PHONG'),
@@ -27,27 +27,27 @@ const ROLE_MAPPINGS = {
   },
   TRUONG_PHONG: {
     KEYWORDS: getKeywords('TRUONG_PHONG'),
-    ROLES:    syncConfigRaw.process_mappings.TRUONG_PHONG.ROLES
+    ROLES:    permissionsTable.TRUONG_PHONG?.ROLES || []
   },
   PHO_TRUONG_PHONG: {
     KEYWORDS: getKeywords('PHO_TRUONG_PHONG'),
-    ROLES:    syncConfigRaw.process_mappings.PHO_TRUONG_PHONG.ROLES
+    ROLES:    permissionsTable.PHO_TRUONG_PHONG?.ROLES || []
   },
   VAN_THU_CUC: {
     KEYWORDS: getKeywords('VAN_THU_CUC') || ["văn thư cục"],
-    ROLES:    syncConfigRaw.process_mappings.VAN_THU_CUC.ROLES
+    ROLES:    permissionsTable.VAN_THU_CUC?.ROLES || []
   },
   VAN_THU: {
     KEYWORDS: getKeywords('VANTHU'),
-    ROLES:    syncConfigRaw.process_mappings.VAN_THU.ROLES
+    ROLES:    permissionsTable.VAN_THU?.ROLES || []
   },
   NHAN_VIEN: {
     KEYWORDS: getKeywords('NHAN_VIEN'),
-    ROLES:    syncConfigRaw.process_mappings.NHAN_VIEN.ROLES
+    ROLES:    permissionsTable.NHAN_VIEN?.ROLES || []
   }
 };
 
-const OUTGOING_SYNC_CONFIG = syncConfigRaw.settings;
+const OUTGOING_SYNC_CONFIG = settings;
 
 /**
  * Gets the workflow configuration for a specific document type.
@@ -57,7 +57,7 @@ const OUTGOING_SYNC_CONFIG = syncConfigRaw.settings;
  * @returns {object} { WORKFLOW_PROCESS_CONFIG, DEFAULT_WORKFLOW_PROCESS }
  */
 const getWorkflowConfig = (docType = 'outgoing') => {
-  const workflowGroup = syncConfigRaw.workflow_config[docType] || syncConfigRaw.workflow_config.outgoing;
+  const workflowGroup = docType === 'incoming' ? workflowIncoming : workflowOutgoing;
 
   const workflow_process = (workflowGroup.workflow_process || []).map(p => {
     // Map normalized role names to their definitions
@@ -65,16 +65,20 @@ const getWorkflowConfig = (docType = 'outgoing') => {
       "VANTHU": "VANTHU",
       "Giám đốc": "GIAM_DOC",
       "Chánh văn phòng": "CHANH_VAN_PHONG",
+      "Phó chánh văn phòng": "PHO_CHANH_VAN_PHONG",
       "Phó giám đốc": "PHO_GIAM_DOC",
       "Trưởng phòng": "TRUONG_PHONG",
       "Phó trưởng phòng": "PHO_TRUONG_PHONG",
       "Cán bộ": "NHAN_VIEN"
     };
+
+    // Use a copy to avoid mutating the original exported objects
+    const processCopy = { ...p };
     const key = roleKeyMap[p.role];
     if (key) {
-      p.keywords = getKeywords(key);
+      processCopy.keywords = getKeywords(key);
     }
-    return p;
+    return processCopy;
   });
 
   return {
@@ -99,6 +103,7 @@ module.exports = {
   COMPLETED_LIMIT:    OUTGOING_SYNC_CONFIG.COMPLETED_LIMIT,
 
   ...OUTGOING_SYNC_CONFIG.STATUS_TABS,
+
 
   // Provide a function to load the correct workflow config based on document type
   getWorkflowConfig,

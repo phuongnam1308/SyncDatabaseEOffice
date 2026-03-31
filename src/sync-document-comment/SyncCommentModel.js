@@ -79,20 +79,23 @@ class StreamCommentMigrationModel extends BaseModel {
     const userId = await this.helper.mapUserName(record.Author, transaction);
     const userName = this.helper.extractDisplayName(record.Author);
 
-    const id = Date.now();
-
+    const id = Date.now() * 1000 + Math.floor(Math.random() * 1000);
     return {
       id,
       document_id: documentId || null,
+      parent_id: null,
       user_id: userId || null,
       user_name: userName,
       content: record.Content || "",
       type: record.Type ? String(record.Type) : null,
+      is_edited: 0,
       created_at: this.helper.parseDate(record.Created),
-      file_id: record.Files || null,
+      fileId: record.Files || null,
       likes: record.LikeNumber ? String(record.LikeNumber) : null,
+      is_leader_suggestion: 0,
+      org_id: null,
       id_comments_bak: String(record.ID),
-      table_backup: this.oldDbTable,
+      table_bak: this.oldDbTable,
     };
   }
 
@@ -106,7 +109,7 @@ class StreamCommentMigrationModel extends BaseModel {
         AND table_bak = @table`,
       {
         bak: mapped.id_comments_bak,
-        table: mapped.table_backup,
+        table: mapped.table_bak,
       },
       transaction
     );
@@ -117,13 +120,13 @@ class StreamCommentMigrationModel extends BaseModel {
   async _insert(data, transaction) {
     const query = `
       INSERT INTO ${process.env.NEW_DB_NAME}.dbo.document_comments (
-        id, document_id, user_id, user_name, content, [type],
-        created_at, updated_at, file_id, likes,
-        id_comments_bak, table_bak
+        id, document_id, parent_id, user_id, user_name, content, [type],
+        is_edited, created_at, updated_at, fileId, likes, is_leader_suggestion,
+        org_id, id_comments_bak, table_bak
       ) VALUES (
-        @id, @documentId, @userId, @userName, @content, @type,
-        @createdAt, GETDATE(), @fileId, @likes,
-        @idCommentsBak, @tableBackup
+        @id, @documentId, NULL, @userId, @userName, @content, @type,
+        @isEdited, @createdAt, GETDATE(), @fileId, @likes, @isLeaderSuggestion,
+        @orgId, @idCommentsBak, @tableBak
       )
     `;
     await this.queryNewDbTx(query, {
@@ -133,11 +136,14 @@ class StreamCommentMigrationModel extends BaseModel {
       userName: data.user_name,
       content: data.content,
       type: data.type,
+      isEdited: data.is_edited,
       createdAt: data.created_at,
-      fileId: data.file_id,
+      fileId: data.fileId,
       likes: data.likes,
+      isLeaderSuggestion: data.is_leader_suggestion,
+      orgId: data.org_id,
       idCommentsBak: data.id_comments_bak,
-      tableBackup: data.table_backup,
+      tableBak: data.table_bak,
     }, transaction);
   }
 
@@ -150,10 +156,10 @@ class StreamCommentMigrationModel extends BaseModel {
         user_name = @userName,
         content = @content,
         [type] = @type,
-        file_id = @fileId,
+        fileId = @fileId,
         likes = @likes,
         updated_at = GETDATE()
-      WHERE id_comments_bak = @idCommentsBak AND table_bak = @tableBackup
+      WHERE id_comments_bak = @idCommentsBak AND table_bak = @tableBak
     `;
     await this.queryNewDbTx(query, {
       documentId: data.document_id,
@@ -161,10 +167,10 @@ class StreamCommentMigrationModel extends BaseModel {
       userName: data.user_name,
       content: data.content,
       type: data.type,
-      fileId: data.file_id,
+      fileId: data.fileId,
       likes: data.likes,
       idCommentsBak: data.id_comments_bak,
-      tableBackup: data.table_backup,
+      tableBak: data.table_bak,
     }, transaction);
   }
 }

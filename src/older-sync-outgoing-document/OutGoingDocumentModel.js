@@ -121,7 +121,7 @@ class OutGoingDocumentModel extends BaseModel {
 
     // ── Bảng trung gian (temp) — cùng cột, tên khác ──────────
     this.newDbSchema = 'dbo';
-    this.tempTable   = 'outgoing_documents_temp';          // bảng tạm trong NEW DB
+    this.tempTable   = 'outgoing_documents_sync';          // bảng tạm trong NEW DB
 
     // ── Bảng sync cuối cùng của document ─────────────────────
     this.syncTable   = 'outgoing_documents_sync';
