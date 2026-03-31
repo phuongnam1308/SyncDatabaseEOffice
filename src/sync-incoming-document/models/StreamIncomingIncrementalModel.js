@@ -989,7 +989,7 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
         try {
           const auditTableNames = auditModels.map(m => m.oldDbTable);
           const firstModel = auditModels[0];
-          
+
           // Lấy tất cả audit từ tất cả các bảng, đã được sắp xếp chronologically bên trong method này
           const allRawAudits = await firstModel.fetchAllAuditsAcrossTables(
             id,
@@ -1009,11 +1009,11 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
             for (const rawAudit of allRawAudits) {
               const tableName = rawAudit.__source_table;
               const model = modelMap.get(tableName) || firstModel;
-              
+
               try {
                 const result = await model.processSingleRecord(rawAudit, documentId, transaction);
                 if (!result) continue;
-                
+
                 logger.info(
                   `[AggregateSync][Audit] table=${tableName} documentId=${documentId} inserted=${result?.inserted || 0} updated=${result?.updated || 0}`
                 );

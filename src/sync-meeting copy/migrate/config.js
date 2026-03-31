@@ -1,4 +1,6 @@
 const { v4: uuidv4 } = require('uuid');
+const statusMapping = require('./status_mapping.json');
+const mapping = require('./mapping.json');
 
 /* ===================== UTIL ===================== */
 
@@ -22,27 +24,46 @@ const formatTimeRange = (start, end) => {
 };
 
 const buildEndedAt = (r) => {
-  const ended = parseDate(r?.EndDate || r?.KetThuc);
+  const ended = parseDate(r?.EndDate);
   if (ended) return ended;
 
-  const started = parseDate(r?.StartDate || r?.BatDau);
+  const started = parseDate(r?.StartDate);
   const duration = Number(r?.ThoiLuongGiay || 0);
 
   if (started && duration > 0) {
     return new Date(started.getTime() + duration * 1000);
   }
 
-  return null;
+  return started || new Date();
 };
 
 const buildMeetingState = (r) => {
   const now = new Date();
-  const started = parseDate(r?.StartDate || r?.BatDau);
+  const started = parseDate(r?.StartDate);
   const ended = buildEndedAt(r);
 
   if (ended && ended < now) return 'KET_THUC';
-  if (started && started <= now) return 'DU_KIEN';
   return 'DU_KIEN';
+};
+
+const mapStatusToStatusCode = (statusStr) => {
+  const defaultCode = statusMapping.DEFAULT_STATUS_CODE || 2;
+  if (!statusStr) return defaultCode;
+
+  const s = statusStr.trim();
+
+  // 1. Kiểm tra nhóm Approved (Phê duyệt/Phát hành)
+  if (statusMapping.APPROVED.includes(s)) return 3;
+
+  // 2. Kiểm tra nhóm Deleted
+  if (statusMapping.DELETED.includes(s)) return 0;
+
+  // 3. Kiểm tra các Keyword xử lý
+  const isProcessing = statusMapping.PROCESSING_KEYWORDS.some(kw => s.includes(kw));
+  if (isProcessing) return 2;
+
+  // 4. Mặc định theo cấu hình
+  return defaultCode;
 };
 
 /* ===================== TABLE MAPPING ===================== */
@@ -50,46 +71,32 @@ const buildMeetingState = (r) => {
 const tableMappings = {
   meeting: {
     /* ================= OLD DB ================= */
-    oldTable: 'AllUserData',
-    oldSchema: 'dbo',
-    oldDatabase: process.env.SHAREPOINT_DB_NAME || 'WSS_Content_eoffice_khkd',
-    oldUserDatabase: 'WSS_Content_eoffice',
+    oldTable: mapping.oldTable || 'AllUserData',
+    oldSchema: mapping.oldSchema || 'dbo',
+    oldDatabase: process.env.SHAREPOINT_DB_NAME || mapping.oldDatabase,
+    oldUserDatabase: mapping.oldUserDatabase || 'WSS_Content_eoffice',
 
-    listIds: [
-        'A769253C-E2D8-4188-AEF5-8841D04F42AE',  // Lich2014
-        'B0F4D2C4-D65B-42AB-A37A-9D45118A2A2C',  // Lịch họp
-        '360585BB-EDDA-4990-B293-AA097594B073'   // Lich2015
-    ],
+    listIds: mapping.listIds || [],
 
     /* ================= NEW DB ================= */
-    newTable: 'meetings',
-    newSchema: 'dbo',
-    newDatabase: process.env.NEW_DB_NAME || 'app_tancang',
+    newTable: mapping.newTable || 'meetings',
+    newSchema: mapping.newSchema || 'dbo',
+    newDatabase: process.env.NEW_DB_NAME || mapping.newDatabase,
 
     /* ================= FIELD MAP ================= */
-    fieldMapping: {
-      ID: 'id_sp_bak',
-      Title: 'title',
-      StartDate: 'meeting_date',  // Sẽ được xử lý tách ngày trong Model
-      Location: 'room_ids',
-      Description: 'content',
-      Organizer: 'chairman_id',
-      AuthorAccount: 'created_by',
-      tp_Created: 'created_at',
-      tp_Modified: 'updated_at'
-    },
+    fieldMapping: mapping.fieldMapping,
 
     requiredFields: ['Title', 'StartDate'],
 
     /* ================= DEFAULT VALUES ================= */
     defaultValues: {
-      table_bak: 1,
-      meeting_type: 'NORMAL',
-      meeting_mode: 'OFFLINE',
-      status: 'Đã phê duyệt',
-      status_code: 'APPROVED',
-      meeting_state: 'FINISHED',
-      timezone: 'Asia/Ho_Chi_Minh',
+      table_bak: mapping.defaults.TABLE_BAK || 1,
+      meeting_type: mapping.defaults.MEETING_TYPE || 'NORMAL',
+      meeting_mode: mapping.defaults.MEETING_MODE || 'OFFLINE',
+      status: mapping.defaults.STATUS || '1',
+      status_code: mapping.defaults.STATUS_CODE || 'APPROVED',
+      meeting_state: mapping.defaults.MEETING_STATE || 'FINISHED',
+      timezone: mapping.defaults.TIMEZONE || 'Asia/Ho_Chi_Minh',
       is_company: 0,
       is_cancelled: 0,
       is_template: 0,
@@ -98,60 +105,70 @@ const tableMappings = {
       id: () => uuidv4(),
 
       /* ===== 2. BASIC INFO ===== */
-      title: (r) => r?.TieuDe || 'Không tiêu đề',
+      title: (r) => r?.Title || mapping.defaults.DEFAULT_TITLE || 'Không tiêu đề',
 
-      meeting_type: (r) => r?.LoaiHop || 'NB',
+      meeting_type: (r) => r?.nvarchar6 || mapping.defaults.MEETING_TYPE || 'NB',
 
-      priority: (r) => (r?.isImportant ? 'cao' : 'tb'),
+      priority: (r) => r?.priority || mapping.defaults.MEETING_PRIORITY || 'tb',
 
       meeting_date: (r) => {
-        const d = parseDate(r?.BatDau);
-        return d ? d.toISOString().split('T')[0] : null;
+        const d = parseDate(r?.StartDate) || new Date();
+        return d.toISOString().split('T')[0];
       },
 
       meeting_time: (r) =>
-        formatTimeRange(r?.BatDau, r?.KetThuc),
+        formatTimeRange(r?.StartDate, r?.EndDate),
 
-      meeting_mode: (r) =>
-        r?.isOnline ? 'ONLINE' : 'OFFLINE',
+      meeting_mode: (r) => {
+        if (!r?.Location) return mapping.defaults.MEETING_MODE || 'OFFLINE';
+        const loc = String(r.Location).toLowerCase();
+        if (loc.includes('zoom') || loc.includes('online')) return 'ONLINE';
+        if (loc.includes('hybrid')) return 'HYBRID';
+        return 'OFFLINE';
+      },
 
-      room_ids: (r) => r?.DiaDiem || null,
+      room_ids: (r) => {
+        if (!r?.Location || r.Location === 'NULL') return mapping.room_default.id;
+        // Nếu location có vẻ là ID (có dấu gạch ngang) thì lấy, không thì lấy default
+        if (String(r.Location).includes('-')) return r.Location;
+        return mapping.room_default.id;
+      },
 
-      status: '1',
+      status: mapping.defaults.STATUS || '1',
 
-      bpmn_version: process.env.DEFAULT_BPMN_VERSION || 'QUY_TRINH_LICH_HOP',
+      bpmn_version: mapping.defaults.BPMN_VERSION || 'QUY_TRINH_LICH_HOP',
 
-      content: (r) => r?.NoiDung || r?.TieuDe || 'Không nội dung',
+      content: (r) => r?.Description || r?.Title || 'Không nội dung',
 
-      chairman_id: (r) => r?.ChuTri || null,
-      secretary_id: null,
-      online_meeting_id: null,
+      chairman_id: (r) => r?.chairman_id || mapping.defaults.CHAIRMAN_ID || 'SYSTEM_MIGRATION',
+      secretary_id: (r) => r?.secretary_id || null,
+      online_meeting_id: (r) => r?.online_meeting_id || null,
 
       /* ===== 3. AUDIT ===== */
       created_at: (r) => parseDate(r?.tp_Created) || new Date(),
 
       updated_at: (r) => parseDate(r?.tp_Modified) || new Date(),
 
-      status_code: 3, // Đã duyệt
+      status_code: (r) => mapStatusToStatusCode(r?.WorkflowStatus || r?.nvarchar10),
 
-      direct_command: '',
-      conclusion: null,
-      created_by: 'SYSTEM_MIGRATION',
+      direct_command: (r) => r?.DocumentTitle || null,
+      conclusion: (r) => r?.nvarchar7 || null,
+      created_by: (r) => r?.AuthorAccount || mapping.defaults.USER_ID || 'SYSTEM_MIGRATION',
 
       attendance_locked: 0,
 
       /* ===== 4. STATE ===== */
       meeting_state: (r) => buildMeetingState(r),
 
-      started_at: (r) => parseDate(r?.BatDau),
+      started_at: (r) => parseDate(r?.StartDate) || new Date(),
 
       ended_at: (r) => buildEndedAt(r),
 
-      timezone: 'Asia/Ho_Chi_Minh',
+      timezone: mapping.defaults.TIMEZONE || 'Asia/Ho_Chi_Minh',
 
       /* ===== 5. FLAGS ===== */
       is_company: 0,
-      organizational_unit: null,
+      organizational_unit: (r) => r?.organizational_unit || mapping.defaults.ORG_UNIT || null,
       is_assigning_seat: 'NOT_ASSIGN',
 
       cancelled_by: null,
@@ -164,6 +181,7 @@ const tableMappings = {
 
       is_cancelled: 0,
       is_override_instance: 0,
+      schedule_type: 'NORMAL',
 
       /* ===== 6. SHAREPOINT LINK ===== */
       sharepoint_item_id: (r) => String(r?.ID || '')
@@ -182,3 +200,4 @@ const tableMappings = {
 };
 
 module.exports = { tableMappings };
+

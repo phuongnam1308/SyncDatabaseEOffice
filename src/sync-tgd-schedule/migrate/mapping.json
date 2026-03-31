@@ -1,0 +1,34 @@
+{
+  "oldTable": "AllUserData",
+  "oldSchema": "dbo",
+  "oldDatabase": "WSS_Content_eoffice_khkd",
+  "oldUserDatabase": "WSS_Content_eoffice",
+  "listIds": [
+    "50654456-9F7A-4436-BFED-F86F1BFDF58D"
+  ],
+  "newTable": "leadership_duty_details",
+  "newSchema": "dbo",
+  "newDatabase": "DiOffice",
+  "fieldMapping": {
+    "ItemID": "id_sp_bak",
+    "StartDate": "duty_date",
+    "Organizer": "leader_id",
+    "Description": "notes",
+    "Status": "status",
+    "DateTime1": "schedule_time",
+    "FromDate": "from_date",
+    "ToDate": "to_date",
+    "Created": "created_at",
+    "Modified": "updated_at"
+  },
+  "defaults": {
+    "STATUS": 1,
+    "SCHEDULE_TYPE": "NORMAL",
+    "LEADER_NAME": "Lãnh đạo (Đồng bộ)",
+    "DUMMY_PARENT_ID": "LDS_1773063888220_HNP0JV0N",
+    "USER_ID": "6915f2387e39c2ba33cef79a",
+    "CREATED_BY": "SYSTEM",
+    "DEFAULT_TITLE": "Lịch trực ban Lãnh đạo (Đồng bộ)",
+    "TABLE_BAK": 1
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "newTable": "audit",
+  "newSchema": "dbo",
+  "newDatabase": "app_tancang",
+  "fieldMapping": {
+    "DocumentID": "document_id",
+    "Time": "time",
+    "UserId": "user_id",
+    "DisplayName": "display_name",
+    "Role": "role",
+    "ActionCode": "action_code",
+    "FromNodeId": "from_node_id",
+    "ToNodeId": "to_node_id",
+    "Details": "details",
+    "OriginId": "origin_id",
+    "CreatedBy": "created_by",
+    "Receiver": "receiver",
+    "ReceiverUnit": "receiver_unit",
+    "Group": "group_",
+    "RoleProcess": "roleProcess",
+    "Action": "action",
+    "Deadline": "deadline",
+    "StageStatus": "stage_status",
+    "CurStatusCode": "curStatusCode",
+    "TypeDocument": "type_document",
+    "ProcessedBy": "processed_by",
+    "ActingAs": "acting_as",
+    "StatusCode": "status_code",
+    "BpmnVersion": "bpmn_version",
+    "TypeOfProcess": "type_of_process"
+  },
+  "defaults": {
+    "TYPE_DOCUMENT": "VEHICLE_REGISTRATION",
+    "STAGE_STATUS": "DA_XU_LY",
+    "TABLE_BAK": 1
+  }
+}

@@ -11,8 +11,8 @@ const parseDate = (v) => {
 const getDayOfWeek = (date) => {
     const d = parseDate(date);
     if (!d) return null;
-    const days = ['Chủ nhật', 'Thứ hai', 'Thứ ba', 'Thứ tư', 'Thứ năm', 'Thứ sáu', 'Thứ bảy'];
-    return days[d.getDay()];
+    // d.getDay() returns 0 (Sunday), 1 (Monday), etc.
+    return d.getDay();
 };
 
 /* ===================== TABLE MAPPING ===================== */
@@ -47,9 +47,13 @@ const tableMappings = {
     /* ================= DEFAULT VALUES ================= */
     defaultValues: {
       table_bak: 1,
-      schedule_id: 'MIGRATED', // Hoặc logic tạo schedule cha
+      schedule_id: 'LDS_1773063888220_HNP0JV0N', // Hardcoded as requested
+      schedule_type: 'NORMAL',
       day_of_week: (r) => getDayOfWeek(r?.StartDate),
+      duty_date: (r) => parseDate(r?.StartDate) || new Date(),
+      notes: (r) => r?.Description || 'N/A',
       status: 1,
+      leader_id: (r) => r?.Organizer || '6915f2387e39c2ba33cef79a',
       created_at: (r) => parseDate(r?.tp_Created) || new Date(),
       updated_at: (r) => parseDate(r?.tp_Modified) || new Date(),
     },

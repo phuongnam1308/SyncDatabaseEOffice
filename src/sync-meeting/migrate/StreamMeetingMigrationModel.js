@@ -578,7 +578,7 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
       { tableName, schema }
     );
 
-    return new Set(result.map(r => r.COLUMN_NAME));
+    return new Set(result.map(r => r.COLUMN_NAME.toLowerCase()));
   }
 
 
@@ -596,7 +596,7 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     /* ================= MAP FIELD ================= */
     for (const [oldField, newField] of Object.entries(fieldMapping)) {
 
-      if (!existingCols.has(newField)) continue;
+      if (!existingCols.has(newField.toLowerCase())) continue;
 
       const value = rawData[oldField];
 
@@ -607,11 +607,15 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
 
       insertCols.push(`[${newField}]`);
       insertVals.push(`@${newField}`);
-      updateSet.push(`[${newField}] = @${newField}`);
+
+      // 🔥 NEVER update ID or created_at
+      if (newField.toLowerCase() !== 'id' && newField.toLowerCase() !== 'created_at') {
+        updateSet.push(`[${newField}] = @${newField}`);
+      }
     }
     /* ================= DEFAULT VALUES ================= */
     for (const [newField, valueFn] of Object.entries(defaultValues || {})) {
-      if (!existingCols.has(newField)) continue; // 🔥 BỎ column không tồn tại
+      if (!existingCols.has(newField.toLowerCase())) continue; // 🔥 BỎ column không tồn tại
 
       if (!params.hasOwnProperty(newField)) {
         params[newField] =
@@ -633,6 +637,9 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     const tableRef = `[${newSchema}].[${newTable}]`;
 
     const query = `
+      DECLARE @OutputTable TABLE (id NVARCHAR(255));
+      DECLARE @affected INT;
+
       IF EXISTS (
           SELECT 1 FROM ${tableRef}
           WHERE [${externalKeyField}] = @_externalKeyValue
@@ -640,19 +647,21 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
       BEGIN
           UPDATE ${tableRef}
           SET ${updateSet.length ? updateSet.join(', ') : `${externalKeyField} = ${externalKeyField}`}
-          OUTPUT INSERTED.id AS id
+          OUTPUT INSERTED.id INTO @OutputTable
           WHERE [${externalKeyField}] = @_externalKeyValue;
 
-          SELECT @@ROWCOUNT AS affected, 'updated' AS action;
+          SELECT @affected = @@ROWCOUNT;
+          SELECT (SELECT TOP 1 id FROM @OutputTable) AS id, @affected AS affected, 'updated' AS action;
       END
       ELSE
       BEGIN
           INSERT INTO ${tableRef}
           (${insertCols.join(', ')})
-          OUTPUT INSERTED.id AS id
+          OUTPUT INSERTED.id INTO @OutputTable
           VALUES (${insertVals.join(', ')});
 
-          SELECT @@ROWCOUNT AS affected, 'inserted' AS action;
+          SELECT @affected = @@ROWCOUNT;
+          SELECT (SELECT TOP 1 id FROM @OutputTable) AS id, @affected AS affected, 'inserted' AS action;
       END
       `;
     const result = await this.queryNewDbTx(query, params, transaction);

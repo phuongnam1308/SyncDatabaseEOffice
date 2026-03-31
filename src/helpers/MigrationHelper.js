@@ -6,6 +6,7 @@ const axios = require('axios');
 const FormData = require('form-data');
 const fs = require('fs').promises; // Use promise-based fs
 const path = require('path');
+const { ROLES_DEFAULT } = require('../config');
 const DEFAULT_PASSWORD = process.env.MIGRATION_DEFAULT_PASSWORD || '12345678';
 const SALT_ROUNDS = parseInt(process.env.BCRYPT_SALT_ROUNDS || '10', 10);
 
@@ -14,6 +15,45 @@ class MigrationHelper {
     this.queryNewDbTx = dbQueryFn;
     this.queryOldDb = queryOldDbFn;
     this.mapStatus = this.mapStatusOutgoing.bind(this);
+  }
+
+  /**
+   * Lấy danh sách cột thực tế từ Database cũ (Source)
+   */
+  async getExistingColumnsSource(dbName, tableName, schema = 'dbo') {
+    try {
+      if (!this.queryOldDb) return new Set();
+      
+      const query = `
+        SELECT COLUMN_NAME
+        FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_NAME = @tableName
+        AND TABLE_SCHEMA = @schema
+      `;
+      
+      const result = await this.queryOldDb(query, { tableName, schema });
+      return new Set(result.map(r => r.COLUMN_NAME.toLowerCase()));
+    } catch (err) {
+      logger.warn(`[MigrationHelper] getExistingColumnsSource Error: ${err.message}`);
+      return new Set();
+    }
+  }
+
+  /**
+   * Kiểm tra sự tồn tại của một bảng trong Database cũ
+   */
+  async checkTableExistsSource(dbName, tableName, schema = 'dbo') {
+    try {
+      if (!this.queryOldDb) return false;
+      const query = `
+        SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.TABLES 
+        WHERE TABLE_NAME = @tableName AND TABLE_SCHEMA = @schema
+      `;
+      const result = await this.queryOldDb(query, { tableName, schema });
+      return result.length > 0;
+    } catch (err) {
+      return false;
+    }
   }
 
   safeString(value) {
@@ -624,128 +664,144 @@ class MigrationHelper {
       }
       const trimmed = userIdOrName.trim();
       if (!trimmed) return userIdOrName;
-      const isIdFormat =
-        /^\d+$/.test(trimmed) ||
-        /^[0-9a-f-]{32,}$/i.test(trimmed);
+
+      const isIdFormat = /^\d+$/.test(trimmed) || /^[0-9a-f-]{32,}$/i.test(trimmed);
       if (isIdFormat) {
-        const checkNewQuery = `
-          SELECT TOP 1 id
-          FROM ${process.env.NEW_DB_NAME}.dbo.users
-          WHERE id = @id
-        `;
-        const existedNew = await this.queryNewDbTx(
-          checkNewQuery,
-          { id: trimmed },
-          transaction
-        );
-        if (existedNew?.length) {
-          return existedNew[0].id;
-        }
-        const isGuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed);
-
-        const checkOldQuery = `
-          SELECT TOP 1 *
-          FROM dbo.PersonalProfile
-          WHERE
-            (TRY_CONVERT(uniqueidentifier, @id) IS NOT NULL AND ID = TRY_CONVERT(uniqueidentifier, @id))
-            OR AccountID = @id
-            OR StaffID = @id
-        `;
-
-        let existedOld = [];
-        try {
-          existedOld = await this.queryOldDb(
-            checkOldQuery,
-            { id: trimmed }
-          );
-        } catch (oldDbErr) {
-          // Bỏ qua lỗi ép kiểu/conversion nếu vẫn còn
-          logger.warn(`[mapUserName] Failed to query PersonalProfile for ID=${trimmed}: ${oldDbErr.message}`);
-        }
-
-        if (!existedOld?.length) {
-          // Nếu không tìm thấy bằng ID/AccountID/StaffID, thử tìm theo tên nếu ID có dạng text
-          if (!/^\d+$/.test(trimmed) && !isGuid) {
-             // Để nó trôi xuống phần tìm theo displayName bên dưới
-          } else {
-             return trimmed;
-          }
-        } else {
-          if (!this._streamUserMigrationModel) {
-            const StreamUserMigrationModel = require('../sync-user-copy/migrate/StreamUserMigrationModel');
-            this._streamUserMigrationModel = new StreamUserMigrationModel();
-            await this._streamUserMigrationModel.initialize();
-          }
-          const syncResult =
-            await this._streamUserMigrationModel.upsertUserById(
-              existedOld[0],
-              transaction
-            );
-
-          // Trả về ID mới sau khi đã upsert/sync
-          if (syncResult?.backupId) {
-             // Cần truy vấn lại ID mới từ bảng users
-             const refreshed = await this.queryNewDbTx(
-                `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users WHERE id_user_bak = @bakId`,
-                { bakId: String(existedOld[0].ID) },
-                transaction
-             );
-             if (refreshed?.length) return refreshed[0].id;
-          }
-          return trimmed;
-        }
+        const checkNewQuery = `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users WHERE id = @id`;
+        const existedNew = await this.queryNewDbTx(checkNewQuery, { id: trimmed }, transaction);
+        if (existedNew?.length) return existedNew[0].id;
+        return trimmed;
       }
 
-      if (!/[a-zA-ZÀ-ỹ]/.test(trimmed)) {
-        return userIdOrName;
-      }
+      if (!/[a-zA-ZÀ-ỹ]/.test(trimmed)) return userIdOrName;
 
       const displayName = this.extractDisplayName(trimmed);
       if (!displayName) return userIdOrName;
 
-      const usernameBase = this.buildUsernameFromName(displayName);
-      if (!usernameBase) return userIdOrName;
+      const selectQuery = `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users WHERE name = @name OR id = @name`;
+      const existing = await this.queryNewDbTx(selectQuery, { name: displayName }, transaction);
+      if (existing?.length) return existing[0].id;
 
-      const selectQuery = `
-        SELECT TOP 1 id
-        FROM ${process.env.NEW_DB_NAME}.dbo.users
-        WHERE name = @name OR id = @name
+      // 2. Tìm trong DB cũ (PersonalProfile) để Auto-Sync nếu không thấy ở DB mới
+      const logger = require('../../utils/logger');
+      const checkOldQuery = `
+        SELECT TOP 1 * FROM dbo.PersonalProfile
+        WHERE LTRIM(RTRIM(AccountID)) = @val
+           OR LTRIM(RTRIM(FullName)) = @name
       `;
-
-      const existing = await this.queryNewDbTx(
-        selectQuery,
-        { name: displayName },
-        transaction
-      );
-
-      if (existing?.length) {
-        return existing[0].id;
+      const oldRows = await this.queryOldDb(checkOldQuery, { val: userIdOrName, name: displayName || userIdOrName });
+      
+      if (oldRows?.length > 0) {
+        const migrator = await this._getUserMigrator();
+        if (migrator) {
+          logger.warn(`[mapUserName] Found "${userIdOrName}" in Old DB. Auto-Syncing...`);
+          const syncResult = await migrator.upsertUserById(oldRows[0], transaction);
+          if (syncResult?.backupId) {
+            const refreshed = await this.queryNewDbTx(
+              `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users WHERE id_user_bak = @bakId`,
+              { bakId: String(oldRows[0].ID) },
+              transaction
+            );
+            if (refreshed?.length) {
+              logger.info(`[mapUserName] Sync SUCCESS: ${userIdOrName} -> ${refreshed[0].id}`);
+              return refreshed[0].id;
+            }
+          }
+        }
       }
 
-        const id = uuidv4();
-        const username = `${usernameBase}${Math.floor(1000 + Math.random() * 9000)}`;
-        const password = await this.hashDefaultPassword();
+      // 3. Nếu hoàn toàn không thấy ở cả 2 DB, tạo User mới theo chuẩn ndc
+      const codeNd = this.buildAbbreviatedCode(displayName || userIdOrName);
+      if (!codeNd) return userIdOrName;
 
-        const insertQuery = `
+      const id = uuidv4();
+      // Đảm bảo username không bị trùng nếu đã có codeNd này
+      const username = `${codeNd}`;
+      
+      const insertQuery = `
         INSERT INTO ${process.env.NEW_DB_NAME}.dbo.users (
-            id, name, username, password, parent, status, table_backups, created_at, updated_at
+          id, name, code_nd, username, password, roles_by_process, created_at, updated_at, status
+        ) VALUES (
+          @id, @name, @codeNd, @username, @password, @roles, GETDATE(), GETDATE(), 1
         )
-        VALUES (@id, @name, @username, @password, @parent, 1, @tableBackups, GETDATE(), GETDATE())
-        `;
+      `;
+      
+      const rolesDefault = ROLES_DEFAULT ? JSON.stringify(ROLES_DEFAULT) : '[]';
 
-        try {
-        await this.queryNewDbTx(insertQuery, {
-            id, name: displayName, username, password, parent: '68afb3a1cb36081f0bba5dd6', tableBackups: 'stream_migration'
-        }, transaction);
+      await this.queryNewDbTx(insertQuery, {
+        id,
+        name: displayName || userIdOrName,
+        codeNd: codeNd,
+        username: username,
+        password: process.env.DEFAULT_USER_PASSWORD || '$2b$10$VAWeyayMFwjr1h8dtZWZEOXxG/WxWrrV4ULwtDsisJlLOxLBTimHC',
+        roles: rolesDefault
+      }, transaction);
 
-        logger.warn(`[mapUserName] Created new user: ${displayName} (${username})`);
-        return id;
-        } catch (err) {
-        const retry = await this.queryNewDbTx(selectQuery, { name: displayName }, transaction);
-        return retry?.length ? retry[0].id : null;
-        }
+      logger.info(`[mapUserName] Created NEW smart user: ${displayName || userIdOrName} (${codeNd}) -> ${id}`);
+      return id;
     } catch (error) {
-      logger.warn("[mapUserName] Error:", error);
+      logger.warn(`[mapUserName] Error for "${userIdOrName}":`, error.message);
+      return null;
+    }
+  }
+
+  /**
+   * MỚI: Hàm đồng bộ và ánh xạ User từ DB cũ nếu chưa có ở DB mới.
+   */
+  async syncAndMapUser(userIdOrName, transaction = null) {
+    try {
+      if (!userIdOrName || typeof userIdOrName !== 'string') return userIdOrName;
+      const trimmed = userIdOrName.trim();
+      if (!trimmed) return userIdOrName;
+
+      logger.info(`[syncAndMapUser] Searching for: "${trimmed}"`);
+
+      // 1. Tìm trong DB mới (theo ID, Username, hoặc Name)
+      const checkNewQuery = `
+        SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users 
+        WHERE id = @val OR username = @val OR name = @val OR code_nd = @val
+      `;
+      const existedNew = await this.queryNewDbTx(checkNewQuery, { val: trimmed }, transaction);
+      if (existedNew?.length) {
+        logger.info(`[syncAndMapUser] Found in New DB: ${trimmed} -> ${existedNew[0].id}`);
+        return existedNew[0].id;
+      }
+
+      // 2. Không thấy -> Tìm trong DB cũ (PersonalProfile)
+      if (this.queryOldDb) {
+        const displayName = this.extractDisplayName(trimmed);
+        const checkOldQuery = `
+          SELECT TOP 1 * FROM dbo.PersonalProfile
+          WHERE (TRY_CONVERT(uniqueidentifier, @val) IS NOT NULL AND ID = TRY_CONVERT(uniqueidentifier, @val))
+             OR AccountID = @val OR StaffID = @val OR FullName = @name
+        `;
+        const oldRows = await this.queryOldDb(checkOldQuery, { val: trimmed, name: displayName || trimmed });
+        
+        if (oldRows?.length > 0) {
+          const migrator = await this._getUserMigrator();
+          if (migrator) {
+            logger.warn(`[syncAndMapUser] Found "${trimmed}" in Old DB. Auto-Syncing...`);
+            const syncResult = await migrator.upsertUserById(oldRows[0], transaction);
+            if (syncResult?.backupId) {
+              const refreshed = await this.queryNewDbTx(
+                `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users WHERE id_user_bak = @bakId`,
+                { bakId: String(oldRows[0].ID) },
+                transaction
+              );
+              if (refreshed?.length) {
+                logger.info(`[syncAndMapUser] Sync SUCCESS: ${trimmed} -> ${refreshed[0].id}`);
+                return refreshed[0].id;
+              }
+            }
+          }
+        }
+      }
+
+      // 3. Nếu vẫn không thấy, dùng mapUserName để tạo user "trống" hoặc fallback
+      logger.warn(`[syncAndMapUser] Not found in Old DB. Falling back to mapUserName for: ${trimmed}`);
+      return await this.mapUserName(trimmed, transaction);
+    } catch (error) {
+      logger.error(`[syncAndMapUser] Error: ${error.message}`);
       return null;
     }
   }
@@ -792,6 +848,129 @@ class MigrationHelper {
           logger.error(`[mapUserWithLikeSearch] Lỗi: ${err.message}`);
           return null;
       }
+  }
+
+  /**
+   * MỚI: Hàm giải quyết User "siêu cấp" với 6 bước ưu tiên và log chi tiết.
+   * Chuyên dùng cho Meeting để tìm Creator/Chairman.
+   */
+  async robustUserResolver(rowData, transaction = null) {
+    const recordId = rowData.ID || rowData.tp_ID || 'Unknown';
+    const defaultVanthuId = process.env.VANTHU_USER_ID || 'eac9bcb6-efcd-4b23-a656-dd351037a138';
+
+    logger.info(`[robustUserResolver] --- START RESOLVING USER (Record ID: ${recordId}) ---`);
+
+    const selectQuery = `
+      SELECT TOP 1 id, name, username, code_nd 
+      FROM ${process.env.NEW_DB_NAME}.dbo.users 
+      WHERE name = @val OR username = @val OR code_nd = @val
+    `;
+
+    // --- STEP 1: AuthorName ---
+    if (rowData.AuthorName) {
+      const cleanName = this.extractDisplayName(rowData.AuthorName);
+      logger.info(`[robustUserResolver] STEP 1: Checking AuthorName "${rowData.AuthorName}" -> Clean: "${cleanName}"`);
+      const res = await this.queryNewDbTx(selectQuery, { val: cleanName }, transaction);
+      if (res?.length) {
+        logger.info(`[robustUserResolver] >> SUCCESS via Step 1: Found UID ${res[0].id} (${res[0].name})`);
+        return res[0].id;
+      }
+    }
+
+    // --- STEP 2: AuthorAccount ---
+    if (rowData.AuthorAccount) {
+      const account = this.extractAccountOnly(rowData.AuthorAccount);
+      logger.info(`[robustUserResolver] STEP 2: Checking AuthorAccount "${rowData.AuthorAccount}" -> Extracted: "${account}"`);
+      const res = await this.queryNewDbTx(selectQuery, { val: account }, transaction);
+      if (res?.length) {
+        logger.info(`[robustUserResolver] >> SUCCESS via Step 2: Found UID ${res[0].id} (${res[0].name})`);
+        return res[0].id;
+      }
+    }
+
+    // --- STEP 3: AuthorEmail ---
+    if (rowData.AuthorEmail) {
+      const prefix = this.extractEmailPrefix(rowData.AuthorEmail);
+      logger.info(`[robustUserResolver] STEP 3: Checking AuthorEmail "${rowData.AuthorEmail}" -> Prefix: "${prefix}"`);
+      const res = await this.queryNewDbTx(selectQuery, { val: prefix }, transaction);
+      if (res?.length) {
+        logger.info(`[robustUserResolver] >> SUCCESS via Step 3: Found UID ${res[0].id} (${res[0].name})`);
+        return res[0].id;
+      }
+    }
+
+    // --- STEP 4: EditorName ---
+    if (rowData.EditorName) {
+      const cleanName = this.extractDisplayName(rowData.EditorName);
+      logger.info(`[robustUserResolver] STEP 4: Checking EditorName "${rowData.EditorName}" -> Clean: "${cleanName}"`);
+      const res = await this.queryNewDbTx(selectQuery, { val: cleanName }, transaction);
+      if (res?.length) {
+        logger.info(`[robustUserResolver] >> SUCCESS via Step 4: Found UID ${res[0].id} (${res[0].name})`);
+        return res[0].id;
+      }
+    }
+
+    // --- STEP 5: EditorAccount ---
+    if (rowData.EditorAccount) {
+      const account = this.extractAccountOnly(rowData.EditorAccount);
+      logger.info(`[robustUserResolver] STEP 5: Checking EditorAccount "${rowData.EditorAccount}" -> Extracted: "${account}"`);
+      const res = await this.queryNewDbTx(selectQuery, { val: account }, transaction);
+      if (res?.length) {
+        logger.info(`[robustUserResolver] >> SUCCESS via Step 5: Found UID ${res[0].id} (${res[0].name})`);
+        return res[0].id;
+      }
+    }
+
+    // --- STEP 6: nvarchar4 (Chairman Name with LIKE) ---
+    const chairmanSrc = rowData.nvarchar4 || rowData.Organizer;
+    if (chairmanSrc) {
+      const cleanName = this.cleanTitleFromName(chairmanSrc);
+      logger.info(`[robustUserResolver] STEP 6: Checking nvarchar4/Organizer "${chairmanSrc}" -> Clean: "${cleanName}"`);
+      
+      const likeQuery = `
+        SELECT TOP 1 id, name, username 
+        FROM ${process.env.NEW_DB_NAME}.dbo.users 
+        WHERE name LIKE '%' + @name + '%'
+      `;
+      const res = await this.queryNewDbTx(likeQuery, { name: cleanName }, transaction);
+      if (res?.length) {
+        logger.info(`[robustUserResolver] >> SUCCESS via Step 6 (LIKE): Found UID ${res[0].id} (${res[0].name})`);
+        return res[0].id;
+      }
+    }
+
+    // --- FINAL FALLBACK ---
+    logger.warn(`[robustUserResolver] !! ALL STEPS FAILED for Record ${recordId}. Using Default ID: ${defaultVanthuId}`);
+    return defaultVanthuId;
+  }
+
+  extractAccountOnly(value) {
+    if (!value || typeof value !== 'string') return value;
+    const lastPipe = value.lastIndexOf('|');
+    if (lastPipe !== -1) {
+      return value.substring(lastPipe + 1).trim();
+    }
+    return value.trim();
+  }
+
+  extractEmailPrefix(value) {
+    if (!value || typeof value !== 'string') return value;
+    const atIndex = value.indexOf('@');
+    if (atIndex !== -1) {
+      const prefix = value.substring(0, atIndex).trim();
+      // Loại bỏ số ở cuối nếu cần (VD: hahtv1 -> hahtv) - Tùy hệ thống
+      return prefix.replace(/\d+$/, '');
+    }
+    return value.trim();
+  }
+
+  cleanTitleFromName(value) {
+    if (!value || typeof value !== 'string') return value;
+    const clean = value
+      .replace(/^(PTGĐ|GĐ|Trưởng phòng|Phó phòng|Đ\/c|Ông|Bà|Anh|Chị|Đồng chí|Đại tá|Thượng tá)\s+/i, "")
+      .split(/\s*[-–—(]\s*/)[0] // Lấy phần trước dấu gạch ngang hoặc ngoặc
+      .trim();
+    return clean;
   }
 
   extractCoreName(value) {
@@ -869,20 +1048,70 @@ class MigrationHelper {
   /**
    * Tìm ID người dùng dựa trên tên đầy đủ
    */
-  async findUserIdByName(fullName) {
+  async _getUserMigrator() {
+    if (this._userMigrator) return this._userMigrator;
+    try {
+      const StreamUserMigrationModel = require('../sync-user-copy/migrate/StreamUserMigrationModel');
+      this._userMigrator = new StreamUserMigrationModel();
+      await this._userMigrator.initialize();
+      return this._userMigrator;
+    } catch (err) {
+      logger.error(`[_getUserMigrator] Failed to load UserMigrator: ${err.message}`);
+      return null;
+    }
+  }
+
+  async findUserIdByName(fullName, transaction = null) {
     try {
       if (!fullName) return null;
       const displayName = this.extractDisplayName(fullName);
       if (!displayName) return null;
 
+      // 1. Search in New DB
       const query = `
-        SELECT TOP 1 id
+        SELECT TOP 1 id, id_user_bak
         FROM ${process.env.NEW_DB_NAME}.dbo.users
         WHERE LTRIM(RTRIM(name)) = @name
            OR LTRIM(RTRIM(username)) = @name
+           OR LTRIM(RTRIM(code_nd)) = @name
       `;
-      const result = await this.queryNewDbTx(query, { name: displayName });
-      return result?.length ? result[0].id : null;
+      const result = await this.queryNewDbTx(query, { name: displayName }, transaction);
+      if (result?.length) {
+        return result[0].id;
+      }
+
+      // 2. Search in Old DB (PersonalProfile) to Auto-Sync
+      if (this.queryOldDb) {
+        logger.info(`[findUserIdByName] User "${displayName}" not found in new DB. Searching PersonalProfile...`);
+        const oldQuery = `
+          SELECT TOP 1 *
+          FROM dbo.PersonalProfile
+          WHERE LTRIM(RTRIM(FullName)) = @name
+             OR LTRIM(RTRIM(AccountID)) = @name
+             OR LTRIM(RTRIM(StaffID)) = @name
+        `;
+        const oldRows = await this.queryOldDb(oldQuery, { name: displayName });
+        if (oldRows?.length > 0) {
+          const migrator = await this._getUserMigrator();
+          if (migrator) {
+            logger.warn(`[findUserIdByName] Found "${displayName}" in Old DB. Auto-Syncing...`);
+            const syncRes = await migrator.upsertUserById(oldRows[0], transaction);
+            if (syncRes?.backupId) {
+              const refreshed = await this.queryNewDbTx(
+                `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users WHERE id_user_bak = @bakId`,
+                { bakId: String(oldRows[0].ID) },
+                transaction
+              );
+              if (refreshed?.length) {
+                logger.info(`[findUserIdByName] Auto-Sync SUCCESS: ${displayName} -> ${refreshed[0].id}`);
+                return refreshed[0].id;
+              }
+            }
+          }
+        }
+      }
+
+      return null;
     } catch (error) {
       logger.error(`[findUserIdByName] Lỗi tìm ID cho "${fullName}":`, error.message);
       return null;
@@ -939,13 +1168,18 @@ class MigrationHelper {
     }
   }
 
-  buildUsernameFromName(name) {
-    const base = this.removeVietnameseTones(name)
+  buildAbbreviatedCode(name) {
+    if (!name) return null;
+    return this.removeVietnameseTones(name)
       .toLowerCase()
-      .replace(/\s+/g, "");
+      .split(/\s+/)
+      .filter(part => part.length > 0)
+      .map(part => part[0])
+      .join('');
+  }
 
-    if (!base) return null;
-    return base;
+  buildUsernameFromName(name) {
+    return this.buildAbbreviatedCode(name);
   }
 
   async hashDefaultPassword() {
@@ -2360,6 +2594,69 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
     }
 
     return count;
+  }
+
+  /**
+   * Giải quyết ID người dùng từ tên hiển thị (Ví dụ: "Nguyễn Thị Liên - HC" -> "Nguyễn Thị Liên" -> ID)
+   * @param {string} fullNameWithUnit Tên đầy đủ kèm đơn vị
+   * @param {object} transaction Transaction SQL (nếu có)
+   * @returns {Promise<string|null>} ID người dùng từ bảng user_sync
+   */
+  async resolveUserIdByFullName(fullNameWithUnit, transaction = null) {
+    if (!fullNameWithUnit || typeof fullNameWithUnit !== 'string') return null;
+
+    try {
+      // 1. Tách chuỗi theo dấu " - " để lấy tên cơ bản
+      const parts = fullNameWithUnit.split(' - ');
+      const pureFullName = parts[0].trim();
+      if (!pureFullName) return null;
+
+      // 2. Truy vấn bảng user_sync trong DiOffice
+      const query = `
+        SELECT TOP 1 ID 
+        FROM [DiOffice].[dbo].[user_sync]
+        WHERE FullName = @fullName
+      `;
+
+      const result = await this.queryNewDbTx(query, { fullName: pureFullName }, transaction);
+
+      if (result && result.length > 0) {
+        return result[0].ID;
+      }
+
+      return null;
+    } catch (error) {
+      logger.error(`[resolveUserIdByFullName] Lỗi tìm ID cho "${fullNameWithUnit}": ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Giải quyết Tên đơn vị từ mã đơn vị (Ví dụ: "ATPC" -> "Phòng An toàn - Pháp chế")
+   * @param {string} unitCode Mã đơn vị (VD: ATPC, HC, NS)
+   * @param {object} transaction Transaction SQL
+   * @returns {Promise<string|null>} Tên đầy đủ của đơn vị
+   */
+  async resolveUnitNameByCode(unitCode, transaction = null) {
+    if (!unitCode || typeof unitCode !== 'string') return null;
+
+    try {
+      const code = unitCode.trim();
+      const query = `
+        SELECT TOP 1 name 
+        FROM ${process.env.NEW_DB_NAME}.dbo.organization_units
+        WHERE LTRIM(RTRIM(code)) = @code
+      `;
+
+      const result = await this.queryNewDbTx(query, { code }, transaction);
+      if (result && result.length > 0) {
+        return result[0].name;
+      }
+      return null;
+    } catch (error) {
+      logger.error(`[resolveUnitNameByCode] Lỗi tìm tên đơn vị cho mã "${unitCode}": ${error.message}`);
+      return null;
+    }
   }
 }
 

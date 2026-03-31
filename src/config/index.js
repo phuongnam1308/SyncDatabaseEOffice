@@ -52,13 +52,13 @@ const OUTGOING_SYNC_CONFIG = settings;
 /**
  * Gets the workflow configuration for a specific document type.
  * Automatically injects the unified keywords into each process step.
- * 
+ *
  * @param {string} docType - 'outgoing' | 'incoming'
  * @returns {object} { WORKFLOW_PROCESS_CONFIG, DEFAULT_WORKFLOW_PROCESS }
  */
 const getWorkflowConfig = (docType = 'outgoing') => {
   const workflowGroup = docType === 'incoming' ? workflowIncoming : workflowOutgoing;
-  
+
   const workflow_process = (workflowGroup.workflow_process || []).map(p => {
     // Map normalized role names to their definitions
     const roleKeyMap = {
@@ -101,7 +101,10 @@ module.exports = {
   USER_PAREN_DEFAULT: OUTGOING_SYNC_CONFIG.USER_PAREN_DEFAULT,
   BEGIN_LIMIT:        OUTGOING_SYNC_CONFIG.BEGIN_LIMIT,
   COMPLETED_LIMIT:    OUTGOING_SYNC_CONFIG.COMPLETED_LIMIT,
-  
+
+  ...OUTGOING_SYNC_CONFIG.STATUS_TABS,
+
+
   // Provide a function to load the correct workflow config based on document type
   getWorkflowConfig,
 

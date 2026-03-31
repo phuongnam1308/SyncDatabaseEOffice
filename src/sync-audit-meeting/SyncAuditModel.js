@@ -68,14 +68,7 @@ class SyncAuditModel extends BaseModel {
     }
 
     try {
-      const auxiliaryTables = [
-        'incomming_assignment',
-        'incomming_current_state',
-        'outgoing_assignment',
-        'outgoing_current_state'
-      ];
-
-      let initQueries = `
+      await this.queryNewDb(`
         IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'table_backups')
             ALTER TABLE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} ADD table_backups NVARCHAR(255) NULL;
         IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'type_document')
@@ -96,19 +89,9 @@ class SyncAuditModel extends BaseModel {
             ALTER TABLE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} ADD curStatusCode INT NULL;
         IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'role')
             ALTER TABLE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} ADD [role] VARCHAR(100) NULL;
-      `;
-
-      // Thêm table_backups cho các bảng phụ
-      for (const table of auxiliaryTables) {
-        initQueries += `
-          IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${table}' AND COLUMN_NAME = 'table_backups')
-              ALTER TABLE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${table} ADD table_backups NVARCHAR(255) NULL;
-        `;
-      }
-
-      await this.queryNewDb(initQueries);
+      `);
     } catch(e) {
-      logger.warn(`[SyncAuditModel] Lỗi khởi tạo cấu trúc cột (table_backups, workflow columns): ${e.message}`);
+      logger.warn(`[SyncAuditModel] Lỗi khởi tạo cấu trúc cột (table_backups, type_document): ${e.message}`);
     }
   }
 
@@ -231,75 +214,6 @@ class SyncAuditModel extends BaseModel {
   }
 
   /**
-   * Lấy tất cả các bản ghi audit từ nhiều bảng khác nhau cho một văn bản.
-   * Kết quả được gộp lại và sắp xếp theo thời gian (NgayTao).
-   * @param {string|number} oldDocumentId - ID của văn bản trong CSDL cũ.
-   * @param {string[]} tableNames - Danh sách các bảng audit cần truy vấn.
-   * @param {string[]} categories - Mảng các danh mục để lọc (nếu có).
-   */
-  async fetchAllAuditsAcrossTables(
-    oldDocumentId,
-    tableNames = [],
-    categories = null
-  ) {
-    if (!oldDocumentId || !tableNames.length) return [];
-
-    const allRecords = [];
-    const normalizedDocumentId = String(oldDocumentId).trim();
-
-    // Thực hiện truy vấn song song trên tất cả các bảng để tối ưu hiệu suất
-    const fetchPromises = tableNames.map(async (tableName) => {
-      try {
-        const params = { oldDocumentId: normalizedDocumentId };
-        let categoryFilter = "";
-        const normalizedCategories = this._normalizeCategories(categories);
-
-        if (normalizedCategories.length) {
-          const placeholders = normalizedCategories.map((_, idx) => `@category${idx}`).join(", ");
-          categoryFilter = `AND LTRIM(RTRIM(ISNULL(Category, ''))) IN (${placeholders})`;
-          normalizedCategories.forEach((cat, idx) => { params[`category${idx}`] = cat; });
-        }
-
-        const query = `
-          SELECT *, '${tableName}' as __source_table
-          FROM ${this.oldDbSchema}.${tableName}
-          WHERE LTRIM(RTRIM(ISNULL(VBId, ''))) = @oldDocumentId
-          ${categoryFilter}
-        `;
-
-        return await this.queryOldDb(query, params);
-      } catch (err) {
-        logger.warn(`[SyncAuditModel.fetchAllAuditsAcrossTables] Failed to fetch from ${tableName}: ${err.message}`);
-        return [];
-      }
-    });
-
-    const results = await Promise.all(fetchPromises);
-
-    // Gộp tất cả các bản ghi từ các bảng
-    for (const batch of results) {
-      if (Array.isArray(batch)) {
-        allRecords.push(...batch);
-      }
-    }
-
-    // Sắp xếp chronologically dựa trên NgayTao
-    allRecords.sort((a, b) => {
-      const timeA = this.helper.parseDate(a.NgayTao) || new Date(0);
-      const timeB = this.helper.parseDate(b.NgayTao) || new Date(0);
-
-      if (timeA.getTime() !== timeB.getTime()) {
-        return timeA.getTime() - timeB.getTime();
-      }
-
-      // Nếu thời gian bằng nhau, dùng ID làm tie-breaker (giả định ID tăng dần theo thời gian)
-      return (Number(a.ID) || 0) - (Number(b.ID) || 0);
-    });
-
-    return allRecords;
-  }
-
-  /**
    * Lấy các bản ghi audit cho văn bản đến dựa trên ID văn bản,
    * lọc theo các danh mục (category) dành riêng cho văn bản đến.
    * @param {string|number} oldDocumentId - ID của văn bản đến trong CSDL cũ.
@@ -329,7 +243,6 @@ class SyncAuditModel extends BaseModel {
 
     let inserted = 0;
     let updated = 0;
-    const results = [];
 
     try {
       // 1. Chuyển đổi (map) dữ liệu từ bản ghi cũ sang cấu trúc mới
@@ -350,14 +263,6 @@ class SyncAuditModel extends BaseModel {
         return null;
       }
 
-      // ── ĐẢM BẢO THỨ TỰ DETERMINISTIC ──
-      // Sắp xếp theo receiver và receiver_unit để đảm bảo thứ tự luôn giống nhau
-      audits.sort((a, b) => {
-        const keyA = String(a.receiver || "") + String(a.receiver_unit || "");
-        const keyB = String(b.receiver || "") + String(b.receiver_unit || "");
-        return keyA.localeCompare(keyB);
-      });
-
       // 3. Lặp qua từng bản ghi audit đã được chuyển đổi
       for (const audit of audits) {
         if (!audit) continue;
@@ -366,28 +271,14 @@ class SyncAuditModel extends BaseModel {
           // 4. Kiểm tra xem bản ghi audit này đã tồn tại trong CSDL mới chưa
           const existed = await this._getExistingAudit(audit, transaction);
 
-          let auditId;
           if (existed) {
             // 5a. Nếu đã tồn tại, cập nhật lại thông tin
-            auditId = await this._update(audit, existed.id, transaction);
+            await this._update(audit, existed.id, transaction);
             updated++;
           } else {
             // 5b. Nếu chưa tồn tại, thêm mới
-            auditId = await this._insert(audit, transaction);
+            await this._insert(audit, transaction);
             inserted++;
-          }
-
-          // Lưu kết quả để subclass sử dụng
-          results.push({ audit, id: auditId });
-
-          // 5c. Cập nhật status_code cho bảng văn bản tương ứng
-          if (audit.status_code && audit.document_id) {
-            await this._updateDocumentStatusCode(
-              audit.document_id, 
-              audit.type_document, 
-              audit.status_code, 
-              transaction
-            );
           }
         } catch (auditErr) {
           logger.warn(
@@ -397,7 +288,7 @@ class SyncAuditModel extends BaseModel {
         }
       }
 
-      return { inserted, updated, results };
+      return { inserted, updated };
 
     } catch (error) {
       logger.error(
@@ -511,7 +402,6 @@ class SyncAuditModel extends BaseModel {
         curStatusCode,
         [role]
       )
-      OUTPUT INSERTED.id
       VALUES (
         @document_id,
         @time,
@@ -540,7 +430,7 @@ class SyncAuditModel extends BaseModel {
     `;
 
     // Thực thi câu lệnh INSERT
-    const result = await this.queryNewDbTx(
+    await this.queryNewDbTx(
       query,
       {
         document_id: data.document_id,
@@ -576,13 +466,6 @@ class SyncAuditModel extends BaseModel {
       },
       transaction
     );
-
-    const auditId = result?.[0]?.id || null;
-    if (auditId) {
-      logger.info(`[SyncAuditModel] Inserted audit row successfully: doc=${data.document_id} originId=${data.origin_id} table=${this.oldDbTable}`);
-    }
-
-    return auditId;
   }
 
   /**
@@ -593,7 +476,7 @@ class SyncAuditModel extends BaseModel {
    * @private
    */
   async _update(data, existingId, transaction) {
-    if (!existingId) return null;
+    if (!existingId) return;
 
     const receiver =
       this._normalizeArrayField(data.receiver, 100);
@@ -657,10 +540,6 @@ class SyncAuditModel extends BaseModel {
       },
       transaction
     );
-
-    logger.info(`[SyncAuditModel] Updated audit row successfully: doc=${data.document_id} originId=${data.origin_id} table=${this.oldDbTable}`);
-
-    return existingId;
   }
 
   /**
@@ -707,7 +586,6 @@ class SyncAuditModel extends BaseModel {
     let receiver = parsed.receiverIds || [];
     const receiverUnit = parsed.receiverUnitIds || [];
     const parsedRoleProcess = parsed.roleProcess || actionParsed.roleProcess || 'VANTHU';
-    const parsedRole = parsed.parsedRole || null; // Role của người nhận bóc từ text
 
     // ── FALLBACK: Nếu receiver rỗng → tự động lấy ID người xử lý (user_id) đắp vào ──
     if ((!receiver || receiver.length === 0) && user_id) {
@@ -740,18 +618,7 @@ class SyncAuditModel extends BaseModel {
     const userPosition = userProfile?.position || '';
     const currentTrangThai = this._normalizeTextField(record.TrangThai);
 
-    // Sử dụng action_code từ parseActionString làm action_code mục tiêu
-    const parsedActionCode = actionParsed.action_code || null;
-
-    const workflowMapping = this._determineUserRoleAndScreen(
-      userPosition,
-      currentTrangThai,
-      rawAction,
-      type_document,
-      parsedRole,
-      parsedActionCode,
-      record.NguoiXuLy // Truyền raw name để check role fallback
-    );
+    const workflowMapping = this._determineUserRoleAndScreen(userPosition, currentTrangThai, rawAction, type_document);
 
     // Trả về đối tượng đã được map theo cấu trúc của bảng 'audit' mới
     return {
@@ -795,55 +662,26 @@ class SyncAuditModel extends BaseModel {
    * @param {string} userPosition - Chức danh/vị trí của người dùng.
    * @param {string} currentTrangThai - Trạng thái hiện tại từ bản ghi cũ.
    * @param {string} actionText - Nội dung hành động (HanhDong).
-   * @param {string} type_document - Loại văn bản.
-   * @param {string} parsedRole - Role bóc được từ text người nhận (Target Role).
-   * @param {string} parsedActionCode - Mã hành động bóc được.
-   * @param {string} rawNguoiXuLy - Tên/Chức danh nguyên bản của người thực hiện (Source Role).
    * @returns {object} - Cấu hình mapping tìm được hoặc mặc định.
    * @private
    */
-  _determineUserRoleAndScreen(userPosition, currentTrangThai, actionText, type_document = 'OutgoingDocument', parsedRole = null, parsedActionCode = null, rawNguoiXuLy = null) {
+  _determineUserRoleAndScreen(userPosition, currentTrangThai, actionText, type_document = 'OutgoingDocument') {
     const pos = (userPosition || '').toLowerCase();
     const status = (currentTrangThai || '').toLowerCase();
     const action = (actionText || '').toLowerCase();
 
-    // Lấy cấu hình workflow chuẩn dựa trên loại văn bản (Hỗ trợ cả Incomming và Incoming)
-    const isIncoming = ['IncomingDocument', 'IncommingDocument'].includes(type_document);
-    const docTypeKey = isIncoming ? 'incoming' : 'outgoing';
+    // Lấy cấu hình workflow chuẩn dựa trên loại văn bản
+    const docTypeKey = type_document === 'IncomingDocument' ? 'incoming' : 'outgoing';
     const workflowConfig = config.getWorkflowConfig(docTypeKey);
     const PROCESS_CONFIG = workflowConfig.WORKFLOW_PROCESS_CONFIG || [];
     const DEFAULT_CONFIG = workflowConfig.DEFAULT_WORKFLOW_PROCESS || {};
 
-    // 1. Tìm vai trò (role)
+    // 1. Tìm vai trò (role) dựa trên keywords
     let matchedRole = null;
-
-    // Ưu tiên 1: Sử dụng parsedRole bóc được từ text người nhận (Target Role)
-    if (parsedRole) {
-      matchedRole = PROCESS_CONFIG.find(r =>
-        (r.role && r.role.toLowerCase() === parsedRole.toLowerCase()) ||
-        (r.name && r.name.toLowerCase() === parsedRole.toLowerCase())
-      );
-    }
-
-    // Ưu tiên 2: Nếu không có target role -> Tìm vai trò dựa trên chức danh/tên người thực hiện (Source Role Fallback)
-    // Dùng rawNguoiXuLy (VD: "Phạm Thị Sáu - VP" hoặc "Văn Thư") để check keywords
-    if (!matchedRole && rawNguoiXuLy) {
-      const sourceInfo = rawNguoiXuLy.toLowerCase();
-      for (const roleConf of PROCESS_CONFIG) {
-        if (roleConf.keywords && roleConf.keywords.some(kw => sourceInfo.includes(kw.toLowerCase()))) {
-          matchedRole = roleConf;
-          break;
-        }
-      }
-    }
-
-    // Ưu tiên 3: Tìm vai trò dựa trên chức danh user trong DB (Phụ trợ)
-    if (!matchedRole && pos) {
-      for (const roleConf of PROCESS_CONFIG) {
-        if (roleConf.keywords && roleConf.keywords.some(kw => pos.includes(kw.toLowerCase()))) {
-          matchedRole = roleConf;
-          break;
-        }
+    for (const roleConf of PROCESS_CONFIG) {
+      if (roleConf.keywords.some(kw => pos.includes(kw.toLowerCase()))) {
+        matchedRole = roleConf;
+        break;
       }
     }
 
@@ -851,23 +689,15 @@ class SyncAuditModel extends BaseModel {
       return DEFAULT_CONFIG;
     }
 
-    // 2. Tìm màn hình (screen)
+    // 2. Tìm màn hình (screen) dựa trên trangthais
     let matchedScreen = null;
     if (matchedRole.screens && matchedRole.screens.length > 0) {
-      // Ưu tiên 1: Khớp theo action_code đã bóc tách
-      if (parsedActionCode) {
-        matchedScreen = matchedRole.screens.find(s => s.action_code === parsedActionCode);
-      }
-
-      // Ưu tiên 2: Khớp theo trangthais (keywords)
-      if (!matchedScreen) {
-        for (const screen of matchedRole.screens) {
-          if (screen.trangthais && screen.trangthais.some(st =>
-            status.includes(st.toLowerCase()) || action.includes(st.toLowerCase())
-          )) {
-            matchedScreen = screen;
-            break;
-          }
+      for (const screen of matchedRole.screens) {
+        if (screen.trangthais && screen.trangthais.some(st =>
+          status.includes(st.toLowerCase()) || action.includes(st.toLowerCase())
+        )) {
+          matchedScreen = screen;
+          break;
         }
       }
     }
@@ -875,56 +705,12 @@ class SyncAuditModel extends BaseModel {
     if (matchedScreen) {
       return {
         ...matchedScreen,
-        role: matchedScreen.role || matchedRole.role || matchedRole.name // Fallback to role name
+        role: matchedScreen.role || matchedRole.role // Fallback to role name if screen doesn't have it
       };
     }
 
-    // --- FALLBACK: Nếu có role nhưng không khớp màn hình nào, lấy màn hình đầu tiên của role đó ---
-    if (matchedRole && matchedRole.screens && matchedRole.screens.length > 0) {
-      const firstScreen = matchedRole.screens[0];
-      return {
-        ...firstScreen,
-        role: firstScreen.role || matchedRole.role || matchedRole.name
-      };
-    }
-
-    // Nếu không khớp role hoặc không có màn hình, trả về mặc định hệ thống
+    // Nếu không khớp màn hình nào, trả về mặc định của role đó hoặc hệ thống
     return DEFAULT_CONFIG;
-  }
-
-  /**
-   * Cập nhật status_code cho bảng văn bản tương ứng.
-   * @param {number} documentId - ID của văn bản trong CSDL mới.
-   * @param {string} typeDocument - Loại văn bản (IncomingDocument/OutgoingDocument).
-   * @param {string} statusCode - Mã trạng thái mới.
-   * @param {object} transaction - Transaction.
-   * @private
-   */
-  async _updateDocumentStatusCode(documentId, typeDocument, statusCode, transaction) {
-    if (!documentId || !statusCode) return;
-
-    const isIncoming = ['IncomingDocument', 'IncommingDocument'].includes(typeDocument);
-    const tableName = isIncoming ? 'incomming_documents' : 'outgoing_documents';
-    const idColumn = 'document_id';
-    const query = `
-      UPDATE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${tableName}
-      SET status_code = @status_code,
-          updated_at = GETDATE()
-      WHERE ${idColumn} = @id
-        AND (
-          status_code IS NULL
-          OR TRY_CAST(status_code AS INT) < TRY_CAST(@status_code AS INT)
-        )
-    `;
-
-    try {
-      await this.queryNewDbTx(query, {
-        status_code: statusCode,
-        id: documentId
-      }, transaction);
-    } catch (err) {
-      logger.warn(`[SyncAuditModel] Không thể cập nhật status_code cho ${tableName} ID=${documentId}: ${err.message}`);
-    }
   }
 
   /**
@@ -1099,12 +885,3 @@ class SyncAuditModel extends BaseModel {
 }
 
 module.exports = SyncAuditModel;
-module.exports.CATEGORY_RELEASE_DV      = CATEGORY_RELEASE_DV;
-module.exports.CATEGORY_RELEASE_TCT     = CATEGORY_RELEASE_TCT;
-module.exports.CATEGORY_OUTGOING        = CATEGORY_OUTGOING;
-module.exports.CATEGORY_INCOMING_SUBMIT = CATEGORY_INCOMING_SUBMIT;
-module.exports.CATEGORY_INCOMING_TCT    = CATEGORY_INCOMING_TCT;
-module.exports.CATEGORY_INCOMING        = CATEGORY_INCOMING;
-module.exports.CATEGORY_INCOMING_INTERNAL = CATEGORY_INCOMING_INTERNAL;
-module.exports.INCOMING_CATEGORIES      = INCOMING_CATEGORIES;
-module.exports.OUTGOING_CATEGORIES      = OUTGOING_CATEGORIES;

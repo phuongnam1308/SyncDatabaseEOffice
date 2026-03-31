@@ -474,17 +474,38 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
         };
     }
 
+    async getExistingColumns(tableName, schema = 'dbo') {
+        const result = await this.queryNewDb(`SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = @tableName AND TABLE_SCHEMA = @schema`, { tableName, schema });
+        return new Set(result.map(r => r.COLUMN_NAME.toLowerCase()));
+    }
+
     async upsertDataToNewDB(rawData, config, externalKeyField, externalKeyValue, transaction) {
         const { newTable, newSchema, newDatabase, fieldMapping, defaultValues, fixedValues } = config;
+        const existingCols = await this.getExistingColumns(newTable, newSchema);
 
         // Prepare Data
         const params = {};
-        const cols = [];
-        const vals = [];
-        const updateClauses = [];
+        const insertCols = [];
+        const insertVals = [];
+        const updateSet = [];
+
+        // Tự động sinh ID nếu bảng có cột 'id' (case-insensitive) nhưng mapping không có
+        if (existingCols.has('id') && !params.hasOwnProperty('id')) {
+            const hasIdInMapping = Object.values(fieldMapping).some(v => v.toLowerCase() === 'id') ||
+                                  Object.keys(defaultValues || {}).some(v => v.toLowerCase() === 'id') ||
+                                  Object.keys(fixedValues || {}).some(v => v.toLowerCase() === 'id');
+            if (!hasIdInMapping) {
+                // Kiểm tra xem ID có phải là IDENTITY không? Ở đây Social target table 'news' có vẻ dùng IDENTITY 
+                // nhưng để chắc chắn, ta kiểm tra nếu mapping không cung cấp ID thì ta để DB tự sinh HOẶC ta sinh UUID.
+                // Thường các bảng render mới dùng UUID NVARCHAR(255).
+                // Nếu resultNews.newsId dùng SCOPE_IDENTITY() thì news.id là INT IDENTITY.
+                // Trong trường hợp đó, ta KHÔNG nên chèn ID thủ công.
+            }
+        }
 
         // 1. Map fields from source
         for (const [oldField, newField] of Object.entries(fieldMapping)) {
+            if (!existingCols.has(newField.toLowerCase())) continue;
             if (rawData[oldField] !== undefined) {
                 params[newField] = rawData[oldField];
             }
@@ -492,6 +513,7 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
 
         // 2. Add default values (computed or fixed)
         for (const [newField, valueFn] of Object.entries(defaultValues || {})) {
+            if (!existingCols.has(newField.toLowerCase())) continue;
             if (!params.hasOwnProperty(newField)) {
                 params[newField] = typeof valueFn === 'function' ? valueFn(rawData) : valueFn;
             }
@@ -499,57 +521,56 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
 
         // 3. Add fixed values (overrides)
         for (const [newField, value] of Object.entries(fixedValues || {})) {
+            if (!existingCols.has(newField.toLowerCase())) continue;
             params[newField] = value;
         }
 
         // 4. Build SQL fragments
         for (const [newField, value] of Object.entries(params)) {
-            cols.push(this.sanitizeColumnName(newField));
-            vals.push(`@${newField}`);
-            updateClauses.push(`${this.sanitizeColumnName(newField)} = @${newField}`);
+            insertCols.push(this.sanitizeColumnName(newField));
+            insertVals.push(`@${newField}`);
+            
+            // 🔥 NEVER update ID or created_at
+            if (newField.toLowerCase() !== 'id' && newField.toLowerCase() !== 'created_at') {
+                updateSet.push(`${this.sanitizeColumnName(newField)} = @${newField}`);
+            }
         }
 
         // Upsert query pattern based on external key (vd: topic = ID UUID)
         params._externalKeyValue = externalKeyValue;
 
+        const tableRef = `[${newDatabase}].[${newSchema}].[${newTable}]`;
         const query = `
-      DECLARE @CurrentId int;
-      
-      IF EXISTS (SELECT 1 FROM ${newDatabase}.${newSchema}.${newTable} WHERE ${this.sanitizeColumnName(externalKeyField)} = @_externalKeyValue)
-      BEGIN
-        UPDATE ${newDatabase}.${newSchema}.${newTable}
-        SET ${updateClauses.join(', ')}
-        WHERE ${this.sanitizeColumnName(externalKeyField)} = @_externalKeyValue;
-        
-        SELECT @CurrentId = id FROM ${newDatabase}.${newSchema}.${newTable} WHERE ${this.sanitizeColumnName(externalKeyField)} = @_externalKeyValue;
-        SELECT @@ROWCOUNT AS affected, 'updated' AS action, @CurrentId AS newsId;
-      END
-      ELSE
-      BEGIN
-        INSERT INTO ${newDatabase}.${newSchema}.${newTable} (${cols.join(', ')})
-        VALUES (${vals.join(', ')});
-        
-        SELECT SCOPE_IDENTITY() AS newsId;
-        SELECT @@ROWCOUNT AS affected, 'inserted' AS action, SCOPE_IDENTITY() AS newsId;
-      END
-    `;
+          DECLARE @OutputTable TABLE (id NVARCHAR(255));
+          DECLARE @affected INT;
+
+          IF EXISTS (SELECT 1 FROM ${tableRef} WHERE ${this.sanitizeColumnName(externalKeyField)} = @_externalKeyValue)
+          BEGIN
+              UPDATE ${tableRef} SET ${updateSet.length ? updateSet.join(', ') : `${this.sanitizeColumnName(externalKeyField)} = ${this.sanitizeColumnName(externalKeyField)}`}
+              OUTPUT INSERTED.id INTO @OutputTable
+              WHERE ${this.sanitizeColumnName(externalKeyField)} = @_externalKeyValue;
+              
+              SELECT @affected = @@ROWCOUNT;
+              SELECT (SELECT TOP 1 id FROM @OutputTable) AS id, @affected AS affected, 'updated' AS action;
+          END
+          ELSE
+          BEGIN
+              INSERT INTO ${tableRef} (${insertCols.join(', ')})
+              OUTPUT INSERTED.id INTO @OutputTable
+              VALUES (${insertVals.join(', ')});
+              
+              SELECT @affected = @@ROWCOUNT;
+              SELECT (SELECT TOP 1 id FROM @OutputTable) AS id, @affected AS affected, 'inserted' AS action;
+          END
+        `;
 
         const result = await this.queryNewDbTx(query, params, transaction);
-
-        // mssql nodejs sometimes returns multiple recordsets for multiple SELECTs
-        let row = null;
-        if (Array.isArray(result) && result.length > 0) {
-            if (Array.isArray(result[result.length - 1])) {
-                row = result[result.length - 1][0];
-            } else {
-                row = result[0]; // If options.multiple is false, the format might be simple array
-            }
-        }
-
-        return {
-            action: row?.action || (row?.affected ? 'updated' : 'none'),
+        const row = Array.isArray(result) ? result[0] : result;
+        return { 
+            id: row?.id || null, 
+            action: row?.action || (row?.affected ? 'updated' : 'none'), 
             affected: Number(row?.affected || 0),
-            newsId: row?.newsId || null
+            newsId: row?.id || null // For Social compatibility
         };
     }
 
