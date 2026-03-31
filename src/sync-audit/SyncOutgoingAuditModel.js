@@ -158,7 +158,7 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
       `MERGE ${process.env.NEW_DB_NAME}.dbo.outgoing_current_state AS tgt
        USING (SELECT @document_id AS document_id) AS src
        ON tgt.document_id = src.document_id
-       WHEN MATCHED AND (@audit_time >= tgt.last_audit_time OR tgt.last_audit_time IS NULL) THEN
+       WHEN MATCHED AND (@audit_time > tgt.last_audit_time OR (@audit_time = tgt.last_audit_time AND @last_audit_id >= tgt.last_audit_id) OR tgt.last_audit_time IS NULL) THEN
          UPDATE SET
            current_stage_status  = @stage_status,
            current_action_code   = @action_code,

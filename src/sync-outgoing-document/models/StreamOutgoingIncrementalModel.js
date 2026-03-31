@@ -288,8 +288,6 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
 
         IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'stage_status')
             ALTER TABLE dbo.outgoing_documents ADD stage_status NVARCHAR(50) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'curStatusCode')
-            ALTER TABLE dbo.outgoing_documents ADD curStatusCode NVARCHAR(10) NULL;
       `);
       logger.info('[OutGoingDocumentModel] Checked and added missing columns (reply_incoming_doc, sign_type, table_backups...) for dbo.outgoing_documents');
     } catch(err) {

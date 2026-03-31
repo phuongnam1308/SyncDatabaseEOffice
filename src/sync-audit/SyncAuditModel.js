@@ -380,9 +380,14 @@ class SyncAuditModel extends BaseModel {
           // Lưu kết quả để subclass sử dụng
           results.push({ audit, id: auditId });
 
-          // 5c. Cập nhật status_code cho bảng văn bản tương ứng (IncomingDocument/OutgoingDocument)
+          // 5c. Cập nhật status_code cho bảng văn bản tương ứng
           if (audit.status_code && audit.document_id) {
-            await this._updateDocumentStatusCode(audit.document_id, audit.type_document, audit.status_code, transaction);
+            await this._updateDocumentStatusCode(
+              audit.document_id, 
+              audit.type_document, 
+              audit.status_code, 
+              transaction
+            );
           }
         } catch (auditErr) {
           logger.warn(

@@ -7,8 +7,8 @@ module.exports = {
         "chờ phát hành"
       ],
       "status_code": 16,
-      "bpmn_version": "SOANTHAO_PHATHANH_CQD",
-      "type_of_process": "SOANTHAO_PHATHANH_CQD",
+      "bpmn_version": "SOANTHAO_PHATHANH_VBD",
+      "type_of_process": "SOANTHAO_PHATHANH_VBD",
       "curStatusCode": 3,
       "stage_status": "DA_XU_LY",
       "role": "VAN_THU",
@@ -73,8 +73,8 @@ module.exports = {
         "chờ đóng dấu"
       ],
       "status_code": 100,
-      "bpmn_version": "KY_SO_HS_VBD",
-      "type_of_process": "KY_SO_HS_VBD",
+      "bpmn_version": "SOANTHAO_PHATHANH_VBD",
+      "type_of_process": "SOANTHAO_PHATHANH_VBD",
       "curStatusCode": 100,
       "stage_status": "CHO_DONG_DAU",
       "role": "NGUOI_KY_PHE_DUYET",
