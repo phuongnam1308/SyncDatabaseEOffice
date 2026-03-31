@@ -28,7 +28,7 @@ function detectFileType(buffer) {
 }
 
 const SyncCommentModel = require('../../sync-document-comment/SyncCommentModel');
-const SyncIncomingAuditModel = require('../../sync-audit/SyncIncomingAuditModel');
+const SyncIncomingAuditModel = require('../../sync-audit-meeting/SyncIncomingAuditModel');
 const StreamIncomingMigrationModel = require('./SyncIncomingDocumentModel');
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 
