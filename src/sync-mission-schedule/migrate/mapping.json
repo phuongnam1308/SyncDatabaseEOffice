@@ -1,0 +1,30 @@
+{
+  "oldTable": "AllUserData",
+  "oldSchema": "dbo",
+  "oldDatabase": "WSS_Content_eoffice_khkd",
+  "oldUserDatabase": "WSS_Content_eoffice",
+  "listIds": [
+    "4DB4FFD7-152C-4EB7-85A6-3A41053664BD"
+  ],
+  "newTable": "travel_work_schedules",
+  "newSchema": "dbo",
+  "newDatabase": "DiOffice",
+  "fieldMapping": {
+    "ItemID": "id_sp_bak",
+    "Title": "content",
+    "StartDate": "from_date",
+    "EndDate": "to_date",
+    "Location": "location",
+    "Organizer": "leader",
+    "AuthorAccount": "created_by"
+  },
+  "defaults": {
+    "STATUS": "1",
+    "SCHEDULE_TYPE": "singleDay",
+    "CALENDAR_FORMAT": "fullDay",
+    "CONTENT": "Lịch công tác (Đồng bộ)",
+    "LOCATION": "Chưa xác định",
+    "LEADER": "6915f2387e39c2ba33cef79a",
+    "USER_ID": "6915f2387e39c2ba33cef79a"
+  }
+}

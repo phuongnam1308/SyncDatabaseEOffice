@@ -77,7 +77,7 @@ class SyncAuditModel extends BaseModel {
             ALTER TABLE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} ADD processed_by VARCHAR(100) NULL;
         IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'acting_as')
             ALTER TABLE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} ADD acting_as VARCHAR(100) NULL;
-        
+
         -- Thêm các cột mới cho workflow process
         IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'status_code')
             ALTER TABLE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} ADD status_code VARCHAR(50) NULL;
@@ -580,7 +580,7 @@ class SyncAuditModel extends BaseModel {
         user_id,
         record.HanhDong
       ) || {};
-    
+
     // ── SỬ DỤNG ReceiverParserService ĐỂ BÓC TÁCH RECEIVER THEO QUY TẮC NGHIỆP VỤ ──
     const parsed = await this.receiverParser.determineReceivers(record, transaction);
     let receiver = parsed.receiverIds || [];
@@ -617,7 +617,7 @@ class SyncAuditModel extends BaseModel {
     const userProfile = await this.helper.findUserByBakId(user_id, transaction);
     const userPosition = userProfile?.position || '';
     const currentTrangThai = this._normalizeTextField(record.TrangThai);
-    
+
     const workflowMapping = this._determineUserRoleAndScreen(userPosition, currentTrangThai, rawAction, type_document);
 
     // Trả về đối tượng đã được map theo cấu trúc của bảng 'audit' mới
@@ -693,7 +693,7 @@ class SyncAuditModel extends BaseModel {
     let matchedScreen = null;
     if (matchedRole.screens && matchedRole.screens.length > 0) {
       for (const screen of matchedRole.screens) {
-        if (screen.trangthais && screen.trangthais.some(st => 
+        if (screen.trangthais && screen.trangthais.some(st =>
           status.includes(st.toLowerCase()) || action.includes(st.toLowerCase())
         )) {
           matchedScreen = screen;

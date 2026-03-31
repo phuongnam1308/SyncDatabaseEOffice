@@ -35,7 +35,7 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
         const tableRef = this.newDbName
           ? `${this.newDbName}.${this.newDbSchema}.${this.newDbTable}`
           : `${this.newDbSchema}.${this.newDbTable}`;
-          
+
         await this.queryNewDb(`
             BEGIN TRY
                 -- 1. Tìm và xóa Khóa chính (Primary Key) hiện hữu để có thể sửa cột id
@@ -72,7 +72,7 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
         for (const col of columnsToAdd) {
             await this.queryNewDb(`
                 IF NOT EXISTS (
-                    SELECT * FROM sys.columns 
+                    SELECT * FROM sys.columns
                     WHERE object_id = OBJECT_ID('${tableRef}') AND name = '${col.name}'
                 )
                 BEGIN
@@ -351,6 +351,12 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
       name = name.substring(0, hyphenIndex).trim();
     }
 
+    // Nếu code_nd trông không giống mã nhân viên (quá dài hoặc chứa tên đầy đủ),
+    // sử dụng hàm buildAbbreviatedCode để tạo mã ndc chuẩn.
+    if (!code_nd || code_nd.length > 10 || code_nd.includes(' ')) {
+      code_nd = this.migrationHelper.buildAbbreviatedCode(name);
+    }
+
     let email_user = this.safeString(oldRecord.Email);
     if (!email_user && code_nd) {
       email_user = `${code_nd}@saigonnewport.com.vn`;
@@ -359,7 +365,7 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
     const position = this.safeString(oldRecord.Position);
 
     return {
-      id: uuidv4(), // Tự động sinh ra UUID cho user mới
+      id: uuidv4(),
       password: process.env.DEFAULT_PASSWORD ||'$2b$10$Ohcqw9J1YStppJHeYdoD5.yWjnCm5Mt7MQxWoIMNc0LBwbFRW1DU2',
       name,
       avatar: oldRecord.Image || '[]',

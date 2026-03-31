@@ -1,0 +1,31 @@
+{
+  "oldTable": "AllUserData",
+  "oldSchema": "dbo",
+  "oldDatabase": "WSS_Content_eoffice_khkd",
+  "oldUserDatabase": "WSS_Content_eoffice",
+  "newTable": "news_calendar",
+  "newSchema": "dbo",
+  "newDatabase": "app_tancang",
+  "listIds": [
+    "C27A522F-FD18-4D74-90C5-B6AC6F70AE42"
+  ],
+  "fieldMapping": {
+    "ItemID": "id_sp_bak",
+    "Title": "title",
+    "StartDate": "startTime",
+    "EndDate": "endTime",
+    "Location": "location",
+    "Description": "description",
+    "AuthorAccount": "createdBy",
+    "AuthorName": "createdByName",
+    "Organizer": "participants"
+  },
+  "defaults": {
+    "TYPE": "Sự kiện",
+    "LOCATION": "Văn phòng Tổng công ty",
+    "DESCRIPTION": "Nội dung đang cập nhật",
+    "STATUS": 1,
+    "CREATED_BY": "6926bd32994b706c8b25118a",
+    "CREATED_BY_NAME": "Hệ thống (Đồng bộ)"
+  }
+}
