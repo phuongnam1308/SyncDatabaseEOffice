@@ -2109,6 +2109,7 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
           receiver_unit: [],
           roleProcess: 'VANTHU',
           stage_status: null,
+          type_document: null,
         };
       }
 
@@ -2125,6 +2126,7 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
           receiver_unit: [],
           roleProcess: 'VANTHU',
           stage_status: null,
+          type_document: null,
         };
       }
 
@@ -2137,6 +2139,7 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
       let roleProcess = 'VANTHU';
       let stageStatus = 'DA_XU_LY';
       let receiverUnit = [];
+      let typeDocument = null; 
 
       // ===== STEP 2: Extract inside / outside parentheses =====
       try {
@@ -2235,6 +2238,7 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
           action = acNormalized;
           if (acNormalized.includes('trình')) {
             actionCode = 'TRINH_KY';
+            typeDocument = 'OutgoingDocument';
           } else if (
             acNormalized.includes('chuyển') ||
             acNormalized.includes('phân công') ||
@@ -2253,7 +2257,7 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
             actionCode = 'BAN_HANH';
             stageStatus = 'DA_BAN_HANH';
           } else if (acNormalized.includes('xóa')) {
-            actionCode = 'THU_HOI';
+            actionCode = 'CREATE';
           } else {
             actionCode = 'CREATE';
             stageStatus = 'DA_XU_LY';
@@ -2365,6 +2369,7 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
         receiver_unit: receiverUnit,
         roleProcess: roleProcess || 'VANTHU',
         stage_status: stageStatus || 'DA_XU_LY',
+        type_document: typeDocument || null,
       };
 
     } catch (error) {
@@ -2376,6 +2381,7 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
         receiver_unit: [],
         roleProcess: 'VANTHU',
         stage_status: null,
+        type_document: null,
       };
     }
   }

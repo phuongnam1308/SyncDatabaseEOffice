@@ -22,11 +22,18 @@ function getStatusCodeByAction(typeDocument, actionCode, role) {
   if (roleKey === 'VANTHU') roleKey = 'VAN_THU';
   if (roleKey === 'NHAN_VIEN') roleKey = 'CAN_BO';
 
-  if (mapConfigs[actionKey] && mapConfigs[actionKey][roleKey] !== undefined) {
-    return mapConfigs[actionKey][roleKey];
+  if (mapConfigs[actionKey]) {
+    // Ưu tiên nạp role đặc biệt được cấu hình tường minh
+    if (mapConfigs[actionKey][roleKey] !== undefined) {
+      return mapConfigs[actionKey][roleKey];
+    }
+    // Fallback sang giá trị mặc định của hành động đó
+    if (mapConfigs[actionKey]['default'] !== undefined) {
+      return mapConfigs[actionKey]['default'];
+    }
   }
 
-  // Fallback mặc định
+  // Fallback an toàn phòng khi actionKey không hề tồn tại trong map
   return 1;
 }
 

@@ -722,19 +722,20 @@ class SyncAuditModel extends BaseModel {
       isTransferOption: true
     });
 
-    // --- LOGIC MỚI ĐỂ XÁC ĐỊNH type_document DỰA TRÊN Category ---
-    let type_document;
-    const category = this._normalizeTextField(record.Category);
+    // --- XÁC ĐỊNH type_document dựa vào actionParsed và Category ---
+    let type_document = actionParsed?.type_document ?? null;
 
-    if (INCOMING_CATEGORIES.has(category)) {
-      type_document = 'IncomingDocument';
-    } else if (OUTGOING_CATEGORIES.has(category)) {
-      type_document = 'OutgoingDocument';
-    } else {
-      // Logic dự phòng nếu category không khớp: sử dụng kết quả phân tích hành động hoặc mặc định
-      type_document = actionParsed.type_document ?? "OutgoingDocument";
+    const categoryRaw = record?.Category ?? null;
+    const category = this._normalizeTextField(categoryRaw);
+
+    // chỉ assign nếu thực sự chưa có (null hoặc undefined, KHÔNG override '')
+    if (type_document === null || type_document === undefined) {
+      if (category && INCOMING_CATEGORIES.has(category)) {
+        type_document = 'IncomingDocument';
+      } else if (category && OUTGOING_CATEGORIES.has(category)) {
+        type_document = 'OutgoingDocument';
+      }
     }
-    // --- KẾT THÚC LOGIC MỚI ---
 
     // ── XỬ LÝ MAPPING ROLE VÀ SCREEN DỰA TRÊN CẤU HÌNH DYNAMIC ──
     const userProfile = await this.helper.findUserByBakId(user_id, transaction);
@@ -758,7 +759,7 @@ class SyncAuditModel extends BaseModel {
     return {
       document_id: documentId,
       time,
-      action_code: workflowMapping.action_code || actionParsed.action_code || null,
+      action_code: actionParsed.action_code || workflowMapping.action_code || null,
       details: actionStr ?? null,
       origin_id: this._normalizeTextField(
         record.ID,
@@ -780,11 +781,11 @@ class SyncAuditModel extends BaseModel {
         255
       ),
       stage_status:
-        workflowMapping.stage_status || actionParsed.stage_status || null,
+        actionParsed.stage_status || workflowMapping.stage_status || null,
       status_code: getStatusCodeByAction(
         type_document,
-        workflowMapping.action_code || actionParsed.action_code || 'CREATE',
-        workflowMapping.role || parsedRoleProcess || actionParsed.roleProcess || 'CAN_BO'
+        actionParsed.action_code || workflowMapping.action_code || 'CREATE',
+        parsedRole || 'CAN_BO'
       ),
       bpmn_version: workflowMapping.bpmn_version || null,
       type_of_process: workflowMapping.type_of_process || null,

@@ -79,7 +79,7 @@ class ReceiverParserService {
     let parsedRole = null; // Role của người nhận được bóc tách từ text
 
     // Bóc tách role mục tiêu từ HanhDong
-    parsedRole = this._determineTargetRole(hanhDongLower);
+    parsedRole = this._determineTargetRole(hanhDongLower, nguoiXuLyRaw);
 
     try {
       // ══════════════════════════════════════════════════════════════
@@ -240,52 +240,33 @@ class ReceiverParserService {
    * @returns {string|null} - Key của role (GIAM_DOC, VANTHU, ...)
    * @private
    */
-  _determineTargetRole(hanhDongLower) {
-    if (!hanhDongLower) return "CAN_BO"; // Mặc định là Cán bộ
+  _determineTargetRole(hanhDongLower, nguoiXuLyRaw) {
+    const targetStr = hanhDongLower || "";
+    const nguoiXuLyStr = (nguoiXuLyRaw || "").toLowerCase();
 
-    // Ưu tiên 1: Chuyển/Trình cho lãnh đạo cao nhất (Giám đốc)
-    const isGiamDoc = KEYWORDS.GIAM_DOC.some(kw => hanhDongLower.includes(kw));
-    if (isGiamDoc) {
-      return "GIAM_DOC";
-    }
+    if (!targetStr && !nguoiXuLyStr) return "CAN_BO";
 
-    // Ưu tiên 2: Văn thư
-    const isVanThu = KEYWORDS.VAN_THU.some(kw => hanhDongLower.includes(kw));
-    if (isVanThu) {
-      return "VAN_THU";
-    }
+    const checkStr = (str, roleKeys) => roleKeys.some(kw => str.includes(kw));
 
-    // Ưu tiên 3: Phó giám đốc
-    const isPhoGiamDoc = KEYWORDS.PHO_GIAM_DOC.some(kw => hanhDongLower.includes(kw));
-    if (isPhoGiamDoc) {
-      return "PHO_GIAM_DOC";
-    }
+    // Bước 1: Ưu tiên tìm trong Nội dung hành động (hanhDong) trước theo thứ tự
+    if (checkStr(targetStr, KEYWORDS.GIAM_DOC)) return "GIAM_DOC";
+    if (checkStr(targetStr, KEYWORDS.VAN_THU)) return "VAN_THU";
+    if (checkStr(targetStr, KEYWORDS.PHO_GIAM_DOC)) return "PHO_GIAM_DOC";
+    if (checkStr(targetStr, KEYWORDS.CHANH_VAN_PHONG)) return "CHANH_VAN_PHONG";
+    if (checkStr(targetStr, KEYWORDS.PHO_CHANH_VAN_PHONG)) return "PHO_CHANH_VAN_PHONG";
+    if (checkStr(targetStr, KEYWORDS.TRUONG_PHONG)) return "TRUONG_PHONG";
+    if (checkStr(targetStr, KEYWORDS.PHO_TRUONG_PHONG)) return "PHO_TRUONG_PHONG";
 
-    // Ưu tiên 4: Chánh văn phòng
-    const isCVP = KEYWORDS.CHANH_VAN_PHONG.some(kw => hanhDongLower.includes(kw));
-    if (isCVP) {
-      return "CHANH_VAN_PHONG";
-    }
+    // Bước 2: Fallback tìm trong NguoiTao / NguoiXuLy nếu không khớp gì ở Bước 1
+    if (checkStr(nguoiXuLyStr, KEYWORDS.GIAM_DOC)) return "GIAM_DOC";
+    if (checkStr(nguoiXuLyStr, KEYWORDS.VAN_THU)) return "VAN_THU";
+    if (checkStr(nguoiXuLyStr, KEYWORDS.PHO_GIAM_DOC)) return "PHO_GIAM_DOC";
+    if (checkStr(nguoiXuLyStr, KEYWORDS.CHANH_VAN_PHONG)) return "CHANH_VAN_PHONG";
+    if (checkStr(nguoiXuLyStr, KEYWORDS.PHO_CHANH_VAN_PHONG)) return "PHO_CHANH_VAN_PHONG";
+    if (checkStr(nguoiXuLyStr, KEYWORDS.TRUONG_PHONG)) return "TRUONG_PHONG";
+    if (checkStr(nguoiXuLyStr, KEYWORDS.PHO_TRUONG_PHONG)) return "PHO_TRUONG_PHONG";
 
-    // Ưu tiên 4.1: Phó chánh văn phòng
-    const isPCVP = KEYWORDS.PHO_CHANH_VAN_PHONG.some(kw => hanhDongLower.includes(kw));
-    if (isPCVP) {
-      return "PHO_CHANH_VAN_PHONG";
-    }
-
-    // Ưu tiên 5: Trưởng phòng
-    const isTruongPhong = KEYWORDS.TRUONG_PHONG.some(kw => hanhDongLower.includes(kw));
-    if (isTruongPhong) {
-      return "TRUONG_PHONG";
-    }
-
-    // Ưu tiên 5.1: Phó trưởng phòng
-    const isPhoTruongPhong = KEYWORDS.PHO_TRUONG_PHONG.some(kw => hanhDongLower.includes(kw));
-    if (isPhoTruongPhong) {
-      return "PHO_TRUONG_PHONG";
-    }
-
-    // Ưu tiên 6: Cán bộ (Default nếu có nội dung mà không khớp các vai trò trên)
+    // Bước 3: Cuối cùng fallback về Cán bộ
     return "CAN_BO";
   }
 

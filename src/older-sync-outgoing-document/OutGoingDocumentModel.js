@@ -4,9 +4,9 @@ const sql          = require('mssql');
 const MigrationHelper = require('../helpers/MigrationHelper');
 
 // ── Related sync models (CHỈ GỌI, KHÔNG SỬA) ─────────────────
-const StreamOutgoingAuditSyncModel = require('../sync-audit-meeting/migrate/StreamAuditMigrationModel');
+const StreamOutgoingAuditSyncModel = require('../sync-audit/migrate/StreamAuditMigrationModel');
 const StreamCommentMigrationModel  = require('../sync-document-comment/migration/StreamCommentMigrationModel');
-const SyncAuditModel               = require('../sync-audit-meeting/apply/SyncAuditModel');
+const SyncAuditModel               = require('../sync-audit/apply/SyncAuditModel');
 const SyncCommentModel             = require('../sync-document-comment/apply/SyncCommentModel');
 
 // ── Danh sách bảng audit trong DB cũ ─────────────────────────
