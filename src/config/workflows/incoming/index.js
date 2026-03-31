@@ -14,8 +14,8 @@ module.exports = {
   workflow_process,
   default: {
   "status_code": 2,
-  "bpmn_version": "SOANTHAO_PHATHANH_VBD",
-  "type_of_process": "SOANTHAO_PHATHANH_VBD",
+  "bpmn_version": "PHOIHOP_NHANDEBIET",
+  "type_of_process": "PHOIHOP_NHANDEBIET",
   "curStatusCode": 1,
   "stage_status": "CHUA_XU_LY",
   "role": "NGUOI_SOAN_THAO",
