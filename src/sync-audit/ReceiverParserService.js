@@ -4,14 +4,7 @@ const logger = require("../../utils/logger");
 // ═══════════════════════════════════════════════════════════════════
 // BẢNG KEYWORD CHỨC DANH — Dùng để tra cứu user theo position
 // ═══════════════════════════════════════════════════════════════════
-const KEYWORDS = {
-  ADMIN:            config.ROLE_MAPPINGS.ADMIN.KEYWORDS,
-  GIAM_DOC:         config.ROLE_MAPPINGS.GIAM_DOC.KEYWORDS,
-  PHO_GIAM_DOC:     config.ROLE_MAPPINGS.PHO_GIAM_DOC.KEYWORDS,
-  TRUONG_PHONG:     config.ROLE_MAPPINGS.TRUONG_PHONG.KEYWORDS,
-  PHO_TRUONG_PHONG: config.ROLE_MAPPINGS.PHO_TRUONG_PHONG.KEYWORDS,
-  VAN_THU:          config.ROLE_MAPPINGS.VAN_THU.KEYWORDS
-};
+const KEYWORDS = config.KEYWORDS;
 
 // ═══════════════════════════════════════════════════════════════════
 // DANH SÁCH TÀI KHOẢN HỆ THỐNG — Bỏ qua, không đưa vào receiver
@@ -248,38 +241,52 @@ class ReceiverParserService {
    * @private
    */
   _determineTargetRole(hanhDongLower) {
-    if (!hanhDongLower) return null;
+    if (!hanhDongLower) return "CAN_BO"; // Mặc định là Cán bộ
 
-    // Ưu tiên 1: Chuyển/Trình cho lãnh đạo cao nhất
+    // Ưu tiên 1: Chuyển/Trình cho lãnh đạo cao nhất (Giám đốc)
     const isGiamDoc = KEYWORDS.GIAM_DOC.some(kw => hanhDongLower.includes(kw));
-    if (isGiamDoc && (hanhDongLower.includes("trình") || hanhDongLower.includes("chuyển"))) {
-      return "Giám đốc";
+    if (isGiamDoc) {
+      return "GIAM_DOC";
     }
 
     // Ưu tiên 2: Văn thư
     const isVanThu = KEYWORDS.VAN_THU.some(kw => hanhDongLower.includes(kw));
     if (isVanThu) {
-      return "VANTHU";
+      return "VAN_THU";
     }
 
     // Ưu tiên 3: Phó giám đốc
     const isPhoGiamDoc = KEYWORDS.PHO_GIAM_DOC.some(kw => hanhDongLower.includes(kw));
-    if (isPhoGiamDoc && (hanhDongLower.includes("trình") || hanhDongLower.includes("chuyển"))) {
-      return "Phó giám đốc";
+    if (isPhoGiamDoc) {
+      return "PHO_GIAM_DOC";
     }
 
     // Ưu tiên 4: Chánh văn phòng
-    if (hanhDongLower.includes("chánh văn phòng") || hanhDongLower.includes("cvp")) {
-      return "Chánh văn phòng";
+    const isCVP = KEYWORDS.CHANH_VAN_PHONG.some(kw => hanhDongLower.includes(kw));
+    if (isCVP) {
+      return "CHANH_VAN_PHONG";
+    }
+
+    // Ưu tiên 4.1: Phó chánh văn phòng
+    const isPCVP = KEYWORDS.PHO_CHANH_VAN_PHONG.some(kw => hanhDongLower.includes(kw));
+    if (isPCVP) {
+      return "PHO_CHANH_VAN_PHONG";
     }
 
     // Ưu tiên 5: Trưởng phòng
     const isTruongPhong = KEYWORDS.TRUONG_PHONG.some(kw => hanhDongLower.includes(kw));
-    if (isTruongPhong && hanhDongLower.includes("chuyển")) {
-      return "Trưởng phòng";
+    if (isTruongPhong) {
+      return "TRUONG_PHONG";
     }
 
-    return null;
+    // Ưu tiên 5.1: Phó trưởng phòng
+    const isPhoTruongPhong = KEYWORDS.PHO_TRUONG_PHONG.some(kw => hanhDongLower.includes(kw));
+    if (isPhoTruongPhong) {
+      return "PHO_TRUONG_PHONG";
+    }
+
+    // Ưu tiên 6: Cán bộ (Default nếu có nội dung mà không khớp các vai trò trên)
+    return "CAN_BO";
   }
 
   // ═══════════════════════════════════════════════════════════════════

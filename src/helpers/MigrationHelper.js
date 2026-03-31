@@ -2256,7 +2256,7 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
             actionCode = 'THU_HOI';
           } else {
             actionCode = 'CREATE';
-          stageStatus = 'DA_XU_LY';
+            stageStatus = 'DA_XU_LY';
           }
         } else {
           actionCode = 'CREATE';

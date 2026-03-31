@@ -10,7 +10,7 @@ const getKeywords = (roleKey) => keywordsTable[roleKey]?.keywords || [];
 // Constants & Mappings
 const ROLE_MAPPINGS = {
   ADMIN: {
-    KEYWORDS: getKeywords('ADMIN') || ["admin", "quản trị viên"],
+    KEYWORDS: getKeywords('ADMIN'),
     ROLES:    permissionsTable.ADMIN?.ROLES || []
   },
   GIAM_DOC: {
@@ -33,6 +33,10 @@ const ROLE_MAPPINGS = {
     KEYWORDS: getKeywords('PHO_TRUONG_PHONG'),
     ROLES:    permissionsTable.PHO_TRUONG_PHONG?.ROLES || []
   },
+  PHO_CHANH_VAN_PHONG: {
+    KEYWORDS: getKeywords('PHO_CHANH_VAN_PHONG'),
+    ROLES:    []
+  },
   VAN_THU_CUC: {
     KEYWORDS: getKeywords('VAN_THU_CUC') || ["văn thư cục"],
     ROLES:    permissionsTable.VAN_THU_CUC?.ROLES || []
@@ -41,11 +45,15 @@ const ROLE_MAPPINGS = {
     KEYWORDS: getKeywords('VANTHU'),
     ROLES:    permissionsTable.VAN_THU?.ROLES || []
   },
-  NHAN_VIEN: {
-    KEYWORDS: getKeywords('NHAN_VIEN'),
-    ROLES:    permissionsTable.NHAN_VIEN?.ROLES || []
+  CAN_BO: {
+    KEYWORDS: getKeywords('CAN_BO'),
+    ROLES:    permissionsTable.CAN_BO?.ROLES || []
   }
 };
+const KEYWORDS = Object.keys(ROLE_MAPPINGS).reduce((acc, key) => {
+  acc[key] = ROLE_MAPPINGS[key].KEYWORDS;
+  return acc;
+}, {});
 
 const OUTGOING_SYNC_CONFIG = settings;
 
@@ -63,18 +71,27 @@ const getWorkflowConfig = (docType = 'outgoing') => {
     // Map normalized role names to their definitions
     const roleKeyMap = {
       "VANTHU": "VANTHU",
+      "GIAM_DOC": "GIAM_DOC",
+      "PHO_GIAM_DOC": "PHO_GIAM_DOC",
+      "CHANH_VAN_PHONG": "CHANH_VAN_PHONG",
+      "PHO_CHANH_VAN_PHONG": "PHO_CHANH_VAN_PHONG",
+      "TRUONG_PHONG": "TRUONG_PHONG",
+      "PHO_TRUONG_PHONG": "PHO_TRUONG_PHONG",
+      "CAN_BO": "CAN_BO",
+      "NHAN_VIEN": "CAN_BO",
+      // Legacy support for human-readable strings if needed
       "Giám đốc": "GIAM_DOC",
       "Chánh văn phòng": "CHANH_VAN_PHONG",
       "Phó chánh văn phòng": "PHO_CHANH_VAN_PHONG",
       "Phó giám đốc": "PHO_GIAM_DOC",
       "Trưởng phòng": "TRUONG_PHONG",
       "Phó trưởng phòng": "PHO_TRUONG_PHONG",
-      "Cán bộ": "NHAN_VIEN"
+      "Cán bộ": "CAN_BO"
     };
 
     // Use a copy to avoid mutating the original exported objects
     const processCopy = { ...p };
-    const key = roleKeyMap[p.role];
+    const key = roleKeyMap[p.role] || p.role; // Use role key directly if not in map
     if (key) {
       processCopy.keywords = getKeywords(key);
     }
@@ -90,13 +107,13 @@ const getWorkflowConfig = (docType = 'outgoing') => {
 module.exports = {
   // Legacy exports for compatibility
   ...Object.keys(ROLE_MAPPINGS).reduce((acc, key) => {
-    acc[`${key}_KEYWORDS`] = ROLE_MAPPINGS[key].KEYWORDS;
+    acc[`${key}_KEYWORDS`] = KEYWORDS[key];
     acc[`ROLES_${key}`] = ROLE_MAPPINGS[key].ROLES;
     return acc;
   }, {}),
 
-  ROLES_DEFAULT: ROLE_MAPPINGS.NHAN_VIEN.ROLES,
-  NHANVIEN_KEYWORDS: ROLE_MAPPINGS.NHAN_VIEN.KEYWORDS,
+  ROLES_DEFAULT: ROLE_MAPPINGS.CAN_BO.ROLES,
+  NHANVIEN_KEYWORDS: ROLE_MAPPINGS.CAN_BO.KEYWORDS,
 
   USER_PAREN_DEFAULT: OUTGOING_SYNC_CONFIG.USER_PAREN_DEFAULT,
   BEGIN_LIMIT:        OUTGOING_SYNC_CONFIG.BEGIN_LIMIT,
@@ -109,5 +126,6 @@ module.exports = {
   getWorkflowConfig,
 
   ROLE_MAPPINGS,
+  KEYWORDS,
   OUTGOING_SYNC_CONFIG
 };

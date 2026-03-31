@@ -1,5 +1,5 @@
 module.exports = {
-  "role": "Phó trưởng phòng",
+  "role": "PHO_TRUONG_PHONG",
   "screens": [
     {
       "screen_name": "Dự thảo - dự thảo",

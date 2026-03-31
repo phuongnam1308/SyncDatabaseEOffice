@@ -15,6 +15,11 @@ module.exports = {
       "văn thư lưu trữ"
     ]
   },
+  "VAN_THU_CUC": {
+    "keywords": [
+      "văn thư cục"
+    ]
+  },
   "GIAM_DOC": {
     "keywords": [
       "giám đốc",
@@ -142,7 +147,7 @@ module.exports = {
       "phó trưởng trực ban"
     ]
   },
-  "NHAN_VIEN": {
+  "CAN_BO": {
     "keywords": [
       "nhân viên",
       "chuyên viên",

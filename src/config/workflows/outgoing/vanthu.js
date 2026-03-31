@@ -1,5 +1,5 @@
 module.exports = {
-  "role": "VANTHU",
+  "role": "VAN_THU",
   "screens": [
     {
       "screen_name": "Màn phát hành - chờ phát hành",

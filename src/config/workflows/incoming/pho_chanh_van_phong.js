@@ -1,5 +1,5 @@
 module.exports = {
-  "role": "Phó chánh văn phòng",
+  "role": "PHO_CHANH_VAN_PHONG",
   "screens": [
     {
       "screen_name": "Màn xử lý - chờ xử lý",

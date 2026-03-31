@@ -1,5 +1,5 @@
 module.exports = {
-  "role": "Cán bộ",
+  "role": "CAN_BO",
   "screens": [
     {
       "screen_name": "dự thảo - dự thảo",

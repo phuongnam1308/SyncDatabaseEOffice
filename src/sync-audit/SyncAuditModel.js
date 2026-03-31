@@ -3,6 +3,7 @@ const BaseModel = require("../../models/BaseModel");
 const logger = require("../../utils/logger");
 const MigrationHelper = require("../helpers/MigrationHelper");
 const ReceiverParserService = require("./ReceiverParserService");
+const { getStatusCodeByAction } = require('../config/action-mapping');
 const sql = require("mssql");
 
 // Định nghĩa các hằng số cho danh mục (Category) của văn bản đi
@@ -780,7 +781,11 @@ class SyncAuditModel extends BaseModel {
       ),
       stage_status:
         workflowMapping.stage_status || actionParsed.stage_status || null,
-      status_code: workflowMapping.status_code || null,
+      status_code: getStatusCodeByAction(
+        type_document,
+        workflowMapping.action_code || actionParsed.action_code || 'CREATE',
+        workflowMapping.role || parsedRoleProcess || actionParsed.roleProcess || 'CAN_BO'
+      ),
       bpmn_version: workflowMapping.bpmn_version || null,
       type_of_process: workflowMapping.type_of_process || null,
       curStatusCode: workflowMapping.curStatusCode || null,

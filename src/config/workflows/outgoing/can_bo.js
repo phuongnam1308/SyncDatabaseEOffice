@@ -1,70 +1,70 @@
 module.exports = {
-  "role": "Cán bộ",
+  "role": "CAN_BO",
   "screens": [
     {
       "screen_name": "dự thảo - dự thảo",
       "trangthais": [
         "dự thảo"
       ],
-      "status_code": null,
+      "status_code": 1,
       "bpmn_version": "VAN_BAN_DI",
       "type_of_process": "VAN_BAN_DI",
-      "curStatusCode": null,
-      "stage_status": null,
-      "role": null,
-      "action_code": null
+      "curStatusCode": 1,
+      "stage_status": 'CHUA_XU_LY',
+      "role": 'NGUOI_SOAN_THAO',
+      "action_code": 'CREATE'
     },
     {
       "screen_name": "dự thảo - đã trình ký",
       "trangthais": [
         "đã trình ký"
       ],
-      "status_code": null,
+      "status_code": 2,
       "bpmn_version": "VAN_BAN_DI",
       "type_of_process": "VAN_BAN_DI",
-      "curStatusCode": null,
-      "stage_status": null,
-      "role": null,
-      "action_code": null
+      "curStatusCode": 2,
+      "stage_status": 'DA_XU_LY',
+      "role": 'NGUOI_SOAN_THAO',
+      "action_code": 'CREATE'
     },
     {
       "screen_name": "dự thảo - chờ phát hành",
       "trangthais": [
         "chờ phát hành"
       ],
-      "status_code": null,
+      "status_code": 6,
       "bpmn_version": "VAN_BAN_DI",
       "type_of_process": "VAN_BAN_DI",
-      "curStatusCode": null,
-      "stage_status": null,
-      "role": null,
-      "action_code": null
+      "curStatusCode": 6,
+      "stage_status": 'DA_XU_LY',
+      "role": 'NGUOI_SOAN_THAO',
+      "action_code": 'CREATE'
     },
     {
       "screen_name": "dự thảo - đã phát hành",
       "trangthais": [
         "đã ban hành"
       ],
-      "status_code": null,
+      "status_code": 9,
       "bpmn_version": "VAN_BAN_DI",
       "type_of_process": "VAN_BAN_DI",
-      "curStatusCode": null,
-      "stage_status": null,
-      "role": null,
-      "action_code": null
+      "curStatusCode": 9,
+      "stage_status": 'DA_XU_LY',
+      "role": 'NGUOI_SOAN_THAO',
+      "action_code": 'CREATE'
     },
     {
       "screen_name": "xử lý - chờ xử lý",
       "trangthais": [
         "chờ xử lý"
       ],
-      "status_code": null,
+      "status_code": 2,
       "bpmn_version": "VAN_BAN_DI",
       "type_of_process": "VAN_BAN_DI",
-      "curStatusCode": null,
-      "stage_status": null,
-      "role": null,
-      "action_code": null
+      "curStatusCode": 2,
+      "stage_status": 'CHUA_XU_LY',
+      "role": 'NGUOI_SOAN_THAO',
+      "action_code": 'CREATE'
     },
     {
       "screen_name": "xử lý - đã xử lý",
