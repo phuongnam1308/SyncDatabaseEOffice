@@ -1193,35 +1193,49 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       logger.warn(`[upsertDocumentAggregateById] Lỗi parse HTML YKien ID=${id}: ${htmlCommentErr.message}`);
     }
 
-    for (const auditModel of this._syncAuditModel || []) {
+    // ══════════════════════════════════════════════════════════════
+    // AGGREGATED AUDIT SYNC: Gộp tất cả audit từ các bảng và xử lý theo thứ tự thời gian
+    // ══════════════════════════════════════════════════════════════
+    const auditModels = this._syncAuditModel || [];
+    if (auditModels.length > 0) {
       try {
-        const rawAudits =
-          await auditModel.fetchByOutgoingDocumentId(
-            id
-          );
+        const auditTableNames = auditModels.map(m => m.oldDbTable);
+        const firstModel = auditModels[0];
+        
+        // Lấy tất cả audit từ tất cả các bảng, đã được sắp xếp chronologically bên trong method này
+        const allRawAudits = await firstModel.fetchAllAuditsAcrossTables(
+          id,
+          auditTableNames,
+          [CATEGORY_RELEASE_DV, CATEGORY_RELEASE_TCT, CATEGORY_OUTGOING] // Categories cho văn bản đi
+        );
 
-        if (!Array.isArray(rawAudits) || !rawAudits.length) {
-          continue;
-        }
+        if (allRawAudits.length > 0) {
+          // Tạo map để tìm nhanh model xử lý dựa trên tên bảng
+          const modelMap = new Map(auditModels.map(m => [m.oldDbTable, m]));
 
-        for (const rawAudit of rawAudits) {
-          try {
-            const result = await auditModel.processSingleRecord(rawAudit, documentId, transaction);
-            if (!result) continue;
-            logger.info(
-              `[AggregateSync][Audit] table=${auditModel?.oldDbTable} documentId=${documentResult.documentId} inserted=${result?.inserted || 0} updated=${result?.updated || 0}`
-            );
-            totalAffected += Number(result.inserted || 0);
-            totalAffected += Number(result.updated || 0);
-          } catch (auditErr) {
-            logger.warn(
-              `[upsertDocumentAggregateById] Audit migrate failed table=${auditModel?.oldDbTable} ID=${id}: ${auditErr.message}`
-            );
+          for (const rawAudit of allRawAudits) {
+            const tableName = rawAudit.__source_table;
+            const model = modelMap.get(tableName) || firstModel;
+            
+            try {
+              const result = await model.processSingleRecord(rawAudit, documentId, transaction);
+              if (!result) continue;
+              
+              logger.info(
+                `[AggregateSync][Audit] table=${tableName} documentId=${documentId} inserted=${result?.inserted || 0} updated=${result?.updated || 0}`
+              );
+              totalAffected += Number(result.inserted || 0);
+              totalAffected += Number(result.updated || 0);
+            } catch (auditErr) {
+              logger.warn(
+                `[upsertDocumentAggregateById] Audit migrate failed table=${tableName} ID=${id}: ${auditErr.message}`
+              );
+            }
           }
         }
       } catch (error) {
         logger.warn(
-          `[upsertDocumentAggregateById] Fetch audit failed table=${auditModel?.oldDbTable} ID=${id}: ${error.message}`
+          `[upsertDocumentAggregateById] Aggregated fetch audit failed for ID=${id}: ${error.message}`
         );
       }
     }

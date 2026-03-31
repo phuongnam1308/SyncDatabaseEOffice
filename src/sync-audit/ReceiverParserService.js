@@ -288,7 +288,7 @@ class ReceiverParserService {
     // Ưu tiên 1: Chuyển/Trình cho lãnh đạo cao nhất
     const isGiamDoc = KEYWORDS.GIAM_DOC.some(kw => hanhDongLower.includes(kw));
     if (isGiamDoc && (hanhDongLower.includes("trình") || hanhDongLower.includes("chuyển"))) {
-      return "GIAM_DOC";
+      return "Giám đốc";
     }
 
     // Ưu tiên 2: Văn thư
@@ -300,18 +300,18 @@ class ReceiverParserService {
     // Ưu tiên 3: Phó giám đốc
     const isPhoGiamDoc = KEYWORDS.PHO_GIAM_DOC.some(kw => hanhDongLower.includes(kw));
     if (isPhoGiamDoc && (hanhDongLower.includes("trình") || hanhDongLower.includes("chuyển"))) {
-      return "PHO_GIAM_DOC";
+      return "Phó giám đốc";
     }
 
     // Ưu tiên 4: Chánh văn phòng
     if (hanhDongLower.includes("chánh văn phòng") || hanhDongLower.includes("cvp")) {
-      return "CHANH_VAN_PHONG";
+      return "Chánh văn phòng";
     }
 
     // Ưu tiên 5: Trưởng phòng
     const isTruongPhong = KEYWORDS.TRUONG_PHONG.some(kw => hanhDongLower.includes(kw));
     if (isTruongPhong && hanhDongLower.includes("chuyển")) {
-      return "TRUONG_PHONG";
+      return "Trưởng phòng";
     }
 
     return null;

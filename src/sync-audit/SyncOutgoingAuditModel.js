@@ -112,9 +112,9 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
              updated_at     = SYSDATETIME()
          WHEN NOT MATCHED THEN
            INSERT (document_id, receiver, role_process, stage_status,
-                   created_at, last_audit_id, receiver_unit, is_creator)
+                   created_at, last_audit_id, receiver_unit, is_creator, table_backups)
            VALUES (@document_id, @receiver, @role_process, @stage_status,
-                   @created_at, @last_audit_id, @receiver_unit, @is_creator);`,
+                   @created_at, @last_audit_id, @receiver_unit, @is_creator, @table_backups);`,
         {
           document_id,
           receiver:      String(rec).substring(0, 100),
@@ -124,9 +124,11 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
           last_audit_id: auditId || null,
           receiver_unit: unit ? String(unit).substring(0, 100) : null,
           is_creator:    isCreator,
+          table_backups: 'outgoing_assignment',
         },
         transaction
       );
+      logger.info(`[SyncOutgoingAuditModel] Sync assignment success: doc=${document_id} receiver=${rec} role=${roleProcess}`);
     }
   }
 
@@ -182,7 +184,7 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
            last_audit_id, last_audit_time,
            has_ban_hanh, has_da_xu_ly, has_ht_vbtt,
            is_completed_doc, last_da_xu_ly_audit_id, has_tra_lai_after_da_xu_ly,
-           has_open_workitem, is_transfer_to_room, updated_at
+           has_open_workitem, is_transfer_to_room, updated_at, table_backups
          )
          VALUES (
            @document_id, @stage_status, @action_code,
@@ -190,7 +192,7 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
            @last_audit_id, @audit_time,
            @has_ban_hanh, @has_da_xu_ly, @has_ht_vbtt,
            @is_completed, CASE WHEN @has_da_xu_ly = 1 THEN @last_audit_id ELSE NULL END, 0,
-           0, 0, SYSDATETIME()
+           0, 0, SYSDATETIME(), @table_backups
          );`,
       {
         document_id,
@@ -204,9 +206,11 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
         has_da_xu_ly:  isDaXuLy,
         has_ht_vbtt:   isHtVbtt,
         is_completed:  isCompleted,
+        table_backups: 'outgoing_current_state',
       },
       transaction
     );
+    logger.info(`[SyncOutgoingAuditModel] Sync current_state success: doc=${document_id} status=${stage_status}`);
   }
 
   // ---------------------------------------------------------------------------

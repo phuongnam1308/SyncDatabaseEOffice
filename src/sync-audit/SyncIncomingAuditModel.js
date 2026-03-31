@@ -107,9 +107,9 @@ class SyncIncomingAuditModel extends SyncAuditModel {
              updated_at     = SYSDATETIME()
          WHEN NOT MATCHED THEN
            INSERT (document_id, receiver, role_process, stage_status,
-                   created_at, last_audit_id)
+                   created_at, last_audit_id, table_backups)
             VALUES (@document_id, @receiver, @role_process, @stage_status,
-                   @created_at, @last_audit_id);`,
+                   @created_at, @last_audit_id, @table_backups);`,
         {
           document_id,
           receiver:      String(rec).substring(0, 100),
@@ -117,9 +117,11 @@ class SyncIncomingAuditModel extends SyncAuditModel {
           stage_status:  String(stage_status).substring(0, 50),
           created_at:    created_at || new Date(),
           last_audit_id: auditId || null,
+          table_backups: 'incomming_assignment',
         },
         transaction
       );
+      logger.info(`[SyncIncomingAuditModel] Sync assignment success: doc=${document_id} receiver=${rec} role=${roleProcess}`);
     }
   }
 
@@ -163,13 +165,13 @@ class SyncIncomingAuditModel extends SyncAuditModel {
            document_id, current_stage_status, current_action_code,
            current_receiver, current_role_process,
            last_audit_id, last_audit_time,
-           is_completed_doc, has_open_workitem, is_transfer_to_room, updated_at
+           is_completed_doc, has_open_workitem, is_transfer_to_room, updated_at, table_backups
          )
          VALUES (
            @document_id, @stage_status, @action_code,
            @receiver, @role_process,
            @last_audit_id, @audit_time,
-           @is_completed, 0, 0, SYSDATETIME()
+           @is_completed, 0, 0, SYSDATETIME(), @table_backups
          );`,
       {
         document_id,
@@ -180,9 +182,11 @@ class SyncIncomingAuditModel extends SyncAuditModel {
         last_audit_id: auditId || null,
         audit_time:    time,
         is_completed:  isCompleted,
+        table_backups: 'incomming_current_state',
       },
       transaction
     );
+    logger.info(`[SyncIncomingAuditModel] Sync current_state success: doc=${document_id} status=${stage_status}`);
   }
 
   // ---------------------------------------------------------------------------
