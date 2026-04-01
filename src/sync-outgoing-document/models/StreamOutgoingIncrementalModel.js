@@ -326,7 +326,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
   async getCount(lastSyncTime, lastSyncId = 0) {
     const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
     const normalizedLastSyncId = Number(lastSyncId || 0);
-    const limit = Number(process.env.COMPLETED_LIMIT || 1000);
+    const limit = Number(process.env.COMPLETED_LIMIT || 20);
 
     const syncTimeExpr = this.getSyncTimeExpression();
     const query = `

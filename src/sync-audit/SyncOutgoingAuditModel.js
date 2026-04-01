@@ -79,56 +79,65 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
       roleProcess, stage_status, action_code
     } = audit;
 
-    if (!document_id || !stage_status || !roleProcess) return;
+    if (!document_id) return;
 
-    const isCreator = CREATOR_ACTION_CODES.has(action_code) ? 1 : 0;
-
-    // Gộp xử lý: cá nhân hoặc đơn vị. 
-    // audit đã được expand nên receiver/receiver_unit thường chỉ có 1 cái hoặc cả 2 nếu cùng một row
-    const allReceivers = [
-      ...(receiver ? [{ rec: receiver, unit: receiver_unit || null }] : []),
-      ...(receiver_unit && receiver_unit !== receiver ? [{ rec: receiver_unit, unit: receiver_unit }] : [])
-    ];
-
-    for (const { rec, unit } of allReceivers) {
-      if (!rec) continue;
-
+    try {
+      // 1. Xoá toàn bộ assignment của document
       await this.queryNewDbTx(
-        `MERGE ${process.env.NEW_DB_NAME}.dbo.outgoing_assignment AS tgt
-         USING (SELECT
-           @document_id      AS document_id,
-           @receiver         AS receiver,
-           @role_process     AS role_process
-         ) AS src
-         ON  tgt.document_id  = src.document_id
-         AND tgt.receiver     = src.receiver
-         AND tgt.role_process = src.role_process
-         WHEN MATCHED THEN
-           UPDATE SET
-             stage_status   = @stage_status,
-             last_audit_id  = @last_audit_id,
-             receiver_unit  = COALESCE(@receiver_unit, tgt.receiver_unit),
-             is_creator     = CASE WHEN @is_creator = 1 THEN 1 ELSE tgt.is_creator END,
-             updated_at     = SYSDATETIME()
-         WHEN NOT MATCHED THEN
-           INSERT (document_id, receiver, role_process, stage_status,
-                   created_at, last_audit_id, receiver_unit, is_creator, table_backups)
-           VALUES (@document_id, @receiver, @role_process, @stage_status,
-                   @created_at, @last_audit_id, @receiver_unit, @is_creator, @table_backups);`,
-        {
-          document_id,
-          receiver:      String(rec).substring(0, 100),
-          role_process:  String(roleProcess).substring(0, 50),
-          stage_status:  String(stage_status).substring(0, 50),
-          created_at:    time || new Date(),
-          last_audit_id: auditId || null,
-          receiver_unit: unit ? String(unit).substring(0, 100) : null,
-          is_creator:    isCreator,
-          table_backups: 'outgoing_assignment',
-        },
+        `DELETE FROM ${process.env.NEW_DB_NAME}.dbo.outgoing_assignment
+        WHERE document_id = @document_id`,
+        { document_id },
         transaction
       );
-      logger.info(`[SyncOutgoingAuditModel] Sync assignment success: doc=${document_id} receiver=${rec} role=${roleProcess}`);
+
+      // 2. Validate dữ liệu chính
+      if (!stage_status || !roleProcess) return;
+
+      const isCreator = CREATOR_ACTION_CODES?.has(action_code) ? 1 : 0;
+
+      const allReceivers = [
+        ...(receiver ? [{ rec: receiver, unit: receiver_unit || null }] : []),
+        ...(receiver_unit && receiver_unit !== receiver
+          ? [{ rec: receiver_unit, unit: receiver_unit }]
+          : [])
+      ];
+
+      if (allReceivers.length === 0) return;
+
+      // 3. Loại duplicate (receiver + role)
+      const uniqueKeys = new Set();
+
+      for (const { rec, unit } of allReceivers) {
+        if (!rec) continue;
+
+        const key = `${rec}_${roleProcess}`;
+        if (uniqueKeys.has(key)) continue;
+        uniqueKeys.add(key);
+
+        await this.queryNewDbTx(
+          `INSERT INTO ${process.env.NEW_DB_NAME}.dbo.outgoing_assignment
+          (document_id, receiver, role_process, stage_status,
+            created_at, last_audit_id, receiver_unit, is_creator, table_backups)
+          VALUES (@document_id, @receiver, @role_process, @stage_status,
+                  @created_at, @last_audit_id, @receiver_unit, @is_creator, @table_backups)`,
+          {
+            document_id,
+            receiver:      String(rec).substring(0, 100),
+            role_process:  String(roleProcess).substring(0, 50),
+            stage_status:  String(stage_status).substring(0, 50),
+            created_at:    time || new Date(),
+            last_audit_id: auditId || null,
+            receiver_unit: unit ? String(unit).substring(0, 100) : null,
+            is_creator:    isCreator,
+            table_backups: 'outgoing_assignment',
+          },
+          transaction
+        );
+      }
+
+    } catch (err) {
+      logger.error(`[SyncOutgoingAuditModel] Sync assignment failed: doc=${document_id}`, err);
+      throw err;
     }
   }
 

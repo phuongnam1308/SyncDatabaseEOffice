@@ -81,47 +81,53 @@ class SyncIncomingAuditModel extends SyncAuditModel {
       roleProcess, stage_status
     } = audit;
 
-    if (!document_id || !stage_status || !roleProcess) return;
+    if (!document_id) return;
 
-    // Gộp tất cả đối tượng nhận (cá nhân và đơn vị) vào danh sách chung
-    // Ở đây audit đã được expand nên receiver/receiver_unit thường chỉ có 1 cái hoặc cả 2 nếu cùng một row
-    const allReceivers = [receiver, receiver_unit].filter(Boolean);
-    if (allReceivers.length === 0) return;
-
-    for (const rec of allReceivers) {
-      // PK: (document_id, receiver, role_process)
+    try {
+      // 1. Xoá toàn bộ assignment của document
       await this.queryNewDbTx(
-        `MERGE ${process.env.NEW_DB_NAME}.dbo.incomming_assignment AS tgt
-         USING (SELECT
-           @document_id      AS document_id,
-           @receiver         AS receiver,
-           @role_process     AS role_process
-         ) AS src
-         ON  tgt.document_id  = src.document_id
-         AND tgt.receiver     = src.receiver
-         AND tgt.role_process = src.role_process
-         WHEN MATCHED THEN
-           UPDATE SET
-             stage_status   = @stage_status,
-             last_audit_id  = @last_audit_id,
-             updated_at     = SYSDATETIME()
-         WHEN NOT MATCHED THEN
-           INSERT (document_id, receiver, role_process, stage_status,
-                   created_at, last_audit_id, table_backups)
-            VALUES (@document_id, @receiver, @role_process, @stage_status,
-                   @created_at, @last_audit_id, @table_backups);`,
-        {
-          document_id,
-          receiver:      String(rec).substring(0, 100),
-          role_process:  String(roleProcess).substring(0, 50),
-          stage_status:  String(stage_status).substring(0, 50),
-          created_at:    created_at || new Date(),
-          last_audit_id: auditId || null,
-          table_backups: 'incomming_assignment',
-        },
+        `DELETE FROM ${process.env.NEW_DB_NAME}.dbo.incomming_assignment
+        WHERE document_id = @document_id`,
+        { document_id },
         transaction
       );
-      logger.info(`[SyncIncomingAuditModel] Sync assignment success: doc=${document_id} receiver=${rec} role=${roleProcess}`);
+
+      // 2. Validate input chính
+      if (!stage_status || !roleProcess) return;
+
+      const allReceivers = [receiver, receiver_unit].filter(Boolean);
+      if (allReceivers.length === 0) return;
+
+      // 3. Loại duplicate receiver + role
+      const uniqueKeys = new Set();
+
+      for (const rec of allReceivers) {
+        const key = `${rec}_${roleProcess}`;
+        if (uniqueKeys.has(key)) continue;
+        uniqueKeys.add(key);
+
+        await this.queryNewDbTx(
+          `INSERT INTO ${process.env.NEW_DB_NAME}.dbo.incomming_assignment
+          (document_id, receiver, role_process, stage_status,
+            created_at, last_audit_id, table_backups)
+          VALUES (@document_id, @receiver, @role_process, @stage_status,
+                  @created_at, @last_audit_id, @table_backups)`,
+          {
+            document_id,
+            receiver:      String(rec).substring(0, 100),
+            role_process:  String(roleProcess).substring(0, 50),
+            stage_status:  String(stage_status).substring(0, 50),
+            created_at:    created_at || new Date(),
+            last_audit_id: auditId || null,
+            table_backups: 'incomming_assignment',
+          },
+          transaction
+        );
+      }
+
+    } catch (err) {
+      logger.error(`[SyncIncomingAuditModel] Sync assignment failed: doc=${document_id}`, err);
+      throw err;
     }
   }
 

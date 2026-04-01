@@ -377,8 +377,8 @@ class SyncAuditModel extends BaseModel {
             auditId = await this._insert(audit, transaction);
             inserted++;
             // Lưu kết quả để subclass sử dụng
-            results.push({ audit, id: auditId });
           }
+          results.push({ audit, id: auditId });
 
           // 5c. Cập nhật status_code cho bảng văn bản tương ứng
           if (audit.status_code && audit.document_id) {
@@ -764,7 +764,7 @@ class SyncAuditModel extends BaseModel {
       display_name: displayName ?? null,
       user_id: user_id ?? null,
       roleProcess:
-        workflowMapping.role || parsedRoleProcess || actionParsed.roleProcess || null,
+        actionParsed.roleProcess || workflowMapping.role || parsedRoleProcess || null,
       action: actionParsed.action || this._normalizeTextField(
         rawAction,
         255
