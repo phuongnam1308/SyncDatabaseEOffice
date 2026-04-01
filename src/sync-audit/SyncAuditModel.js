@@ -3,6 +3,7 @@ const BaseModel = require("../../models/BaseModel");
 const logger = require("../../utils/logger");
 const MigrationHelper = require("../helpers/MigrationHelper");
 const ReceiverParserService = require("./ReceiverParserService");
+const { getStatusCodeByAction } = require('../config/action-mapping');
 const sql = require("mssql");
 
 // Định nghĩa các hằng số cho danh mục (Category) của văn bản đi
@@ -375,14 +376,18 @@ class SyncAuditModel extends BaseModel {
             // 5b. Nếu chưa tồn tại, thêm mới
             auditId = await this._insert(audit, transaction);
             inserted++;
+            // Lưu kết quả để subclass sử dụng
+            results.push({ audit, id: auditId });
           }
 
-          // Lưu kết quả để subclass sử dụng
-          results.push({ audit, id: auditId });
-
-          // 5c. Cập nhật status_code cho bảng văn bản tương ứng (IncomingDocument/OutgoingDocument)
+          // 5c. Cập nhật status_code cho bảng văn bản tương ứng
           if (audit.status_code && audit.document_id) {
-            await this._updateDocumentStatusCode(audit.document_id, audit.type_document, audit.status_code, transaction);
+            await this._updateDocumentStatusCode(
+              audit.document_id, 
+              audit.type_document, 
+              audit.status_code, 
+              transaction
+            );
           }
         } catch (auditErr) {
           logger.warn(
@@ -412,57 +417,47 @@ class SyncAuditModel extends BaseModel {
    */
   async _getExistingAudit(audit, transaction) {
     if (!audit) return null;
-
-    // Ưu tiên tìm kiếm theo ID gốc (origin_id) và tên bảng backup
-    if (audit.origin_id) {
-      const byOriginQuery = `
-        SELECT TOP 1 id
-        FROM ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable}
-        WHERE origin_id = @origin_id
-          AND table_backups = @table_backups
-      `;
-
-      const byOrigin = await this.queryNewDbTx(
-        byOriginQuery,
-        {
-          origin_id: audit.origin_id,
-          table_backups:
-            audit.table_backups ||
-            this.oldDbTable,
-        },
-        transaction
-      );
-
-      if (byOrigin?.[0]) {
-        return byOrigin[0];
-      }
-    }
-
-    // Nếu không tìm thấy bằng origin_id, thử tìm kiếm bằng tổ hợp document_id, time và user_id
     if (!audit.document_id || !audit.time) return null;
 
-    const query = `
-      SELECT TOP 1 id
-      FROM ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable}
-      WHERE document_id = @document_id
-        AND [time] = @time
-        AND (
-          (@user_id IS NULL AND user_id IS NULL)
-          OR user_id = @user_id
-        )
+    const baseCondition = `
+      document_id = @document_id
+      AND [time] = @time
     `;
 
-    const result = await this.queryNewDbTx(
-      query,
-      {
-        document_id: audit.document_id,
-        time: audit.time,
-        user_id: audit.user_id ?? null,
-      },
-      transaction
-    );
+    const baseParams = {
+      document_id: audit.document_id,
+      time: audit.time,
+    };
 
-    return result?.[0] || null;
+    // Priority 1: Tìm theo receiver
+    if (audit.receiver !== undefined) {
+      const result = await this.queryNewDbTx(
+        `SELECT TOP 1 id
+        FROM ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable}
+        WHERE ${baseCondition}
+          AND ((@receiver IS NULL AND receiver IS NULL) OR receiver = @receiver)
+        ORDER BY id ASC`,
+        { ...baseParams, receiver: audit.receiver ?? null },
+        transaction
+      );
+      if (result?.[0]) return result[0];
+    }
+
+    // Priority 2: Fallback theo receiver_unit
+    if (audit.receiver_unit !== undefined) {
+      const result = await this.queryNewDbTx(
+        `SELECT TOP 1 id
+        FROM ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable}
+        WHERE ${baseCondition}
+          AND ((@receiver_unit IS NULL AND receiver_unit IS NULL) OR receiver_unit = @receiver_unit)
+        ORDER BY id ASC`,
+        { ...baseParams, receiver_unit: audit.receiver_unit ?? null },
+        transaction
+      );
+      if (result?.[0]) return result[0];
+    }
+
+    return null; // ← fix: không có result nào ở đây, trả null thẳng
   }
 
   /**
@@ -716,19 +711,20 @@ class SyncAuditModel extends BaseModel {
       isTransferOption: true
     });
 
-    // --- LOGIC MỚI ĐỂ XÁC ĐỊNH type_document DỰA TRÊN Category ---
-    let type_document;
-    const category = this._normalizeTextField(record.Category);
+    // --- XÁC ĐỊNH type_document dựa vào actionParsed và Category ---
+    let type_document = actionParsed?.type_document ?? null;
 
-    if (INCOMING_CATEGORIES.has(category)) {
-      type_document = 'IncomingDocument';
-    } else if (OUTGOING_CATEGORIES.has(category)) {
-      type_document = 'OutgoingDocument';
-    } else {
-      // Logic dự phòng nếu category không khớp: sử dụng kết quả phân tích hành động hoặc mặc định
-      type_document = actionParsed.type_document ?? "OutgoingDocument";
+    const categoryRaw = record?.Category ?? null;
+    const category = this._normalizeTextField(categoryRaw);
+
+    // chỉ assign nếu thực sự chưa có (null hoặc undefined, KHÔNG override '')
+    if (type_document === null || type_document === undefined) {
+      if (category && INCOMING_CATEGORIES.has(category)) {
+        type_document = 'IncomingDocument';
+      } else if (category && OUTGOING_CATEGORIES.has(category)) {
+        type_document = 'OutgoingDocument';
+      }
     }
-    // --- KẾT THÚC LOGIC MỚI ---
 
     // ── XỬ LÝ MAPPING ROLE VÀ SCREEN DỰA TRÊN CẤU HÌNH DYNAMIC ──
     const userProfile = await this.helper.findUserByBakId(user_id, transaction);
@@ -752,7 +748,7 @@ class SyncAuditModel extends BaseModel {
     return {
       document_id: documentId,
       time,
-      action_code: workflowMapping.action_code || actionParsed.action_code || null,
+      action_code: actionParsed.action_code || workflowMapping.action_code || null,
       details: actionStr ?? null,
       origin_id: this._normalizeTextField(
         record.ID,
@@ -774,8 +770,12 @@ class SyncAuditModel extends BaseModel {
         255
       ),
       stage_status:
-        workflowMapping.stage_status || actionParsed.stage_status || null,
-      status_code: workflowMapping.status_code || null,
+        actionParsed.stage_status || workflowMapping.stage_status || null,
+      status_code: getStatusCodeByAction(
+        type_document,
+        actionParsed.action_code || workflowMapping.action_code || 'CREATE',
+        parsedRole || 'CAN_BO'
+      ),
       bpmn_version: workflowMapping.bpmn_version || null,
       type_of_process: workflowMapping.type_of_process || null,
       curStatusCode: workflowMapping.curStatusCode || null,

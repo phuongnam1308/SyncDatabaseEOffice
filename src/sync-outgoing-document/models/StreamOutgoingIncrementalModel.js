@@ -2,7 +2,7 @@ const logger = require('../../../utils/logger');
 const sql = require('mssql');
 const { v4: uuidv4 } = require("uuid");
 const SyncCommentModel = require('../../sync-document-comment/SyncCommentModel');
-const SyncOutgoingAuditModel = require('../../sync-audit-meeting/SyncOutgoingAuditModel');
+const SyncOutgoingAuditModel = require('../../sync-audit/SyncOutgoingAuditModel');
 const StreamOutgoingMigrationModel = require('./StreamOutgoingMigrationModel');
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 const FileService = require('../../sync-file-copy/Fileuploadservice');
@@ -288,8 +288,6 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
 
         IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'stage_status')
             ALTER TABLE dbo.outgoing_documents ADD stage_status NVARCHAR(50) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'curStatusCode')
-            ALTER TABLE dbo.outgoing_documents ADD curStatusCode NVARCHAR(10) NULL;
       `);
       logger.info('[OutGoingDocumentModel] Checked and added missing columns (reply_incoming_doc, sign_type, table_backups...) for dbo.outgoing_documents');
     } catch(err) {

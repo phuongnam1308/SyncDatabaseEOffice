@@ -4,14 +4,7 @@ const logger = require("../../utils/logger");
 // ═══════════════════════════════════════════════════════════════════
 // BẢNG KEYWORD CHỨC DANH — Dùng để tra cứu user theo position
 // ═══════════════════════════════════════════════════════════════════
-const KEYWORDS = {
-  ADMIN:            config.ROLE_MAPPINGS.ADMIN.KEYWORDS,
-  GIAM_DOC:         config.ROLE_MAPPINGS.GIAM_DOC.KEYWORDS,
-  PHO_GIAM_DOC:     config.ROLE_MAPPINGS.PHO_GIAM_DOC.KEYWORDS,
-  TRUONG_PHONG:     config.ROLE_MAPPINGS.TRUONG_PHONG.KEYWORDS,
-  PHO_TRUONG_PHONG: config.ROLE_MAPPINGS.PHO_TRUONG_PHONG.KEYWORDS,
-  VAN_THU:          config.ROLE_MAPPINGS.VAN_THU.KEYWORDS
-};
+const KEYWORDS = config.KEYWORDS;
 
 // ═══════════════════════════════════════════════════════════════════
 // DANH SÁCH TÀI KHOẢN HỆ THỐNG — Bỏ qua, không đưa vào receiver
@@ -86,7 +79,7 @@ class ReceiverParserService {
     let parsedRole = null; // Role của người nhận được bóc tách từ text
 
     // Bóc tách role mục tiêu từ HanhDong
-    parsedRole = this._determineTargetRole(hanhDongLower);
+    parsedRole = this._determineTargetRole(hanhDongLower, nguoiXuLyRaw);
 
     try {
       // ══════════════════════════════════════════════════════════════
@@ -247,39 +240,34 @@ class ReceiverParserService {
    * @returns {string|null} - Key của role (GIAM_DOC, VANTHU, ...)
    * @private
    */
-  _determineTargetRole(hanhDongLower) {
-    if (!hanhDongLower) return null;
+  _determineTargetRole(hanhDongLower, nguoiXuLyRaw) {
+    const targetStr = hanhDongLower || "";
+    const nguoiXuLyStr = (nguoiXuLyRaw || "").toLowerCase();
 
-    // Ưu tiên 1: Chuyển/Trình cho lãnh đạo cao nhất
-    const isGiamDoc = KEYWORDS.GIAM_DOC.some(kw => hanhDongLower.includes(kw));
-    if (isGiamDoc && (hanhDongLower.includes("trình") || hanhDongLower.includes("chuyển"))) {
-      return "Giám đốc";
-    }
+    if (!targetStr && !nguoiXuLyStr) return "CAN_BO";
 
-    // Ưu tiên 2: Văn thư
-    const isVanThu = KEYWORDS.VAN_THU.some(kw => hanhDongLower.includes(kw));
-    if (isVanThu) {
-      return "VANTHU";
-    }
+    const checkStr = (str, roleKeys) => roleKeys.some(kw => str.includes(kw));
 
-    // Ưu tiên 3: Phó giám đốc
-    const isPhoGiamDoc = KEYWORDS.PHO_GIAM_DOC.some(kw => hanhDongLower.includes(kw));
-    if (isPhoGiamDoc && (hanhDongLower.includes("trình") || hanhDongLower.includes("chuyển"))) {
-      return "Phó giám đốc";
-    }
+    // Bước 1: Ưu tiên tìm trong Nội dung hành động (hanhDong) trước theo thứ tự
+    if (checkStr(targetStr, KEYWORDS.GIAM_DOC)) return "GIAM_DOC";
+    if (checkStr(targetStr, KEYWORDS.VAN_THU)) return "VAN_THU";
+    if (checkStr(targetStr, KEYWORDS.PHO_GIAM_DOC)) return "PHO_GIAM_DOC";
+    if (checkStr(targetStr, KEYWORDS.CHANH_VAN_PHONG)) return "CHANH_VAN_PHONG";
+    if (checkStr(targetStr, KEYWORDS.PHO_CHANH_VAN_PHONG)) return "PHO_CHANH_VAN_PHONG";
+    if (checkStr(targetStr, KEYWORDS.TRUONG_PHONG)) return "TRUONG_PHONG";
+    if (checkStr(targetStr, KEYWORDS.PHO_TRUONG_PHONG)) return "PHO_TRUONG_PHONG";
 
-    // Ưu tiên 4: Chánh văn phòng
-    if (hanhDongLower.includes("chánh văn phòng") || hanhDongLower.includes("cvp")) {
-      return "Chánh văn phòng";
-    }
+    // Bước 2: Fallback tìm trong NguoiTao / NguoiXuLy nếu không khớp gì ở Bước 1
+    if (checkStr(nguoiXuLyStr, KEYWORDS.GIAM_DOC)) return "GIAM_DOC";
+    if (checkStr(nguoiXuLyStr, KEYWORDS.VAN_THU)) return "VAN_THU";
+    if (checkStr(nguoiXuLyStr, KEYWORDS.PHO_GIAM_DOC)) return "PHO_GIAM_DOC";
+    if (checkStr(nguoiXuLyStr, KEYWORDS.CHANH_VAN_PHONG)) return "CHANH_VAN_PHONG";
+    if (checkStr(nguoiXuLyStr, KEYWORDS.PHO_CHANH_VAN_PHONG)) return "PHO_CHANH_VAN_PHONG";
+    if (checkStr(nguoiXuLyStr, KEYWORDS.TRUONG_PHONG)) return "TRUONG_PHONG";
+    if (checkStr(nguoiXuLyStr, KEYWORDS.PHO_TRUONG_PHONG)) return "PHO_TRUONG_PHONG";
 
-    // Ưu tiên 5: Trưởng phòng
-    const isTruongPhong = KEYWORDS.TRUONG_PHONG.some(kw => hanhDongLower.includes(kw));
-    if (isTruongPhong && hanhDongLower.includes("chuyển")) {
-      return "Trưởng phòng";
-    }
-
-    return null;
+    // Bước 3: Cuối cùng fallback về Cán bộ
+    return "CAN_BO";
   }
 
   // ═══════════════════════════════════════════════════════════════════

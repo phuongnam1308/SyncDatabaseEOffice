@@ -15,6 +15,11 @@ module.exports = {
       "văn thư lưu trữ"
     ]
   },
+  "VAN_THU_CUC": {
+    "keywords": [
+      "văn thư cục"
+    ]
+  },
   "GIAM_DOC": {
     "keywords": [
       "giám đốc",
@@ -40,6 +45,7 @@ module.exports = {
       "thư ký thường trực hội đồng thành viên",
       "thư ký tổng giám đốc",
       "lãnh đạo",
+      "tgđ",
       "tgđ"
     ]
   },
@@ -49,7 +55,11 @@ module.exports = {
       "phó gđ",
       "phó gd",
       "phó chính ủy",
-      "phó tham mưu trưởng"
+      "phó tham mưu trưởng",
+      "ptgđ",
+      "phó tổng giám đốc",
+      "phó chủ tịch",
+      "ptgd"
     ]
   },
   "CHANH_VAN_PHONG": {
@@ -142,7 +152,7 @@ module.exports = {
       "phó trưởng trực ban"
     ]
   },
-  "NHAN_VIEN": {
+  "CAN_BO": {
     "keywords": [
       "nhân viên",
       "chuyên viên",

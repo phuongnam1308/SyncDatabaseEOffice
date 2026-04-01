@@ -1,5 +1,5 @@
 module.exports = {
-  "role": "VANTHU",
+  "role": "VAN_THU",
   "screens": [
     {
       "screen_name": "Màn phát hành - chờ phát hành",
@@ -7,8 +7,8 @@ module.exports = {
         "chờ phát hành"
       ],
       "status_code": 16,
-      "bpmn_version": "SOANTHAO_PHATHANH_CQD",
-      "type_of_process": "SOANTHAO_PHATHANH_CQD",
+      "bpmn_version": "PHOIHOP_NHANDEBIET",
+      "type_of_process": "PHOIHOP_NHANDEBIET",
       "curStatusCode": 3,
       "stage_status": "DA_XU_LY",
       "role": "VAN_THU",
@@ -21,10 +21,10 @@ module.exports = {
         "phát hành"
       ],
       "status_code": 9,
-      "bpmn_version": "SOANTHAO_PHATHANH_VBD",
-      "type_of_process": "SOANTHAO_PHATHANH_VBD",
+      "bpmn_version": "PHOIHOP_NHANDEBIET",
+      "type_of_process": "PHOIHOP_NHANDEBIET",
       "curStatusCode": 9,
-      "stage_status": "BAN_HANH_DU_THAO",
+      "stage_status": "DA_XU_LY",
       "role": "VAN_THU",
       "action_code": "DONG_DAU"
     },
@@ -34,8 +34,8 @@ module.exports = {
         "chờ xử lý"
       ],
       "status_code": 2,
-      "bpmn_version": "SOANTHAO_PHATHANH_VBD",
-      "type_of_process": "SOANTHAO_PHATHANH_VBD",
+      "bpmn_version": "PHOIHOP_NHANDEBIET",
+      "type_of_process": "PHOIHOP_NHANDEBIET",
       "curStatusCode": 2,
       "stage_status": "CHUA_XU_LY",
       "role": "NGUOI_SOAN_THAO",
@@ -47,8 +47,8 @@ module.exports = {
         "đã xử lý"
       ],
       "status_code": 6,
-      "bpmn_version": "SOANTHAO_PHATHANH_VBD",
-      "type_of_process": "SOANTHAO_PHATHANH_VBD",
+      "bpmn_version": "PHOIHOP_NHANDEBIET",
+      "type_of_process": "PHOIHOP_NHANDEBIET",
       "curStatusCode": 3,
       "stage_status": "DA_XU_LY",
       "role": "VAN_THU",
@@ -60,8 +60,8 @@ module.exports = {
         "đã ban hành"
       ],
       "status_code": 9,
-      "bpmn_version": "SOANTHAO_PHATHANH_VBD",
-      "type_of_process": "SOANTHAO_PHATHANH_VBD",
+      "bpmn_version": "PHOIHOP_NHANDEBIET",
+      "type_of_process": "PHOIHOP_NHANDEBIET",
       "curStatusCode": 9,
       "stage_status": "DA_BAN_HANH",
       "role": "VAN_THU",
@@ -73,8 +73,8 @@ module.exports = {
         "chờ đóng dấu"
       ],
       "status_code": 100,
-      "bpmn_version": "KY_SO_HS_VBD",
-      "type_of_process": "KY_SO_HS_VBD",
+      "bpmn_version": "PHOIHOP_NHANDEBIET",
+      "type_of_process": "PHOIHOP_NHANDEBIET",
       "curStatusCode": 100,
       "stage_status": "CHO_DONG_DAU",
       "role": "NGUOI_KY_PHE_DUYET",
@@ -86,8 +86,8 @@ module.exports = {
         "đã đóng dấu"
       ],
       "status_code": 6,
-      "bpmn_version": "SOANTHAO_PHATHANH_VBD",
-      "type_of_process": "SOANTHAO_PHATHANH_VBD",
+      "bpmn_version": "PHOIHOP_NHANDEBIET",
+      "type_of_process": "PHOIHOP_NHANDEBIET",
       "curStatusCode": 3,
       "stage_status": "DA_XU_LY",
       "role": "VAN_THU",
