@@ -54,6 +54,16 @@ const tableMappings = {
       driver_ids: (r) => r?.driver_ids || r?.nvarcharMAX2 || null,
       car_ids: (r) => r?.car_ids || r?.nvarcharMAX3 || null,
 
+      // 🔥 2. Ép cứng các trường hiển thị theo chuẩn UI của USER
+      status_code: 2,
+      bpmn_version: 'QUY_TRINH_DANG_KY_XE',
+      request_code: 'YC-20260329-004',
+      department: '68afbefecb36081f0bbbef2e',
+      contact_phone: '0297227381',
+      is_important_guest: 'co',
+      request_type: 'Tp',
+      priority: 'bt',
+
       created_by: (r) => r?.AuthorAccount || mapping.defaults.USER_ID,
       created_at: (r) => r?.tp_Created ? new Date(r.tp_Created) : new Date(),
       updated_at: (r) => r?.tp_Modified ? new Date(r.tp_Modified) : new Date(),
@@ -63,7 +73,7 @@ const tableMappings = {
     /* ================= DUPLICATE ================= */
     duplicateCheck: {
       fields: ['id_sp_bak'],
-      strategy: 'skip'
+      strategy: 'update'
     },
 
     externalKey: 'id_sp_bak',
