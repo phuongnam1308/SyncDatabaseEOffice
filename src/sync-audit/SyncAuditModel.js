@@ -696,7 +696,7 @@ class SyncAuditModel extends BaseModel {
     const parsed = await this.receiverParser.determineReceivers(record, transaction);
     let receiver = parsed.receiverIds || [];
     const receiverUnit = parsed.receiverUnitIds || [];
-    const parsedRoleProcess = parsed.roleProcess || actionParsed.roleProcess || 'VANTHU';
+    const parsedRoleProcess = actionParsed.roleProcess || parsed.roleProcess || 'VANTHU';
     const parsedRole = parsed.parsedRole || null; // Role của người nhận bóc từ text
 
     // ── FALLBACK: Nếu receiver rỗng → tự động lấy ID người xử lý (user_id) đắp vào ──

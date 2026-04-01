@@ -9,11 +9,11 @@ module.exports = {
   },
 
   "TRINH_KY": {
-    default: 2
+    default: 3
   },
 
   "CHUYEN_XU_LY": {
-    default: 2
+    default: 3
   },
 
   "HOAN_THANH_VAN_BAN": {

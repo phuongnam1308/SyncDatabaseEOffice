@@ -9,7 +9,7 @@ module.exports = {
   },
 
   "TRINH_KY": {
-    default: 2
+    default: 3
   },
 
   "BAN_HANH": {

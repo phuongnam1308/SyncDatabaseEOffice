@@ -17,6 +17,7 @@ const STAGE = {
   // Văn bản đang chờ hoàn thiện thể thức
   HT_VBTT:        'HT_VBTT',
   BAN_HANH_DU_THAO: 'BAN_HANH_DU_THAO',
+  HOAN_THANH_VAN_BAN: 'HOAN_THANH_VAN_BAN',
   // Trả lại
   TRA_LAI:        'TRA_LAI',
 };
@@ -146,8 +147,7 @@ class SyncIncomingAuditModel extends SyncAuditModel {
 
     const stageUp  = (stage_status || '').toUpperCase();
     // Văn bản đến được coi là hoàn tất khi ở trạng thái DA_XU_LY
-    const isCompleted = (stageUp === STAGE.DA_XU_LY) ? 1 : 0;
-
+    const isCompleted = (stageUp === STAGE.HOAN_THANH_VAN_BAN) ? 1 : 0;
     // Ưu tiên hiển thị cá nhân làm receiver chính trong current_state
     const currentReceiver = receiver || receiver_unit;
 
