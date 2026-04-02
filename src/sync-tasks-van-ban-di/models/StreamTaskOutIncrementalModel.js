@@ -13,7 +13,7 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
     super({ modelName: 'STREAM_TASK_INCREMENTAL' });
     this.newDbName = process.env.NEW_DB_NAME;
     this.oldDbSchema = 'dbo';
-    this.oldDbTable = 'TaskVBDi';
+    this.oldDbTable = 'TaskVBDen';
     this.newDbSchema = 'dbo';
     this.newTableSync = 'task_sync';
 
@@ -46,7 +46,7 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
     }
   }
 
-  /** Create task_sync staging table */
+  /** Create task_sync staging table — stores ALL columns from TaskVBDen */
   async ensureStagingTableExists() {
     try {
       const tableRef = `${this.newDbName}.${this.newDbSchema}.${this.newTableSync}`;
@@ -61,27 +61,52 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
       )
       BEGIN
           CREATE TABLE ${tableRef} (
-              SY_SyncId INT IDENTITY(1,1) PRIMARY KEY,
-              __sync_time DATETIME2 NULL,
-              __sync_id_num BIGINT NULL,
-              id_task_bak NVARCHAR(MAX) NULL,
-              ID NVARCHAR(MAX) NULL,
-              VBId NVARCHAR(MAX) NULL,
-              Title NVARCHAR(MAX) NULL,
-              StartDate NVARCHAR(MAX) NULL,
-              DueDate NVARCHAR(MAX) NULL,
-              TrangThai NVARCHAR(MAX) NULL,
-              Priority NVARCHAR(MAX) NULL,
-              Content NVARCHAR(MAX) NULL,
-              CreatedBy NVARCHAR(MAX) NULL,
-              ModifiedBy NVARCHAR(MAX) NULL,
-              Created NVARCHAR(MAX) NULL,
-              Modified NVARCHAR(MAX) NULL
+              SY_SyncId              INT IDENTITY(1,1) PRIMARY KEY,
+              __sync_time            DATETIME2     NULL,
+              __sync_id_num          BIGINT        NULL,
+              id_task_bak            NVARCHAR(MAX) NULL,
+              ID                     NVARCHAR(MAX) NULL,
+              VBId                   NVARCHAR(MAX) NULL,
+              DepartmentId           NVARCHAR(MAX) NULL,
+              ParentId               NVARCHAR(MAX) NULL,
+              Title                  NVARCHAR(MAX) NULL,
+              DanhGia                NVARCHAR(MAX) NULL,
+              DeBaoCao               NVARCHAR(MAX) NULL,
+              DeBiet                 NVARCHAR(MAX) NULL,
+              DeThucHien             NVARCHAR(MAX) NULL,
+              DuocHuy                NVARCHAR(MAX) NULL,
+              DiemChatLuong          NVARCHAR(MAX) NULL,
+              DiemThoiGian           NVARCHAR(MAX) NULL,
+              DiemDanhGia            NVARCHAR(MAX) NULL,
+              StartDate              NVARCHAR(MAX) NULL,
+              DueDate                NVARCHAR(MAX) NULL,
+              CompletedDate          NVARCHAR(MAX) NULL,
+              HoanTatTuDong          NVARCHAR(MAX) NULL,
+              HoSoDuThaoId           NVARCHAR(MAX) NULL,
+              HoSoDuThaoUrl          NVARCHAR(MAX) NULL,
+              HoSoXuLyUrl            NVARCHAR(MAX) NULL,
+              [Percent]              NVARCHAR(MAX) NULL,
+              TrangThai              NVARCHAR(MAX) NULL,
+              Priority               NVARCHAR(MAX) NULL,
+              YKienCuaNguoiGiaiQuyet NVARCHAR(MAX) NULL,
+              YKienChiDao            NVARCHAR(MAX) NULL,
+              ModuleId               NVARCHAR(MAX) NULL,
+              SiteName               NVARCHAR(MAX) NULL,
+              ListName               NVARCHAR(MAX) NULL,
+              ItemId                 NVARCHAR(MAX) NULL,
+              Modified               NVARCHAR(MAX) NULL,
+              Created                NVARCHAR(MAX) NULL,
+              ModifiedBy             NVARCHAR(MAX) NULL,
+              CreatedBy              NVARCHAR(MAX) NULL,
+              MigrateFlg             NVARCHAR(MAX) NULL,
+              MigrateErrFlg          NVARCHAR(MAX) NULL,
+              MigrateErrMess         NVARCHAR(MAX) NULL,
+              ParentTaskID           NVARCHAR(MAX) NULL
           )
       END
       `;
 
-      await this.queryNewDb(query);
+      await this.queryNewDb(query, {});
       logger.info('[StreamTaskOutIncrementalModel] task_sync ready');
     } catch (err) {
       logger.error('[StreamTaskOutIncrementalModel.ensureStagingTableExists]', err.message);
@@ -89,13 +114,11 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
     }
   }
 
-  /** Fetch from old DB: TaskVBDi with limit (100 rows, sorted by Modified cursor) */
+  /** Fetch from old DB: ALL columns of TaskVBDen with limit (100 rows, sorted by Modified cursor) */
   async fetchListFromOldDb(lastSyncTime, lastSyncId = 0) {
     try {
       const query = `
-        SELECT TOP 100
-          ID, VBId, Title, StartDate, DueDate, TrangThai, Priority,
-          CreatedBy, ModifiedBy, Created, Modified, Content
+        SELECT TOP 100 *
         FROM ${this.oldDbSchema}.${this.oldDbTable}
         WHERE Modified > @lastSyncTime OR (Modified = @lastSyncTime AND ID > @lastSyncId)
         ORDER BY Modified ASC, ID ASC
@@ -117,7 +140,7 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
     }
   }
 
-  /** Stage tasks into task_sync */
+  /** Stage tasks into task_sync — stores ALL columns from TaskVBDen */
   async syncOldToStaging(rows, { transaction } = {}) {
     if (!Array.isArray(rows) || rows.length === 0) {
       return { stagedCount: 0, inserted: 0, updated: 0 };
@@ -129,51 +152,150 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
       const stagingRef = `${this.newDbName}.${this.newDbSchema}.${this.newTableSync}`;
       
       for (const row of rows) {
-        const existing = await this.queryNewDb(
+        const existing = await this.queryNewDbTx(
           `SELECT TOP 1 SY_SyncId FROM ${stagingRef} WHERE ID = @id`,
-          { id: row.ID }
+          { id: row.ID }, transaction
         );
         
         if (Array.isArray(existing) && existing.length > 0) {
-          await this.queryNewDb(`
+          await this.queryNewDbTx(`
             UPDATE ${stagingRef}
-            SET Title = @title, VBId = @vbId, StartDate = @startDate,
-                DueDate = @dueDate, TrangThai = @trangThai, Priority = @priority,
-                Content = @content, Modified = @modified, __sync_time = @syncTime
+            SET VBId                   = @vbId,
+                DepartmentId           = @departmentId,
+                ParentId               = @parentId,
+                Title                  = @title,
+                DanhGia                = @danhGia,
+                DeBaoCao               = @deBaoCao,
+                DeBiet                 = @deBiet,
+                DeThucHien             = @deThucHien,
+                DuocHuy                = @duocHuy,
+                DiemChatLuong          = @diemChatLuong,
+                DiemThoiGian           = @diemThoiGian,
+                DiemDanhGia            = @diemDanhGia,
+                StartDate              = @startDate,
+                DueDate                = @dueDate,
+                CompletedDate          = @completedDate,
+                HoanTatTuDong          = @hoanTatTuDong,
+                HoSoDuThaoId           = @hoSoDuThaoId,
+                HoSoDuThaoUrl          = @hoSoDuThaoUrl,
+                HoSoXuLyUrl            = @hoSoXuLyUrl,
+                [Percent]              = @percent,
+                TrangThai              = @trangThai,
+                Priority               = @priority,
+                YKienCuaNguoiGiaiQuyet = @yKienCuaNguoiGiaiQuyet,
+                YKienChiDao            = @yKienChiDao,
+                ModuleId               = @moduleId,
+                SiteName               = @siteName,
+                ListName               = @listName,
+                ItemId                 = @itemId,
+                Modified               = @modified,
+                Created                = @created,
+                ModifiedBy             = @modifiedBy,
+                CreatedBy              = @createdBy,
+                MigrateFlg             = @migrateFlg,
+                MigrateErrFlg          = @migrateErrFlg,
+                MigrateErrMess         = @migrateErrMess,
+                ParentTaskID           = @parentTaskId,
+                __sync_time            = @syncTime
             WHERE ID = @id
           `, {
-            title: row.Title,
-            vbId: row.VBId,
-            startDate: row.StartDate,
-            dueDate: row.DueDate,
-            trangThai: row.TrangThai,
-            priority: row.Priority,
-            content: row.Content,
-            modified: row.Modified,
-            syncTime: new Date().toISOString(),
-            id: row.ID
-          });
+            vbId:                   row.VBId,
+            departmentId:           row.DepartmentId,
+            parentId:               row.ParentId,
+            title:                  row.Title,
+            danhGia:                row.DanhGia,
+            deBaoCao:               row.DeBaoCao,
+            deBiet:                 row.DeBiet,
+            deThucHien:             row.DeThucHien,
+            duocHuy:                row.DuocHuy,
+            diemChatLuong:          row.DiemChatLuong,
+            diemThoiGian:           row.DiemThoiGian,
+            diemDanhGia:            row.DiemDanhGia,
+            startDate:              row.StartDate,
+            dueDate:                row.DueDate,
+            completedDate:          row.CompletedDate,
+            hoanTatTuDong:          row.HoanTatTuDong,
+            hoSoDuThaoId:           row.HoSoDuThaoId,
+            hoSoDuThaoUrl:          row.HoSoDuThaoUrl,
+            hoSoXuLyUrl:            row.HoSoXuLyUrl,
+            percent:                row.Percent,
+            trangThai:              row.TrangThai,
+            priority:               row.Priority,
+            yKienCuaNguoiGiaiQuyet: row.YKienCuaNguoiGiaiQuyet,
+            yKienChiDao:            row.YKienChiDao,
+            moduleId:               row.ModuleId,
+            siteName:               row.SiteName,
+            listName:               row.ListName,
+            itemId:                 row.ItemId,
+            modified:               row.Modified,
+            created:                row.Created,
+            modifiedBy:             row.ModifiedBy,
+            createdBy:              row.CreatedBy,
+            migrateFlg:             row.MigrateFlg,
+            migrateErrFlg:          row.MigrateErrFlg,
+            migrateErrMess:         row.MigrateErrMess,
+            parentTaskId:           row.ParentTaskID,
+            syncTime:               new Date().toISOString(),
+            id:                     row.ID
+          }, transaction);
           updated++;
         } else {
-          await this.queryNewDb(`
+          await this.queryNewDbTx(`
             INSERT INTO ${stagingRef}
-            (ID, Title, VBId, StartDate, DueDate, TrangThai, Priority, Content, Created, Modified, __sync_time, id_task_bak)
+            (ID, VBId, DepartmentId, ParentId, Title, DanhGia, DeBaoCao, DeBiet, DeThucHien,
+             DuocHuy, DiemChatLuong, DiemThoiGian, DiemDanhGia, StartDate, DueDate, CompletedDate,
+             HoanTatTuDong, HoSoDuThaoId, HoSoDuThaoUrl, HoSoXuLyUrl, [Percent], TrangThai,
+             Priority, YKienCuaNguoiGiaiQuyet, YKienChiDao, ModuleId, SiteName, ListName, ItemId,
+             Modified, Created, ModifiedBy, CreatedBy, MigrateFlg, MigrateErrFlg, MigrateErrMess,
+             ParentTaskID, __sync_time, id_task_bak)
             VALUES
-            (@id, @title, @vbId, @startDate, @dueDate, @trangThai, @priority, @content, @created, @modified, @syncTime, @idBak)
+            (@id, @vbId, @departmentId, @parentId, @title, @danhGia, @deBaoCao, @deBiet, @deThucHien,
+             @duocHuy, @diemChatLuong, @diemThoiGian, @diemDanhGia, @startDate, @dueDate, @completedDate,
+             @hoanTatTuDong, @hoSoDuThaoId, @hoSoDuThaoUrl, @hoSoXuLyUrl, @percent, @trangThai,
+             @priority, @yKienCuaNguoiGiaiQuyet, @yKienChiDao, @moduleId, @siteName, @listName, @itemId,
+             @modified, @created, @modifiedBy, @createdBy, @migrateFlg, @migrateErrFlg, @migrateErrMess,
+             @parentTaskId, @syncTime, @idBak)
           `, {
-            id: row.ID,
-            title: row.Title,
-            vbId: row.VBId,
-            startDate: row.StartDate,
-            dueDate: row.DueDate,
-            trangThai: row.TrangThai,
-            priority: row.Priority,
-            content: row.Content,
-            created: row.Created,
-            modified: row.Modified,
-            syncTime: new Date().toISOString(),
-            idBak: row.ID
-          });
+            id:                     row.ID,
+            vbId:                   row.VBId,
+            departmentId:           row.DepartmentId,
+            parentId:               row.ParentId,
+            title:                  row.Title,
+            danhGia:                row.DanhGia,
+            deBaoCao:               row.DeBaoCao,
+            deBiet:                 row.DeBiet,
+            deThucHien:             row.DeThucHien,
+            duocHuy:                row.DuocHuy,
+            diemChatLuong:          row.DiemChatLuong,
+            diemThoiGian:           row.DiemThoiGian,
+            diemDanhGia:            row.DiemDanhGia,
+            startDate:              row.StartDate,
+            dueDate:                row.DueDate,
+            completedDate:          row.CompletedDate,
+            hoanTatTuDong:          row.HoanTatTuDong,
+            hoSoDuThaoId:           row.HoSoDuThaoId,
+            hoSoDuThaoUrl:          row.HoSoDuThaoUrl,
+            hoSoXuLyUrl:            row.HoSoXuLyUrl,
+            percent:                row.Percent,
+            trangThai:              row.TrangThai,
+            priority:               row.Priority,
+            yKienCuaNguoiGiaiQuyet: row.YKienCuaNguoiGiaiQuyet,
+            yKienChiDao:            row.YKienChiDao,
+            moduleId:               row.ModuleId,
+            siteName:               row.SiteName,
+            listName:               row.ListName,
+            itemId:                 row.ItemId,
+            modified:               row.Modified,
+            created:                row.Created,
+            modifiedBy:             row.ModifiedBy,
+            createdBy:              row.CreatedBy,
+            migrateFlg:             row.MigrateFlg,
+            migrateErrFlg:          row.MigrateErrFlg,
+            migrateErrMess:         row.MigrateErrMess,
+            parentTaskId:           row.ParentTaskID,
+            syncTime:               new Date().toISOString(),
+            idBak:                  row.ID
+          }, transaction);
           inserted++;
         }
       }
@@ -224,18 +346,17 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
     }
   }
 
-  /** Fetch one task from staging */
+  /** Fetch one task from staging — all columns */
   async fetchOneFromStaging() {
     try {
       const stagingRef = `${this.newDbName}.${this.newDbSchema}.${this.newTableSync}`;
       const query = `
-        SELECT TOP 1 SY_SyncId, ID, Title, VBId, StartDate, DueDate, TrangThai, Priority, Content, 
-                     CreatedBy, ModifiedBy, Created, Modified
+        SELECT TOP 1 *
         FROM ${stagingRef}
         ORDER BY SY_SyncId ASC
       `;
       
-      const rows = await this.queryNewDb(query);
+      const rows = await this.queryNewDb(query, {});
       return Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
     } catch (error) {
       logger.error('[StreamTaskOutIncrementalModel.fetchOneFromStaging]', error);
@@ -326,6 +447,7 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
     }
 
     const taskId = String(stagingRow.ID || '').trim();
+    const createdAt = stagingRow.Created || new Date().toISOString();
     let totalAffected = 0;
 
     try {
@@ -337,6 +459,7 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
         return { action: 'none', affected: 0 };
       }
 
+      const createdBy = taskResult?.createdBy || stagingRow.CreatedBy || null;
       logger.info(`[AggregateSync][Task] taskId=${taskId} newTaskId=${taskResult.newTaskId} action=${taskResult.action}`);
       totalAffected += 1;
 
@@ -344,22 +467,20 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
 
 
       try {
-        const taskUsersStagingRef = this.taskUsersModel.getStagingTableRef();
         const taskUsersQuery = `
-          SELECT TOP 1000 SY_SyncId, ID, TaskId, PermissionID, PermissionName, Type
-          FROM ${taskUsersStagingRef}
+          SELECT *
+          FROM ${this.oldDbSchema}.TaskVBDenPermission
           WHERE TaskId = @taskId
-          ORDER BY SY_SyncId ASC
         `;
 
-        const taskUsersRows = await this.queryNewDb(taskUsersQuery, {
+        const taskUsersRows = await this.queryOldDb(taskUsersQuery, {
           taskId: String(stagingRow.ID)
         });
 
         if (Array.isArray(taskUsersRows) && taskUsersRows.length > 0) {
           for (const userRow of taskUsersRows) {
             try {
-              const userResult = await this.taskUsersModel.processSingleRecord(userRow, transaction);
+              const userResult = await this.taskUsersModel.processSingleRecord({ ...userRow, newTaskId, createdAt}, transaction);
               if (userResult && userResult.action !== 'skipped') {
                 totalAffected += 1;
               }
@@ -373,10 +494,9 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
         logger.warn(`[upsertTaskAggregateById] TaskUsers sync failed: ${userError.message}`);
       }
 
-
       try {
         const logResult = await this.systemLogsModel.createLogForTask(
-          { idTask: newTaskId, idUserBak: taskId },
+          { idTask: newTaskId, userInfo: createdBy, createdAt: createdAt },
           transaction
         );
         
@@ -463,8 +583,7 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
       logger.info('[StreamTaskOutIncrementalModel] Cleanup staging tables');
       const cleanupResults = {
         taskSync: await this.taskModel.cleanupStagingTable(),
-        taskUsersSync: await this.taskUsersModel.cleanupStagingTable?.(),
-        systemLogsSync: await this.systemLogsModel.cleanupStagingTable?.()
+        taskUsersSync: await this.taskUsersModel.cleanupStagingTable?.()
       };
 
       logger.info(`[StreamTaskOutIncrementalModel.processAllAsync] Completed: ${processed} processed, ${failedCount} failed`);
@@ -490,15 +609,13 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
     try {
       const taskCleanup = await this.taskModel.cleanupStagingTable();
       const userCleanup = await this.taskUsersModel.cleanupStagingTable?.();
-      const logCleanup = await this.systemLogsModel.cleanupStagingTable?.();
 
       return {
         success: taskCleanup.success,
         message: 'All staging tables cleaned',
         details: {
           task: taskCleanup,
-          taskUsers: userCleanup,
-          systemLogs: logCleanup
+          taskUsers: userCleanup
         }
       };
     } catch (error) {

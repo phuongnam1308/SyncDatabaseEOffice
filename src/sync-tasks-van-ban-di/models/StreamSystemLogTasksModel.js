@@ -1,7 +1,7 @@
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 const logger = require('../../../utils/logger');
 
-/** Auto-generate system_log_tasks entries (8 columns with id_log_bak UUID) */
+/** Auto-generate system_log_tasks entries (10 columns with id_log_bak UUID) */
 class StreamSystemLogTasksModel extends BaseIncrementalSyncInterface {
   constructor() {
     super({ modelName: 'STREAM_SYSTEM_LOG_TASKS_MODEL' });
@@ -22,7 +22,6 @@ class StreamSystemLogTasksModel extends BaseIncrementalSyncInterface {
     try {
       const tableRef = `${this.newDbName}.${this.newDbSchema}.${this.newDbTable}`;
 
-      // Step 1 & 2: Create table if missing (with all 8 columns including id_log_bak)
       const createTableQuery = `
       IF NOT EXISTS (
           SELECT 1
@@ -33,30 +32,23 @@ class StreamSystemLogTasksModel extends BaseIncrementalSyncInterface {
       )
       BEGIN
           CREATE TABLE ${tableRef} (
-              id NVARCHAR(36) PRIMARY KEY,
-              id_log_bak NVARCHAR(36) NULL,
-              id_task INT NOT NULL,
-              actions NVARCHAR(50) NOT NULL,
-              details NVARCHAR(MAX) NULL,
-              user_info NVARCHAR(255) NULL,
-              created_at DATETIME2 DEFAULT GETDATE() NULL,
-              updated_at DATETIME2 DEFAULT GETDATE() NULL
+              id          NVARCHAR(255)  NOT NULL,
+              actions     NVARCHAR(50)   NULL,
+              details     NVARCHAR(MAX)  NULL,
+              user_info   NVARCHAR(MAX)  NULL,
+              timestamps  DATETIME       NULL,
+              created_at  DATETIME2(0)   DEFAULT GETDATE() NULL,
+              updated_at  DATETIME2(0)   DEFAULT GETDATE() NULL,
+              task_id     VARCHAR(1000)  NULL,
+              note        NVARCHAR(500)  NULL
           )
       END
       `;
 
-      await this.queryNewDb(createTableQuery);
+      await this.queryNewDb(createTableQuery, {});
 
-      // Step 3 & 4: Add id_log_bak column if table already exists but column is missing
       const addColumnQuery = `
-      IF EXISTS (
-          SELECT 1
-          FROM ${this.newDbName}.sys.tables t
-          JOIN ${this.newDbName}.sys.schemas s ON t.schema_id = s.schema_id
-          WHERE t.name = '${this.newDbTable}'
-          AND s.name = '${this.newDbSchema}'
-      )
-      AND NOT EXISTS (
+      IF NOT EXISTS (
           SELECT 1
           FROM ${this.newDbName}.sys.columns c
           JOIN ${this.newDbName}.sys.tables t ON c.object_id = t.object_id
@@ -71,11 +63,11 @@ class StreamSystemLogTasksModel extends BaseIncrementalSyncInterface {
       END
       `;
 
-      await this.queryNewDb(addColumnQuery);
+      await this.queryNewDb(addColumnQuery, {});
 
-      logger.info('✅ system_log_tasks table and columns ready');
+      logger.info('[StreamSystemLogTasksModel] system_log_tasks ready');
     } catch (err) {
-      logger.error('❌ Ensure system_log_tasks failed:', err.message);
+      logger.error('Ensure system_log_tasks failed:', err.message);
       throw err;
     }
   }
@@ -85,85 +77,118 @@ class StreamSystemLogTasksModel extends BaseIncrementalSyncInterface {
     return `${this.newDbName}.${this.newDbSchema}.${this.newDbTable}`;
   }
 
-  /** Create log entry for task: 8 columns (id, id_log_bak UUID, id_task, actions, details, user_info, timestamps) */
   async createLogForTask(params, transaction) {
     if (!params || !params.idTask) {
       throw new Error('idTask is required');
     }
 
     const tableRef = this.getTableRef();
-    const createdAt = params.createdAt || new Date();
-    const logId = this._generateUUID();
-    const logIdBak = this._generateUUID();
+    const now = params.createdAt ? params.createdAt : new Date();
+    const taskId = String(params.idTask).trim();
 
-    const insertQuery = `
-      INSERT INTO ${tableRef}
-      (id, id_log_bak, id_task, actions, details, user_info, created_at, updated_at)
-      VALUES
-      (@id, @idLogBak, @idTask, @actions, @details, @userInfo, @createdAt, @updatedAt)
-    `;
+    try {
+      /** 1. CHECK EXIST */
+      const checkQuery = `
+        SELECT TOP 1 id
+        FROM ${tableRef}
+        WHERE task_id = @taskId
+        ORDER BY updated_at DESC
+      `;
 
-    await this.queryNewDb(insertQuery, {
-      id: logId,
-      idLogBak: logIdBak,
-      idTask: params.idTask,
-      actions: 'POST',
-      details: 'Tạo công việc',
-      userInfo: params.userInfo || null,
-      createdAt: createdAt,
-      updatedAt: createdAt
-    });
+      const existed = await this.queryNewDbTx(
+        checkQuery,
+        { taskId },
+        transaction
+      );
 
-    logger.info(`[StreamSystemLogTasksModel] Created log ${logId} for task ${params.idTask}`);
+      /** 2. UPDATE nếu đã tồn tại */
+      if (existed?.[0]?.id) {
+        const updateQuery = `
+          UPDATE ${tableRef}
+          SET
+            actions     = @actions,
+            details     = @details,
+            user_info   = @userInfo,
+            timestamps  = @timestamps,
+            updated_at  = @updatedAt,
+            note        = @note
+          WHERE id = @id
+        `;
 
-    return {
-      success: true,
-      logId: logId,
-      message: 'Log entry created successfully',
-      idTask: params.idTask
-    };
+        await this.queryNewDbTx(
+          updateQuery,
+          {
+            id: existed[0].id,
+            actions: 'POST',
+            details: 'Tạo công việc',
+            userInfo: params.userInfo || null,
+            timestamps: now,
+            updatedAt: now,
+            note: params.note || null,
+          },
+          transaction
+        );
+
+        logger.info(`[StreamSystemLogTasksModel] Updated log for task_id ${taskId}`);
+
+        return {
+          success: true,
+          logId: existed[0].id,
+          message: 'Log updated successfully',
+          taskId
+        };
+      }
+
+      /** 3. INSERT nếu chưa tồn tại */
+      const logId = this._generateUUID();
+      const logIdBak = this._generateUUID();
+
+      const insertQuery = `
+        INSERT INTO ${tableRef}
+        (id, actions, details, user_info, timestamps, created_at, updated_at, task_id, note, id_log_bak)
+        VALUES
+        (@id, @actions, @details, @userInfo, @timestamps, @createdAt, @updatedAt, @taskId, @note, @idLogBak)
+      `;
+
+      await this.queryNewDbTx(
+        insertQuery,
+        {
+          id: logId,
+          actions: 'POST',
+          details: 'Tạo công việc',
+          userInfo: params.userInfo || null,
+          timestamps: now,
+          createdAt: now,
+          updatedAt: now,
+          taskId,
+          note: params.note || null,
+          idLogBak: logIdBak
+        },
+        transaction
+      );
+
+      logger.info(`[StreamSystemLogTasksModel] Created log ${logId} for task_id ${taskId}`);
+
+      return {
+        success: true,
+        logId,
+        message: 'Log entry created successfully',
+        taskId
+      };
+
+    } catch (err) {
+      logger.error(`[StreamSystemLogTasksModel] createLogForTask failed task_id=${params.idTask}: ${err.message}`);
+      throw err;
+    }
   }
 
-  /** Generate UUID v4 format */
+  /** Generate UUID v4 */
   _generateUUID() {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
       const r = Math.random() * 16 | 0;
       const v = c === 'x' ? r : (r & 0x3 | 0x8);
       return v.toString(16);
     });
-  }
-
-  /** Cleanup staging - NO-OP (no staging for system logs) */
-  async cleanupStagingTable() {
-    try {
-      logger.debug('[StreamSystemLogTasksModel] cleanupStagingTable called (NO-OP - no staging)');
-      return {
-        success: true,
-        message: 'No staging table for system logs',
-        table: this.newDbTable
-      };
-    } catch (error) {
-      logger.error('[StreamSystemLogTasksModel.cleanupStagingTable]', error);
-      throw error;
-    }
-  }
-
-  /** Query logs for specific task */
-  async getLogsForTask(idTask) {
-    try {
-      const tableRef = this.getTableRef();
-      const query = `
-        SELECT * FROM ${tableRef}
-        WHERE id_task = @idTask
-        ORDER BY created_at DESC
-      `;
-
-      const rows = await this.queryNewDb(query, { idTask: Number(idTask) });
-      return Array.isArray(rows) ? rows : [];
-    } catch (error) {
-      logger.error('[StreamSystemLogTasksModel.getLogsForTask]', error);
-      throw error;
-    }
   }
 }
 

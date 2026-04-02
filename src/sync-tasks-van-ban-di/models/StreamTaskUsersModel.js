@@ -2,17 +2,14 @@ const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncremental
 const MigrationHelper = require('../../helpers/MigrationHelper');
 const logger = require('../../../utils/logger');
 
-const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
-
-/** Maps TaskVBDiPermission → document_users (9 columns with id_user_bak) */
+/** Maps TaskVBDenPermission → task_users (9 columns with id_user_bak) */
 class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
   constructor() {
     super({ modelName: 'STREAM_TASK_USERS_MODEL' });
     this.newDbName = process.env.NEW_DB_NAME;
     this.oldDbSchema = 'dbo';
-    this.oldDbTable = 'TaskVBDiPermission';
+    this.oldDbTable = 'TaskVBDenPermission';
     this.newDbSchema = 'dbo';
-    this.newTableSync = 'task_users_sync';
     this.newDbTable = 'task_users';
 
     this.helper = new MigrationHelper(
@@ -43,7 +40,7 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
           AND COLUMN_NAME = 'id_user_bak'
       `;
       
-      const existing = await this.queryNewDb(checkColQuery);
+      const existing = await this.queryNewDb(checkColQuery, {});
       
       if (!existing || existing.length === 0) {
         // Column doesn't exist - ADD it
@@ -52,11 +49,11 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
           ADD id_user_bak NVARCHAR(255) NULL
         `;
         
-        await this.queryNewDb(alterQuery);
-        logger.info('✅ Added id_user_bak column to task_users table');
+        await this.queryNewDb(alterQuery, {});
+        logger.info('Added id_user_bak column to task_users table');
       }
     } catch (err) {
-      logger.error('❌ ensureTaskUsersTableColumns failed:', err.message);
+      logger.error('ensureTaskUsersTableColumns failed:', err.message);
       throw err;
     }
   }
@@ -79,7 +76,7 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
         WHERE id_user_bak = @idUserBak
       `;
 
-      const existing = await this.queryNewDb(existQuery, { idUserBak: mapped.id_user_bak });
+      const existing = await this.queryNewDbTx(existQuery, { idUserBak: mapped.id_user_bak }, transaction);
       
       if (Array.isArray(existing) && existing.length > 0) {
         // 3a. Update existing - WITH ALL 8 COLUMNS
@@ -90,18 +87,19 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
               process_name = @processName,
               role = @role,
               type = @type,
-              update_at = GETDATE()
+              update_at = @updateAt
           WHERE id_user_bak = @idUserBak
         `;
 
-        await this.queryNewDb(updateQuery, {
+        await this.queryNewDbTx(updateQuery, {
           taskId: mapped.task_id,
           processId: mapped.process_id,
           processName: mapped.process_name,
           role: mapped.role,
           type: mapped.type,
-          idUserBak: mapped.id_user_bak
-        });
+          idUserBak: mapped.id_user_bak,
+          updateAt: mapped.update_at
+        }, transaction);
 
         logger.info(`[StreamTaskUsersModel] Updated task_user ${mapped.id_user_bak}`);
         return { action: 'updated', id_user_bak: mapped.id_user_bak, taskId: mapped.task_id };
@@ -111,17 +109,19 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
           INSERT INTO ${targetTable}
           (task_id, process_id, process_name, role, type, id_user_bak, created_at, update_at)
           VALUES
-          (@taskId, @processId, @processName, @role, @type, @idUserBak, GETDATE(), GETDATE())
+          (@taskId, @processId, @processName, @role, @type, @idUserBak, @createdAt, @updateAt)
         `;
 
-        await this.queryNewDb(insertQuery, {
+        await this.queryNewDbTx(insertQuery, {
           taskId: mapped.task_id,
           processId: mapped.process_id,
           processName: mapped.process_name,
           role: mapped.role,
           type: mapped.type,
-          idUserBak: mapped.id_user_bak
-        });
+          idUserBak: mapped.id_user_bak,
+          updateAt: mapped.update_at,
+          createdAt: mapped.created_at
+        }, transaction);
 
         logger.info(`[StreamTaskUsersModel] Inserted task_user ${mapped.id_user_bak}`);
         return { action: 'inserted', id_user_bak: mapped.id_user_bak, taskId: mapped.task_id };
@@ -132,43 +132,30 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
     }
   }
 
-  /** Map TaskVBDiPermission → document_users (all 8 columns) */
+  /** Map TaskVBDenPermission → task_users (all 8 columns) */
   async mapSingleRecord(rawRecord) {
     if (!rawRecord) {
       throw new Error('rawRecord is required');
     }
 
     let typeValue = null;
-    if (rawRecord.Type) {
+    if (rawRecord.UserType) {
       typeValue = parseInt(rawRecord.Type, 10);
       if (isNaN(typeValue)) typeValue = null;
     }
-
+    const processId = this.helper.mapUserName(rawRecord.UserId) || null;
+    const processName = this.helper.getUserame(processId) || null; // todo
+    const role = this.helper.getRoleTask(rawRecord.UserFieldId) || null; // todo
     return {
       id_user_bak: String(rawRecord.ID || '').trim() || null,
-      task_id: rawRecord.TaskId ? parseInt(rawRecord.TaskId, 10) : null,
-      process_id: rawRecord.UserFieldId || null,
-      process_name: rawRecord.PermissionName || null,
-      role: rawRecord.PermissionID || null,
+      task_id: rawRecord.newTaskId ? parseInt(rawRecord.newTaskId, 10) : null,
+      process_id: processId,
+      process_name: processName,
+      role: role,
       type: typeValue,
-      created_at: rawRecord.CreatedAt ? new Date(rawRecord.CreatedAt).toISOString() : new Date().toISOString(),
-      update_at: rawRecord.UpdatedAt ? new Date(rawRecord.UpdatedAt).toISOString() : new Date().toISOString()
+      created_at: rawRecord.createdAt ? new Date(rawRecord.createdAt).toISOString() : new Date().toISOString(),
+      update_at: rawRecord.Modified ? new Date(rawRecord.Modified).toISOString() : new Date().toISOString()
     };
-  }
-
-  /** Cleanup staging - NO-OP (no staging for task_users) */
-  async cleanupStagingTable() {
-    try {
-      logger.debug('[StreamTaskUsersModel] cleanupStagingTable - NO-OP (no staging table)');
-      return {
-        success: true,
-        message: 'No staging table for task_users (direct INSERT/UPDATE)',
-        table: this.newDbTable
-      };
-    } catch (error) {
-      logger.error('[StreamTaskUsersModel.cleanupStagingTable]', error);
-      throw error;
-    }
   }
 }
 

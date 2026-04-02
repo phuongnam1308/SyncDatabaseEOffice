@@ -2,7 +2,7 @@ const BaseModel = require('../../../models/BaseModel');
 const MigrationHelper = require('../../helpers/MigrationHelper');
 const logger = require('../../../utils/logger');
 
-/** Maps TaskVBDi → document (35 columns with id_document_bak) */
+/** Maps TaskVBDen → task (35 columns with id_task_bak) */
 class StreamTaskMigrationModel extends BaseModel {
   constructor() {
     super();
@@ -38,7 +38,7 @@ class StreamTaskMigrationModel extends BaseModel {
           AND COLUMN_NAME = 'id_task_bak'
       `;
       
-      const existing = await this.queryNewDb(checkColQuery);
+      const existing = await this.queryNewDb(checkColQuery, {});
       
       if (!existing || existing.length === 0) {
         // Column doesn't exist - ADD it
@@ -47,11 +47,11 @@ class StreamTaskMigrationModel extends BaseModel {
           ADD id_task_bak NVARCHAR(255) NULL
         `;
         
-        await this.queryNewDb(alterQuery);
-        logger.info('✅ Added id_task_bak column to task table');
+        await this.queryNewDb(alterQuery, {});
+        logger.info('Added id_task_bak column to task table');
       }
     } catch (err) {
-      logger.error('❌ ensureTaskTableColumns failed:', err.message);
+      logger.error('ensureTaskTableColumns failed:', err.message);
       throw err;
     }
   }
@@ -72,9 +72,9 @@ class StreamTaskMigrationModel extends BaseModel {
         WHERE id_task_bak = @idTaskBak
       `;
       
-      const existing = await this.queryNewDb(existQuery, {
+      const existing = await this.queryNewDbTx(existQuery, {
         idTaskBak: String(stagingRow.ID)
-      });
+      }, transaction);
       
       if (Array.isArray(existing) && existing.length > 0) {
         // 3a. Update existing - WITH ALL COLUMNS
@@ -116,7 +116,7 @@ class StreamTaskMigrationModel extends BaseModel {
           WHERE id_task_bak = @idTaskBak
         `;
         
-        await this.queryNewDb(updateQuery, {
+        await this.queryNewDbTx(updateQuery, {
           code: mapped.code,
           name: mapped.name,
           startDate: mapped.start_date,
@@ -150,7 +150,7 @@ class StreamTaskMigrationModel extends BaseModel {
           dependentTaskId: mapped.dependent_task_id,
           isConfidential: mapped.is_confidential,
           idTaskBak: String(stagingRow.ID)
-        });
+        }, transaction);
         
         logger.info(`[StreamTaskMigrationModel.processSingleRecord] Updated task ${stagingRow.ID}`);
         return { action: 'updated', idTaskBak: String(stagingRow.ID), newTaskId: existing[0].id };
@@ -174,7 +174,7 @@ class StreamTaskMigrationModel extends BaseModel {
           SELECT SCOPE_IDENTITY() as id
         `;
         
-        const result = await this.queryNewDb(insertQuery, {
+        const result = await this.queryNewDbTx(insertQuery, {
           code: mapped.code,
           name: mapped.name,
           startDate: mapped.start_date,
@@ -208,12 +208,12 @@ class StreamTaskMigrationModel extends BaseModel {
           dependentTaskId: mapped.dependent_task_id,
           isConfidential: mapped.is_confidential,
           idTaskBak: String(stagingRow.ID)
-        });
+        }, transaction);
         
         const newId = result && result.length > 0 ? result[0].id : null;
         
         logger.info(`[StreamTaskMigrationModel.processSingleRecord] Inserted task ${stagingRow.ID} with new ID ${newId}`);
-        return { action: 'inserted', idTaskBak: String(stagingRow.ID), newTaskId: newId };
+        return { action: 'inserted', idTaskBak: String(stagingRow.ID), newTaskId: newId, createdBy: mapped.created_by };
       }
     } catch (error) {
       logger.error('[StreamTaskMigrationModel.processSingleRecord]', error);
@@ -221,12 +221,12 @@ class StreamTaskMigrationModel extends BaseModel {
     }
   }
 
-  /** Map TaskVBDi → document (12 mapped + 23 defaults) */
+  /** Map TaskVBDen → task (12 mapped + 23 defaults) */
   async mapSingleRecord(rawRecord, transaction = null) {
     if (!rawRecord) {
       throw new Error('rawRecord is required');
     }
-
+    const createdBy = this.helper.mapUserName(rawRecord.CreatedBy) || null;
     return {
       // Mapping từ old DB
       id_task_bak: String(rawRecord.ID || '').trim() || null,
@@ -237,7 +237,7 @@ class StreamTaskMigrationModel extends BaseModel {
       status: rawRecord.TrangThai ? parseInt(rawRecord.TrangThai, 10) : 1,
       priority: rawRecord.Priority || null,
       note: rawRecord.Content || null,
-      created_by: rawRecord.CreatedBy || null,
+      created_by: createdBy,
       updated_by: rawRecord.ModifiedBy || null,
       created_at: rawRecord.Created ? new Date(rawRecord.Created).toISOString() : new Date().toISOString(),
       update_at: rawRecord.Modified ? new Date(rawRecord.Modified).toISOString() : new Date().toISOString(),
@@ -275,7 +275,7 @@ class StreamTaskMigrationModel extends BaseModel {
       const stagingRef = `${this.newDbName}.${this.newDbSchema}.${this.newTableSync}`;
       const truncateQuery = `TRUNCATE TABLE ${stagingRef}`;
       
-      await this.queryNewDb(truncateQuery);
+      await this.queryNewDb(truncateQuery, {});
       
       logger.info(`[StreamTaskMigrationModel.cleanupStagingTable] Cleaned up ${this.newTableSync}`);
       return {
