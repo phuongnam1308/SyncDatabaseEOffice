@@ -1,9 +1,15 @@
 const express = require('express');
 const router = express.Router();
 
-const StreamTaskMigrationController = require('./migrate/StreamTaskMigrationController');
+const StreamTaskMigrationController = require('./controllers/StreamTaskMigrationController');
 
-router.post('/migrate/task-get-list', StreamTaskMigrationController.taskGetList);
-router.post('/migrate/task-process-one', StreamTaskMigrationController.taskProcessOne);
+/**
+ * Task Sync Routes
+ */
+router.post('/migrate/test-get-list', StreamTaskMigrationController.testGetList);
+router.post('/migrate/test-process-one', StreamTaskMigrationController.testProcessOne);
+router.post('/migrate/process-all', StreamTaskMigrationController.processAll);
+router.get('/migrate/sync-stats/:syncJobId', StreamTaskMigrationController.getSyncStats);
+router.post('/migrate/reset/:syncJobId', StreamTaskMigrationController.resetSync);
 
 module.exports = router;
