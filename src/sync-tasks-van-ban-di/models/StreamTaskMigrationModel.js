@@ -8,7 +8,7 @@ class StreamTaskMigrationModel extends BaseModel {
     super();
     this.newDbName = process.env.NEW_DB_NAME;
     this.newDbSchema = 'dbo';
-    this.newTableSync = 'task_sync';
+    this.newTableSync = 'task_sync_out';
     this.newDbTable = 'task';
 
     this.helper = new MigrationHelper(
@@ -19,6 +19,7 @@ class StreamTaskMigrationModel extends BaseModel {
 
   /** Initialize model */
   async initialize() {
+    await super.initialize();
     await this.ensureTaskTableColumns();
     logger.info('[StreamTaskMigrationModel] Initialized');
   }

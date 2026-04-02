@@ -143,15 +143,15 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
       typeValue = parseInt(rawRecord.Type, 10);
       if (isNaN(typeValue)) typeValue = null;
     }
-    const processId = this.helper.mapUserName(rawRecord.UserId) || null;
-    const processName = this.helper.getUserame(processId) || null; // todo
-    const role = this.helper.getRoleTask(rawRecord.UserFieldId) || null; // todo
+    const processId = await this.helper.mapUserName(rawRecord.UserId) || null;
+    // const processName = await this.helper.getUserame(processId) || null; // todo
+    // const role = await this.helper.getRoleTask(rawRecord.UserFieldId) || null; // todo
     return {
       id_user_bak: String(rawRecord.ID || '').trim() || null,
       task_id: rawRecord.newTaskId ? parseInt(rawRecord.newTaskId, 10) : null,
       process_id: processId,
-      process_name: processName,
-      role: role,
+      process_name: processId,
+      role: rawRecord.UserFieldId || null,
       type: typeValue,
       created_at: rawRecord.createdAt ? new Date(rawRecord.createdAt).toISOString() : new Date().toISOString(),
       update_at: rawRecord.Modified ? new Date(rawRecord.Modified).toISOString() : new Date().toISOString()
