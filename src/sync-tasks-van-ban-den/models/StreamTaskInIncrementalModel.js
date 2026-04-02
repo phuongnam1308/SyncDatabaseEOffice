@@ -7,11 +7,8 @@ const StreamSystemLogTasksModel = require('./StreamSystemLogTasksModel');
 
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 
-/**
- * Task sync orchestrator - coordinates task + task_users + system_logs atomic processing
- * Fetches TaskVBDen + TaskVBDenPermission from old DB, stages, processes with transactions
- */
-class StreamTaskIncrementalModel extends BaseIncrementalSyncInterface {
+/** Task sync orchestrator (transaction-based: fetch → stage → process with atomic multi-table handling) */
+class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
   constructor() {
     super({ modelName: 'STREAM_TASK_INCREMENTAL' });
     this.newDbName = process.env.NEW_DB_NAME;
@@ -26,10 +23,7 @@ class StreamTaskIncrementalModel extends BaseIncrementalSyncInterface {
     this.systemLogsModel = null;
   }
 
-  /**
-   * Initialize all models and staging tables
-   * @returns {Promise<void>}
-   */
+  /** Initialize all models and staging tables */
   async initialize() {
     await super.initialize();
     
@@ -45,17 +39,14 @@ class StreamTaskIncrementalModel extends BaseIncrementalSyncInterface {
 
       await this.ensureStagingTableExists();
 
-      logger.info('[StreamTaskIncrementalModel] Initialized with transaction-based aggregate processing');
+      logger.info('[StreamTaskInIncrementalModel] Initialized with transaction-based aggregate processing');
     } catch (error) {
-      logger.error('[StreamTaskIncrementalModel.initialize]', error);
+      logger.error('[StreamTaskInIncrementalModel.initialize]', error);
       throw error;
     }
   }
 
-  /**
-   * Create task_sync staging table
-   * @returns {Promise<void>}
-   */
+  /** Create task_sync staging table */
   async ensureStagingTableExists() {
     try {
       const tableRef = `${this.newDbName}.${this.newDbSchema}.${this.newTableSync}`;
@@ -91,19 +82,14 @@ class StreamTaskIncrementalModel extends BaseIncrementalSyncInterface {
       `;
 
       await this.queryNewDb(query);
-      logger.info('[StreamTaskIncrementalModel] task_sync ready');
+      logger.info('[StreamTaskInIncrementalModel] task_sync ready');
     } catch (err) {
-      logger.error('[StreamTaskIncrementalModel.ensureStagingTableExists]', err.message);
+      logger.error('[StreamTaskInIncrementalModel.ensureStagingTableExists]', err.message);
       throw err;
     }
   }
 
-  /**
-   * Fetch từ old DB TaskVBDen with limit
-   * @param {string} lastSyncTime - Last sync time cursor
-   * @param {number} lastSyncId - Last sync ID cursor
-   * @returns {Promise<{rows, totalCount, lastSyncTime}>}
-   */
+  /** Fetch from old DB: TaskVBDen with limit (100 rows, sorted by Modified cursor) */
   async fetchListFromOldDb(lastSyncTime, lastSyncId = 0) {
     try {
       const query = `
@@ -126,17 +112,12 @@ class StreamTaskIncrementalModel extends BaseIncrementalSyncInterface {
         lastSyncTime
       };
     } catch (error) {
-      logger.error('[StreamTaskIncrementalModel.fetchListFromOldDb]', error);
+      logger.error('[StreamTaskInIncrementalModel.fetchListFromOldDb]', error);
       throw error;
     }
   }
 
-  /**
-   * Stage tasks into task_sync
-   * @param {Array} rows - Rows to stage
-   * @param {Object} options - { transaction? }
-   * @returns {Promise<{stagedCount, inserted, updated}>}
-   */
+  /** Stage tasks into task_sync */
   async syncOldToStaging(rows, { transaction } = {}) {
     if (!Array.isArray(rows) || rows.length === 0) {
       return { stagedCount: 0, inserted: 0, updated: 0 };
@@ -197,7 +178,7 @@ class StreamTaskIncrementalModel extends BaseIncrementalSyncInterface {
         }
       }
       
-      logger.info(`[StreamTaskIncrementalModel.syncOldToStaging] ${inserted} new, ${updated} updated`);
+      logger.info(`[StreamTaskInIncrementalModel.syncOldToStaging] ${inserted} new, ${updated} updated`);
       
       return {
         stagedCount: rows.length,
@@ -205,18 +186,12 @@ class StreamTaskIncrementalModel extends BaseIncrementalSyncInterface {
         updated
       };
     } catch (error) {
-      logger.error('[StreamTaskIncrementalModel.syncOldToStaging]', error);
+      logger.error('[StreamTaskInIncrementalModel.syncOldToStaging]', error);
       throw error;
     }
   }
 
-  /**
-   * Get list - orchestrate fetch + stage
-   * @param {string} lastSyncTime - Optional last sync time
-   * @param {string} syncJobId - Job ID
-   * @param {number} lastSyncId - Optional last sync ID
-   * @returns {Promise<{lastSyncTime, totalCount, stagedCount, inserted, updated, message}>}
-   */
+  /** Fetch list: orchestrate fetch from old DB + stage in new DB */
   async getList(lastSyncTime = DEFAULT_SYNC_TIME, syncJobId = null, lastSyncId = 0) {
     try {
       const fetchResult = await this.fetchListFromOldDb(lastSyncTime, lastSyncId);
@@ -233,7 +208,7 @@ class StreamTaskIncrementalModel extends BaseIncrementalSyncInterface {
       
       const stagingResult = await this.syncOldToStaging(rows);
       
-      logger.info(`[StreamTaskIncrementalModel.getList] Fetched ${totalCount}, staged ${stagingResult.stagedCount}`);
+      logger.info(`[StreamTaskInIncrementalModel.getList] Fetched ${totalCount}, staged ${stagingResult.stagedCount}`);
       
       return {
         lastSyncTime,
@@ -244,15 +219,12 @@ class StreamTaskIncrementalModel extends BaseIncrementalSyncInterface {
         message: `Staged ${stagingResult.stagedCount} tasks`
       };
     } catch (error) {
-      logger.error('[StreamTaskIncrementalModel.getList]', error);
+      logger.error('[StreamTaskInIncrementalModel.getList]', error);
       throw error;
     }
   }
 
-  /**
-   * Fetch one task from staging
-   * @returns {Promise<Object|null>}
-   */
+  /** Fetch one task from staging */
   async fetchOneFromStaging() {
     try {
       const stagingRef = `${this.newDbName}.${this.newDbSchema}.${this.newTableSync}`;
@@ -266,19 +238,12 @@ class StreamTaskIncrementalModel extends BaseIncrementalSyncInterface {
       const rows = await this.queryNewDb(query);
       return Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
     } catch (error) {
-      logger.error('[StreamTaskIncrementalModel.fetchOneFromStaging]', error);
+      logger.error('[StreamTaskInIncrementalModel.fetchOneFromStaging]', error);
       throw error;
     }
   }
 
-  /**
-   * Process one task with transaction (pattern: StreamOutgoingIncrementalModel)
-   * 
-   * Creates transaction → calls processRowData() → commits or rolls back
-   * 
-   * @param {string} syncJobId - Job ID
-   * @returns {Promise<{syncJobId, itemIndex?, processed, done, result?}>}
-   */
+  /** Process one: fetch from staging → execute in transaction → delete from staging */
   async processOne(syncJobId = null) {
     const transaction = new sql.Transaction(this.newPool);
     
@@ -306,7 +271,7 @@ class StreamTaskIncrementalModel extends BaseIncrementalSyncInterface {
           { syncId: stagingRow.SY_SyncId }
         );
       } catch (delErr) {
-        logger.warn('[StreamTaskIncrementalModel] Delete from staging error:', delErr.message);
+        logger.warn('[StreamTaskInIncrementalModel] Delete from staging error:', delErr.message);
       }
 
       await transaction.commit();
@@ -322,22 +287,14 @@ class StreamTaskIncrementalModel extends BaseIncrementalSyncInterface {
       try {
         await transaction.rollback();
       } catch (rollbackError) {
-        logger.error('[StreamTaskIncrementalModel.processOne] Rollback failed:', rollbackError);
+        logger.error('[StreamTaskInIncrementalModel.processOne] Rollback failed:', rollbackError);
       }
-      logger.error('[StreamTaskIncrementalModel.processOne]', error);
+      logger.error('[StreamTaskInIncrementalModel.processOne]', error);
       throw error;
     }
   }
 
-  /**
-   * Process row data - orchestrates task + task_users + system_logs in aggregate
-   * 
-   * Pattern: Follows StreamOutgoingIncrementalModel.processRowData()
-   * 
-   * @param {Object} rowData - Staging row { ID, Title, VBId, ... }
-   * @param {Object} options - { transaction }
-   * @returns {Promise<{action, idTaskBak, newTaskId?, affected}>}
-   */
+  /** Process row data: coordinates task + task_users + system_logs in aggregate */
   async processRowData(rowData, { transaction } = {}) {
     if (!rowData) {
       throw new Error('rowData is required');
@@ -362,20 +319,7 @@ class StreamTaskIncrementalModel extends BaseIncrementalSyncInterface {
     };
   }
 
-  /**
-   * Upsert task aggregate - main coordination method
-   * 
-   * Processes:
-   * 1. Main task → task table
-   * 2. Task users → task_users table
-   * 3. System log entry → system_log_tasks table
-   * 
-   * All in ONE transaction (StreamOutgoingIncrementalModel pattern)
-   * 
-   * @param {Object} stagingRow - Task staging row
-   * @param {Object} options - { transaction }
-   * @returns {Promise<{action, idTaskBak, affected}>}
-   */
+  /** Upsert task aggregate: main coordination (task + task_users + system_logs in ONE transaction) */
   async upsertTaskAggregateById(stagingRow, { transaction } = {}) {
     if (!stagingRow) {
       return { action: 'none', affected: 0 };
@@ -385,13 +329,11 @@ class StreamTaskIncrementalModel extends BaseIncrementalSyncInterface {
     let totalAffected = 0;
 
     try {
-      // ══════════════════════════════════════════════════════════════
-      // 1. PROCESS MAIN TASK
-      // ══════════════════════════════════════════════════════════════
+
       const taskResult = await this.taskModel.processSingleRecord(stagingRow, transaction);
 
       if (!taskResult || !taskResult.newTaskId) {
-        logger.warn(`[StreamTaskIncrementalModel] Task not inserted for ID ${taskId}`);
+        logger.warn(`[StreamTaskInIncrementalModel] Task not inserted for ID ${taskId}`);
         return { action: 'none', affected: 0 };
       }
 
@@ -400,11 +342,8 @@ class StreamTaskIncrementalModel extends BaseIncrementalSyncInterface {
 
       const newTaskId = taskResult.newTaskId;
 
-      // ══════════════════════════════════════════════════════════════
-      // 2. PROCESS TASK USERS (auto-sync related records)
-      // ══════════════════════════════════════════════════════════════
+
       try {
-        // Fetch task_users from staging by task_id
         const taskUsersStagingRef = this.taskUsersModel.getStagingTableRef();
         const taskUsersQuery = `
           SELECT TOP 1000 SY_SyncId, ID, TaskId, PermissionID, PermissionName, Type
@@ -434,9 +373,7 @@ class StreamTaskIncrementalModel extends BaseIncrementalSyncInterface {
         logger.warn(`[upsertTaskAggregateById] TaskUsers sync failed: ${userError.message}`);
       }
 
-      // ══════════════════════════════════════════════════════════════
-      // 3. CREATE SYSTEM LOG ENTRY
-      // ══════════════════════════════════════════════════════════════
+
       try {
         const logResult = await this.systemLogsModel.createLogForTask(
           { idTask: newTaskId, idUserBak: taskId },
@@ -458,16 +395,12 @@ class StreamTaskIncrementalModel extends BaseIncrementalSyncInterface {
         affected: Math.max(1, totalAffected)
       };
     } catch (error) {
-      logger.error('[StreamTaskIncrementalModel.upsertTaskAggregateById]', error);
+      logger.error('[StreamTaskInIncrementalModel.upsertTaskAggregateById]', error);
       throw error;
     }
   }
 
-  /**
-   * Get sync job state
-   * @param {string} syncJobId - Job ID
-   * @returns {Promise<{total_to_sync, total_processed, status, last_sync_time}>}
-   */
+  /** Get sync job state */
   async getSyncJobState(syncJobId) {
     try {
       const query = `
@@ -494,7 +427,7 @@ class StreamTaskIncrementalModel extends BaseIncrementalSyncInterface {
         last_sync_time: null
       };
     } catch (error) {
-      logger.error('[StreamTaskIncrementalModel.getSyncJobState]', error);
+      logger.error('[StreamTaskInIncrementalModel.getSyncJobState]', error);
       throw error;
     }
   }
@@ -506,11 +439,11 @@ class StreamTaskIncrementalModel extends BaseIncrementalSyncInterface {
    */
   async processAllAsync(syncJobId = null) {
     try {
-      logger.info(`[StreamTaskIncrementalModel.processAllAsync] Starting job ${syncJobId}`);
+      logger.info(`[StreamTaskInIncrementalModel.processAllAsync] Starting job ${syncJobId}`);
 
       // 1. Fetch + stage
       const listResult = await this.getList(DEFAULT_SYNC_TIME, syncJobId);
-      logger.info(`[StreamTaskIncrementalModel] Staged ${listResult.stagedCount} tasks`);
+      logger.info(`[StreamTaskInIncrementalModel] Staged ${listResult.stagedCount} tasks`);
 
       // 2. Process all
       let processed = 0;
@@ -521,20 +454,20 @@ class StreamTaskIncrementalModel extends BaseIncrementalSyncInterface {
           if (!result.processed) break;
           processed++;
         } catch (procErr) {
-          logger.error('[StreamTaskIncrementalModel.processAllAsync]', procErr);
+          logger.error('[StreamTaskInIncrementalModel.processAllAsync]', procErr);
           failedCount++;
         }
       }
 
       // 3. Cleanup
-      logger.info('[StreamTaskIncrementalModel] Cleanup staging tables');
+      logger.info('[StreamTaskInIncrementalModel] Cleanup staging tables');
       const cleanupResults = {
         taskSync: await this.taskModel.cleanupStagingTable(),
         taskUsersSync: await this.taskUsersModel.cleanupStagingTable?.(),
         systemLogsSync: await this.systemLogsModel.cleanupStagingTable?.()
       };
 
-      logger.info(`[StreamTaskIncrementalModel.processAllAsync] Completed: ${processed} processed, ${failedCount} failed`);
+      logger.info(`[StreamTaskInIncrementalModel.processAllAsync] Completed: ${processed} processed, ${failedCount} failed`);
 
       return {
         status: 'success',
@@ -544,7 +477,7 @@ class StreamTaskIncrementalModel extends BaseIncrementalSyncInterface {
         message: `Synced ${processed} tasks (${failedCount} failed)`
       };
     } catch (error) {
-      logger.error('[StreamTaskIncrementalModel.processAllAsync]', error);
+      logger.error('[StreamTaskInIncrementalModel.processAllAsync]', error);
       throw error;
     }
   }
@@ -569,10 +502,10 @@ class StreamTaskIncrementalModel extends BaseIncrementalSyncInterface {
         }
       };
     } catch (error) {
-      logger.error('[StreamTaskIncrementalModel.cleanupStagingTable]', error);
+      logger.error('[StreamTaskInIncrementalModel.cleanupStagingTable]', error);
       throw error;
     }
   }
 }
 
-module.exports = StreamTaskIncrementalModel;
+module.exports = StreamTaskInIncrementalModel;

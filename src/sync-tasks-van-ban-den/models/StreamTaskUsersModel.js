@@ -1,13 +1,10 @@
-const BaseIncrementalSyncInterface = require('../../../sync-manager/BaseIncrementalSyncInterface');
-const MigrationHelper = require('../../../helpers/MigrationHelper');
+const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
+const MigrationHelper = require('../../helpers/MigrationHelper');
 const logger = require('../../../utils/logger');
 
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 
-/**
- * Task users table INSERT/UPDATE operations
- * Maps TaskVBDenPermission (old) → task_users (new): 9 columns including id_user_bak marking
- */
+/** Maps TaskVBDenPermission → task_users (9 columns with id_user_bak) */
 class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
   constructor() {
     super({ modelName: 'STREAM_TASK_USERS_MODEL' });
@@ -24,10 +21,7 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
     );
   }
 
-  /**
-   * Initialize model
-   * @returns {Promise<void>}
-   */
+  /** Initialize model */
   async initialize() {
     await super.initialize();
     await this.ensureTaskUsersTableColumns();
@@ -67,13 +61,7 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
     }
   }
 
-  /**
-   * Process một bản ghi task user - INSERT/UPDATE với ĐẦY ĐỦ tất cả 8 columns
-   * 
-   * @param {Object} stagingRow - Row { ID, TaskId, UserFieldId, PermissionID, PermissionName, Type, CreatedAt, UpdatedAt }
-   * @param {Object} transaction - MSSQL transaction object (optional)
-   * @returns {Promise<{action: string, id_user_bak: string, taskId: number}>}
-   */
+  /** Process single task user: map & insert/update all 8 columns */
   async processSingleRecord(stagingRow, transaction) {
     try {
       if (!stagingRow) {
@@ -144,10 +132,7 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
     }
   }
 
-  /**
-   * Map record: TaskVBDenPermission (8 fields) → task_users (9 columns)
-   * All fields mapped directly from old DB
-   */
+  /** Map TaskVBDenPermission → task_users (all 8 columns) */
   async mapSingleRecord(rawRecord) {
     if (!rawRecord) {
       throw new Error('rawRecord is required');
@@ -171,10 +156,7 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
     };
   }
 
-  /**
-   * Drop và recreate - NO-OP (không có staging table cho task_users)
-   * @returns {Promise<{success: boolean, message: string}>}
-   */
+  /** Cleanup staging - NO-OP (no staging for task_users) */
   async cleanupStagingTable() {
     try {
       logger.debug('[StreamTaskUsersModel] cleanupStagingTable - NO-OP (no staging table)');

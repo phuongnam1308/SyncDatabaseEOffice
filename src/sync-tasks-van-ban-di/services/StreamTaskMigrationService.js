@@ -1,22 +1,17 @@
 const logger = require('../../../utils/logger');
-const StreamTaskIncrementalModel = require('../models/StreamTaskIncrementalModel');
+const StreamTaskOutIncrementalModel = require('../models/StreamTaskOutIncrementalModel');
 
-/**
- * Task sync service
- */
+/** Task sync service */
 class StreamTaskMigrationService {
   constructor() {
     this.model = null;
   }
 
-  /**
-   * Initialize service
-   * @returns {Promise<void>}
-   */
+  /** Initialize service */
   async initialize() {
     try {
       if (!this.model) {
-        this.model = new StreamTaskIncrementalModel();
+        this.model = new StreamTaskOutIncrementalModel();
         await this.model.initialize();
       }
       logger.info('[StreamTaskMigrationService] Initialized');
@@ -26,20 +21,14 @@ class StreamTaskMigrationService {
     }
   }
 
-  /**
-   * Ensure initialized before operations
-   * @private
-   * @returns {Promise<void>}
-   */
+  /** Ensure initialized before operations */
   async ensureInitialized() {
     if (!this.model) {
       await this.initialize();
     }
   }
 
-  /**
-   * Get task list to sync from old DB and stage in new DB
-   */
+  /** Get task list from old DB and stage in new DB */
   async testGetList(jobId) {
     try {
       await this.ensureInitialized();
@@ -65,9 +54,7 @@ class StreamTaskMigrationService {
     }
   }
 
-  /**
-   * Process one staged task (with transaction: task + users + logs)
-   */
+  /** Process one staged task (transaction: task + users + logs) */
   async testProcessOne(jobId) {
     try {
       await this.ensureInitialized();
@@ -93,9 +80,7 @@ class StreamTaskMigrationService {
     }
   }
 
-  /**
-   * Process all staged tasks: fetch → stage → process with transaction → cleanup
-   */
+  /** Process all staged tasks: fetch → stage → process with transaction → cleanup */
   async processAllAsync(jobId) {
     try {
       await this.ensureInitialized();
@@ -123,9 +108,7 @@ class StreamTaskMigrationService {
     }
   }
 
-  /**
-   * Get sync stats for job (pending count, status, etc)
-   */
+  /** Get sync stats for job (pending count, status, etc) */
   async getSyncStats(jobId) {
     try {
       await this.ensureInitialized();
@@ -148,9 +131,7 @@ class StreamTaskMigrationService {
     }
   }
 
-  /**
-   * Reset sync job: cleanup staging, reset state
-   */
+  /** Reset sync job: cleanup staging & state */
   async resetSync(jobId) {
     try {
       await this.ensureInitialized();
@@ -177,10 +158,7 @@ class StreamTaskMigrationService {
     }
   }
 
-  /**
-   * Get instance of underlying model (advanced usage)
-   * @returns {StreamTaskIncrementalModel}
-   */
+  /** Get underlying model instance */
   getModel() {
     return this.model;
   }
@@ -189,10 +167,7 @@ class StreamTaskMigrationService {
 // Singleton instance
 let serviceInstance = null;
 
-/**
- * Get or create singleton instance
- * @returns {StreamTaskMigrationService}
- */
+/** Singleton factory */
 function getService() {
   if (!serviceInstance) {
     serviceInstance = new StreamTaskMigrationService();

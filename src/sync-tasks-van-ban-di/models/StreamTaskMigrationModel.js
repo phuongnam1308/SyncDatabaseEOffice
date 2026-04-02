@@ -2,10 +2,7 @@ const BaseModel = require('../../../models/BaseModel');
 const MigrationHelper = require('../../helpers/MigrationHelper');
 const logger = require('../../../utils/logger');
 
-/**
- * Task table INSERT/UPDATE operations
- * Maps TaskVBDen (old) → task (new): 35 columns including id_task_bak marking
- */
+/** Maps TaskVBDi → document (35 columns with id_document_bak) */
 class StreamTaskMigrationModel extends BaseModel {
   constructor() {
     super();
@@ -20,10 +17,7 @@ class StreamTaskMigrationModel extends BaseModel {
     );
   }
 
-  /**
-   * Initialize model
-   * @returns {Promise<void>}
-   */
+  /** Initialize model */
   async initialize() {
     await this.ensureTaskTableColumns();
     logger.info('[StreamTaskMigrationModel] Initialized');
@@ -62,15 +56,7 @@ class StreamTaskMigrationModel extends BaseModel {
     }
   }
 
-  /**
-   * Process một task: map dữ liệu cũ, insert/update vào main table với ĐẦY ĐỦ tất cả columns
-   * 
-   * Interface:
-   * @param {Object} stagingRow - { ID, Title, VBId, StartDate, DueDate, ... } từ task_sync
-   * @param {Object} transaction - MSSQL transaction object (for atomic aggregate processing)
-   * @returns {Promise<{action: string, idTaskBak: string, newTaskId?: number}>}
-   * @throws {Error} nếu dữ liệu không hợp lệ
-   */
+  /** Process single task: map & insert/update all 35 columns */
   async processSingleRecord(stagingRow, transaction = null) {
     try {
       if (!stagingRow || !stagingRow.ID) {
@@ -79,10 +65,8 @@ class StreamTaskMigrationModel extends BaseModel {
 
       const targetTable = `${this.newDbName}.${this.newDbSchema}.${this.newDbTable}`;
       
-      // 1. Map dữ liệu cũ → cấu trúc mới (with ALL columns)
       const mapped = await this.mapSingleRecord(stagingRow, transaction);
 
-      // 2. Check tồn tại bằng id_task_bak
       const existQuery = `
         SELECT TOP 1 id FROM ${targetTable}
         WHERE id_task_bak = @idTaskBak
@@ -237,10 +221,7 @@ class StreamTaskMigrationModel extends BaseModel {
     }
   }
 
-  /**
-   * Map record: TaskVBDen (14 fields) → task (35 columns)
-   * Mapping: 12 from old DB, 23 defaults (NULL or 0)
-   */
+  /** Map TaskVBDi → document (12 mapped + 23 defaults) */
   async mapSingleRecord(rawRecord, transaction = null) {
     if (!rawRecord) {
       throw new Error('rawRecord is required');
@@ -288,12 +269,7 @@ class StreamTaskMigrationModel extends BaseModel {
     };
   }
 
-  /**
-   * Cleanup staging table sau khi sync hoàn thành
-   * 
-   * Interface:
-   * @returns {Promise<{success: boolean, message: string, table: string}>}
-   */
+  /** Cleanup staging table */
   async cleanupStagingTable() {
     try {
       const stagingRef = `${this.newDbName}.${this.newDbSchema}.${this.newTableSync}`;

@@ -1,10 +1,7 @@
-const BaseIncrementalSyncInterface = require('../../../sync-manager/BaseIncrementalSyncInterface');
+const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 const logger = require('../../../utils/logger');
 
-/**
- * System log entry creation for tasks
- * Creates system_log_tasks entries: 8 columns including id_log_bak UUID marking
- */
+/** Auto-generate system_log_tasks entries (8 columns with id_log_bak UUID) */
 class StreamSystemLogTasksModel extends BaseIncrementalSyncInterface {
   constructor() {
     super({ modelName: 'STREAM_SYSTEM_LOG_TASKS_MODEL' });
@@ -13,27 +10,14 @@ class StreamSystemLogTasksModel extends BaseIncrementalSyncInterface {
     this.newDbTable = 'system_log_tasks';
   }
 
-  /**
-   * Initialize model
-   * @returns {Promise<void>}
-   */
+  /** Initialize model */
   async initialize() {
     await super.initialize();
     await this.ensureSystemLogTasksTableExists();
     logger.info('[StreamSystemLogTasksModel] Initialized');
   }
 
-  /**
-   * Ensure system_log_tasks table exists with proper schema
-   * 
-   * Steps:
-   * 1. Check if table EXISTS in database
-   * 2. If missing: CREATE TABLE with all 8 columns including id_log_bak
-   * 3. If exists: Check if id_log_bak COLUMN exists
-   * 4. If column missing: ALTER TABLE ADD id_log_bak NVARCHAR(36) NULL
-   * 
-   * @returns {Promise<void>}
-   */
+  /** Ensure system_log_tasks table exists with proper schema */
   async ensureSystemLogTasksTableExists() {
     try {
       const tableRef = `${this.newDbName}.${this.newDbSchema}.${this.newDbTable}`;
@@ -96,17 +80,12 @@ class StreamSystemLogTasksModel extends BaseIncrementalSyncInterface {
     }
   }
 
-  /**
-   * Get table reference
-   * @returns {string}
-   */
+  /** Get table reference */
   getTableRef() {
     return `${this.newDbName}.${this.newDbSchema}.${this.newDbTable}`;
   }
 
-  /**
-   * Insert system log: 8 columns (id, id_log_bak UUID marking, id_task, actions, details, user_info, timestamps)
-   */
+  /** Create log entry for task: 8 columns (id, id_log_bak UUID, id_task, actions, details, user_info, timestamps) */
   async createLogForTask(params, transaction) {
     if (!params || !params.idTask) {
       throw new Error('idTask is required');
@@ -145,11 +124,7 @@ class StreamSystemLogTasksModel extends BaseIncrementalSyncInterface {
     };
   }
 
-  /**
-   * Generate UUID v4 format: 03ec30d8-56cd-419b-b16e-96d626af5f05
-   * @private
-   * @returns {string}
-   */
+  /** Generate UUID v4 format */
   _generateUUID() {
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
       const r = Math.random() * 16 | 0;
@@ -158,11 +133,7 @@ class StreamSystemLogTasksModel extends BaseIncrementalSyncInterface {
     });
   }
 
-  /**
-   * Cleanup staging (NO-OP for system logs - no staging table)
-   * 
-   * @returns {Promise<{success: boolean, message: string}>}
-   */
+  /** Cleanup staging - NO-OP (no staging for system logs) */
   async cleanupStagingTable() {
     try {
       logger.debug('[StreamSystemLogTasksModel] cleanupStagingTable called (NO-OP - no staging)');
@@ -177,11 +148,7 @@ class StreamSystemLogTasksModel extends BaseIncrementalSyncInterface {
     }
   }
 
-  /**
-   * Query logs for specific task
-   * @param {number} idTask - Task ID
-   * @returns {Promise<Array>}
-   */
+  /** Query logs for specific task */
   async getLogsForTask(idTask) {
     try {
       const tableRef = this.getTableRef();

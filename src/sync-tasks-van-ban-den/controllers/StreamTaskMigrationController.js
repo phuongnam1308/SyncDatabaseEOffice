@@ -4,18 +4,14 @@ const StreamTaskMigrationService = require('../services/StreamTaskMigrationServi
 
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 
-/**
- * Task sync controller - HTTP layer
- */
+/** Task sync controller - HTTP layer */
 class StreamTaskMigrationController extends BaseController {
   constructor() {
     super();
     this.service = new StreamTaskMigrationService();
   }
 
-  /**
-   * Get task list from old DB and stage in new DB
-   */
+  /** Get task list from old DB and stage in new DB */
   testGetList = this.asyncHandler(async (req, res) => {
     const lastSyncTime = req.body?.lastSyncTime || req.query?.lastSyncTime || DEFAULT_SYNC_TIME;
     const syncJobId = req.body?.syncJobId || req.query?.syncJobId || null;
@@ -30,9 +26,7 @@ class StreamTaskMigrationController extends BaseController {
     }
   });
 
-  /**
-   * Process one staged task (with transaction: task + users + logs)
-   */
+  /** Process one staged task (transaction: task + users + logs) */
   testProcessOne = this.asyncHandler(async (req, res) => {
     const syncJobId = req.body?.syncJobId || req.query?.syncJobId || null;
 
@@ -46,9 +40,7 @@ class StreamTaskMigrationController extends BaseController {
     }
   });
 
-  /**
-   * Process all staged tasks: fetch → stage → process with transaction → cleanup
-   */
+  /** Process all staged tasks: fetch → stage → process with transaction → cleanup */
   processAll = this.asyncHandler(async (req, res) => {
     const syncJobId = req.body?.syncJobId || req.query?.syncJobId || null;
 
@@ -62,9 +54,7 @@ class StreamTaskMigrationController extends BaseController {
     }
   });
 
-  /**
-   * Get sync stats (pending count, status, etc)
-   */
+  /** Get sync stats (pending count, status, etc) */
   getSyncStats = this.asyncHandler(async (req, res) => {
     const { syncJobId } = req.params;
 
@@ -82,9 +72,7 @@ class StreamTaskMigrationController extends BaseController {
     }
   });
 
-  /**
-   * Reset sync job: cleanup staging
-   */
+  /** Reset sync job: cleanup staging */
   resetSync = this.asyncHandler(async (req, res) => {
     const { syncJobId } = req.params;
 

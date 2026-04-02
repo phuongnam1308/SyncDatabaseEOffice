@@ -3,7 +3,8 @@ const SyncHandlerModel = require('./SyncHandlerModel');
 
 const OutGoingDocumentModel = require('../sync-outgoing-document/models/StreamOutgoingIncrementalModel');
 const StreamUserMigrationModel = require('../sync-user-copy/migrate/StreamUserMigrationModel');
-const StreamTaskIncrementalModel = require('../sync-tasks/models/StreamTaskIncrementalModel');
+const StreamTaskInIncrementalModel = require('../sync-tasks-van-ban-den/models/StreamTaskInIncrementalModel');
+const StreamTaskOutIncrementalModel = require('../sync-tasks-van-ban-di/models/StreamTaskOutIncrementalModel');
 const StreamSocialMigrationModel = require('../sync-social-resource/migrate/StreamSocialMigrationModel');
 const SyncIncomingDocumentModel = require('../sync-incoming-document/models/SyncIncomingDocumentModel');
 const StreamMeetingMigrationModel = require('../sync-meeting/migrate/StreamMeetingMigrationModel');
@@ -38,10 +39,16 @@ const MODEL_DEFINITIONS = [
     ModelClass: StreamUserMigrationModel
   },
   {
-    key: 'UNIT_TEST_STREAM_TASK_INCREMENTAL',
-    label: 'Đồng bộ công việc (task → task_users → system_logs)',
+    key: 'UNIT_TEST_STREAM_TASK_INCOMMING_INCREMENTAL',
+    label: 'Đồng bộ công việc đến',
     section: 'realtime',
-    ModelClass: StreamTaskIncrementalModel,
+    ModelClass: StreamTaskInIncrementalModel,
+  },
+  {
+    key: 'UNIT_TEST_STREAM_TASK_OUTGOING_INCREMENTAL',
+    label: 'Đồng bộ công việc đi',
+    section: 'realtime',
+    ModelClass: StreamTaskOutIncrementalModel,
   },
   {
     key: 'UNIT_TEST_STREAM_NEWS_ASPX_PAGE_INCREMENTAL',
