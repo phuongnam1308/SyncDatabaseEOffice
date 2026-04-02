@@ -411,13 +411,13 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
         AND ud.[tp_IsCurrent] = 1
         AND ud.[tp_DeleteTransactionId] = 0x0
         AND (
-            ud.[tp_Modified] > @lastSyncTime
+            ud.[tp_Modified] < @lastSyncTime
             OR (
                 ud.[tp_Modified] = @lastSyncTime
-                AND ud.[tp_ID] > @lastSyncId
+                AND ud.[tp_ID] < @lastSyncId
             )
         )
-        ORDER BY ud.[tp_Modified] ASC, ud.[tp_ID] ASC
+        ORDER BY ud.[tp_Modified] DESC, ud.[tp_ID] DESC
     `;
 
     const rows = await this.queryOldDb(query, {
@@ -526,8 +526,8 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
         WHERE ud.[tp_ListId] IN (${listIdsStr})
         AND ud.[tp_IsCurrent] = 1
         AND ud.[tp_DeleteTransactionId] = 0x0
-        AND (ud.[tp_Modified] > @lastSyncTime OR (ud.[tp_Modified] = @lastSyncTime AND ud.[tp_ID] > @lastSyncId))
-        ORDER BY ud.[tp_Modified] ASC, ud.[tp_ID] ASC
+        AND (ud.[tp_Modified] < @lastSyncTime OR (ud.[tp_Modified] = @lastSyncTime AND ud.[tp_ID] < @lastSyncId))
+        ORDER BY ud.[tp_Modified] DESC, ud.[tp_ID] DESC
     `;
     const rows = await this.queryOldDb(query, { lastSyncTime, lastSyncId });
     return rows?.[0] || null;
