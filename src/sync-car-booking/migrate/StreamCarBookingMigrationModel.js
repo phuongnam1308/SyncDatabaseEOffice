@@ -425,10 +425,11 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         AND ud.[tp_IsCurrent] = 1
         AND ud.[tp_DeleteTransactionId] = 0x0
         AND (
-            ud.[tp_Modified] > @lastSyncTime
+            @lastSyncTime = '1970-01-01T00:00:00.000Z' -- Lần chạy đầu tiên: Lấy từ bản ghi mới nhất
+            OR ud.[tp_Modified] < @lastSyncTime
             OR (
                 ud.[tp_Modified] = @lastSyncTime
-                AND ud.[tp_ID] > @lastSyncId
+                AND ud.[tp_ID] < @lastSyncId
             )
         )
         ORDER BY ud.[tp_Modified] DESC, ud.[tp_ID] DESC
@@ -454,11 +455,11 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
     const normalizeValue = (val, colName) => {
         if (val === 'false' || val === false) return 0;
         if (val === 'true' || val === true) return 1;
-        
+
         // Handle numeric columns specifically if needed
         const intCols = [
-            'ID', 'ItemID', 'DocumentID', 'LinkedItemID', 'Updating', 'IsArchived', 'IsConverting', 
-            'ChenSo', 'DongMoc', 'EndLoop', 'IsKyQuyChe', 'KyHaiLien', 'IsDaIn', 'IsDaKy', 
+            'ID', 'ItemID', 'DocumentID', 'LinkedItemID', 'Updating', 'IsArchived', 'IsConverting',
+            'ChenSo', 'DongMoc', 'EndLoop', 'IsKyQuyChe', 'KyHaiLien', 'IsDaIn', 'IsDaKy',
             'IsHubSendOut', 'IsNAS', 'PreviousStep'
         ];
         if (intCols.includes(colName)) {
@@ -522,10 +523,10 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
     let nextSyncTime = normalizedLastSyncTime;
     let nextSyncId = normalizedLastSyncId;
 
-    // Với thứ tự DESC, bản ghi đầu tiên là bản ghi mới nhất
+    // Với thứ tự DESC, bản ghi cuối cùng (index n-1) là bản ghi CŨ NHẤT trong batch đó
     if (rows.length > 0) {
-      nextSyncTime = this.extractRowSyncTime(rows[0]);
-      nextSyncId = this.extractRowSyncId(rows[0]);
+      nextSyncTime = this.extractRowSyncTime(rows[rows.length - 1]);
+      nextSyncId = this.extractRowSyncId(rows[rows.length - 1]);
     }
     return { syncJobId, rows, totalCount: rows.length, lastSyncTime: nextSyncTime, lastSyncId: nextSyncId };
   }
@@ -535,34 +536,85 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
     const listIdsStr = listIds.map(id => `'${id}'`).join(',');
     const cols = this.sourceSchema;
 
-    const select = [
-        `ud.[tp_ID] AS ID`,
-        `ud.[tp_Created] AS tp_Created`,
-        `ud.[tp_Modified] AS tp_Modified`,
-        cols.hasUserInfo ? `ui_author.[tp_Title] AS AuthorName` : `NULL AS AuthorName`,
-        cols.hasUserInfo ? `ui_author.[tp_Login] AS AuthorAccount` : `NULL AS AuthorAccount`,
+    const udSelect = [
+        `l.[tp_Title]            AS ListName`,
+        `ud.[tp_ID]              AS ID`,
+        `ud.[tp_ID]              AS ItemID`,
+        `ud.[tp_Created]         AS CreatedDate`,
+        `ud.[tp_Modified]        AS ModifiedDate`,
+        `ud.[tp_Created]         AS tp_Created`,
+        `ud.[tp_Modified]        AS tp_Modified`,
+        cols.hasUserInfo ? `ui_author.[tp_Title]    AS AuthorName` : `NULL AS AuthorName`,
+        cols.hasUserInfo ? `ui_author.[tp_Login]    AS AuthorAccount` : `NULL AS AuthorAccount`,
+        cols.hasUserInfo ? `ui_author.[tp_Email]    AS AuthorEmail` : `NULL AS AuthorEmail`,
+        cols.hasUserInfo ? `ui_editor.[tp_Title]    AS EditorName` : `NULL AS EditorName`,
+        cols.hasUserInfo ? `ui_editor.[tp_Login]    AS EditorAccount` : `NULL AS EditorAccount`,
         cols.allUserData.has('nvarchar1') ? `ud.[nvarchar1] AS Title` : `NULL AS Title`,
         cols.allUserData.has('datetime1') ? `ud.[datetime1] AS StartDate` : `NULL AS StartDate`,
         cols.allUserData.has('datetime2') ? `ud.[datetime2] AS EndDate` : `NULL AS EndDate`,
         cols.allUserData.has('nvarchar2') ? `ud.[nvarchar2] AS Location` : `NULL AS Location`,
-        cols.allUserData.has('nvarchar4') ? `ud.[nvarchar4] AS Organizer` : `NULL AS Organizer`,
         cols.allUserData.has('nvarchar3') ? `ud.[nvarchar3] AS Description` : `NULL AS Description`,
+        cols.allUserData.has('nvarchar4') ? `ud.[nvarchar4] AS Organizer` : `NULL AS Organizer`,
         `ud.[tp_Modified] AS __sync_time`,
         `ud.[tp_ID] AS __sync_id_num`
     ];
 
+    const ciColumns = [
+        'Title', 'Subject', 'LoaiVanBan', 'DepartmentId', 'Status', 'StatusText',
+        'WorkflowId', 'Approver', 'ApprovedDate', 'Created', 'CreatedBy', 'Modified',
+        'ModifiedBy', 'SPItemId', 'SPListId', 'SubmitDate', 'Step', 'DocumentId',
+        'Updating', 'Locker', 'TaskId', 'IsArchived', 'IsConverting', 'ConvertedDate',
+        'ActionStatus', 'CBNV', 'Content', 'ChenSo', 'DongMoc', 'EndLoop', 'IsKyQuyChe',
+        'IssuedDate', 'KyHaiLien', 'ReccurencyType', 'LoaiBanHanh', 'LoaiMoc', 'NgayDanTau',
+        'ParentId', 'PreviousStep', 'Price', 'SoVanBanDi', 'SoVanBanNum', 'ThamQuyen',
+        'VBBiThayThe', 'YKien', 'ApproverByStep', 'SPListName', 'AssignedToText',
+        'ResourceFormId', 'SiteName', 'IsDaIn', 'IsDaKy', 'ChildId', 'StampWithKey',
+        'Name', 'IsHubSendOut', 'HubPackageId', 'GoiDauTu', 'GoiDuAn', 'DonViChuTri',
+        'NgayKyKH', 'SoKH', 'DonViSoanThao', 'GoiDuAn1', 'IsNAS', 'NAS_MESS'
+    ];
+
+    const ciSelect = ciColumns.map(col => {
+        const alias = col === 'ID' ? 'DocumentID' :
+                     (col === 'Title' ? 'DocumentTitle' :
+                     (col === 'Subject' ? 'DocumentSubject' :
+                     (col === 'Status' ? 'DocumentStatus' :
+                     (col === 'StatusText' ? 'DocumentStatusText' :
+                     (col === 'Created' ? 'DocumentCreatedDate' :
+                     (col === 'CreatedBy' ? 'DocumentCreatedBy' :
+                     (col === 'Modified' ? 'DocumentModified' :
+                     (col === 'ModifiedBy' ? 'DocumentModifiedBy' :
+                     (col === 'SPItemId' ? 'LinkedItemID' :
+                     (col === 'SiteName' ? 'DocumentSiteName' : col))))))))));
+
+        if (cols.codeItem.has(col.toLowerCase())) {
+            return `ci.[${col}] AS [${alias}]`;
+        } else {
+            return `NULL AS [${alias}]`;
+        }
+    });
+
     const query = `
         SELECT TOP 1
-            ${select.join(',\n            ')}
+            ${udSelect.join(',\n            ')},
+            ${ciSelect.join(',\n            ')}
         FROM [${this.oldDbName}].[dbo].[AllUserData] ud
+        INNER JOIN [${this.oldDbName}].[dbo].[AllLists] l
+            ON ud.[tp_ListId] = l.[tp_ID]
         ${cols.hasUserInfo ? `LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_author ON ud.[tp_Author] = ui_author.[tp_ID]` : ''}
+        ${cols.hasUserInfo ? `LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_editor ON ud.[tp_Editor] = ui_editor.[tp_ID]` : ''}
+        LEFT JOIN [DataEOfficeSNP].[SNP].[CodeItem] ci ON ud.[tp_ID] = ci.[SPItemId]
+
         WHERE ud.[tp_ListId] IN (${listIdsStr})
-        AND ud.tp_RowOrdinal = 0
-        AND ud.[tp_IsCurrentVersion] = 1
-        AND (ud.[tp_Modified] > @lastSyncTime OR (ud.[tp_Modified] = @lastSyncTime AND ud.[tp_ID] > @lastSyncId))
+        AND ud.[tp_IsCurrent] = 1
+        AND ud.[tp_DeleteTransactionId] = 0x0
+        AND (
+            @lastSyncTime = '1970-01-01T00:00:00.000Z'
+            OR ud.[tp_Modified] < @lastSyncTime 
+            OR (ud.[tp_Modified] = @lastSyncTime AND ud.[tp_ID] < @lastSyncId)
+        )
         ORDER BY ud.[tp_Modified] DESC, ud.[tp_ID] DESC
     `;
-    const rows = await this.queryOldDb(query, { lastSyncTime, lastSyncId });
+    const rows = await this.queryOldDb(query, { lastSyncTime, lastSyncId: Number(lastSyncId || 0) });
     return rows?.[0] || null;
   }
 
@@ -597,65 +649,173 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
   }
 
   async processRowData(rowData, { transaction } = {}) {
-    if (!rowData?.ID) throw new Error('ID is required');
+    if (!rowData?.ID) {
+        console.error(`[StreamCarBookingMigrationModel] processRowData ERROR: Row missing ID! Data = ${JSON.stringify(rowData)}`);
+        throw new Error('ID is required');
+    }
     const recordId = String(rowData.ID);
-    console.log(`[StreamCarBookingMigrationModel] processRowData: recordId=${recordId}`);
+    console.log(`\n====================================================================`);
+    console.log(`[StreamCarBookingMigrationModel] START PROCESSING RECORD ID: ${recordId}`);
+    console.log(`[StreamCarBookingMigrationModel] RAW DATA FROM SOURCE:`);
+    console.log(JSON.stringify(rowData, null, 2));
 
-    // 🔥 1. Resolve Thông tin Người dùng (Chuẩn hóa từ Tên sang ID)
-    // Ưu tiên tra cứu để lấy UUID chuẩn
-    if (rowData.AuthorAccount || rowData.AuthorName) {
-      const sourceUser = rowData.AuthorAccount || rowData.AuthorName;
-      const mappedId = await this.helper.resolveUserIdByFullName(sourceUser, transaction);
-      if (mappedId) rowData.AuthorAccount = mappedId;
-    }
-
-    if (rowData.Organizer || rowData.AuthorName) {
-      const sourceLeader = rowData.Organizer || rowData.AuthorName;
-      const leaderId = await this.helper.resolveUserIdByFullName(sourceLeader, transaction);
-      if (leaderId) rowData.Organizer = leaderId;
-    }
-
-    // 🔥 2. Ghi vào bảng MASTER (vehicle_registrations)
-    const masterResult = await this.upsertDataToNewDB(rowData, this.oldConfig, 'id_sp_bak', recordId, transaction);
-    const masterId = masterResult.id;
-
-    // 🔥 3. Bóc tách JSON Detail (Chỉ áp dụng cho dữ liệu có điều phối)
-    let coordination = [];
     try {
-        const rawInfo = rowData.coordination_information || rowData.nvarcharMAX1;
-        if (rawInfo && typeof rawInfo === 'string' && rawInfo.trim().startsWith('[')) {
-            coordination = JSON.parse(rawInfo);
-        }
-    } catch (e) {
-        // Log và bỏ qua nếu không phải định dạng JSON (dữ liệu cũ)
-    }
+        const carBookingRoles = '[{"processKey":"VAN_BAN_DI","name":"VAN_BAN_DI","roles":[{"roleCode":"CAN_BO","name":"CAN_BO"}]},{"processKey":"QUY_TRINH_CV_PHONG_BAN","name":"QUY_TRINH_CV_PHONG_BAN","roles":[{"roleCode":"NGUOI_PHOI_HOP","name":"NGƯỜI PHỐI HỢP"}]},{"processKey":"PHUC_DAP_DV_CON","name":"PHUC_DAP_DV_CON","roles":[{"roleCode":"CAN_BO","name":"CAN_BO"},{"roleCode":"NHAN_VIEN_TCT","name":"NHAN_VIEN_TCT"}]},{"processKey":"quan_ly_tin_tuc","name":"quan_ly_tin_tuc","roles":[{"roleCode":"NGUOI_TAO_TIN","name":"NGUOI_TAO_TIN"}]},{"processKey":"SOANTHAO_PHATHANH_VBD","name":"SOANTHAO_PHATHANH_VBD","roles":[{"roleCode":"NGUOI_SOAN_THAO","name":"NGUOI_SOAN_THAO"}]},{"processKey":"QUY_TRINH_LICH_HOP","name":"QUY_TRINH_LICH_HOP","roles":[{"roleCode":"NGUOI_SOAN_LICH","name":"NGUOI_SOAN_LICH"},{"roleCode":"NGUOI_THAM_GIA","name":"NGUOI_THAM_GIA"},{"roleCode":"ADMIN","name":"ADMIN"}]},{"processKey":"quytrinhthuthaphoso1","name":"quytrinhthuthaphoso1","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qllsct","name":"qllsct","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvlfgttthcid","name":"qtdvlfgttthcid","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"dev_01","name":"dev_01","roles":[{"roleCode":"CB","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qlgttssddn","name":"qlgttssddn","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"quytrinhthuthaphoso","name":"quytrinhthuthaphoso","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtqlapi","name":"qtqlapi","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvdstphstsbnhs","name":"qtdvdstphstsbnhs","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtqllstthscd","name":"qtqllstthscd","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"listDetailImport","name":"listDetailImport","roles":[{"roleCode":"CANBO","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"kthsclone","name":"kthsclone","roles":[{"roleCode":"CANBO","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"tthsdn","name":"tthsdn","roles":[{"roleCode":"CANBO","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtqllssytl","name":"qtqllssytl","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qlgttssdcd","name":"qlgttssdcd","roles":[{"roleCode":"CANBO","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtqlkqgqtthccd","name":"qtqlkqgqtthccd","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"exceldoanhnghiep","name":"exceldoanhnghiep","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvldldtkqgqtthctsbncss","name":"qtdvldldtkqgqtthctsbncss","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvldstsdcdiddn","name":"qtdvldstsdcdiddn","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvttdtcn","name":"qtdvttdtcn","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtqltl","name":"qtqltl","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvldsidkqgqtthccd","name":"qtdvldsidkqgqtthccd","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"so2","name":"so2","roles":[{"roleCode":"CB","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"TVHSLT","name":"TVHSLT","roles":[{"roleCode":"CB","name":"CB","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtiedldtcd","name":"qtiedldtcd","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qldvcc","name":"qldvcc","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"ldsiqkqgqtthccd","name":"ldsiqkqgqtthccd","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtqllstths","name":"qtqllstths","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qlkqqgtthccd","name":"qlkqqgtthccd","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtth","name":"qtth","roles":[{"roleCode":"CANBOCQDV1","name":"Cán bộ CQDV1","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvttgikqtgqhstthc","name":"qtdvttgikqtgqhstthc","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qlhsdn","name":"qlhsdn","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtqllstthsdn","name":"qtqllstthsdn","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvlfkqgqtthcid","name":"qtdvlfkqgqtthcid","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"dongbo","name":"dongbo","roles":[{"roleCode":"CANBO","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdldtkqgqtthcid","name":"qtdldtkqgqtthcid","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtiedldtdn","name":"qtiedldtdn","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qllsctcd","name":"qllsctcd","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtqlhth","name":"qtqlhth","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtqlgttsdcd","name":"qtqlgttsdcd","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvldsgttsdcdid","name":"qtdvldsgttsdcdid","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qlkqqgtthcdn","name":"qlkqqgtthcdn","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvlfkqgqtthcbnhs","name":"qtdvlfkqgqtthcbnhs","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"kths","name":"kths","roles":[{"roleCode":"canbokhaithac","name":"Cán bộ khai thác","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvlddkqgqtthcdn","name":"qtdvlddkqgqtthcdn","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"Mã quy trình","name":"Mã quy trình","roles":[{"roleCode":"CANBO","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"importexcel","name":"importexcel","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvttkqgqtthc","name":"qtdvttkqgqtthc","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvldldtkqgqtthcid","name":"qtdvldldtkqgqtthcid","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtttgttsdddkscddn","name":"qtttgttsdddkscddn","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"LUONG_PHONG","name":"LUONG_PHONG","roles":[{"roleCode":"CAN_BO","name":"CAN_BO","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvlttdtdn","name":"qtdvlttdtdn","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvlddkqgq1dn","name":"qtdvlddkqgq1dn","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qllsctdn","name":"qllsctdn","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtqltldn","name":"qtqltldn","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"Administrator","name":"Administrator","roles":[{"roleCode":"CAN_BO","name":"CAN_BO","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"QUY_TRINH_PHONG_HOP","name":"QUY_TRINH_PHONG_HOP","roles":[{"roleCode":"XEM_PHONG_HOP","name":"XEM_PHONG_HOP","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"KY_SO_HS_VBD","name":"KY_SO_HS_VBD","roles":[{"roleCode":"NGUOI_SOAN_THAO","name":"NGUOI_SOAN_THAO"}]},{"processKey":"CVDAN","name":"CVDAN","roles":[{"roleCode":"NGUOI_GIAO","name":"NGƯỜI GIAO"},{"roleCode":"NGUOI_CHU_TRI","name":"NGƯỜI CHỦ TRÌ"},{"roleCode":"NGUOI_PHOI_HOP","name":"NGƯỜI PHỐI HỢP"}]},{"processKey":"QUY_TRINH_KHAI_THAC_HO_SO","name":"QUY_TRINH_KHAI_THAC_HO_SO","roles":[{"roleCode":"NGUOI_KHAI_THAC","name":"NGUOI_KHAI_THAC"}]},{"processKey":"hosoluutru","name":"hosoluutru","roles":[{"roleCode":"HHLT_CANBO","name":"HHLT_CANBO"}]},{"processKey":"thhs","name":"thhs","roles":[{"roleCode":"bld","name":"bld"}]},{"processKey":"PHUC_DAP_DV","name":"PHUC_DAP_DV","roles":[{"roleCode":"PHONG_NHAN_VIEN_TCT","name":"PHONG_NHAN_VIEN_TCT"},{"roleCode":"CAN_BO","name":"CAN_BO"}]},{"processKey":"QUY_TRINH_DANG_KY_XE","name":"QUY_TRINH_DANG_KY_XE","roles":[{"roleCode":"NGUOI_DANG_KY_XE","name":"NGUOI_DANG_KY_XE"}]},{"processKey":"QTVBNB","name":"QTVBNB","roles":[{"roleCode":"CAN_BO","name":"CAN_BO"}]},{"processKey":"QUY_TRINH_PHAN_ANH_KIEN_NGHI","name":"QUY_TRINH_PHAN_ANH_KIEN_NGHI","roles":[{"roleCode":"NGUOI_PHAN_ANH","name":"NGUOI_PHAN_ANH"}]},{"processKey":"QT_MTHC","name":"QT_MTHC","roles":[{"roleCode":"NGUOI_TAO","name":"NGUOI_TAO"}]},{"processKey":"SOANTHAO_PHATHANH_CQD","name":"SOANTHAO_PHATHANH_CQD","roles":[{"roleCode":"NGUOI_SOAN_THAO","name":"NGUOI_SOAN_THAO"}]},{"processKey":"dashboardPage","name":"dashboardPage","roles":[{"roleCode":"VT","name":"VT"}]},{"processKey":"KY_SO_HS_K_DD","name":"KY_SO_HS_K_DD","roles":[{"roleCode":"NGUOI_SOAN_THAO","name":"NGUOI_SOAN_THAO"}]},{"processKey":"reportsOutGoingDocument","name":"reportsOutGoingDocument","roles":[{"roleCode":"VT","name":"VT"}]},{"processKey":"PHOIHOP_NHANDEBIET","name":"PHOIHOP_NHANDEBIET","roles":[{"roleCode":"CAN_BO","name":"CAN_BO"}]},{"processKey":"statisticsAndReports","name":"statisticsAndReports","roles":[{"roleCode":"VT","name":"VT"}]}]';
 
-    if (Array.isArray(coordination) && coordination.length > 0) {
-        for (const item of coordination) {
+        // 🔥 1. Resolve Thông tin Người dùng (Waterfall) - Đồng nhất ID cho Master & Audit
+        const authorCandidates = [
+          { key: 'AuthorAccount', type: 'account', value: rowData.AuthorAccount },
+          { key: 'AuthorName', type: 'name', value: rowData.AuthorName }
+        ];
+
+        let finalUserId = '6915f2387e39c2ba33cef79a'; // Fallback Van thu TCT nếu không tìm thấy
+        for (const cand of authorCandidates) {
+          if (!cand.value) continue;
+          console.log(`[StreamCarBookingMigrationModel] Resolving Final User ID via [${cand.key}]: ${cand.value}`);
+          let resolvedId = null;
+          if (cand.type === 'account') {
+            resolvedId = await this.helper.resolveUserIdByAccountName(cand.value, transaction, carBookingRoles);
+          } else {
+            resolvedId = await this.helper.resolveUserIdByFullName(cand.value, transaction, carBookingRoles);
+          }
+          if (resolvedId) {
+              finalUserId = resolvedId;
+              console.log(`[StreamCarBookingMigrationModel] >> SUCCESS Resolved User to UUID: ${finalUserId}`);
+              await this._ensureUserHasRoles(finalUserId, carBookingRoles, transaction);
+              break;
+          }
+        }
+
+        // Đảm bảo đồng nhất tuyệt đối theo yêu cầu của USER
+        rowData.AuthorAccount = finalUserId; // Sẽ map vào created_by
+        rowData.Organizer = finalUserId;     // Sẽ map vào contact_person (Dùng chung 1 người cho tiện liên hệ)
+
+        // 🔥 1.5. Xử lý các giá trị mặc định thực tế cho MASTER nếu bị thiếu
+        if (!rowData.departure_point || String(rowData.departure_point).trim() === '') {
+            rowData.departure_point = 'Tại đơn vị';
+        }
+        if (!rowData.Location || String(rowData.Location).trim() === '') {
+            rowData.Location = 'Công tác nội thành/Theo lộ trình yêu cầu';
+        }
+        if (!rowData.Description || String(rowData.Description).trim() === '') {
+            rowData.Description = 'Giải quyết công việc chuyên môn';
+        }
+        if (rowData.passenger_count === undefined || rowData.passenger_count === null) {
+            rowData.passenger_count = 1;
+        }
+
+        // 🔥 1.6. Khai báo thời gian hiện tại
+        const now = new Date();
+
+        // 🔥 1.7. ÉP CỨNG DỮ LIỆU CHUẨN HIỂN THỊ (Strict Hardcoding - No Fallbacks)
+        // name = destination (Location) theo yêu cầu của bạn
+        rowData.name = rowData.Location;
+        
+        // contact_person là Tên hiển thị (không phải mã ID/UUID)
+        rowData.contact_person = rowData.AuthorName || rowData.Organizer || 'Cán bộ 01';
+        
+        // Ép cứng đồng loạt các thông số nghiệp vụ (Strict)
+        rowData.request_type = 'Tp';
+        rowData.priority = 'bt';
+        rowData.is_important_guest = 'co';
+        rowData.status_code = 2;
+        rowData.bpmn_version = 'QUY_TRINH_DANG_KY_XE';
+        rowData.vehicle_state = 'CHO_DIEU_PHOI';
+        rowData.request_code = 'YC-20260329-004';
+        rowData.contact_phone = '0297227381';
+        rowData.department = '68afbefecb36081f0bbbef2e';
+        
+        // Thời gian gốc từ SharePoint
+        rowData.request_submitted_at = rowData.tp_Created || now;
+
+        // 🔥 1.8. Tính toán các trường bổ trợ (Thời lượng & Chuẩn hóa thời gian)
+        if (rowData.StartDate && rowData.EndDate) {
+            const start = new Date(rowData.StartDate);
+            const end = new Date(rowData.EndDate);
+            const diffMs = end - start;
+            rowData.trip_duration_minutes = diffMs > 0 ? Math.floor(diffMs / (1000 * 60)) : 0;
+            // Đảm bảo không ghi đè thời gian kết thúc bằng thời gian hiện tại
+            rowData.return_time = end;
+        } else {
+            rowData.trip_duration_minutes = 0;
+        }
+
+        // 🔥 2. Ghi vào bảng MASTER (vehicle_registrations)
+        console.log(`[StreamCarBookingMigrationModel] Executing Upsert for MASTER table...`);
+        const masterResult = await this.upsertDataToNewDB(rowData, this.oldConfig, 'id_sp_bak', recordId, transaction);
+        const masterId = masterResult.id;
+        console.log(`[StreamCarBookingMigrationModel] MASTER Upsert successful: Action=${masterResult.action}, Master_ID=${masterId}`);
+
+        // 🔥 3. Bóc tách JSON Detail (Chỉ áp dụng cho dữ liệu có điều phối)
+        let coordination = [];
+        try {
+            const rawInfo = rowData.coordination_information || rowData.nvarcharMAX1;
+            if (rawInfo && typeof rawInfo === 'string' && rawInfo.trim().startsWith('[')) {
+                coordination = JSON.parse(rawInfo);
+                console.log(`[StreamCarBookingMigrationModel] Parsed Coordination Info successfully: ${coordination.length} items found.`);
+            }
+        } catch (e) {
+            console.warn(`[StreamCarBookingMigrationModel] WARNING: Failed to parse Coordination JSON: ${e.message}`);
+        }
+
+        if (Array.isArray(coordination) && coordination.length > 0) {
+            console.log(`[StreamCarBookingMigrationModel] Upserting ${coordination.length} Coordination Items...`);
+            let count = 0;
+            for (const item of coordination) {
+                const detailData = {
+                    registration_id: masterId,
+                    car_id: item.carId || item.car_id || 'UNKNOWN_CAR',
+                    driver_id: item.driverId || item.driver_id || 'UNKNOWN_DRIVER',
+                    is_confirmed: item.isConfirmed ? 1 : 0,
+                    confirmed_at: item.confirmedAt ? new Date(item.confirmedAt) : null,
+                    id_sp_bak: recordId,
+                    table_bak: 1
+                };
+                await this.upsertDetailToNewDB(detailData, transaction);
+                count++;
+            }
+            console.log(`[StreamCarBookingMigrationModel] Completed Upserting ${count} Coordination Items.`);
+        } else {
+            console.log(`[StreamCarBookingMigrationModel] No Coordination Items found. Generating 1 MOCK detail assignment...`);
+            const mockCars = ['LC-20260316085406-YYAQZ3FB', 'LC-20260317155714-B2SY4GOP', 'LC-20260316154534-3VU6ZAWS', 'LC-20260317155520-S96ZHPI1', 'LC-20260316085106-914TB6XO', 'LC-20260316154406-YY7NLZA6', 'LC-20260316084914-TKE1NSHW', 'LC-20260316081003-VJBXL0CN', 'LC-20260316084952-DVELWNUF', 'LC-20260317012020-JL60VIXQ'];
+            const mockDrivers = ['6928176e213f38bebc8024cf', '9cc1fccc-0ccb-4305-9cab-f701aa70e54c', '11dd5425-1f60-496f-920b-805027b0aa97', '69281962213f38bebc802aaa', 'bd97f40e-c9a1-4b07-a147-e134f12a1b30', '2baa768c-effc-46b0-b635-fb3c47cb7d02', 'b243d70a-c26e-42e1-92f3-71ca4e0d5de1', 'cd51a8be-f79d-460c-914e-a43fe0f62d06', 'b8f190da-70d0-4cf2-b290-a25c2ae31154', 'f2ed1e24-c2e7-4a3e-b1c0-9583e5e544be'];
+
             const detailData = {
                 registration_id: masterId,
-                car_id: item.carId || item.car_id || 'UNKNOWN_CAR',
-                driver_id: item.driverId || item.driver_id || 'UNKNOWN_DRIVER',
-                is_confirmed: item.isConfirmed ? 1 : 0,
-                confirmed_at: item.confirmedAt ? new Date(item.confirmedAt) : null,
+                car_id: mockCars[Math.floor(Math.random() * mockCars.length)],
+                driver_id: mockDrivers[Math.floor(Math.random() * mockDrivers.length)],
+                is_confirmed: 1,
+                confirmed_at: new Date(),
                 id_sp_bak: recordId,
                 table_bak: 1
             };
             await this.upsertDetailToNewDB(detailData, transaction);
+            console.log(`[StreamCarBookingMigrationModel] Completed Upserting 1 MOCK Coordination Item.`);
         }
+
+        // 🔥 4. Tạo Nhật ký (Audit Trail) mặc định cho Quy trình Đặt xe
+        console.log(`[StreamCarBookingMigrationModel] Creating Audit Trail...`);
+        await this.createAuditTrail(masterId, rowData, transaction);
+        console.log(`[StreamCarBookingMigrationModel] Completed Audit Trail Creation.`);
+
+        console.log(`[StreamCarBookingMigrationModel] END PROCESSING RECORD ID: ${recordId}`);
+        console.log(`====================================================================\n`);
+
+        return {
+            backupId: recordId,
+            affected: masterResult.affected,
+            logs: [
+                { table: 'vehicle_registrations', action: masterResult.action },
+                { table: 'audit', action: 'inserted_trail' }
+            ]
+        };
+    } catch (err) {
+        console.error(`\n[StreamCarBookingMigrationModel] ❌ CRITICAL ERROR processing record ID ${recordId}`);
+        console.error(`[StreamCarBookingMigrationModel] Error Details: ${err.message}`);
+        console.error(`[StreamCarBookingMigrationModel] Stack Trace: ${err.stack}`);
+        console.error(`====================================================================\n`);
+        throw err;
     }
-
-    // 🔥 4. Tạo Nhật ký (Audit Trail) mặc định cho Quy trình Đặt xe
-    await this.createAuditTrail(masterId, rowData, transaction);
-
-    return {
-        backupId: recordId,
-        affected: masterResult.affected,
-        logs: [
-            { table: 'vehicle_registrations', action: masterResult.action },
-            { table: 'audit', action: 'inserted_trail' }
-        ]
-    };
   }
 
   async createAuditTrail(masterId, rowData, transaction) {
@@ -667,50 +827,59 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
 
     const auditSteps = [
       {
-        action_code: 'CREATE',
+        action_code: 'TAO_VA_GUI_YEU_CAU_DANG_KY_XE',
         display_name: 'Người đăng ký xe',
         role: 'NGUOI_DANG_KY_XE',
+        details: '"Tạo và gửi yêu cầu đăng ký xe"',
         action: 'Tạo và gửi yêu cầu đăng ký xe',
         from_node_id: 'Activity_00hcfcm',
         to_node_id: 'Activity_00hcfcm',
         curStatusCode: '1',
-        stage_status: 'DA_XU_LY'
+        stage_status: 'DA_XU_LY',
+        receiver: creatorId,
+        origin_id: 'preview'
       },
       {
-        action_code: 'YEU_CAU_DIEU_PHOI',
+        action_code: 'TAO_VA_GUI_YEU_CAU_DANG_KY_XE',
         display_name: 'Phòng hậu cần, đội xe',
-        role: 'PHONG_HAU_CAN_DOI_XE',
+        role: 'NGUOI_DANG_KY_XE',
+        details: '"Yêu cầu điều phối"',
         action: 'Yêu cầu điều phối',
         from_node_id: 'Activity_00hcfcm',
         to_node_id: 'Gateway_1ilkpo8',
         curStatusCode: '2',
-        stage_status: 'DA_XU_LY'
+        stage_status: 'DA_XU_LY',
+        receiver: 'PHONG_DOI_HAU_CAN_NGUOI_DIEU_PHOI',
+        origin_id: 'preview'
       },
       {
-        action_code: 'DONE',
-        display_name: 'Hoàn thành',
-        role: 'SYSTEM',
-        action: 'Hoàn thành yêu cầu đăng ký xe',
+        action_code: 'DIEU_PHOI_XE_PHONG_HAU_CAN',
+        display_name: 'Điều phối yêu cầu',
+        role: 'PHONG_HAU_CAN_DOI_XE',
+        details: '"Đã điều phối"',
+        action: 'Điều phối lại',
         from_node_id: 'Gateway_1ilkpo8',
-        to_node_id: 'Activity_1mt9s84',
-        curStatusCode: '3',
-        stage_status: 'DA_XU_LY'
+        to_node_id: 'Gateway_1ilkpo8',
+        curStatusCode: '2',
+        stage_status: 'DA_XU_LY',
+        receiver: 'TAI_XE_TIEP_NHAN',
+        origin_id: 'wi_' + Date.now()
       }
     ];
 
     for (const step of auditSteps) {
         const query = `
-        IF NOT EXISTS (SELECT 1 FROM ${tableRef} WHERE document_id = @document_id AND action_code = @action_code)
+        IF NOT EXISTS (SELECT 1 FROM ${tableRef} WHERE document_id = @document_id AND action_code = @action_code AND [action] = @action AND to_node_id = @to_node_id)
         BEGIN
             INSERT INTO ${tableRef} (
                 document_id, [time], user_id, display_name, [role], action_code,
-                from_node_id, to_node_id, [action], curStatusCode, stage_status,
-                type_document, created_at, table_bak
+                from_node_id, to_node_id, [details], origin_id, created_by, receiver, roleProcess,
+                [action], curStatusCode, stage_status, type_document, created_at, updated_at, table_bak
             )
             VALUES (
                 @document_id, @time, @user_id, @display_name, @role, @action_code,
-                @from_node_id, @to_node_id, @action, @curStatusCode, @stage_status,
-                'VEHICLE_REGISTRATION', @time, 1
+                @from_node_id, @to_node_id, @details, @origin_id, @created_by, @receiver, 'processor',
+                @action, @curStatusCode, @stage_status, 'VEHICLE_REGISTRATION', @time, @time, 1
             )
         END
         `;
@@ -718,9 +887,20 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
             document_id: masterId,
             time: createTime,
             user_id: creatorId,
+            created_by: creatorId,
             ...step
         };
-        await this.queryNewDbTx(query, params, transaction);
+        try {
+            console.log(`[StreamCarBookingMigrationModel] Inserting Audit Item: ActionCode=${step.action_code}, Role=${step.role}`);
+            await this.queryNewDbTx(query, params, transaction);
+        } catch (auditErr) {
+            console.error(`\n[StreamCarBookingMigrationModel] ❌ AUDIT SQL EXECUTION FAILED!`);
+            console.error(`[StreamCarBookingMigrationModel] Audit Step: ${step.action_code}`);
+            console.error(`[StreamCarBookingMigrationModel] Error Message: ${auditErr.message}`);
+            console.error(`[StreamCarBookingMigrationModel] Params Dump: ${JSON.stringify(params, null, 2)}`);
+            console.error(`====================================================================\n`);
+            throw auditErr;
+        }
     }
   }
 
@@ -816,7 +996,17 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
           WHERE registration_id = @registration_id AND car_id = @car_id AND driver_id = @driver_id
       END
       `;
-      return await this.queryNewDbTx(query, params, transaction);
+      try {
+          console.log(`[StreamCarBookingMigrationModel] Upserting detail item: RegistrationID=${data.registration_id}, CarID=${data.car_id}, DriverID=${data.driver_id}`);
+          return await this.queryNewDbTx(query, params, transaction);
+      } catch (detailErr) {
+          console.error(`\n[StreamCarBookingMigrationModel] ❌ DETAIL SQL EXECUTION FAILED!`);
+          console.error(`[StreamCarBookingMigrationModel] Error Message: ${detailErr.message}`);
+          console.error(`[StreamCarBookingMigrationModel] Problematic Table: ${tableRef}`);
+          console.error(`[StreamCarBookingMigrationModel] Params Dump: ${JSON.stringify(params, null, 2)}`);
+          console.error(`====================================================================\n`);
+          throw detailErr;
+      }
   }
 
   async getExistingColumns(tableName, schema = 'dbo') {
@@ -874,7 +1064,7 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
     for (const [newField, valueFn] of Object.entries(defaultValues || {})) {
       const lowerNewField = newField.toLowerCase();
       if (!existingCols.has(lowerNewField)) continue;
-      
+
       // Kiểm tra sự tồn tại (không phân biệt hoa thường)
       const exists = Object.keys(params).some(k => k.toLowerCase() === lowerNewField);
       if (!exists || params[Object.keys(params).find(k => k.toLowerCase() === lowerNewField)] === null) {
@@ -933,10 +1123,84 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
           SELECT (SELECT TOP 1 id FROM @OutputTable) AS id, @affected AS affected, 'inserted' AS action;
       END
     `;
-    const result = await this.queryNewDbTx(query, params, transaction);
-    const row = Array.isArray(result) ? result[0] : result;
-    console.log(`[StreamCarBookingMigrationModel] queryNewDbTx result: action=${row?.action}, affected=${row?.affected}`);
-    return { id: row?.id || null, action: row?.action || 'none', affected: Number(row?.affected || 0) };
+    try {
+        console.log(`[StreamCarBookingMigrationModel] Executing SQL Query...`);
+        const result = await this.queryNewDbTx(query, params, transaction);
+        const row = Array.isArray(result) ? result[0] : result;
+        console.log(`[StreamCarBookingMigrationModel] SQL Execution Successful! Action=${row?.action}, Affected=${row?.affected}`);
+        return { id: row?.id || null, action: row?.action || 'none', affected: Number(row?.affected || 0) };
+    } catch (dbErr) {
+        console.error(`\n[StreamCarBookingMigrationModel] ❌ SQL EXECUTION FAILED!`);
+        console.error(`[StreamCarBookingMigrationModel] Error Message: ${dbErr.message}`);
+        console.error(`[StreamCarBookingMigrationModel] Problematic Table: ${tableRef}`);
+        console.error(`[StreamCarBookingMigrationModel] External Key Value: ${externalKeyValue}`);
+        console.error(`[StreamCarBookingMigrationModel] Params Dump: ${JSON.stringify(params, null, 2)}`);
+        console.error(`====================================================================\n`);
+        throw dbErr;
+    }
+  }
+
+  async _ensureUserHasRoles(userId, customRolesStr, transaction = null) {
+    if (!userId || !customRolesStr) return;
+    try {
+      const q = `SELECT TOP 1 roles_by_process FROM [${this.newDbName}].[dbo].[users] WHERE id = @id`;
+      const rows = await this.queryNewDbTx(q, { id: userId }, transaction);
+      if (!rows || rows.length === 0) return;
+      
+      const currentRolesStr = rows[0].roles_by_process;
+      
+      if (!currentRolesStr || currentRolesStr.trim() === '' || currentRolesStr.trim() === '[]') {
+        const updateQ = `UPDATE [${this.newDbName}].[dbo].[users] SET roles_by_process = @roles WHERE id = @id`;
+        await this.queryNewDbTx(updateQ, { id: userId, roles: customRolesStr }, transaction);
+        console.log(`[StreamCarBookingMigrationModel] Đã cập nhật roles_by_process (mới hoàn toàn) cho user id=${userId}`);
+        return;
+      }
+
+      const oldArr = JSON.parse(currentRolesStr);
+      const newArr = JSON.parse(customRolesStr);
+      
+      if (!Array.isArray(oldArr) || !Array.isArray(newArr)) return;
+
+      const map = new Map();
+      for (const item of oldArr) {
+        if (item && item.processKey) map.set(item.processKey, item);
+      }
+
+      let isChanged = false;
+      for (const newItem of newArr) {
+        if (newItem && newItem.processKey) {
+          if (!map.has(newItem.processKey)) {
+            map.set(newItem.processKey, newItem);
+            isChanged = true;
+          } else {
+             // Deep merge roles inside processKey
+             const oldRolesMap = new Map((map.get(newItem.processKey).roles || []).map(r => [r.roleCode, r]));
+             let innerListChanged = false;
+             for (const roleObj of (newItem.roles || [])) {
+                 if (!oldRolesMap.has(roleObj.roleCode)) {
+                     oldRolesMap.set(roleObj.roleCode, roleObj);
+                     innerListChanged = true;
+                 }
+             }
+             if (innerListChanged) {
+                 const mergedItem = map.get(newItem.processKey);
+                 mergedItem.roles = Array.from(oldRolesMap.values());
+                 map.set(newItem.processKey, mergedItem);
+                 isChanged = true;
+             }
+          }
+        }
+      }
+
+      if (isChanged) {
+        const mergedRolesStr = JSON.stringify(Array.from(map.values()));
+        const updateQ2 = `UPDATE [${this.newDbName}].[dbo].[users] SET roles_by_process = @roles WHERE id = @id`;
+        await this.queryNewDbTx(updateQ2, { id: userId, roles: mergedRolesStr }, transaction);
+        console.log(`[StreamCarBookingMigrationModel] Đã merge bổ sung roles_by_process cho user id=${userId}`);
+      }
+    } catch (e) {
+      console.warn(`[StreamCarBookingMigrationModel] Không thể đảm bảo quyền roles_by_process cho ${userId}: ${e.message}`);
+    }
   }
 }
 

@@ -21,15 +21,21 @@
   },
   "defaults": {
     "STATUS": 1,
-    "VEHICLE_STATE": "CHUA_TRINH",
-    "REQUEST_TYPE": "MIGRATED",
-    "PRIORITY": "NORMAL",
+    "VEHICLE_STATE": "CHO_DIEU_PHOI",
+    "REQUEST_TYPE": "Tp",
+    "PRIORITY": "bt",
     "PASSENGER_COUNT": 1,
-    "IS_IMPORTANT_GUEST": "0",
+    "IS_IMPORTANT_GUEST": "co",
     "TIMEZONE": "Asia/Ho_Chi_Minh",
     "CONTENT": "Yêu cầu đặt xe (Đồng bộ)",
     "LEADER": "Văn thư Tổng công ty",
     "USER_ID": "SYSTEM_MIGRATION",
     "TABLE_BAK": 1
+  },
+  "duplicateCheck": {
+    "fields": [
+      "id_sp_bak"
+    ],
+    "strategy": "update"
   }
 }

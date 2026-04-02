@@ -55,35 +55,115 @@ class StreamTgdScheduleMigrationModel extends BaseIncrementalSyncInterface {
     return `${prefix}_${timestamp}_${random}`;
   }
 
-  /**
-   * Đảm bảo bản ghi cha (Schedules) tồn tại để tránh lỗi Foreign Key
-   */
-  async ensureScheduleParentExists(scheduleId, transaction = null) {
-    if (!scheduleId || scheduleId.length < 5) {
-      console.warn(`[StreamTgdScheduleMigrationModel] Invalid scheduleId: "${scheduleId}"`);
-      return;
-    }
+  getWeekInfo(dateInput) {
+    const d = new Date(dateInput);
+    if (isNaN(d.getTime())) return null;
 
-    // 2. Tạo mới bản ghi mẫu (Parent) - Cập nhật theo schema thực tế (id, title, week, month, year, created_by, schedule_date, status, created_at, updated_at)
-    console.log(`[StreamTgdScheduleMigrationModel] +++ ATTEMPTING TO CREATE PARENT SCHEDULE (CORRECT SCHEMA): ${scheduleId} +++`);
-    const queryInsert = `
-      INSERT INTO ${tableRef} (
-        id, title, week, month, year, created_by, schedule_date, status, created_at, updated_at
-      ) VALUES (
-        @id, @title, 1, 1, 2026, 'SYSTEM', GETDATE(), 1, GETDATE(), GETDATE()
-      )
-    `;
-    
-    try {
-      await this.queryNewDbTx(queryInsert, { 
-        id: scheduleId, 
-        title: 'Lịch trực ban Lãnh đạo (Đồng bộ)' 
-      }, transaction);
-      console.log(`[StreamTgdScheduleMigrationModel] Successfully created parent schedule: ${scheduleId}`);
-    } catch (err) {
-      console.error(`[StreamTgdScheduleMigrationModel] CRITICAL ERROR creating parent schedule: ${err.message}`);
-      throw err;
-    }
+    // Lấy thứ 2 của tuần chứa ngày đó (Coi thứ 2 là đầu tuần)
+    const day = d.getDay();
+    const diffToMonday = d.getDate() - day + (day === 0 ? -6 : 1); 
+    const monday = new Date(d.setDate(diffToMonday));
+    monday.setHours(0, 0, 0, 0);
+
+    const sunday = new Date(monday.getTime());
+    sunday.setDate(monday.getDate() + 6);
+    sunday.setHours(23, 59, 59, 999);
+
+    // Tính số thứ tự của tuần trong năm (ISO 8601 mode)
+    const dCopy = new Date(Date.UTC(monday.getFullYear(), monday.getMonth(), monday.getDate()));
+    dCopy.setUTCDate(dCopy.getUTCDate() + 4 - (dCopy.getUTCDay()||7));
+    const yearStart = new Date(Date.UTC(dCopy.getUTCFullYear(),0,1));
+    const weekNo = Math.ceil((((dCopy - yearStart) / 86400000) + 1)/7);
+
+    return {
+      week: weekNo,
+      year: monday.getFullYear(),
+      month: monday.getMonth() + 1,
+      from_date: monday,
+      to_date: sunday,
+      schedule_time: new Date(dateInput)
+    };
+  }
+
+  /**
+   * Đảm bảo bản ghi cha (Schedules) tồn tại và tự động suy luận ID dựa trên dutyDate
+   * @returns {Promise<string>} schedule_id
+   */
+  async ensureScheduleParentExists(dutyDate, leaderId, transaction = null) {
+      if (!dutyDate) return null;
+      const weekInfo = this.getWeekInfo(dutyDate);
+      if (!weekInfo) return null;
+
+      const cacheKey = `${weekInfo.year}_${weekInfo.week}`;
+      
+      // 1. Kiểm tra Cache RAM tĩnh (Tránh select quá nhiều)
+      if (this.parentScheduleCache && this.parentScheduleCache.has(cacheKey)) {
+          return this.parentScheduleCache.get(cacheKey);
+      }
+
+      const schema = this.newDbSchema || 'dbo';
+      const parentTableRef = `[${this.newDbName}].[${schema}].[leadership_duty_schedules]`;
+
+      // 2. Lock theo key để diệt "Race Condition" lúc các vòng lặp Promise.all chạy song song
+      if (!this.parentScheduleLocks) this.parentScheduleLocks = new Map();
+
+      if (!this.parentScheduleLocks.has(cacheKey)) {
+          const lockPromise = (async () => {
+              try {
+                  // 2.1 Kiểm tra DB trong trường hợp đã chạy từ lượt đồng bộ trước đó
+                  const checkQuery = `SELECT TOP 1 id FROM ${parentTableRef} WHERE week = @week AND year = @year`;
+                  const rows = await this.queryNewDbTx(checkQuery, { week: weekInfo.week, year: weekInfo.year }, transaction);
+                  
+                  let scheduleId = '';
+                  if (rows && rows.length > 0) {
+                      scheduleId = rows[0].id;
+                      console.log(`[StreamTgdScheduleMigrationModel] Đã map được với Lịch trực cũ: ID=${scheduleId}`);
+                  } else {
+                      // 2.2 Tạo mới ID và bản ghi NẾU THỰC SỰ CHƯA CÓ
+                      scheduleId = this.generateSystemId('LDS');
+                      const title = `Lịch trực chỉ huy tuần ${weekInfo.week} năm ${weekInfo.year}`;
+                      const createdBy = leaderId || 'SYSTEM';
+                      const queryInsert = `
+                          INSERT INTO ${parentTableRef} (
+                            id, title, week, month, year, created_by, schedule_date, status, created_at, updated_at, schedule_time, from_date, to_date, table_bak
+                          ) VALUES (
+                            @id, @title, @week, @month, @year, @created_by, GETDATE(), 1, GETDATE(), GETDATE(), @schedule_time, @from_date, @to_date, 1
+                          )
+                      `;
+                      await this.queryNewDbTx(queryInsert, {
+                          id: scheduleId,
+                          title,
+                          week: weekInfo.week,
+                          month: weekInfo.month,
+                          year: weekInfo.year,
+                          created_by: createdBy,
+                          schedule_time: weekInfo.schedule_time,
+                          from_date: weekInfo.from_date,
+                          to_date: weekInfo.to_date
+                      }, transaction);
+                      console.log(`[StreamTgdScheduleMigrationModel] Đã tự tạo Parent Schedule mới: ${title} ---> ID: ${scheduleId}`);
+                  }
+
+                  if (!this.parentScheduleCache) this.parentScheduleCache = new Map();
+                  this.parentScheduleCache.set(cacheKey, scheduleId);
+                  
+                  return scheduleId;
+              } catch (err) {
+                  console.error(`[StreamTgdScheduleMigrationModel] Lỗi Ensure Schedule Parent: ${err.message}`);
+                  throw err;
+              }
+          })();
+
+          // Hủy lock nếu rác lỗi giữa chừng để tiến trình sau còn chạy
+          lockPromise.catch(() => {
+              this.parentScheduleLocks.delete(cacheKey);
+              if (this.parentScheduleCache) this.parentScheduleCache.delete(cacheKey);
+          });
+
+          this.parentScheduleLocks.set(cacheKey, lockPromise);
+      }
+
+      return await this.parentScheduleLocks.get(cacheKey);
   }
 
   async cacheSourceSchema() {
@@ -118,11 +198,34 @@ class StreamTgdScheduleMigrationModel extends BaseIncrementalSyncInterface {
       const table = this.oldConfig.newTable;
       const schema = this.newDbSchema || 'dbo';
       const fullTableRef = `[${this.newDbName}].[${schema}].[${table}]`;
+      const parentTableRef = `[${this.newDbName}].[${schema}].[leadership_duty_schedules]`;
 
-      console.log(`[StreamTgdScheduleMigrationModel] Checking/Adding missing columns to ${fullTableRef}...`);
+      console.log(`[StreamTgdScheduleMigrationModel] Checking/Adding missing columns to ${fullTableRef} and ${parentTableRef}...`);
 
+      // 1. Kiểm tra bảng cha (Schedules)
+      const parentCols = [
+        { name: 'table_bak', type: 'INT' },
+        { name: 'id_sp_bak', type: 'NVARCHAR(255)' },
+        { name: 'schedule_time', type: 'DATETIME' },
+        { name: 'from_date', type: 'DATETIME' },
+        { name: 'to_date', type: 'DATETIME' },
+        { name: 'week', type: 'INT' },
+        { name: 'month', type: 'INT' },
+        { name: 'year', type: 'INT' }
+      ];
+      for (const col of parentCols) {
+        const queryParent = `
+          IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'leadership_duty_schedules' AND COLUMN_NAME = '${col.name}')
+          BEGIN
+              ALTER TABLE ${parentTableRef} ADD ${col.name} ${col.type} NULL;
+          END
+        `;
+        await this.queryNewDb(queryParent);
+      }
+
+      // 2. Kiểm tra bảng con (Details)
       const columnsToCheck = [
-        { name: '[type]', type: 'NVARCHAR(255)' }, // 'type' là từ khóa SQL
+        { name: '[type]', type: 'NVARCHAR(255)' },
         { name: 'location', type: 'NVARCHAR(500)' },
         { name: 'participants', type: 'NVARCHAR(MAX)' },
         { name: 'description', type: 'NVARCHAR(MAX)' },
@@ -156,7 +259,7 @@ class StreamTgdScheduleMigrationModel extends BaseIncrementalSyncInterface {
       `;
       await this.queryNewDb(indexQuery);
 
-      console.log(`[StreamTgdScheduleMigrationModel] [ensureTargetColumnsExist] OK: All columns checked for ${table}`);
+      console.log(`[StreamTgdScheduleMigrationModel] [ensureTargetColumnsExist] OK: All columns checked`);
     } catch (err) {
       console.error(`[StreamTgdScheduleMigrationModel] [ensureTargetColumnsExist] ERROR: ${err.message}`);
     }
@@ -416,13 +519,18 @@ class StreamTgdScheduleMigrationModel extends BaseIncrementalSyncInterface {
         FROM [${this.oldDbName}].[dbo].[AllUserData] ud
         INNER JOIN [${this.oldDbName}].[dbo].[AllLists] l
             ON ud.[tp_ListId] = l.[tp_ID]
-        ${cols.hasUserInfo ? `LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_author ON ud.[tp_Author] = ui_author.[tp_ID]` : ''}
-        ${cols.hasUserInfo ? `LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_editor ON ud.[tp_Editor] = ui_editor.[tp_ID]` : ''}
-        LEFT JOIN [DataEOfficeSNP].[SNP].[CodeItem] ci ON ud.[tp_ID] = ci.[SPItemId]
+        ${cols.hasUserInfo ? `OUTER APPLY (SELECT TOP 1 * FROM [${this.oldUserDb}].[dbo].[UserInfo] uia WHERE ud.[tp_Author] = uia.[tp_ID]) ui_author` : ''}
+        ${cols.hasUserInfo ? `OUTER APPLY (SELECT TOP 1 * FROM [${this.oldUserDb}].[dbo].[UserInfo] uie WHERE ud.[tp_Editor] = uie.[tp_ID]) ui_editor` : ''}
+        OUTER APPLY (
+            SELECT TOP 1 * 
+            FROM [DataEOfficeSNP].[SNP].[CodeItem] ci2 
+            WHERE ci2.[SPItemId] = ud.[tp_ID] 
+            ORDER BY ci2.[ID] DESC
+        ) ci
 
         WHERE ud.[tp_ListId] IN (${listIdsStr})
-        AND ud.[tp_IsCurrent] = 1
-        AND ud.[tp_DeleteTransactionId] = 0x0
+        AND ud.tp_RowOrdinal = 0
+        AND ud.[tp_IsCurrentVersion] = 1
         AND (
             ud.[tp_Modified] > @lastSyncTime
             OR (
@@ -430,7 +538,7 @@ class StreamTgdScheduleMigrationModel extends BaseIncrementalSyncInterface {
                 AND ud.[tp_ID] > @lastSyncId
             )
         )
-        ORDER BY ud.[tp_Modified] DESC, ud.[tp_ID] DESC
+        ORDER BY ud.[tp_Modified] ASC, ud.[tp_ID] ASC
         OFFSET ${beginLimit} ROWS FETCH NEXT ${completedLimit} ROWS ONLY;
     `;
 
@@ -563,12 +671,12 @@ class StreamTgdScheduleMigrationModel extends BaseIncrementalSyncInterface {
         SELECT TOP 1
             ${select.join(',\n            ')}
         FROM [${this.oldDbName}].[dbo].[AllUserData] ud
-        ${cols.hasUserInfo ? `LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_author ON ud.[tp_Author] = ui_author.[tp_ID]` : ''}
+        ${cols.hasUserInfo ? `OUTER APPLY (SELECT TOP 1 * FROM [${this.oldUserDb}].[dbo].[UserInfo] uia WHERE ud.[tp_Author] = uia.[tp_ID]) ui_author` : ''}
         WHERE ud.[tp_ListId] IN (${listIdsStr})
         AND ud.tp_RowOrdinal = 0
         AND ud.[tp_IsCurrentVersion] = 1
         AND (ud.[tp_Modified] > @lastSyncTime OR (ud.[tp_Modified] = @lastSyncTime AND ud.[tp_ID] > @lastSyncId))
-        ORDER BY ud.[tp_Modified] DESC, ud.[tp_ID] DESC
+        ORDER BY ud.[tp_Modified] ASC, ud.[tp_ID] ASC
     `;
     const rows = await this.queryOldDb(query, { lastSyncTime, lastSyncId });
     return rows?.[0] || null;
@@ -599,44 +707,86 @@ class StreamTgdScheduleMigrationModel extends BaseIncrementalSyncInterface {
   }
 
   async processRowData(rowData, { transaction } = {}) {
-    console.log(`[StreamTgdScheduleMigrationModel] ENTER processRowData for recordId=${rowData.ItemID}`);
-    
-    // --- 0. Xác định Schedule ID (Fix cứng theo yêu cầu người dùng) ---
-    const scheduleId = 'LDS_1773063888220_HNP0JV0N';
-    rowData.schedule_id = scheduleId; // Đảm bảo hàng con dùng đúng ID này
-    
-    console.log(`[StreamTgdScheduleMigrationModel] Using hardcoded scheduleId: "${scheduleId}"`);
-    
-    // Đảm bảo bản ghi cha tồn tại
-    await this.ensureScheduleParentExists(scheduleId, transaction);
-    console.log(`[StreamTgdScheduleMigrationModel] Finished ensureScheduleParentExists for: ${scheduleId}`);
+    try {
+      console.log(`[StreamTgdScheduleMigrationModel] ENTER processRowData for recordId=${rowData.ItemID}`);
+      
+      // --- 1. Resolve Thông tin Người dùng (Làm trước để có Leader ID) ---
+      if (!rowData?.ItemID) throw new Error('ItemID is required');
+      const recordId = String(rowData.ItemID);
+      console.log(`[StreamTgdScheduleMigrationModel] processRowData: recordId=${recordId}`);
+      const { externalKey } = this.oldConfig;
 
-    // --- 1. Resolve Thông tin Người dùng ---
-    if (!rowData?.ItemID) throw new Error('ItemID is required');
-    const recordId = String(rowData.ItemID);
-    console.log(`[StreamTgdScheduleMigrationModel] processRowData: recordId=${recordId}`);
-    const { externalKey } = this.oldConfig;
+      const authorCustomRoles = '[{"processKey":"QUY_TRINH_LICH_HOP","name":"QUY_TRINH_LICH_HOP","roles":[{"roleCode":"BAN_QUAN_LY_PHONG_HOP","name":"BAN_QUAN_LY_PHONG_HOP"},{"roleCode":"ADMIN","name":"ADMIN"}]},{"processKey":"QUY_TRINH_PHONG_HOP","name":"QUY_TRINH_PHONG_HOP","roles":[{"roleCode":"BAN_QUAN_LY_PHONG_HOP","name":"BAN_QUAN_LY_PHONG_HOP"}]},{"processKey":"LICH_TRUC_BAN_LANH_DAO","name":"LICH_TRUC_BAN_LANH_DAO","roles":[{"roleCode":"LANH_DAO","name":"LANH_DAO"}]},{"processKey":"dashboardPage","name":"dashboardPage","roles":[{"roleCode":"VT","name":"VT"}]}]';
+      
+      // Kịch bản Waterfall Fallback dò tìm User chặt chẽ cho Leader (created_by + leader_id)
+      const candidates = [
+        { key: 'Organizer', type: 'name', value: rowData.Organizer },
+        { key: 'AuthorName', type: 'name', value: rowData.AuthorName },
+        { key: 'AuthorAccount', type: 'account', value: rowData.AuthorAccount },
+        { key: 'AuthorEmail', type: 'account', value: rowData.AuthorEmail ? rowData.AuthorEmail.split('@')[0] : null },
+        { key: 'EditorName', type: 'name', value: rowData.EditorName },
+        { key: 'EditorAccount', type: 'account', value: rowData.EditorAccount }
+      ];
 
-    if (rowData.AuthorAccount) {
-      console.log(`[StreamTgdScheduleMigrationModel] Mapping Author: ${rowData.AuthorAccount}`);
-      const authorId = await this.helper.resolveUserIdByAccountName(rowData.AuthorAccount, transaction);
-      if (authorId) rowData.AuthorAccount = authorId;
-    }
+      let resolvedLeaderId = null;
 
-    if (rowData.Organizer) {
-      console.log(`[StreamTgdScheduleMigrationModel] Mapping Organizer (Leader): ${rowData.Organizer}`);
-      const leaderId = await this.helper.findUserIdByName(rowData.Organizer);
-      if (leaderId) {
-        rowData.Organizer = leaderId;
+      for (const cand of candidates) {
+        if (!cand.value) continue;
+        console.log(`[StreamTgdScheduleMigrationModel] Dò tìm Leader qua [${cand.key}]: ${cand.value}`);
+        
+        if (cand.type === 'name') {
+          resolvedLeaderId = await this.helper.resolveUserIdByFullName(cand.value, transaction, authorCustomRoles);
+        } else {
+          resolvedLeaderId = await this.helper.resolveUserIdByAccountName(cand.value, transaction, authorCustomRoles);
+        }
+        
+        if (resolvedLeaderId) {
+          console.log(`[StreamTgdScheduleMigrationModel] ---> Đã khóa mục tiêu Leader ID: ${resolvedLeaderId}`);
+          await this._ensureUserHasRoles(resolvedLeaderId, authorCustomRoles, transaction);
+          break;
+        }
+      }
+
+      if (resolvedLeaderId) {
+        rowData.Organizer = resolvedLeaderId;
       } else {
-        console.log(`[StreamTgdScheduleMigrationModel] Leader not found: ${rowData.Organizer}. Using mapping default.`);
+        console.log(`[StreamTgdScheduleMigrationModel] Fallback Waterfall thất bại, dùng ID cứng.`);
         rowData.Organizer = this.oldConfig.defaultValues?.leader_id || '6915f2387e39c2ba33cef79a';
       }
-    }
+      
+      // Xử lý nốt để nguyên cái Account cũ update lại
+      if (rowData.AuthorAccount && typeof rowData.AuthorAccount === 'string' && rowData.AuthorAccount.includes('|')) {
+         const authorId = await this.helper.resolveUserIdByAccountName(rowData.AuthorAccount, transaction, authorCustomRoles);
+         if (authorId) {
+            rowData.AuthorAccount = authorId;
+            await this._ensureUserHasRoles(authorId, authorCustomRoles, transaction);
+         }
+      }
 
-    const result = await this.upsertDataToNewDB(rowData, this.oldConfig, externalKey, recordId, transaction);
-    console.log(`[StreamTgdScheduleMigrationModel] Upsert result: ${result.action}, ID=${result.id}`);
-    return { backupId: recordId, affected: result.affected, logs: [{ table: this.oldConfig.newTable, action: result.action }] };
+      // --- 2. Xác định Schedule ID theo Tuần/Năm (Động) SAU KHI ĐÃ CÓ LEADER ID ---
+      const dutyDate = rowData.StartDate || new Date();
+      let parentLeaderId = rowData.Organizer;
+      
+      if (!parentLeaderId) {
+          const defaultLeaderId = this.oldConfig.defaultValues?.leader_id;
+          parentLeaderId = typeof defaultLeaderId === 'function' ? defaultLeaderId(rowData) : defaultLeaderId;
+      }
+      if (!parentLeaderId) parentLeaderId = '6915f2387e39c2ba33cef79a'; // Fallback cuối cùng
+      
+      const scheduleId = await this.ensureScheduleParentExists(dutyDate, parentLeaderId, transaction);
+      
+      if (scheduleId) {
+          rowData.schedule_id = scheduleId; // Bắt buộc hàng con map với ID vừa tạo
+          console.log(`[StreamTgdScheduleMigrationModel] Bản ghi con ItemID=${rowData.ItemID} map với Parent ID: "${scheduleId}"`);
+      }
+
+      const result = await this.upsertDataToNewDB(rowData, this.oldConfig, externalKey, recordId, transaction);
+      console.log(`[StreamTgdScheduleMigrationModel] Upsert result: ${result.action}, ID=${result.id}`);
+      return { backupId: recordId, affected: result.affected, logs: [{ table: this.oldConfig.newTable, action: result.action }] };
+    } catch (err) {
+      console.error(`[StreamTgdScheduleMigrationModel] CRITICAL ERROR inside processRowData for ItemID ${rowData?.ItemID}: ${err.message}`);
+      return { backupId: rowData?.ItemID, affected: 0, logs: [{ table: this.oldConfig?.newTable, action: 'error_skipped' }] };
+    }
   }
 
   async getExistingColumns(tableName, schema = 'dbo') {
@@ -716,13 +866,29 @@ class StreamTgdScheduleMigrationModel extends BaseIncrementalSyncInterface {
         }
     }
 
-    // --- 3.1 Đảm bảo schedule_id định dạng hệ thống (LDS_...) ---
-    if (existingCols.has('schedule_id') && (params['schedule_id'] === undefined || params['schedule_id'] === null || params['schedule_id'] === '00000000-0000-0000-0000-000000000000' || params['schedule_id'] === '')) {
-        // Ưu tiên dùng từ rowData nếu đã được gán (ở processRowData) hoặc config
-        params['schedule_id'] = rowData.schedule_id || config.defaultValues?.schedule_id || this.generateSystemId('LDS');
+    // --- 3.1 Đảm bảo schedule_id lấy chuẩn ID động (Ghi đè config cứng) ---
+    if (existingCols.has('schedule_id')) {
+        let finalScheduleId = params['schedule_id'];
+        
+        if (rawData.schedule_id) {
+            finalScheduleId = rawData.schedule_id; // Ép dùng ID động vừa gen
+        } else if (!finalScheduleId || finalScheduleId === '00000000-0000-0000-0000-000000000000') {
+            const configScheduleId = config.defaultValues?.schedule_id;
+            finalScheduleId = typeof configScheduleId === 'function' ? configScheduleId(rawData) : configScheduleId;
+        }
+        
+        if (!finalScheduleId || finalScheduleId === '00000000-0000-0000-0000-000000000000') {
+            finalScheduleId = this.generateSystemId('LDS');
+        }
+        
+        params['schedule_id'] = finalScheduleId;
+
         if (!insertCols.includes('[schedule_id]')) {
             insertCols.push('[schedule_id]');
             insertVals.push('@schedule_id');
+            updateSet.push(`[schedule_id] = @schedule_id`);
+        } else if (!updateSet.includes(`[schedule_id] = @schedule_id`)) {
+            updateSet.push(`[schedule_id] = @schedule_id`);
         }
     }
 
@@ -757,7 +923,7 @@ class StreamTgdScheduleMigrationModel extends BaseIncrementalSyncInterface {
     params._externalKeyValue = externalKeyValue;
     
     // --- 5. LOG TRƯỚC KHI TRUY VẤN ---
-    console.log(`[StreamTgdScheduleMigrationModel] --- EXECUTING UPSERT for ItemID ${rowData.ItemID} ---`);
+    console.log(`[StreamTgdScheduleMigrationModel] --- EXECUTING UPSERT for ItemID ${rawData.ItemID} ---`);
     console.log(`[StreamTgdScheduleMigrationModel] schedule_id in params: "${params.schedule_id}"`);
 
     const tableRef = `[${this.newDbName}].[${newSchema}].[${newTable}]`;
@@ -778,6 +944,57 @@ class StreamTgdScheduleMigrationModel extends BaseIncrementalSyncInterface {
     const result = await this.queryNewDbTx(query, params, transaction);
     const row = Array.isArray(result) ? result[0] : result;
     return { id: row?.id || null, action: row?.action || 'none', affected: Number(row?.affected || 0) };
+  }
+
+  /**
+   * Đảm bảo tính riêng biệt: Chỉ riêng chức năng TGD mới tự động quét và merge Quyền cho các User
+   * cũ đê đảm bảo họ luôn có quyền "LICH_TRUC_BAN_LANH_DAO".
+   */
+  async _ensureUserHasRoles(userId, customRolesStr, transaction = null) {
+    if (!userId || !customRolesStr) return;
+    try {
+      const q = `SELECT TOP 1 roles_by_process FROM [${this.newDbName}].[dbo].[users] WHERE id = @id`;
+      const rows = await this.queryNewDbTx(q, { id: userId }, transaction);
+      if (!rows || rows.length === 0) return;
+      
+      const currentRolesStr = rows[0].roles_by_process;
+      
+      if (!currentRolesStr || currentRolesStr.trim() === '' || currentRolesStr.trim() === '[]') {
+        const updateQ = `UPDATE [${this.newDbName}].[dbo].[users] SET roles_by_process = @roles WHERE id = @id`;
+        await this.queryNewDbTx(updateQ, { id: userId, roles: customRolesStr }, transaction);
+        console.log(`[StreamTgdScheduleMigrationModel] Đã cấp mới roles_by_process cho id=${userId}`);
+        return;
+      }
+
+      const oldArr = JSON.parse(currentRolesStr);
+      const newArr = JSON.parse(customRolesStr);
+      
+      if (!Array.isArray(oldArr) || !Array.isArray(newArr)) return;
+
+      const map = new Map();
+      for (const item of oldArr) {
+        if (item && item.processKey) map.set(item.processKey, item);
+      }
+
+      let isChanged = false;
+      for (const newItem of newArr) {
+        if (newItem && newItem.processKey) {
+          if (!map.has(newItem.processKey)) {
+            map.set(newItem.processKey, newItem);
+            isChanged = true;
+          }
+        }
+      }
+
+      if (isChanged) {
+        const mergedRolesStr = JSON.stringify(Array.from(map.values()));
+        const updateQ = `UPDATE [${this.newDbName}].[dbo].[users] SET roles_by_process = @roles WHERE id = @id`;
+        await this.queryNewDbTx(updateQ, { id: userId, roles: mergedRolesStr }, transaction);
+        console.log(`[StreamTgdScheduleMigrationModel] Đã chèn bổ sung quyền LICH_TRUC_BAN_LANH_DAO cho id=${userId} mà không làm mất quyền cũ.`);
+      }
+    } catch (e) {
+      console.log(`[StreamTgdScheduleMigrationModel] Lỗi khi merge roles_by_process cho id=${userId}: ${e.message}`);
+    }
   }
 }
 

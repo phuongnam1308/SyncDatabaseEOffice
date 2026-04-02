@@ -23,14 +23,14 @@ class MigrationHelper {
   async getExistingColumnsSource(dbName, tableName, schema = 'dbo') {
     try {
       if (!this.queryOldDb) return new Set();
-      
+
       const query = `
         SELECT COLUMN_NAME
         FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS
         WHERE TABLE_NAME = @tableName
         AND TABLE_SCHEMA = @schema
       `;
-      
+
       const result = await this.queryOldDb(query, { tableName, schema });
       return new Set(result.map(r => r.COLUMN_NAME.toLowerCase()));
     } catch (err) {
@@ -46,7 +46,7 @@ class MigrationHelper {
     try {
       if (!this.queryOldDb) return false;
       const query = `
-        SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.TABLES 
+        SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.TABLES
         WHERE TABLE_NAME = @tableName AND TABLE_SCHEMA = @schema
       `;
       const result = await this.queryOldDb(query, { tableName, schema });
@@ -690,7 +690,7 @@ class MigrationHelper {
            OR LTRIM(RTRIM(FullName)) = @name
       `;
       const oldRows = await this.queryOldDb(checkOldQuery, { val: userIdOrName, name: displayName || userIdOrName });
-      
+
       if (oldRows?.length > 0) {
         const migrator = await this._getUserMigrator();
         if (migrator) {
@@ -717,7 +717,7 @@ class MigrationHelper {
       const id = uuidv4();
       // Đảm bảo username không bị trùng nếu đã có codeNd này
       const username = `${codeNd}`;
-      
+
       const insertQuery = `
         INSERT INTO ${process.env.NEW_DB_NAME}.dbo.users (
           id, name, code_nd, username, password, roles_by_process, created_at, updated_at, status
@@ -725,7 +725,7 @@ class MigrationHelper {
           @id, @name, @codeNd, @username, @password, @roles, GETDATE(), GETDATE(), 1
         )
       `;
-      
+
       let rolesDefault = process.env.ROLES_DEFAULT;
       if (!rolesDefault || rolesDefault.trim() === '') {
           rolesDefault = (ROLES_DEFAULT && ROLES_DEFAULT.length > 0) ? JSON.stringify(ROLES_DEFAULT) : '[]';
@@ -761,7 +761,7 @@ class MigrationHelper {
 
       // 1. Tìm trong DB mới (theo ID, Username, hoặc Name)
       const checkNewQuery = `
-        SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users 
+        SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users
         WHERE id = @val OR username = @val OR name = @val OR code_nd = @val
       `;
       const existedNew = await this.queryNewDbTx(checkNewQuery, { val: trimmed }, transaction);
@@ -779,7 +779,7 @@ class MigrationHelper {
              OR AccountID = @val OR StaffID = @val OR FullName = @name
         `;
         const oldRows = await this.queryOldDb(checkOldQuery, { val: trimmed, name: displayName || trimmed });
-        
+
         if (oldRows?.length > 0) {
           const migrator = await this._getUserMigrator();
           if (migrator) {
@@ -864,8 +864,8 @@ class MigrationHelper {
     logger.info(`[robustUserResolver] --- START RESOLVING USER (Record ID: ${recordId}) ---`);
 
     const selectQuery = `
-      SELECT TOP 1 id, name, username, code_nd 
-      FROM ${process.env.NEW_DB_NAME}.dbo.users 
+      SELECT TOP 1 id, name, username, code_nd
+      FROM ${process.env.NEW_DB_NAME}.dbo.users
       WHERE name = @val OR username = @val OR code_nd = @val
     `;
 
@@ -929,10 +929,10 @@ class MigrationHelper {
     if (chairmanSrc) {
       const cleanName = this.cleanTitleFromName(chairmanSrc);
       logger.info(`[robustUserResolver] STEP 6: Checking nvarchar4/Organizer "${chairmanSrc}" -> Clean: "${cleanName}"`);
-      
+
       const likeQuery = `
-        SELECT TOP 1 id, name, username 
-        FROM ${process.env.NEW_DB_NAME}.dbo.users 
+        SELECT TOP 1 id, name, username
+        FROM ${process.env.NEW_DB_NAME}.dbo.users
         WHERE name LIKE '%' + @name + '%'
       `;
       const res = await this.queryNewDbTx(likeQuery, { name: cleanName }, transaction);
@@ -2611,7 +2611,7 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
    * @param {object} transaction Transaction SQL (nếu có)
    * @returns {Promise<string|null>} ID người dùng từ bảng user_sync
    */
-  async resolveUserIdByFullName(fullNameWithUnit, transaction = null) {
+  async resolveUserIdByFullName(fullNameWithUnit, transaction = null, customRoles = null) {
     if (!fullNameWithUnit || typeof fullNameWithUnit !== 'string') return null;
 
     try {
@@ -2620,22 +2620,55 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
       const pureFullName = parts[0].trim();
       if (!pureFullName) return null;
 
-      // 2. Truy vấn bảng user_sync trong DiOffice
-      const query = `
-        SELECT TOP 1 ID 
+      // 2. Truy vấn bảng log user_sync
+      let query = `
+        SELECT TOP 1 ID
         FROM [DiOffice].[dbo].[user_sync]
         WHERE FullName = @fullName
       `;
-
-      const result = await this.queryNewDbTx(query, { fullName: pureFullName }, transaction);
-
+      let result = await this.queryNewDbTx(query, { fullName: pureFullName }, transaction);
       if (result && result.length > 0) {
         return result[0].ID;
       }
 
-      return null;
+      // 3. Nếu không có ở user_sync, tìm trong bảng users (Tìm theo cột name)
+      query = `SELECT TOP 1 id FROM [${process.env.NEW_DB_NAME}].[dbo].[users] WHERE name = @fullName`;
+      result = await this.queryNewDbTx(query, { fullName: pureFullName }, transaction);
+      if (result && result.length > 0) {
+        return result[0].id;
+      }
+
+      // 4. Tuyệt đối không có -> Chuyển sang tạo Tự Động (Auto-create)
+      const { v4: uuidv4 } = require('uuid');
+      const newId = uuidv4().toUpperCase();
+
+      // username mượn tạm từ FullName để tạo dummy login
+      let tempUsername = pureFullName.toLowerCase().replace(/\s+/g, '_');
+      tempUsername = tempUsername.replace(/[àáạảãâầấậẩẫăằắặẳẵ]/g, 'a').replace(/[èéẹẻẽêềếệểễ]/g, 'e').replace(/[ìíịỉĩ]/g, 'i').replace(/[òóọỏõôồốộổỗơờớợởỡ]/g, 'o').replace(/[ùúụủũưừứựửữ]/g, 'u').replace(/[ỳýỵỷỹ]/g, 'y').replace(/đ/g, 'd');
+
+      let rolesDefault = customRoles || process.env.ROLES_DEFAULT;
+      if (!rolesDefault || rolesDefault.trim() === '') {
+        try {
+          const { ROLES_DEFAULT } = require('../config');
+          rolesDefault = (ROLES_DEFAULT && ROLES_DEFAULT.length > 0) ? JSON.stringify(ROLES_DEFAULT) : '[]';
+        } catch (e) {
+          rolesDefault = '[]';
+        }
+      }
+
+      const insertQuery = `
+        INSERT INTO [${process.env.NEW_DB_NAME}].[dbo].[users]
+        (id, username, code_nd, name, password, avatar, roles_by_process, status, created_at, updated_at)
+        VALUES (@id, @username, @username, @fullName, @password, '[]', @roles, 1, GETDATE(), GETDATE())
+      `;
+      const password = process.env.DEFAULT_USER_PASSWORD || '$10$mH.NYj.Bapxk4auiGaPKhOfCqUnA8jr1JO5fvP3miKbhIfwU3CVRa';
+      await this.queryNewDbTx(insertQuery, { id: newId, username: tempUsername, fullName: pureFullName, password, roles: rolesDefault }, transaction);
+
+      logger.info(`[resolveUserIdByFullName] Đã tự tạo mới tài khoản (Leader mapping) "${pureFullName}" với id=${newId}`);
+      return newId;
+
     } catch (error) {
-      logger.error(`[resolveUserIdByFullName] Lỗi tìm ID cho "${fullNameWithUnit}": ${error.message}`);
+      logger.error(`[resolveUserIdByFullName] Lỗi tìm/tạo ID cho "${fullNameWithUnit}": ${error.message}`);
       return null;
     }
   }
@@ -2649,15 +2682,15 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
    */
   async resolveUserIdByAccountName(accountString, transaction = null, customRoles = null) {
     if (!accountString || typeof accountString !== 'string') return null;
-    
+
     try {
       // 1. Lọc lấy username từ chuỗi claim của SharePoint
       const parts = accountString.split('|');
       const username = parts[parts.length - 1].trim().toLowerCase();
       if (!username) return null;
 
-      // 2. Tìm trong bảng users
-      const findQuery = `SELECT TOP 1 id FROM [${process.env.NEW_DB_NAME}].[dbo].[users] WHERE username = @username`;
+      // 2. Tìm trong bảng users (Tìm theo username HOẶC code_nd)
+      const findQuery = `SELECT TOP 1 id FROM [${process.env.NEW_DB_NAME}].[dbo].[users] WHERE username = @username OR code_nd = @username`;
       const findResult = await this.queryNewDbTx(findQuery, { username }, transaction);
       if (findResult && findResult.length > 0) {
         return findResult[0].id;
@@ -2666,7 +2699,7 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
       // 3. Nếu không có, tạo mới một record cho user này
       const { v4: uuidv4 } = require('uuid');
       const newId = uuidv4().toUpperCase();
-      
+
       let rolesDefault = customRoles || process.env.ROLES_DEFAULT;
       if (!rolesDefault || rolesDefault.trim() === '') {
         try {
@@ -2678,14 +2711,14 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
       }
 
       const insertQuery = `
-        INSERT INTO [${process.env.NEW_DB_NAME}].[dbo].[users] 
-        (id, username, name, password, avatar, roles_by_process, status, created_at, updated_at)
-        VALUES (@id, @username, @username, @password, '[]', @roles, 1, GETDATE(), GETDATE())
+        INSERT INTO [${process.env.NEW_DB_NAME}].[dbo].[users]
+        (id, username, code_nd, name, password, avatar, roles_by_process, status, created_at, updated_at)
+        VALUES (@id, @username, @username, @username, @password, '[]', @roles, 1, GETDATE(), GETDATE())
       `;
       // Mật khẩu mặc định hoặc hash rác
       const password = process.env.DEFAULT_USER_PASSWORD || '$10$mH.NYj.Bapxk4auiGaPKhOfCqUnA8jr1JO5fvP3miKbhIfwU3CVRa';
       await this.queryNewDbTx(insertQuery, { id: newId, username, password, roles: rolesDefault }, transaction);
-      
+
       logger.info(`[resolveUserIdByAccountName] Đã tự tạo mới tài khoản "${username}" với id=${newId}`);
       return newId;
 
@@ -2707,7 +2740,7 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
     try {
       const code = unitCode.trim();
       const query = `
-        SELECT TOP 1 name 
+        SELECT TOP 1 name
         FROM ${process.env.NEW_DB_NAME}.dbo.organization_units
         WHERE LTRIM(RTRIM(code)) = @code
       `;

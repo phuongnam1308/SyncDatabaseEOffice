@@ -37,6 +37,8 @@ const tableMappings = {
     /* ================= FIELD MAP ================= */
     fieldMapping: {
       ID: 'id_sp_bak',
+      Title: 'content',      // Thông tin chi tiết lịch / Nội dung
+      Location: 'destination', // Địa điểm (nơi đến/phòng họp) dạng Text
       StartDate: 'duty_date',
       Organizer: 'leader_id',
       Description: 'notes',

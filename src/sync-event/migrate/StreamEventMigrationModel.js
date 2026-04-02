@@ -359,9 +359,9 @@ class StreamEventMigrationModel extends BaseIncrementalSyncInterface {
         ${cols.hasUserInfo ? `OUTER APPLY (SELECT TOP 1 * FROM [${this.oldUserDb}].[dbo].[UserInfo] uia WHERE ud.[tp_Author] = uia.[tp_ID]) ui_author` : ''}
         ${cols.hasUserInfo ? `OUTER APPLY (SELECT TOP 1 * FROM [${this.oldUserDb}].[dbo].[UserInfo] uie WHERE ud.[tp_Editor] = uie.[tp_ID]) ui_editor` : ''}
         OUTER APPLY (
-            SELECT TOP 1 * 
-            FROM [DataEOfficeSNP].[SNP].[CodeItem] ci2 
-            WHERE ci2.[SPItemId] = ud.[tp_ID] 
+            SELECT TOP 1 *
+            FROM [DataEOfficeSNP].[SNP].[CodeItem] ci2
+            WHERE ci2.[SPItemId] = ud.[tp_ID]
             ORDER BY ci2.[ID] DESC
         ) ci
 
