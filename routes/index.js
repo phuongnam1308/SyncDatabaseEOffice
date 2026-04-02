@@ -321,12 +321,6 @@ router.post(
 );
 
 
-const OutgoingRoutes = require('../src/older-sync-outgoing-document/route');
-router.use('/outgoing', OutgoingRoutes);
-
-const AuditRoutes = require('../src/older-sync-audit/route');
-router.use('/audit', AuditRoutes);
-
 const UserRoutes = require('../src/sync-user/route');
 router.use('/user', UserRoutes);
 
@@ -362,9 +356,6 @@ router.use('/sync-outgoing', SyncOutgoingRoutes);
 
 const SyncTintucRawRoutes = require('../src/sync-news-aspx-page/route');
 router.use('/sync-tintucraw', SyncTintucRawRoutes);
-
-const CommentRoutes = require('../src/older-sync-document-comment/route');
-router.use('/document-comments', CommentRoutes);
 
 const TaskCopyRoutes = require('../src/sync-tasks/route');
 router.use('/sync-tasks', TaskCopyRoutes);
