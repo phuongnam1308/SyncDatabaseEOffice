@@ -286,7 +286,7 @@ class StreamTaskMigrationModel extends BaseModel {
     if (!endDate && rawRecord.DueDate) {
       logger.warn(`[mapSingleRecord] Invalid DueDate: ${rawRecord.DueDate} ID=${rawRecord.ID}`);
     }
-    const typeTask = 'type_task';
+    const typeTask = 'form_doc';
     const progress = rawRecord.Percent ? parseInt(rawRecord.Percent, 10) : null;
 
     const mapProcessStatus = (val) => {
