@@ -286,6 +286,34 @@ class StreamTaskMigrationModel extends BaseModel {
     if (!endDate && rawRecord.DueDate) {
       logger.warn(`[mapSingleRecord] Invalid DueDate: ${rawRecord.DueDate} ID=${rawRecord.ID}`);
     }
+    const typeTask = 'type_task';
+    const progress = rawRecord.Percent ? parseInt(rawRecord.Percent, 10) : null;
+
+    const mapProcessStatus = (val) => {
+      const key = String(val || '').trim();
+      return ({
+        'Chưa bắt đầu': '1',
+        'Đang thực hiện': '2',
+        'Chờ phê duyệt': '3',
+        'Hoàn tất': '4',
+        'Từ chối phê duyệt': '5',
+        'Điều chỉnh': '6',
+        'Từ chối điều chỉnh': '7',
+        'Huỷ': '8'
+      }[key] || '1');
+    };
+    const processStatus = mapProcessStatus(rawRecord.TrangThai);
+
+    const mapPriority = (val) => {
+      const key = String(val || '').trim();
+      return ({
+        '0': 'binhthuong',
+        '1': 'gap'
+      }[key] || 'binhthuong');
+    };
+    const priority = mapPriority(rawRecord.TrangThai);
+
+    const parentRaw = rawRecord.ParentId ? String(rawRecord.ParentId).trim() : null;
 
     return {
       id_task_bak: String(rawRecord.ID || '').trim() || null,
@@ -295,9 +323,9 @@ class StreamTaskMigrationModel extends BaseModel {
       start_date: startDate,
       end_date: endDate,
 
-      status: rawRecord.TrangThai ? parseInt(rawRecord.TrangThai, 10) : 1,
-      priority: rawRecord.Priority || null,
-      note: rawRecord.Content || null,
+      status: 1,
+      priority: priority,
+      note: rawRecord.YKienChiDao || null,
 
       created_by: createdBy,
       updated_by: modifiedBy,
@@ -313,13 +341,13 @@ class StreamTaskMigrationModel extends BaseModel {
       month: null,
       repetitive_start: null,
       repetitive_end: null,
-      parent: null,
+      parent: parentRaw,
       path: null,
-      progress: null,
-      process_status: null,
+      progress: progress,
+      process_status: processStatus,
       approval_status: null,
       recurring_from_id: null,
-      type_task: null,
+      type_task: typeTask,
       meeting_id: null,
       meeting_conclusion_id: null,
       week_days: null,

@@ -7,6 +7,63 @@ const StreamSystemLogTasksModel = require('./StreamSystemLogTasksModel');
 
 const DEFAULT_SYNC_TIME = '9999-12-31T23:59:59.999Z';
 
+// ─── Deadlock retry config ────────────────────────────────────────────────────
+const DEADLOCK_MAX_RETRIES = 3;
+const DEADLOCK_BASE_DELAY_MS = 200; // exponential back-off: 200ms, 400ms, 800ms
+const DEADLOCK_ERROR_NUMBER = 1205;
+
+/**
+ * Sleep for `ms` milliseconds.
+ * @param {number} ms
+ * @returns {Promise<void>}
+ */
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Returns true when the error originates from a SQL Server deadlock (error 1205).
+ * @param {Error} err
+ * @returns {boolean}
+ */
+function isDeadlockError(err) {
+  return (
+    err?.number === DEADLOCK_ERROR_NUMBER ||
+    err?.originalError?.info?.number === DEADLOCK_ERROR_NUMBER ||
+    String(err?.message || '').includes('deadlock')
+  );
+}
+
+/**
+ * Executes `fn` and retries automatically on deadlock up to `maxRetries` times.
+ * Uses exponential back-off to reduce re-collision probability.
+ *
+ * @template T
+ * @param {() => Promise<T>} fn          Async function to execute (should be idempotent).
+ * @param {string} [label='']            Label used in log messages.
+ * @param {number} [maxRetries]          Max retry attempts.
+ * @returns {Promise<T>}
+ */
+async function withDeadlockRetry(fn, label = '', maxRetries = DEADLOCK_MAX_RETRIES) {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await fn();
+    } catch (err) {
+      attempt += 1;
+      if (isDeadlockError(err) && attempt <= maxRetries) {
+        const delay = DEADLOCK_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+        logger.warn(
+          `[withDeadlockRetry]${label ? ' ' + label : ''} deadlock detected — retry ${attempt}/${maxRetries} after ${delay}ms`
+        );
+        await sleep(delay);
+      } else {
+        throw err;
+      }
+    }
+  }
+}
+
 /** Task sync orchestrator (transaction-based: fetch → stage → process with atomic multi-table handling) */
 class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
   constructor() {
@@ -21,12 +78,37 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     this.taskModel = null;
     this.taskUsersModel = null;
     this.systemLogsModel = null;
+
+    // Guard: prevent concurrent initialize() calls from racing on staging DDL
+    this._initializingPromise = null;
   }
 
-  /** Initialize all models and staging tables */
+  // ═══════════════════════════════════════════════════════════════
+  // INITIALIZE
+  // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * Initialize all models and staging tables.
+   * Concurrent callers share the same promise to avoid DDL races.
+   */
   async initialize() {
+    // If already initializing (e.g. duplicate registration race), share the same promise
+    if (this._initializingPromise) {
+      return this._initializingPromise;
+    }
+
+    this._initializingPromise = this._doInitialize();
+    try {
+      await this._initializingPromise;
+    } finally {
+      this._initializingPromise = null;
+    }
+  }
+
+  /** Internal initialize logic, wrapped by the public guard above */
+  async _doInitialize() {
     await super.initialize();
-    
+
     try {
       this.taskModel = new StreamTaskMigrationModel();
       await this.taskModel.initialize();
@@ -37,7 +119,11 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       this.systemLogsModel = new StreamSystemLogTasksModel();
       await this.systemLogsModel.initialize();
 
-      await this.ensureStagingTableExists();
+      // FIX: use deadlock-safe staging table creation with retry
+      await withDeadlockRetry(
+        () => this.ensureStagingTableExists(),
+        'ensureStagingTableExists'
+      );
 
       logger.info('[StreamTaskInIncrementalModel] Initialized with transaction-based aggregate processing');
     } catch (error) {
@@ -143,64 +229,99 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
 
   /**
    * Tạo bảng staging `task_sync` trong DB mới nếu chưa tồn tại.
-   * DROP + CREATE để đảm bảo schema luôn fresh.
+   *
+   * FIX (deadlock): Thay DROP + CREATE bằng CREATE IF NOT EXISTS để tránh
+   * tranh chấp schema-lock với các transaction khác đang chạy song song.
+   * Khi schema thật sự thay đổi (thêm/bớt cột), gọi rebuildStagingTable().
    */
   async ensureStagingTableExists() {
     const table = this.getStagingTableRef();
+    const tableName = this.newTableSync;
+    const schemaName = this.newDbSchema;
+    const dbName = this.newDbName;
 
-    const query = `
-      IF OBJECT_ID('${table}', 'U') IS NOT NULL
-          DROP TABLE ${table};
+    // ── 1. Create table only if it doesn't exist (no DROP → no schema lock race) ──
+    const createQuery = `
+      IF NOT EXISTS (
+        SELECT 1
+        FROM ${dbName}.sys.tables  t
+        JOIN ${dbName}.sys.schemas s ON t.schema_id = s.schema_id
+        WHERE t.name   = '${tableName}'
+          AND s.name   = '${schemaName}'
+      )
+      BEGIN
+        CREATE TABLE ${table} (
+          -- Source columns (raw from TaskVBDen / old DB)
+          ID                     NVARCHAR(255)   NOT NULL,
+          VBId                   NVARCHAR(MAX)   NULL,
+          DepartmentId           NVARCHAR(MAX)   NULL,
+          ParentId               NVARCHAR(MAX)   NULL,
+          Title                  NVARCHAR(MAX)   NULL,
+          DanhGia                NVARCHAR(MAX)   NULL,
+          DeBaoCao               NVARCHAR(MAX)   NULL,
+          DeBiet                 NVARCHAR(MAX)   NULL,
+          DeThucHien             NVARCHAR(MAX)   NULL,
+          DuocHuy                NVARCHAR(MAX)   NULL,
+          DiemChatLuong          NVARCHAR(MAX)   NULL,
+          DiemThoiGian           NVARCHAR(MAX)   NULL,
+          DiemDanhGia            NVARCHAR(MAX)   NULL,
+          StartDate              NVARCHAR(MAX)   NULL,
+          DueDate                NVARCHAR(MAX)   NULL,
+          CompletedDate          NVARCHAR(MAX)   NULL,
+          HoanTatTuDong          NVARCHAR(MAX)   NULL,
+          HoSoDuThaoId           NVARCHAR(MAX)   NULL,
+          HoSoDuThaoUrl          NVARCHAR(MAX)   NULL,
+          HoSoXuLyUrl            NVARCHAR(MAX)   NULL,
+          [Percent]              NVARCHAR(MAX)   NULL,
+          TrangThai              NVARCHAR(MAX)   NULL,
+          Priority               NVARCHAR(MAX)   NULL,
+          YKienCuaNguoiGiaiQuyet NVARCHAR(MAX)   NULL,
+          YKienChiDao            NVARCHAR(MAX)   NULL,
+          ModuleId               NVARCHAR(MAX)   NULL,
+          SiteName               NVARCHAR(MAX)   NULL,
+          ListName               NVARCHAR(MAX)   NULL,
+          ItemId                 NVARCHAR(MAX)   NULL,
+          Modified               NVARCHAR(MAX)   NULL,
+          Created                NVARCHAR(MAX)   NULL,
+          ModifiedBy             NVARCHAR(MAX)   NULL,
+          CreatedBy              NVARCHAR(MAX)   NULL,
+          MigrateFlg             NVARCHAR(MAX)   NULL,
+          MigrateErrFlg          NVARCHAR(MAX)   NULL,
+          MigrateErrMess         NVARCHAR(MAX)   NULL,
+          ParentTaskID           NVARCHAR(MAX)   NULL,
 
-      CREATE TABLE ${table} (
-        -- Source columns (raw from TaskVBDen / old DB)
-        ID                     NVARCHAR(255)   NOT NULL,
-        VBId                   NVARCHAR(MAX)   NULL,
-        DepartmentId           NVARCHAR(MAX)   NULL,
-        ParentId               NVARCHAR(MAX)   NULL,
-        Title                  NVARCHAR(MAX)   NULL,
-        DanhGia                NVARCHAR(MAX)   NULL,
-        DeBaoCao               NVARCHAR(MAX)   NULL,
-        DeBiet                 NVARCHAR(MAX)   NULL,
-        DeThucHien             NVARCHAR(MAX)   NULL,
-        DuocHuy                NVARCHAR(MAX)   NULL,
-        DiemChatLuong          NVARCHAR(MAX)   NULL,
-        DiemThoiGian           NVARCHAR(MAX)   NULL,
-        DiemDanhGia            NVARCHAR(MAX)   NULL,
-        StartDate              NVARCHAR(MAX)   NULL,
-        DueDate                NVARCHAR(MAX)   NULL,
-        CompletedDate          NVARCHAR(MAX)   NULL,
-        HoanTatTuDong          NVARCHAR(MAX)   NULL,
-        HoSoDuThaoId           NVARCHAR(MAX)   NULL,
-        HoSoDuThaoUrl          NVARCHAR(MAX)   NULL,
-        HoSoXuLyUrl            NVARCHAR(MAX)   NULL,
-        [Percent]              NVARCHAR(MAX)   NULL,
-        TrangThai              NVARCHAR(MAX)   NULL,
-        Priority               NVARCHAR(MAX)   NULL,
-        YKienCuaNguoiGiaiQuyet NVARCHAR(MAX)   NULL,
-        YKienChiDao            NVARCHAR(MAX)   NULL,
-        ModuleId               NVARCHAR(MAX)   NULL,
-        SiteName               NVARCHAR(MAX)   NULL,
-        ListName               NVARCHAR(MAX)   NULL,
-        ItemId                 NVARCHAR(MAX)   NULL,
-        Modified               NVARCHAR(MAX)   NULL,
-        Created                NVARCHAR(MAX)   NULL,
-        ModifiedBy             NVARCHAR(MAX)   NULL,
-        CreatedBy              NVARCHAR(MAX)   NULL,
-        MigrateFlg             NVARCHAR(MAX)   NULL,
-        MigrateErrFlg          NVARCHAR(MAX)   NULL,
-        MigrateErrMess         NVARCHAR(MAX)   NULL,
-        ParentTaskID           NVARCHAR(MAX)   NULL,
+          -- Bak tracking
+          id_task_bak            NVARCHAR(MAX)   NULL,
 
-        -- Bak tracking
-        id_task_bak            NVARCHAR(MAX)   NULL,
-
-        CONSTRAINT PK_task_sync PRIMARY KEY (ID)
-      );
+          CONSTRAINT PK_task_sync PRIMARY KEY (ID)
+        );
+        PRINT 'task_sync table created';
+      END
     `;
 
-    await this.queryNewDb(query);
+    await this.queryNewDb(createQuery);
     logger.info('[StreamTaskInIncrementalModel] task_sync staging table ready');
+  }
+
+  /**
+   * Force-rebuilds the staging table (DROP + CREATE).
+   * Call this ONLY during maintenance / schema migration — NOT on every startup.
+   * Wrapped with deadlock retry automatically.
+   */
+  async rebuildStagingTable() {
+    await withDeadlockRetry(async () => {
+      const table = this.getStagingTableRef();
+
+      const dropQuery = `
+        IF OBJECT_ID('${table}', 'U') IS NOT NULL
+          DROP TABLE ${table};
+      `;
+      await this.queryNewDb(dropQuery);
+      logger.info('[StreamTaskInIncrementalModel] task_sync dropped for rebuild');
+
+      // Re-use ensureStagingTableExists to create fresh
+      await this.ensureStagingTableExists();
+    }, 'rebuildStagingTable');
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -353,11 +474,9 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       const query = `
         IF EXISTS (SELECT 1 FROM ${stagingTableRef} WHERE ID = @ID)
         BEGIN
-          ${nonIdColumns.length > 0 ? `
-          UPDATE ${stagingTableRef}
-          SET ${updateClause}
-          WHERE ID = @ID;` : `
-          SELECT 1 AS noop;`}
+          ${nonIdColumns.length > 0
+          ? `UPDATE ${stagingTableRef} SET ${updateClause} WHERE ID = @ID;`
+          : `SELECT 1 AS noop;`}
         END
         ELSE
         BEGIN
@@ -366,7 +485,11 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
         END
       `;
 
-      await this.queryNewDbTx(query, params, transaction);
+      // FIX: wrap each row upsert with deadlock retry
+      await withDeadlockRetry(
+        () => this.queryNewDbTx(query, params, transaction),
+        `syncOldToStaging ID=${rawId}`
+      );
     }
 
     return { stagedCount: rows.length };
@@ -526,11 +649,13 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // PROCESS ONE
+  // PROCESS ONE — with deadlock retry on full transaction
   // ═══════════════════════════════════════════════════════════════
 
   /**
    * Processes one staged item for a sync job inside a DB transaction.
+   * Retries the entire transaction on deadlock (SQL error 1205).
+   *
    * @param {string} syncJobId
    * @param {object} [options]
    * @returns {Promise<object>}
@@ -540,6 +665,22 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       throw new Error('syncJobId is required');
     }
 
+    // Safety check: ensure pool is initialized
+    if (!this.newPool) {
+      throw new Error('Database pool not initialized');
+    }
+
+    return withDeadlockRetry(
+      () => this._processOneAttempt(syncJobId, options),
+      `processOne syncJobId=${syncJobId}`
+    );
+  }
+
+  /**
+   * Single attempt of processOne — extracted so withDeadlockRetry can re-run it cleanly.
+   * @private
+   */
+  async _processOneAttempt(syncJobId, options = {}) {
     const jobState = await this.getSyncJobState(syncJobId);
     const itemIndex = Number(
       options.itemIndex != null
@@ -555,11 +696,6 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
         ? options.sourceLastSyncId
         : (jobState?.last_sync_id || 0)
     );
-
-    // Safety check: ensure pool is initialized
-    if (!this.newPool) {
-      throw new Error('Database pool not initialized');
-    }
 
     const transaction = new sql.Transaction(this.newPool);
     await transaction.begin();
@@ -597,9 +733,9 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       try {
         await transaction.rollback();
       } catch (rollbackError) {
-        logger.error('[StreamTaskInIncrementalModel.processOne] rollback failed:', rollbackError);
+        logger.error('[StreamTaskInIncrementalModel._processOneAttempt] rollback failed:', rollbackError);
       }
-      throw error;
+      throw error; // re-throw so withDeadlockRetry can decide whether to retry
     }
   }
 
@@ -685,9 +821,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
             );
             if (userResult && userResult.action !== 'skipped') {
               totalAffected += 1;
-              logger.info(
-                `[user] userId=${userRow.ID} action=${userResult?.action}`
-              );
+              logger.info(`[user] userId=${userRow.UserId} action=${userResult?.action}`);
             }
           } catch (userErr) {
             // SUB-TABLE ERROR: Log warning only, do NOT throw
@@ -717,7 +851,6 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
         logger.info(`[log] logId=${logResult.logId} created=true`);
         totalAffected += 1;
       } else {
-        // Log creation returned false: Log warning only
         logger.warn(`[StreamTaskInIncrementalModel] Log creation returned success=false for task_id=${newTaskId}`, {
           logResult
         });

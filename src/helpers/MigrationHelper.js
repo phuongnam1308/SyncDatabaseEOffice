@@ -2755,6 +2755,93 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
       return null;
     }
   }
+
+  async getUserDisplayName(userIdOrName, transaction = null) {
+    if (!userIdOrName || typeof userIdOrName !== 'string') return null;
+
+    const trimmed = userIdOrName.trim();
+    if (!trimmed) return null;
+
+    try {
+      // ── BƯỚC 1: Tìm trong DB mới theo nhiều tiêu chí ──────────────────────
+      const newDbQuery = `
+        SELECT TOP 1 name
+        FROM ${process.env.NEW_DB_NAME}.dbo.users
+        WHERE id          = @val
+          OR id_user_bak = @val
+          OR username    = @val
+          OR code_nd     = @val
+          OR name        = @val
+      `;
+
+      const newResult = await this.queryNewDbTx(newDbQuery, { val: trimmed }, transaction);
+      if (newResult?.length) {
+        logger.info(`[getUserDisplayName] Found in New DB: "${trimmed}" -> "${newResult[0].name}"`);
+        return newResult[0].name;
+      }
+
+      // ── BƯỚC 2: Fallback sang DB cũ (PersonalProfile) ─────────────────────
+      if (this.queryOldDb) {
+        const oldDbQuery = `
+          SELECT TOP 1 FullName
+          FROM dbo.PersonalProfile
+          WHERE (TRY_CONVERT(uniqueidentifier, @val) IS NOT NULL AND ID = TRY_CONVERT(uniqueidentifier, @val))
+            OR AccountID = @val
+            OR StaffID   = @val
+            OR FullName  = @val
+        `;
+
+        const oldResult = await this.queryOldDb(oldDbQuery, { val: trimmed });
+        if (oldResult?.length) {
+          const name = this.safeString(oldResult[0].FullName);
+          logger.info(`[getUserDisplayName] Found in Old DB: "${trimmed}" -> "${name}"`);
+          return name;
+        }
+      }
+
+      logger.warn(`[getUserDisplayName] Không tìm thấy tên cho: "${trimmed}"`);
+      return null;
+
+    } catch (error) {
+      logger.error(`[getUserDisplayName] Lỗi cho "${trimmed}": ${error.message}`);
+      return null;
+    }
+  }
+  
+  async getUserFieldName(userFieldId) {
+    if (!userFieldId || typeof userFieldId !== 'string') return null;
+
+    const trimmed = userFieldId.trim();
+    if (!trimmed) return null;
+
+    try {
+      if (!this.queryOldDb) {
+        logger.warn('[getUserFieldName] queryOldDb chưa được khởi tạo.');
+        return null;
+      }
+
+      const query = `
+        SELECT TOP 1 Name
+        FROM ${process.env.OLD_DB_NAME}.dbo.UserField
+        WHERE ID = @userFieldId
+      `;
+
+      const result = await this.queryOldDb(query, { userFieldId: trimmed });
+
+      if (result?.length) {
+        const name = this.safeString(result[0].Name);
+        logger.info(`[getUserFieldName] Found: UserFieldId="${trimmed}" -> Name="${name}"`);
+        return name;
+      }
+
+      logger.warn(`[getUserFieldName] Không tìm thấy UserField với ID: "${trimmed}"`);
+      return null;
+
+    } catch (error) {
+      logger.error(`[getUserFieldName] Lỗi cho UserFieldId="${trimmed}": ${error.message}`);
+      return null;
+    }
+  }
 }
 
 module.exports = MigrationHelper;

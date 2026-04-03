@@ -179,15 +179,32 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
 
     // CRITICAL FIX: Use UserType to check existence, but parse Type for value
     let typeValue = null;
-    if (rawRecord.Type !== undefined && rawRecord.Type !== null) {
-      typeValue = parseInt(rawRecord.Type, 10);
+    if (rawRecord.UserType !== undefined && rawRecord.UserType !== null) {
+      typeValue = parseInt(rawRecord.UserType, 10);
       if (isNaN(typeValue)) typeValue = null;
     }
     
     const processId = await this.helper.mapUserName(rawRecord.UserId) || null;
-    // const processName = await this.helper.getUserame(processId) || null; // todo
-    // const role = await this.helper.getRoleTask(rawRecord.UserFieldId) || null; // todo
-
+    const processName = await this.helper.getUserDisplayName(processId) || null;
+    const roleRaw = await this.helper.getUserFieldName(rawRecord.UserFieldId) || null;
+    const mapPriority = (val) => {
+      const key = String(val || '').trim();
+      return ({
+        'AssignedTo': 'assigner',
+        'NguoiPhanViec': 'assigner',
+        'Xem': 'viewer',
+        'NguoiDanhGia': 'director',
+        'ToChucThucHien': 'director',
+        'NguoiSoanThao': 'assigner',
+        'NguoiNhanDeBiet': 'viewer',
+        'NguoiNhanDeBaoCao': 'director',
+        'NguoiNhan': 'director',
+        'NguoiDuocYKien': 'director',
+        'NguoiDanhGia': 'director',
+        'Attendees': 'supporter',
+      }[key] || 'assigner');
+    };
+    const role = mapPriority(roleRaw);
     // Use provided override or try to extract from rawRecord, fallback to generated ID
     const userBackupId = userBackupIdOverride || String(rawRecord.ID || '').trim() || this._generateUUID();
 
@@ -199,8 +216,8 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
       id_user_bak: userBackupId,
       task_id: rawRecord.newTaskId ? parseInt(rawRecord.newTaskId, 10) : null,
       process_id: processId,
-      process_name: processId,
-      role: rawRecord.UserFieldId || null,
+      process_name: processName,
+      role: role,
       type: typeValue,
       created_at: createdAtParsed || new Date().toISOString(),
       update_at: modifiedAtParsed || new Date().toISOString()

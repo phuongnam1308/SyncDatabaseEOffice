@@ -7,26 +7,108 @@ const StreamSystemLogTasksModel = require('./StreamSystemLogTasksModel');
 
 const DEFAULT_SYNC_TIME = '9999-12-31T23:59:59.999Z';
 
-/** Task sync orchestrator (transaction-based: fetch → stage → process with atomic multi-table handling) */
-class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
+// ─── Deadlock retry config ────────────────────────────────────────────────────
+const DEADLOCK_MAX_RETRIES = 3;
+const DEADLOCK_BASE_DELAY_MS = 200; // exponential back-off: 200ms, 400ms, 800ms
+const DEADLOCK_ERROR_NUMBER = 1205;
+
+/**
+ * Sleep for `ms` milliseconds.
+ * @param {number} ms
+ * @returns {Promise<void>}
+ */
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Returns true when the error originates from a SQL Server deadlock (error 1205).
+ * @param {Error} err
+ * @returns {boolean}
+ */
+function isDeadlockError(err) {
+  return (
+    err?.number === DEADLOCK_ERROR_NUMBER ||
+    err?.originalError?.info?.number === DEADLOCK_ERROR_NUMBER ||
+    String(err?.message || '').includes('deadlock')
+  );
+}
+
+/**
+ * Executes `fn` and retries automatically on deadlock up to `maxRetries` times.
+ * Uses exponential back-off to reduce re-collision probability.
+ *
+ * @template T
+ * @param {() => Promise<T>} fn          Async function to execute (should be idempotent).
+ * @param {string} [label='']            Label used in log messages.
+ * @param {number} [maxRetries]          Max retry attempts.
+ * @returns {Promise<T>}
+ */
+async function withDeadlockRetry(fn, label = '', maxRetries = DEADLOCK_MAX_RETRIES) {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await fn();
+    } catch (err) {
+      attempt += 1;
+      if (isDeadlockError(err) && attempt <= maxRetries) {
+        const delay = DEADLOCK_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+        logger.warn(
+          `[withDeadlockRetry]${label ? ' ' + label : ''} deadlock detected — retry ${attempt}/${maxRetries} after ${delay}ms`
+        );
+        await sleep(delay);
+      } else {
+        throw err;
+      }
+    }
+  }
+}
+
+/** Task sync orchestrator — VĂN BẢN ĐI (TaskVBDi → task_sync_out)
+ *  (transaction-based: fetch → stage → process with atomic multi-table handling) */
+class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
   constructor() {
-    super({ modelName: 'STREAM_TASK_INCREMENTAL' });
+    super({ modelName: 'STREAM_TASK_OUT_INCREMENTAL' });
     this.newDbName = process.env.NEW_DB_NAME;
     this.oldDbSchema = 'dbo';
-    this.oldDbTable = 'TaskVBDen';
+    this.oldDbTable = 'TaskVBDi';           // ← VĂN BẢN ĐI
     this.newDbSchema = 'dbo';
-    this.newTableSync = 'task_sync_out';
+    this.newTableSync = 'task_sync_out';    // ← staging riêng cho VBĐi
 
     // Internal data models
     this.taskModel = null;
     this.taskUsersModel = null;
     this.systemLogsModel = null;
+
+    // Guard: prevent concurrent initialize() calls from racing on staging DDL
+    this._initializingPromise = null;
   }
 
-  /** Initialize all models and staging tables */
+  // ═══════════════════════════════════════════════════════════════
+  // INITIALIZE
+  // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * Initialize all models and staging tables.
+   * Concurrent callers share the same promise to avoid DDL races.
+   */
   async initialize() {
+    if (this._initializingPromise) {
+      return this._initializingPromise;
+    }
+
+    this._initializingPromise = this._doInitialize();
+    try {
+      await this._initializingPromise;
+    } finally {
+      this._initializingPromise = null;
+    }
+  }
+
+  /** Internal initialize logic, wrapped by the public guard above. */
+  async _doInitialize() {
     await super.initialize();
-    
+
     try {
       this.taskModel = new StreamTaskMigrationModel();
       await this.taskModel.initialize();
@@ -37,11 +119,15 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       this.systemLogsModel = new StreamSystemLogTasksModel();
       await this.systemLogsModel.initialize();
 
-      await this.ensureStagingTableExists();
+      // FIX: deadlock-safe staging table creation with retry
+      await withDeadlockRetry(
+        () => this.ensureStagingTableExists(),
+        'ensureStagingTableExists'
+      );
 
-      logger.info('[StreamTaskInIncrementalModel] Initialized with transaction-based aggregate processing');
+      logger.info('[StreamTaskOutIncrementalModel] Initialized with transaction-based aggregate processing');
     } catch (error) {
-      logger.error('[StreamTaskInIncrementalModel.initialize]', error);
+      logger.error('[StreamTaskOutIncrementalModel.initialize]', error);
       throw error;
     }
   }
@@ -68,7 +154,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
    * @returns {string|null}
    */
   extractRowSyncTime(row) {
-    const raw = row?.__sync_time || row?.Modified || row?.Created || null;
+    const raw = row?.__sync_time || row?.Modified || row?.Created || row?.NgayTao || row?.updated_at || null;
     if (!raw) return null;
     const dateValue = new Date(raw);
     if (Number.isNaN(dateValue.getTime())) return null;
@@ -138,69 +224,102 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // STAGING TABLE — task-specific schema
+  // STAGING TABLE — task_sync_out schema
   // ═══════════════════════════════════════════════════════════════
 
   /**
    * Tạo bảng staging `task_sync_out` trong DB mới nếu chưa tồn tại.
-   * DROP + CREATE để đảm bảo schema luôn fresh.
+   *
+   * FIX (deadlock): Thay DROP + CREATE bằng CREATE IF NOT EXISTS để tránh
+   * tranh chấp schema-lock với các transaction khác đang chạy song song.
+   * Khi schema thật sự thay đổi (thêm/bớt cột), gọi rebuildStagingTable().
    */
   async ensureStagingTableExists() {
     const table = this.getStagingTableRef();
+    const tableName = this.newTableSync;   // 'task_sync_out'
+    const schemaName = this.newDbSchema;
+    const dbName = this.newDbName;
 
-    const query = `
-      IF OBJECT_ID('${table}', 'U') IS NOT NULL
-          DROP TABLE ${table};
+    // Create only if not exists — no DROP → no Sch-M lock race
+    const createQuery = `
+      IF NOT EXISTS (
+        SELECT 1
+        FROM ${dbName}.sys.tables  t
+        JOIN ${dbName}.sys.schemas s ON t.schema_id = s.schema_id
+        WHERE t.name = '${tableName}'
+          AND s.name = '${schemaName}'
+      )
+      BEGIN
+        CREATE TABLE ${table} (
+          -- Source columns (raw from TaskVBDi / old DB)
+          ID                     NVARCHAR(255)   NOT NULL,
+          VBId                   NVARCHAR(MAX)   NULL,
+          DepartmentId           NVARCHAR(MAX)   NULL,
+          ParentId               NVARCHAR(MAX)   NULL,
+          Title                  NVARCHAR(MAX)   NULL,
+          DanhGia                NVARCHAR(MAX)   NULL,
+          DeBaoCao               NVARCHAR(MAX)   NULL,
+          DeBiet                 NVARCHAR(MAX)   NULL,
+          DeThucHien             NVARCHAR(MAX)   NULL,
+          DuocHuy                NVARCHAR(MAX)   NULL,
+          DiemChatLuong          NVARCHAR(MAX)   NULL,
+          DiemThoiGian           NVARCHAR(MAX)   NULL,
+          DiemDanhGia            NVARCHAR(MAX)   NULL,
+          StartDate              NVARCHAR(MAX)   NULL,
+          DueDate                NVARCHAR(MAX)   NULL,
+          CompletedDate          NVARCHAR(MAX)   NULL,
+          HoanTatTuDong          NVARCHAR(MAX)   NULL,
+          HoSoDuThaoId           NVARCHAR(MAX)   NULL,
+          HoSoDuThaoUrl          NVARCHAR(MAX)   NULL,
+          HoSoXuLyUrl            NVARCHAR(MAX)   NULL,
+          [Percent]              NVARCHAR(MAX)   NULL,
+          TrangThai              NVARCHAR(MAX)   NULL,
+          Priority               NVARCHAR(MAX)   NULL,
+          YKienCuaNguoiGiaiQuyet NVARCHAR(MAX)   NULL,
+          YKienChiDao            NVARCHAR(MAX)   NULL,
+          ModuleId               NVARCHAR(MAX)   NULL,
+          SiteName               NVARCHAR(MAX)   NULL,
+          ListName               NVARCHAR(MAX)   NULL,
+          ItemId                 NVARCHAR(MAX)   NULL,
+          Modified               NVARCHAR(MAX)   NULL,
+          Created                NVARCHAR(MAX)   NULL,
+          ModifiedBy             NVARCHAR(MAX)   NULL,
+          CreatedBy              NVARCHAR(MAX)   NULL,
+          MigrateFlg             NVARCHAR(MAX)   NULL,
+          MigrateErrFlg          NVARCHAR(MAX)   NULL,
+          MigrateErrMess         NVARCHAR(MAX)   NULL,
+          ParentTaskID           NVARCHAR(MAX)   NULL,
 
-      CREATE TABLE ${table} (
-        -- Source columns (raw from TaskVBDen / old DB)
-        ID                     NVARCHAR(255)   NOT NULL,
-        VBId                   NVARCHAR(MAX)   NULL,
-        DepartmentId           NVARCHAR(MAX)   NULL,
-        ParentId               NVARCHAR(MAX)   NULL,
-        Title                  NVARCHAR(MAX)   NULL,
-        DanhGia                NVARCHAR(MAX)   NULL,
-        DeBaoCao               NVARCHAR(MAX)   NULL,
-        DeBiet                 NVARCHAR(MAX)   NULL,
-        DeThucHien             NVARCHAR(MAX)   NULL,
-        DuocHuy                NVARCHAR(MAX)   NULL,
-        DiemChatLuong          NVARCHAR(MAX)   NULL,
-        DiemThoiGian           NVARCHAR(MAX)   NULL,
-        DiemDanhGia            NVARCHAR(MAX)   NULL,
-        StartDate              NVARCHAR(MAX)   NULL,
-        DueDate                NVARCHAR(MAX)   NULL,
-        CompletedDate          NVARCHAR(MAX)   NULL,
-        HoanTatTuDong          NVARCHAR(MAX)   NULL,
-        HoSoDuThaoId           NVARCHAR(MAX)   NULL,
-        HoSoDuThaoUrl          NVARCHAR(MAX)   NULL,
-        HoSoXuLyUrl            NVARCHAR(MAX)   NULL,
-        [Percent]              NVARCHAR(MAX)   NULL,
-        TrangThai              NVARCHAR(MAX)   NULL,
-        Priority               NVARCHAR(MAX)   NULL,
-        YKienCuaNguoiGiaiQuyet NVARCHAR(MAX)   NULL,
-        YKienChiDao            NVARCHAR(MAX)   NULL,
-        ModuleId               NVARCHAR(MAX)   NULL,
-        SiteName               NVARCHAR(MAX)   NULL,
-        ListName               NVARCHAR(MAX)   NULL,
-        ItemId                 NVARCHAR(MAX)   NULL,
-        Modified               NVARCHAR(MAX)   NULL,
-        Created                NVARCHAR(MAX)   NULL,
-        ModifiedBy             NVARCHAR(MAX)   NULL,
-        CreatedBy              NVARCHAR(MAX)   NULL,
-        MigrateFlg             NVARCHAR(MAX)   NULL,
-        MigrateErrFlg          NVARCHAR(MAX)   NULL,
-        MigrateErrMess         NVARCHAR(MAX)   NULL,
-        ParentTaskID           NVARCHAR(MAX)   NULL,
+          -- Bak tracking
+          id_task_bak            NVARCHAR(MAX)   NULL,
 
-        -- Bak tracking
-        id_task_bak            NVARCHAR(MAX)   NULL,
-
-        CONSTRAINT PK_task_sync_out PRIMARY KEY (ID)
-      );
+          CONSTRAINT PK_task_sync_out PRIMARY KEY (ID)   -- ← tên constraint của VBĐi
+        );
+        PRINT 'task_sync_out table created';
+      END
     `;
 
-    await this.queryNewDb(query);
-    logger.info('[StreamTaskInIncrementalModel] task_sync_out staging table ready');
+    await this.queryNewDb(createQuery);
+    logger.info('[StreamTaskOutIncrementalModel] task_sync_out staging table ready');
+  }
+
+  /**
+   * Force-rebuilds the staging table (DROP + CREATE).
+   * Gọi thủ công khi cần migration schema — KHÔNG gọi lúc startup.
+   */
+  async rebuildStagingTable() {
+    await withDeadlockRetry(async () => {
+      const table = this.getStagingTableRef();
+
+      const dropQuery = `
+        IF OBJECT_ID('${table}', 'U') IS NOT NULL
+          DROP TABLE ${table};
+      `;
+      await this.queryNewDb(dropQuery);
+      logger.info('[StreamTaskOutIncrementalModel] task_sync_out dropped for rebuild');
+
+      await this.ensureStagingTableExists();
+    }, 'rebuildStagingTable');
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -216,7 +335,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
   async getCount(lastSyncTime, lastSyncId = 0) {
     const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
     const normalizedLastSyncId = Number(lastSyncId || 0);
-    const limit = Number(process.env.COMPLETED_LIMIT || 20);
+    const limit = Number(process.env.COMPLETED_LIMIT || 0);
 
     const syncTimeExpr = this.getSyncTimeExpression();
     const query = `
@@ -311,7 +430,6 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
 
   /**
    * Upserts source rows into staging table so process phase can read deterministic snapshots.
-   * Dynamic column mapping — không hardcode từng field như trước.
    * @param {object[]} rows
    * @param {{transaction?: object}} [context]
    * @returns {Promise<{stagedCount:number}>}
@@ -322,7 +440,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     }
 
     const internalColumns = new Set(['__sync_time', '__sync_id', '__sync_id_num']);
-    const columns = Object.keys(rows[0] || {}).filter((col) => !internalColumns.has(col));
+    const columns = Object.keys(rows[0] || {}).filter((column) => !internalColumns.has(column));
     if (!columns.length) {
       return { stagedCount: 0 };
     }
@@ -331,9 +449,9 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       throw new Error('Staging sync requires source column "ID"');
     }
 
-    const safeColumns = columns.map((col) => this.sanitizeColumnName(col));
-    const nonIdColumns = columns.filter((col) => col !== 'ID');
-    const safeNonIdColumns = nonIdColumns.map((col) => this.sanitizeColumnName(col));
+    const safeColumns = columns.map((column) => this.sanitizeColumnName(column));
+    const nonIdColumns = columns.filter((column) => column !== 'ID');
+    const safeNonIdColumns = nonIdColumns.map((column) => this.sanitizeColumnName(column));
     const stagingTableRef = this.getStagingTableRef();
 
     for (const row of rows) {
@@ -342,35 +460,34 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
         throw new Error('Row ID is required for staging');
       }
 
-      // Đính kèm id_task_bak nếu chưa có trong nguồn
       const params = {};
-      for (const col of columns) {
-        params[col] = row[col];
-      }
-      if (!params.id_task_bak) {
-        params.id_task_bak = String(rawId).trim();
+      for (const column of columns) {
+        params[column] = row[column];
       }
 
       const updateClause = safeNonIdColumns
-        .map((safeCol, idx) => `${safeCol} = @${nonIdColumns[idx]}`)
+        .map((columnName, idx) => `${columnName} = @${nonIdColumns[idx]}`)
         .join(', ');
 
       const query = `
         IF EXISTS (SELECT 1 FROM ${stagingTableRef} WHERE ID = @ID)
         BEGIN
-          ${nonIdColumns.length > 0 ? `
-          UPDATE ${stagingTableRef}
-          SET ${updateClause}
-          WHERE ID = @ID;` : `SELECT 1 AS noop;`}
+          ${nonIdColumns.length > 0
+          ? `UPDATE ${stagingTableRef} SET ${updateClause} WHERE ID = @ID;`
+          : `SELECT 1 AS noop;`}
         END
         ELSE
         BEGIN
           INSERT INTO ${stagingTableRef} (${safeColumns.join(', ')})
-          VALUES (${columns.map((col) => `@${col}`).join(', ')});
+          VALUES (${columns.map((column) => `@${column}`).join(', ')});
         END
       `;
 
-      await this.queryNewDbTx(query, params, transaction);
+      // FIX: wrap each row upsert with deadlock retry
+      await withDeadlockRetry(
+        () => this.queryNewDbTx(query, params, transaction),
+        `syncOldToStaging ID=${rawId}`
+      );
     }
 
     return { stagedCount: rows.length };
@@ -530,12 +647,13 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // PROCESS ONE
+  // PROCESS ONE — with deadlock retry on full transaction
   // ═══════════════════════════════════════════════════════════════
 
   /**
    * Processes one staged item for a sync job inside a DB transaction.
-   * Sau khi xử lý thành công, xoá bản ghi khỏi staging (task-specific).
+   * Retries the entire transaction on deadlock (SQL error 1205).
+   *
    * @param {string} syncJobId
    * @param {object} [options]
    * @returns {Promise<object>}
@@ -545,6 +663,21 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       throw new Error('syncJobId is required');
     }
 
+    if (!this.newPool) {
+      throw new Error('Database pool not initialized');
+    }
+
+    return withDeadlockRetry(
+      () => this._processOneAttempt(syncJobId, options),
+      `processOne syncJobId=${syncJobId}`
+    );
+  }
+
+  /**
+   * Single attempt of processOne — extracted so withDeadlockRetry can re-run it cleanly.
+   * @private
+   */
+  async _processOneAttempt(syncJobId, options = {}) {
     const jobState = await this.getSyncJobState(syncJobId);
     const itemIndex = Number(
       options.itemIndex != null
@@ -583,19 +716,6 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       }
 
       const result = await this.processRowData(rowData, { transaction });
-
-      // Task-specific: xoá row đã xử lý khỏi staging
-      try {
-        const stagingRef = this.getStagingTableRef();
-        await this.queryNewDbTx(
-          `DELETE FROM ${stagingRef} WHERE ID = @id`,
-          { id: String(rowData.ID) },
-          transaction
-        );
-      } catch (delErr) {
-        logger.warn('[StreamTaskInIncrementalModel.processOne] Delete from staging error:', delErr.message);
-      }
-
       await transaction.commit();
 
       return {
@@ -610,9 +730,9 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       try {
         await transaction.rollback();
       } catch (rollbackError) {
-        logger.error('[StreamTaskInIncrementalModel.processOne] Rollback failed:', rollbackError);
+        logger.error('[StreamTaskOutIncrementalModel._processOneAttempt] rollback failed:', rollbackError);
       }
-      throw error;
+      throw error; // re-throw so withDeadlockRetry can decide whether to retry
     }
   }
 
@@ -673,19 +793,20 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     const taskResult = await this.taskModel.processSingleRecord(stagingRow, transaction);
 
     if (!taskResult || !taskResult.newTaskId) {
-      logger.warn(`[StreamTaskInIncrementalModel] Task not inserted for ID=${taskId}`);
-      return { action: 'none', affected: 0 };
+      logger.error(`[SYNC FAILED] Task not inserted for ID=${taskId}`);
+      return { action: 'none', affected: 0, failed: true };
     }
 
     const newTaskId = taskResult.newTaskId;
     const createdBy = taskResult?.createdBy || stagingRow.CreatedBy || null;
-    logger.info(`[AggregateSync][Task] taskId=${taskId} newTaskId=${newTaskId} action=${taskResult.action}`);
+    logger.info(`[SYNC OK] task ID=${taskId} → new_id=${newTaskId} action=${taskResult.action}`);
     totalAffected += 1;
 
-    // ── 2. Task users (TaskVBDenPermission) ───────────────────────
+    // ── 2. Task users (TaskVBDiPermission) ────────────────────────
+    // BUG FIX: file cũ query nhầm TaskVBDenPermission thay vì TaskVBDiPermission
     try {
       const taskUsersRows = await this.queryOldDb(
-        `SELECT * FROM ${this.oldDbSchema}.TaskVBDenPermission WHERE TaskId = @taskId`,
+        `SELECT * FROM ${this.oldDbSchema}.TaskVBDiPermission WHERE TaskId = @taskId`,
         { taskId: String(stagingRow.ID) }
       );
 
@@ -698,19 +819,23 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
             );
             if (userResult && userResult.action !== 'skipped') {
               totalAffected += 1;
+              logger.info(`[user] userId=${userRow.UserId} action=${userResult?.action}`);
             }
-            logger.info(
-              `[AggregateSync][TaskUser] taskId=${taskId} userId=${userRow.ID} action=${userResult?.action}`
-            );
           } catch (userErr) {
+            // SUB-TABLE ERROR: Log warning only, do NOT throw
             logger.warn(
-              `[upsertTaskAggregateById] TaskUser process failed for ${userRow.ID}: ${userErr.message}`
+              `[StreamTaskOutIncrementalModel] TaskUser sync failed (non-critical) userId=${userRow.ID}: ${userErr.message}`,
+              { errorStack: userErr.stack }
             );
           }
         }
       }
     } catch (userError) {
-      logger.warn(`[upsertTaskAggregateById] TaskUsers sync failed: ${userError.message}`);
+      // Fetch error: Log warning only, do NOT throw
+      logger.warn(
+        `[StreamTaskOutIncrementalModel] Failed to fetch task users for task_id=${taskId}: ${userError.message}`,
+        { errorStack: userError.stack }
+      );
     }
 
     // ── 3. System log ─────────────────────────────────────────────
@@ -721,11 +846,19 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       );
 
       if (logResult.success) {
-        logger.info(`[AggregateSync][SystemLog] taskId=${newTaskId} logCreated=true`);
+        logger.info(`[log] logId=${logResult.logId} created=true`);
         totalAffected += 1;
+      } else {
+        logger.warn(`[StreamTaskOutIncrementalModel] Log creation returned success=false for task_id=${newTaskId}`, {
+          logResult
+        });
       }
     } catch (logErr) {
-      logger.warn(`[upsertTaskAggregateById] System log creation failed: ${logErr.message}`);
+      // SUB-TABLE ERROR: Log warning only, do NOT throw
+      logger.warn(
+        `[StreamTaskOutIncrementalModel] System log creation failed (non-critical) task_id=${newTaskId}: ${logErr.message}`,
+        { errorStack: logErr.stack }
+      );
     }
 
     return {
@@ -735,81 +868,6 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       affected: Math.max(1, totalAffected)
     };
   }
-
-  // ═══════════════════════════════════════════════════════════════
-  // BATCH HELPERS — task-specific utilities
-  // ═══════════════════════════════════════════════════════════════
-
-  /**
-   * Full async processing of all staged tasks.
-   * @param {string} syncJobId
-   * @returns {Promise<{status, processed, failedCount, cleanup}>}
-   */
-  async processAllAsync(syncJobId = null) {
-    try {
-      logger.info(`[StreamTaskInIncrementalModel.processAllAsync] Starting job ${syncJobId}`);
-
-      const listResult = await this.getList(DEFAULT_SYNC_TIME, syncJobId);
-      logger.info(`[StreamTaskInIncrementalModel] Staged ${listResult.stagedCount} tasks`);
-
-      let processed = 0;
-      let failedCount = 0;
-      while (true) {
-        try {
-          const result = await this.processOne(syncJobId);
-          if (!result.processed) break;
-          processed++;
-        } catch (procErr) {
-          logger.error('[StreamTaskInIncrementalModel.processAllAsync]', procErr);
-          failedCount++;
-        }
-      }
-
-      logger.info('[StreamTaskInIncrementalModel] Cleanup staging tables');
-      const cleanupResults = {
-        taskSync: await this.taskModel.cleanupStagingTable(),
-        taskUsersSync: await this.taskUsersModel.cleanupStagingTable?.()
-      };
-
-      logger.info(
-        `[StreamTaskInIncrementalModel.processAllAsync] Completed: ${processed} processed, ${failedCount} failed`
-      );
-
-      return {
-        status: 'success',
-        processed,
-        failedCount,
-        cleanup: cleanupResults,
-        message: `Synced ${processed} tasks (${failedCount} failed)`
-      };
-    } catch (error) {
-      logger.error('[StreamTaskInIncrementalModel.processAllAsync]', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Cleanup all staging tables.
-   * @returns {Promise<{success, message, details}>}
-   */
-  async cleanupStagingTable() {
-    try {
-      const taskCleanup = await this.taskModel.cleanupStagingTable();
-      const userCleanup = await this.taskUsersModel.cleanupStagingTable?.();
-
-      return {
-        success: taskCleanup.success,
-        message: 'All staging tables cleaned',
-        details: {
-          task: taskCleanup,
-          taskUsers: userCleanup
-        }
-      };
-    } catch (error) {
-      logger.error('[StreamTaskInIncrementalModel.cleanupStagingTable]', error);
-      throw error;
-    }
-  }
 }
 
-module.exports = StreamTaskInIncrementalModel;
+module.exports = StreamTaskOutIncrementalModel;
