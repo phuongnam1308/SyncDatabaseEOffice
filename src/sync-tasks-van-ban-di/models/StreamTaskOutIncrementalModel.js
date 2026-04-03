@@ -5,12 +5,55 @@ const StreamTaskMigrationModel = require('./StreamTaskMigrationModel');
 const StreamTaskUsersModel = require('./StreamTaskUsersModel');
 const StreamSystemLogTasksModel = require('./StreamSystemLogTasksModel');
 
+const { v4: uuidv4 } = require('uuid');
+const SyncCommentModel = require('../../sync-document-comment/SyncCommentModel');
+const FileService = require('../../sync-file-copy/Fileuploadservice');
+const { downloadFile: spDownload } = require('../../sync-file-copy/SharePointAuthService');
+
 const DEFAULT_SYNC_TIME = '9999-12-31T23:59:59.999Z';
 
 // ─── Deadlock retry config ────────────────────────────────────────────────────
 const DEADLOCK_MAX_RETRIES = 3;
 const DEADLOCK_BASE_DELAY_MS = 200; // exponential back-off: 200ms, 400ms, 800ms
 const DEADLOCK_ERROR_NUMBER = 1205;
+
+// ── Reuse detectFileType từ outgoing (copy nguyên, không import cross-module) ──
+function detectFileType(buffer) {
+  if (!buffer || buffer.length < 4) return { mime: 'application/octet-stream', ext: 'bin' };
+  const b = buffer;
+  if (b[0]===0x25&&b[1]===0x50&&b[2]===0x44&&b[3]===0x46) return { mime:'application/pdf', ext:'pdf' };
+  if (b[0]===0x89&&b[1]===0x50&&b[2]===0x4E&&b[3]===0x47) return { mime:'image/png', ext:'png' };
+  if (b[0]===0xFF&&b[1]===0xD8&&b[2]===0xFF)               return { mime:'image/jpeg', ext:'jpg' };
+  if (b[0]===0x47&&b[1]===0x49&&b[2]===0x46)               return { mime:'image/gif', ext:'gif' };
+  if (b[0]===0x42&&b[1]===0x4D)                             return { mime:'image/bmp', ext:'bmp' };
+  if (b[0]===0x50&&b[1]===0x4B&&b[2]===0x03&&b[3]===0x04) {
+    const s = buffer.slice(0,200).toString('latin1');
+    if (s.includes('word/')) return { mime:'application/vnd.openxmlformats-officedocument.wordprocessingml.document', ext:'docx' };
+    if (s.includes('xl/'))   return { mime:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', ext:'xlsx' };
+    if (s.includes('ppt/'))  return { mime:'application/vnd.openxmlformats-officedocument.presentationml.presentation', ext:'pptx' };
+    return { mime:'application/zip', ext:'zip' };
+  }
+  if (b[0]===0xD0&&b[1]===0xCF&&b[2]===0x11&&b[3]===0xE0) return { mime:'application/msword', ext:'doc' };
+  if (b[0]===0x52&&b[1]===0x61&&b[2]===0x72&&b[3]===0x21) return { mime:'application/x-rar-compressed', ext:'rar' };
+  return { mime:'application/octet-stream', ext:'bin' };
+}
+
+// ── Comment tables (dùng chung với In model) ──
+const COMMENT_TABLES = [
+  'Comments',
+  'Comments_ATPC', 'Comments_CLL',  'Comments_CNTT', 'Comments_CT',
+  'Comments_CVTC', 'Comments_DonVi', 'Comments_DVHH', 'Comments_DVKT',
+  'Comments_GNVT', 'Comments_HC',   'Comments_HT',   'Comments_ICDLB',
+  'Comments_ICDST','Comments_KHDT', 'Comments_KHKD', 'Comments_KTVT',
+  'Comments_KVTC', 'Comments_MKT',  'Comments_NPL',  'Comments_QLCT',
+  'Comments_QSBV', 'Comments_SNPL', 'Comments_TC',   'Comments_TC189',
+  'Comments_TCCT', 'Comments_TCHP', 'Comments_TCIDI','Comments_TCLD',
+  'Comments_TCMT', 'Comments_TCO',  'Comments_TCOT', 'Comments_TCPC',
+  'Comments_TCPH', 'Comments_TCTT', 'Comments_TTDDC','Comments_TTDTC',
+  'Comments_VP',   'Comments_VPMB', 'Comments_VPTNB','Comments_VTB',
+  'Comments_VTT',  'Comments_XDCT', 'Comments_xdsm', 'Comments_XNCG',
+  'Comments_YTE'
+];
 
 /**
  * Sleep for `ms` milliseconds.
@@ -80,6 +123,9 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
     this.taskUsersModel = null;
     this.systemLogsModel = null;
 
+    this._fileService = null;
+    this._syncCommentModel = [];
+
     // Guard: prevent concurrent initialize() calls from racing on staging DDL
     this._initializingPromise = null;
   }
@@ -124,6 +170,37 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
         () => this.ensureStagingTableExists(),
         'ensureStagingTableExists'
       );
+
+      this._fileService = new FileService(this.newPool);
+
+      // init comment models — chỉ initialize() 1 lần, share pool cho 47 instances
+      this._syncCommentModel = [];
+      const baseCommentModel = new SyncCommentModel(COMMENT_TABLES[0]);
+      await baseCommentModel.initialize();
+
+      // Đảm bảo 2 cột backup tồn tại trong document_comments (dùng chung với In model)
+      await baseCommentModel.queryNewDb(`
+        IF NOT EXISTS (
+          SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+          WHERE TABLE_NAME = 'document_comments' AND COLUMN_NAME = 'id_comments_bak'
+        )
+          ALTER TABLE ${process.env.NEW_DB_NAME}.dbo.document_comments
+            ADD id_comments_bak NVARCHAR(255) NULL;
+
+        IF NOT EXISTS (
+          SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+          WHERE TABLE_NAME = 'document_comments' AND COLUMN_NAME = 'table_bak'
+        )
+          ALTER TABLE ${process.env.NEW_DB_NAME}.dbo.document_comments
+            ADD table_bak NVARCHAR(255) NULL;
+      `);
+
+      this._syncCommentModel = COMMENT_TABLES.map((table) => {
+        const model = new SyncCommentModel(table);
+        model.oldPool = baseCommentModel.oldPool;
+        model.newPool = baseCommentModel.newPool;
+        return model;
+      });
 
       logger.info('[StreamTaskOutIncrementalModel] Initialized with transaction-based aggregate processing');
     } catch (error) {
@@ -320,6 +397,95 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
 
       await this.ensureStagingTableExists();
     }, 'rebuildStagingTable');
+  }
+
+  async ThemFileDinhKemTask(stagingRow, newTaskId) {
+    if (!this._fileService) {
+      logger.warn('[ThemFileDinhKemTask] FileService chưa được khởi tạo');
+      return false;
+    }
+
+    const baseUrl = (process.env.BASE_URL || '').replace(/\/$/, '');
+    if (!baseUrl) {
+      logger.error('[ThemFileDinhKemTask] BASE_URL chưa được cấu hình trong .env');
+      return false;
+    }
+
+    const fileUrlFields = [
+      { field: 'HoSoDuThaoUrl', objectType: 'docDraft'   },
+      { field: 'HoSoXuLyUrl',   objectType: 'docProcess'  },
+    ];
+
+    let anySuccess = false;
+
+    for (const { field, objectType } of fileUrlFields) {
+      const rawUrl = stagingRow?.[field];
+      if (!rawUrl || String(rawUrl).trim() === '') continue;
+
+      const relativePath = String(rawUrl).trim();
+      const fullUrl = relativePath.startsWith('http')
+        ? relativePath
+        : `${baseUrl}${relativePath}`;
+
+      const fileName = relativePath.substring(relativePath.lastIndexOf('/') + 1) || field;
+
+      let buffer;
+      try {
+        buffer = await spDownload(fullUrl);
+      } catch (downloadErr) {
+        logger.error(
+          `[ThemFileDinhKemTask] Download failed field=${field} url=${fullUrl} taskId=${stagingRow?.ID}: ${downloadErr.message}`
+        );
+        continue;
+      }
+
+      try {
+        const { mime: mimeType } = detectFileType(buffer);
+        const fileIdBak = uuidv4();
+
+        const fileRecord = {
+          file_name:   fileName,
+          file_path:   relativePath,
+          mime_type:   mimeType,
+          created_by:  stagingRow?.CreatedBy || null,
+          version:     1,
+          id_bak:      fileIdBak,
+          table_bak:   'TaskVBDi',   // ← VBĐi
+          type_doc:    null,
+          isBak:       1
+        };
+
+        const relationRecord = {
+          object_type:    objectType,
+          object_id:      String(newTaskId),
+          object_id_bak:  stagingRow?.ID,
+          file_id_bak:    fileIdBak,
+          table_bak:      'TaskVBDi',   // ← VBĐi
+          type_doc:       objectType,
+        };
+
+        await this._fileService.uploadAndInsert({
+          fileBuffer:    buffer,
+          originalName:  fileName,
+          mimeType,
+          fileRecord,
+          relationRecord,
+          folder:        'task',
+          localFolder:   'task'
+        });
+
+        logger.info(
+          `[ThemFileDinhKemTask] field=${field} taskId=${stagingRow?.ID} newTaskId=${newTaskId} ok`
+        );
+        anySuccess = true;
+      } catch (insertErr) {
+        logger.error(
+          `[ThemFileDinhKemTask] Insert failed field=${field} taskId=${stagingRow?.ID}: ${insertErr.message}`
+        );
+      }
+    }
+
+    return anySuccess;
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -803,7 +969,6 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
     totalAffected += 1;
 
     // ── 2. Task users (TaskVBDiPermission) ────────────────────────
-    // BUG FIX: file cũ query nhầm TaskVBDenPermission thay vì TaskVBDiPermission
     try {
       const taskUsersRows = await this.queryOldDb(
         `SELECT * FROM ${this.oldDbSchema}.TaskVBDiPermission WHERE TaskId = @taskId`,
@@ -859,6 +1024,58 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
         `[StreamTaskOutIncrementalModel] System log creation failed (non-critical) task_id=${newTaskId}: ${logErr.message}`,
         { errorStack: logErr.stack }
       );
+    }
+
+    // ── 4. File + Comment sync via linked outgoing document ───────
+    const vbId = stagingRow?.VBId ? String(stagingRow.VBId).trim() : null;
+
+    if (vbId) {
+      // ── 4a. File sync ──────────────────────────────────────────
+      try {
+        const hasFiles = stagingRow?.HoSoDuThaoUrl || stagingRow?.HoSoXuLyUrl;
+        if (hasFiles) {
+          await this.ThemFileDinhKemTask(stagingRow, newTaskId);
+        }
+      } catch (fileErr) {
+        logger.warn(
+          `[StreamTaskOutIncrementalModel] File sync failed (non-critical) taskId=${taskId} newTaskId=${newTaskId}: ${fileErr.message}`
+        );
+      }
+
+      // ── 4b. Comment sync ───────────────────────────────────────
+      for (const commentModel of this._syncCommentModel) {
+        try {
+          const rawComments = await commentModel.fetchByDocumentId(vbId);
+
+          if (!Array.isArray(rawComments) || !rawComments.length) {
+            continue;
+          }
+
+          for (const rawComment of rawComments) {
+            try {
+              const result = await commentModel.processSingleRecord(
+                rawComment,
+                newTaskId,
+                transaction
+              );
+              if (!result) continue;
+              logger.info(
+                `[AggregateSync][Comment] table=${commentModel?.oldDbTable} taskId=${taskId} newTaskId=${newTaskId} inserted=${result?.inserted || 0} updated=${result?.updated || 0}`
+              );
+              totalAffected += Number(result.inserted || 0);
+              totalAffected += Number(result.updated || 0);
+            } catch (commentRowErr) {
+              logger.warn(
+                `[StreamTaskOutIncrementalModel] Comment row sync failed table=${commentModel?.oldDbTable} taskId=${taskId}: ${commentRowErr.message}`
+              );
+            }
+          }
+        } catch (commentFetchErr) {
+          logger.warn(
+            `[StreamTaskOutIncrementalModel] Comment fetch failed table=${commentModel?.oldDbTable} taskId=${taskId}: ${commentFetchErr.message}`
+          );
+        }
+      }
     }
 
     return {
