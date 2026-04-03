@@ -8,6 +8,14 @@ const parseDate = (v) => {
   return isNaN(d.getTime()) ? null : d;
 };
 
+// Chuẩn hóa cột JSON array: null/'' → '[]', string JSON giữ nguyên
+const normalizeJsonArray = (v) => {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  if (s === '') return '[]';
+  return s;
+};
+
 /* ===================== TABLE MAPPING ===================== */
 const tableMappings = {
   car_booking: {
@@ -50,9 +58,9 @@ const tableMappings = {
       contact_person: (r) => r?.Organizer || mapping.defaults.LEADER,
       
       // Bóc tách các trường JSON phối hợp
-      coordination_information: (r) => r?.coordination_information || r?.nvarcharMAX1 || null,
-      driver_ids: (r) => r?.driver_ids || r?.nvarcharMAX2 || null,
-      car_ids: (r) => r?.car_ids || r?.nvarcharMAX3 || null,
+      coordination_information: (r) => normalizeJsonArray(r?.coordination_information || r?.nvarcharMAX1),
+      driver_ids:               (r) => normalizeJsonArray(r?.driver_ids || r?.nvarcharMAX2),
+      car_ids:                  (r) => normalizeJsonArray(r?.car_ids    || r?.nvarcharMAX3),
 
       // 🔥 2. Ép cứng các trường hiển thị theo chuẩn UI của USER
       status_code: 2,

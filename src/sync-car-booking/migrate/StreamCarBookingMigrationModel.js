@@ -741,6 +741,16 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         }
 
         // 🔥 2. Ghi vào bảng MASTER (vehicle_registrations)
+        // Safeguard: Chuẩn hóa cột JSON array - chuỗi rỗng '' → '[]' để tránh lỗi constraint
+        const normalizeArr = (v) => {
+            if (v === null || v === undefined) return null;
+            const s = String(v).trim();
+            return s === '' ? '[]' : s;
+        };
+        rowData.driver_ids               = normalizeArr(rowData.driver_ids);
+        rowData.car_ids                  = normalizeArr(rowData.car_ids);
+        rowData.coordination_information = normalizeArr(rowData.coordination_information);
+
         console.log(`[StreamCarBookingMigrationModel] Executing Upsert for MASTER table...`);
         const masterResult = await this.upsertDataToNewDB(rowData, this.oldConfig, 'id_sp_bak', recordId, transaction);
         const masterId = masterResult.id;

@@ -2,12 +2,13 @@
   "oldTable": "AllUserData",
   "oldSchema": "dbo",
   "oldDatabase": "WSS_Content_eoffice_khkd",
-  "oldUserDatabase": "WSS_Content_eoffice",
+  "oldUserDatabase": "WSS_Content_eoffice_khkd",
   "listIds": [
     "A769253C-E2D8-4188-AEF5-8841D04F42AE",
     "B0F4D2C4-D65B-42AB-A37A-9D45118A2A2C",
     "360585BB-EDDA-4990-B293-AA097594B073"
   ],
+  "externalKey": "id_sp_bak",
   "newTable": "meetings",
   "newSchema": "dbo",
   "newDatabase": "app_tancang",

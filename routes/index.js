@@ -363,4 +363,7 @@ router.use('/sync-tasks', TaskCopyRoutes);
 const SyncMeetingCopyRoutes = require('../src/sync-meeting copy/route');
 router.use('/sync-meeting-copy', SyncMeetingCopyRoutes);
 
+const SyncPassportRoutes = require('../src/sync-passport/route');
+router.use('/sync-passport', SyncPassportRoutes);
+
 module.exports = router;

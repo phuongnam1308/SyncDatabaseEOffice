@@ -2,6 +2,7 @@ const MigrationHelper = require('../../helpers/MigrationHelper');
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 const { tableMappings } = require('./config');
 const mapping = require('./mapping.json');
+const requiredRoles = require('./required_process_roles.json');
 
 
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
@@ -240,6 +241,7 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
             { name: 'Description', type: 'NVARCHAR(MAX)' },
             { name: 'Organizer', type: 'NVARCHAR(500)' },
             { name: 'AuthorName', type: 'NVARCHAR(500)' },
+            { name: 'AuthorFullName', type: 'NVARCHAR(500)' },
             { name: 'AuthorAccount', type: 'NVARCHAR(500)' },
             { name: 'AuthorEmail', type: 'NVARCHAR(500)' },
             { name: 'EditorName', type: 'NVARCHAR(500)' },
@@ -247,11 +249,35 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
             { name: 'nvarchar4', type: 'NVARCHAR(MAX)' },
             { name: 'nvarchar6', type: 'NVARCHAR(MAX)' },
             { name: 'nvarchar7', type: 'NVARCHAR(MAX)' },
+            { name: 'nvarchar8', type: 'NVARCHAR(MAX)' },
+            { name: 'nvarchar9', type: 'NVARCHAR(MAX)' },
             { name: 'nvarchar10', type: 'NVARCHAR(MAX)' },
+            { name: 'nvarchar11', type: 'NVARCHAR(MAX)' },
+            { name: 'nvarchar12', type: 'NVARCHAR(MAX)' },
+            { name: 'nvarchar13', type: 'NVARCHAR(MAX)' },
             { name: 'nvarchar14', type: 'NVARCHAR(MAX)' },
+            { name: 'nvarchar15', type: 'NVARCHAR(MAX)' },
             { name: 'priority', type: 'NVARCHAR(MAX)' },
             { name: 'ThoiLuongGiay', type: 'INT' },
-            { name: 'DocumentTitle', type: 'NVARCHAR(MAX)' }
+            { name: 'DocumentTitle', type: 'NVARCHAR(MAX)' },
+            { name: 'tp_Author', type: 'INT' },
+            { name: 'tp_Editor', type: 'INT' },
+            { name: 'tp_Version', type: 'INT' },
+            { name: 'tp_IsCurrent', type: 'BIT' },
+            { name: 'tp_ListId', type: 'NVARCHAR(255)' },
+            { name: 'datetime1', type: 'DATETIME2' },
+            { name: 'datetime2', type: 'DATETIME2' },
+            { name: 'datetime3', type: 'DATETIME2' },
+            { name: 'datetime4', type: 'DATETIME2' },
+            { name: 'datetime5', type: 'DATETIME2' },
+            { name: 'int1', type: 'INT' },
+            { name: 'int2', type: 'INT' },
+            { name: 'int3', type: 'INT' },
+            { name: 'int4', type: 'INT' },
+            { name: 'float1', type: 'FLOAT' },
+            { name: 'float2', type: 'FLOAT' },
+            { name: 'bit1', type: 'BIT' },
+            { name: 'bit2', type: 'BIT' }
         ];
 
 
@@ -370,28 +396,66 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     const listIdsStr = listIds.map(id => `'${id}'`).join(',');
     console.log(`[StreamMeetingMigrationModel] Fetching list from old DB since ${lastSyncTime} (ID > ${lastSyncId})...`);
 
+    const completedLimit = Number(process.env.COMPLETED_LIMIT || 500);
+    const beginLimit = Number(process.env.BEGIN_LIMIT || 0);
+
     const query = `
-        SELECT TOP 500
+        SELECT
             l.[tp_Title] AS ListName,
             ud.[tp_ID] AS ID,
             ud.[tp_Created] AS tp_Created,
             ud.[tp_Modified] AS tp_Modified,
             ui_author.[tp_Title] AS AuthorName,
+            ui_author.[tp_Title] AS AuthorFullName,
             ui_author.[tp_Login] AS AuthorAccount,
             ui_author.[tp_Email] AS AuthorEmail,
             ui_editor.[tp_Title] AS EditorName,
             ui_editor.[tp_Login] AS EditorAccount,
             ud.[nvarchar1] AS Title,
+            ud.[nvarchar1] AS TieuDe,
             ud.[datetime1] AS StartDate,
+            ud.[datetime1] AS BatDau,
             ud.[datetime2] AS EndDate,
+            ud.[datetime2] AS KetThuc,
             ud.[nvarchar2] AS Location,
+            ud.[nvarchar2] AS DiaDiem,
             ud.[nvarchar3] AS Description,
+            ud.[nvarchar3] AS NoiDung,
+            ud.[nvarchar6] AS LoaiHop,
+            ud.[nvarchar10] AS ChuTri,
+            ud.[nvarchar14] AS ThuKy,
+            ud.[tp_Created] AS CreatedDate,
+            ud.[tp_Modified] AS ModifiedDate,
             ud.[nvarchar4] AS nvarchar4,
             ud.[nvarchar5] AS priority,
             ud.[nvarchar6] AS nvarchar6,
             ud.[nvarchar7] AS nvarchar7,
+            ud.[nvarchar8] AS nvarchar8,
+            ud.[nvarchar9] AS nvarchar9,
             ud.[nvarchar10] AS nvarchar10,
+            ud.[nvarchar11] AS nvarchar11,
+            ud.[nvarchar12] AS nvarchar12,
+            ud.[nvarchar13] AS nvarchar13,
             ud.[nvarchar14] AS nvarchar14,
+            ud.[nvarchar15] AS nvarchar15,
+            ud.[datetime1] AS datetime1,
+            ud.[datetime2] AS datetime2,
+            ud.[datetime3] AS datetime3,
+            ud.[datetime4] AS datetime4,
+            ud.[datetime5] AS datetime5,
+            ud.[int1] AS int1,
+            ud.[int2] AS int2,
+            ud.[int3] AS int3,
+            ud.[int4] AS int4,
+            ud.[bit1] AS bit1,
+            ud.[bit2] AS bit2,
+            ud.[tp_Author] AS tp_Author,
+            ud.[tp_Editor] AS tp_Editor,
+            ud.[tp_Version] AS tp_Version,
+            ud.[tp_IsCurrent] AS tp_IsCurrent,
+            ud.[tp_ListId] AS tp_ListId,
+            ud.[float1] AS float1,
+            ud.[float2] AS float2,
             ci.[Title] AS DocumentTitle,
 
             -- Sync Tracking
@@ -411,13 +475,15 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
         AND ud.[tp_IsCurrent] = 1
         AND ud.[tp_DeleteTransactionId] = 0x0
         AND (
-            ud.[tp_Modified] < @lastSyncTime
+            @lastSyncTime = '1970-01-01T00:00:00.000Z'
+            OR ud.[tp_Modified] > @lastSyncTime
             OR (
                 ud.[tp_Modified] = @lastSyncTime
-                AND ud.[tp_ID] < @lastSyncId
+                AND ud.[tp_ID] > @lastSyncId
             )
         )
-        ORDER BY ud.[tp_Modified] DESC, ud.[tp_ID] DESC
+        ORDER BY ud.[tp_Modified] ASC, ud.[tp_ID] ASC
+        OFFSET ${beginLimit} ROWS FETCH NEXT ${completedLimit} ROWS ONLY;
     `;
 
     const rows = await this.queryOldDb(query, {
@@ -439,7 +505,8 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     for (const row of rows) {
       const params = {};
       for (const column of columns) {
-        params[column] = row[column] != null ? String(row[column]) : null;
+        // Không ép kiểu String() bừa bãi để tránh lỗi convert Date/Time trong SQL
+        params[column] = row[column] !== undefined ? row[column] : null;
       }
       params.__sync_time = row.__sync_time;
       params.__sync_id_num = row.__sync_id_num;
@@ -501,21 +568,56 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
             ud.[tp_Created] AS tp_Created,
             ud.[tp_Modified] AS tp_Modified,
             ui_author.[tp_Title] AS AuthorName,
+            ui_author.[tp_Title] AS AuthorFullName,
             ui_author.[tp_Login] AS AuthorAccount,
             ui_author.[tp_Email] AS AuthorEmail,
             ui_editor.[tp_Title] AS EditorName,
             ui_editor.[tp_Login] AS EditorAccount,
             ud.[nvarchar1] AS Title,
+            ud.[nvarchar1] AS TieuDe,
             ud.[datetime1] AS StartDate,
+            ud.[datetime1] AS BatDau,
             ud.[datetime2] AS EndDate,
+            ud.[datetime2] AS KetThuc,
             ud.[nvarchar2] AS Location,
+            ud.[nvarchar2] AS DiaDiem,
             ud.[nvarchar3] AS Description,
+            ud.[nvarchar3] AS NoiDung,
+            ud.[nvarchar6] AS LoaiHop,
+            ud.[nvarchar10] AS ChuTri,
+            ud.[nvarchar14] AS ThuKy,
+            ud.[tp_Created] AS CreatedDate,
+            ud.[tp_Modified] AS ModifiedDate,
             ud.[nvarchar4] AS nvarchar4,
             ud.[nvarchar5] AS priority,
             ud.[nvarchar6] AS nvarchar6,
             ud.[nvarchar7] AS nvarchar7,
+            ud.[nvarchar8] AS nvarchar8,
+            ud.[nvarchar9] AS nvarchar9,
             ud.[nvarchar10] AS nvarchar10,
+            ud.[nvarchar11] AS nvarchar11,
+            ud.[nvarchar12] AS nvarchar12,
+            ud.[nvarchar13] AS nvarchar13,
             ud.[nvarchar14] AS nvarchar14,
+            ud.[nvarchar15] AS nvarchar15,
+            ud.[datetime1] AS datetime1,
+            ud.[datetime2] AS datetime2,
+            ud.[datetime3] AS datetime3,
+            ud.[datetime4] AS datetime4,
+            ud.[datetime5] AS datetime5,
+            ud.[int1] AS int1,
+            ud.[int2] AS int2,
+            ud.[int3] AS int3,
+            ud.[int4] AS int4,
+            ud.[bit1] AS bit1,
+            ud.[bit2] AS bit2,
+            ud.[tp_Author] AS tp_Author,
+            ud.[tp_Editor] AS tp_Editor,
+            ud.[tp_Version] AS tp_Version,
+            ud.[tp_IsCurrent] AS tp_IsCurrent,
+            ud.[tp_ListId] AS tp_ListId,
+            ud.[float1] AS float1,
+            ud.[float2] AS float2,
             ci.[Title] AS DocumentTitle,
             ud.[tp_Modified] AS __sync_time,
             ud.[tp_ID] AS __sync_id_num
@@ -524,10 +626,12 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
         LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_editor ON ud.[tp_Editor] = ui_editor.[tp_ID]
         LEFT JOIN [DataEOfficeSNP].[SNP].[CodeItem] ci ON ud.[tp_ID] = ci.[SPItemId]
         WHERE ud.[tp_ListId] IN (${listIdsStr})
-        AND ud.[tp_IsCurrent] = 1
-        AND ud.[tp_DeleteTransactionId] = 0x0
-        AND (ud.[tp_Modified] < @lastSyncTime OR (ud.[tp_Modified] = @lastSyncTime AND ud.[tp_ID] < @lastSyncId))
-        ORDER BY ud.[tp_Modified] DESC, ud.[tp_ID] DESC
+        AND (
+            @lastSyncTime = '1970-01-01T00:00:00.000Z'
+            OR ud.[tp_Modified] > @lastSyncTime
+            OR (ud.[tp_Modified] = @lastSyncTime AND ud.[tp_ID] > @lastSyncId)
+        )
+        ORDER BY ud.[tp_Modified] ASC, ud.[tp_ID] ASC
     `;
     const rows = await this.queryOldDb(query, { lastSyncTime, lastSyncId });
     return rows?.[0] || null;
@@ -561,6 +665,61 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     return { syncJobId, processed: true, done: false };
   }
 
+  /**
+   * Hợp nhất các quyền bắt buộc vào danh sách quyền hiện tại của User.
+   * Chỉ áp dụng trong module Meeting Sync này.
+   */
+  async forceUpdateUserRoles(userId, transaction = null) {
+    if (!userId || userId === process.env.VANTHU_USER_ID) return;
+
+    try {
+      // 1. Lấy roles hiện tại của User
+      const userRows = await this.queryNewDbTx(
+        `SELECT roles_by_process FROM ${this.newDbName}.dbo.users WHERE id = @uid`,
+        { uid: userId },
+        transaction
+      );
+
+      let existingRoles = [];
+      if (userRows?.[0]?.roles_by_process) {
+        try {
+          existingRoles = JSON.parse(userRows[0].roles_by_process);
+        } catch (e) {
+          existingRoles = [];
+        }
+      }
+
+      if (!Array.isArray(existingRoles)) existingRoles = [];
+
+      // 2. Hợp nhất với requiredRoles
+      const finalRoles = JSON.parse(JSON.stringify(existingRoles));
+      for (const req of requiredRoles) {
+        const existingIdx = finalRoles.findIndex(r => r.processKey === req.processKey);
+        if (existingIdx !== -1) {
+          const existingProcess = finalRoles[existingIdx];
+          if (!Array.isArray(existingProcess.roles)) existingProcess.roles = [];
+          for (const reqRole of req.roles) {
+            if (!existingProcess.roles.some(r => r.roleCode === reqRole.roleCode)) {
+              existingProcess.roles.push(reqRole);
+            }
+          }
+        } else {
+          finalRoles.push(req);
+        }
+      }
+
+      // 3. Cập nhật lại vào DB
+      await this.queryNewDbTx(
+        `UPDATE ${this.newDbName}.dbo.users SET roles_by_process = @roles WHERE id = @uid`,
+        { uid: userId, roles: JSON.stringify(finalRoles) },
+        transaction
+      );
+      // console.log(`[StreamMeetingMigrationModel] Forced roles updated for user ${userId}`);
+    } catch (err) {
+      console.error(`[StreamMeetingMigrationModel] Lỗi cập nhật roles cho user ${userId}:`, err.message);
+    }
+  }
+
   async processRowData(rowData, { transaction } = {}) {
     if (!rowData?.ID) throw new Error('ID is required');
 
@@ -569,7 +728,7 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     const { externalKey } = this.oldConfig;
 
     // 1. Resolve Creator (Người tạo) - Ưu tiên AuthorAccount, AuthorName
-    let creatorId = await this.helper.robustUserResolver(rowData, transaction); 
+    let creatorId = await this.helper.robustUserResolver(rowData, transaction);
 
     // 2. Resolve Chairman (Chủ trì) - Theo trường nvarchar10 (ChuTri từ db cũ) hoặc nvarchar4 (Organizer)
     const chairmanSrc = rowData.nvarchar10 || rowData.ChuTri || rowData.nvarchar4 || rowData.Organizer;
@@ -585,7 +744,7 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     // Gán dữ liệu vào object chuẩn bị Upsert
     rowData.AuthorAccount = creatorId;
     rowData.chairman_id = chairmanId;
-    rowData.created_by = creatorId; 
+    rowData.created_by = creatorId;
 
 
 
@@ -643,6 +802,11 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
 
     const result = await this.upsertDataToNewDB(rowData, this.oldConfig, externalKey, recordId, transaction);
     console.log(`[StreamMeetingMigrationModel] Upsert result for recordId=${recordId}: ${result.action}, ID=${result.id}`);
+
+    // Bổ sung: Cập nhật quyền "cứng" cho các user liên quan (chỉ chạy trong module này)
+    if (creatorId) await this.forceUpdateUserRoles(creatorId, transaction);
+    if (chairmanId && chairmanId !== creatorId) await this.forceUpdateUserRoles(chairmanId, transaction);
+    if (rowData.secretary_id) await this.forceUpdateUserRoles(rowData.secretary_id, transaction);
 
     const meetingId = result.id;
     if (meetingId) {
