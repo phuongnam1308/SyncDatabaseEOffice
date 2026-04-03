@@ -317,7 +317,8 @@ class StreamTaskMigrationModel extends BaseModel {
 
     const parentRaw = rawRecord.ParentId ? String(rawRecord.ParentId).trim() : null;
 
-    const docId = this.helper.findDocumentIdByOldId(rawRecord.VBId, 'IncommingDocument', transaction);
+    const docLookup = await this.helper.findDocumentIdByOldId(rawRecord.VBId, 'IncommingDocument', transaction);
+    const docId = docLookup?.document_id || null;
 
     return {
       id_task_bak: String(rawRecord.ID || '').trim() || null,
