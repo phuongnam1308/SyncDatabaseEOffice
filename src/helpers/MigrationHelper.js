@@ -2842,6 +2842,56 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
       return null;
     }
   }
+
+  async findDocumentIdByOldId(oldId, scope = 'both', transaction = null) {
+    if (!oldId) return null;
+
+    const trimmed = String(oldId).trim();
+    if (!trimmed) return null;
+
+    try {
+      const db = process.env.NEW_DB_NAME;
+
+      // ── BƯỚC 1: Tìm trong incoming_documents ──────────────────────────────
+      if (scope === 'incoming' || scope === 'both') {
+        const incomingQuery = `
+          SELECT TOP 1 document_id
+          FROM ${db}.dbo.incomming_documents
+          WHERE id_incoming_bak    = @oldId
+        `;
+
+        const incomingResult = await this.queryNewDbTx(incomingQuery, { oldId: trimmed }, transaction);
+        if (incomingResult?.length) {
+          const document_id = incomingResult[0].document_id;
+          logger.info(`[findDocumentIdByOldId] Found in incoming_documents: oldId="${trimmed}" -> document_id="${document_id}"`);
+          return { document_id, type: 'IncommingDocument' };
+        }
+      }
+
+      // ── BƯỚC 2: Tìm trong outgoing_documents ──────────────────────────────
+      if (scope === 'outgoing' || scope === 'both') {
+        const outgoingQuery = `
+          SELECT TOP 1 document_id
+          FROM ${db}.dbo.outgoing_documents
+          WHERE id_outgoing_bak    = @oldId
+        `;
+
+        const outgoingResult = await this.queryNewDbTx(outgoingQuery, { oldId: trimmed }, transaction);
+        if (outgoingResult?.length) {
+          const document_id = outgoingResult[0].document_id;
+          logger.info(`[findDocumentIdByOldId] Found in outgoing_documents: oldId="${trimmed}" -> document_id="${document_id}"`);
+          return { document_id, type: 'OutgoingDocument' };
+        }
+      }
+
+      logger.warn(`[findDocumentIdByOldId] Không tìm thấy document với oldId="${trimmed}" (scope=${scope})`);
+      return null;
+
+    } catch (error) {
+      logger.error(`[findDocumentIdByOldId] Lỗi cho oldId="${trimmed}": ${error.message}`);
+      return null;
+    }
+  }
 }
 
 module.exports = MigrationHelper;

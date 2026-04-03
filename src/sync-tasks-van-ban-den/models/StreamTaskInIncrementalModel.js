@@ -955,7 +955,6 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     }
 
     const taskId = String(stagingRow.ID || '').trim();
-    const createdAt = stagingRow.Created || new Date().toISOString();
     let totalAffected = 0;
 
     // ── 1. Upsert task chính ──────────────────────────────────────
@@ -967,17 +966,17 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     }
 
     const newTaskId = taskResult.newTaskId;
-    const createdBy = taskResult?.createdBy || stagingRow.CreatedBy || null;
     logger.info(`[SYNC OK] task ID=${taskId} → new_id=${newTaskId} action=${taskResult.action}`);
     totalAffected += 1;
 
+    const createdAt = taskResult.createdAt || stagingRow.Created || new Date().toISOString();
     // ── 2. Task users (TaskVBDenPermission) ───────────────────────
+    let firstUserId = null;
     try {
       const taskUsersRows = await this.queryOldDb(
         `SELECT * FROM ${this.oldDbSchema}.TaskVBDenPermission WHERE TaskId = @taskId`,
         { taskId: String(stagingRow.ID) }
       );
-
       if (Array.isArray(taskUsersRows) && taskUsersRows.length > 0) {
         for (const userRow of taskUsersRows) {
           try {
@@ -985,6 +984,9 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
               { ...userRow, newTaskId, createdAt },
               transaction
             );
+            if(userResult && !firstUserId) {
+              firstUserId = userRow.UserId;
+            }
             if (userResult && userResult.action !== 'skipped') {
               totalAffected += 1;
               logger.info(`[user] userId=${userRow.UserId} action=${userResult?.action}`);
@@ -1006,6 +1008,11 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       );
     }
 
+    const createdBy =
+      firstUserId ||
+      taskResult?.createdBy ||
+      stagingRow.CreatedBy ||
+      null;
     // ── 3. System log ─────────────────────────────────────────────
     try {
       const logResult = await this.systemLogsModel.createLogForTask(

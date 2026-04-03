@@ -249,7 +249,7 @@ class StreamTaskMigrationModel extends BaseModel {
         }
         
         logger.info(`[StreamTaskMigrationModel.processSingleRecord] Inserted task ${backupId} with new ID ${newId}`);
-        return { action: 'inserted', idTaskBak: backupId, newTaskId: newId, createdBy: mapped.created_by };
+        return { action: 'inserted', idTaskBak: backupId, newTaskId: newId, createdBy: mapped.created_by, createdAt: mapped.created_at };
       }
     } catch (error) {
       logger.error(`[StreamTaskMigrationModel.processSingleRecord] FAILED ID=${stagingRow?.ID}: ${error.message}`, error);
@@ -269,12 +269,14 @@ class StreamTaskMigrationModel extends BaseModel {
     // Parse dates from helper, then apply safeDateParse
     const startDateRaw = this.helper.parseDate(rawRecord.StartDate);
     const endDateRaw = this.helper.parseDate(rawRecord.DueDate);
+    const completedDateRaw = this.helper.parseDate(rawRecord.CompletedDate);
     const createdAtRaw = this.helper.parseDate(rawRecord.Created);
     const updatedAtRaw = this.helper.parseDate(rawRecord.Modified);
 
     // Multiple layers of safety: convert to ISO string or null
     const startDate = safeDateParse(startDateRaw, 'StartDate');
     const endDate = safeDateParse(endDateRaw, 'DueDate');
+    const completedDate = safeDateParse(completedDateRaw, 'CompletedDate');
     const createdAt = safeDateParse(createdAtRaw, 'Created');
     const updatedAt = safeDateParse(updatedAtRaw, 'Modified');
 
@@ -315,13 +317,15 @@ class StreamTaskMigrationModel extends BaseModel {
 
     const parentRaw = rawRecord.ParentId ? String(rawRecord.ParentId).trim() : null;
 
+    const docId = this.helper.findDocumentIdByOldId(rawRecord.VBId);
+
     return {
       id_task_bak: String(rawRecord.ID || '').trim() || null,
       name: rawRecord.Title || null,
-      doc_id: String(rawRecord.VBId || '').trim() || null,
+      doc_id: docId,
 
       start_date: startDate,
-      end_date: endDate,
+      end_date: endDate || completedDate || startDate,
 
       status: 1,
       priority: priority,
@@ -382,6 +386,23 @@ class StreamTaskMigrationModel extends BaseModel {
         error: error.message
       };
     }
+  }
+
+  async resolveParentRelation(transaction) {
+    const targetTable = `${this.newDbName}.${this.newDbSchema}.${this.newDbTable}`;
+
+    const query = `
+      UPDATE child
+      SET parent = parent.id
+      FROM ${targetTable} child
+      INNER JOIN ${targetTable} parent
+        ON child.parent = parent.id_task_bak
+      WHERE child.parent IS NOT NULL AND child.id_task_bak <> child.parent
+    `;
+
+    await this.queryNewDbTx(query, {}, transaction);
+
+    logger.info('[resolveParentRelation] Parent mapping completed');
   }
 }
 

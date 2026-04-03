@@ -190,8 +190,8 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
     const mapPriority = (val) => {
       const key = String(val || '').trim();
       return ({
-        'AssignedTo': 'assigner',
-        'NguoiPhanViec': 'assigner',
+        'AssignedTo': 'director',
+        'NguoiPhanViec': 'director',
         'Xem': 'viewer',
         'NguoiDanhGia': 'director',
         'ToChucThucHien': 'director',
