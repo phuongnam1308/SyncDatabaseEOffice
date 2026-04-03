@@ -2853,7 +2853,7 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
       const db = process.env.NEW_DB_NAME;
 
       // ── BƯỚC 1: Tìm trong incoming_documents ──────────────────────────────
-      if (scope === 'incoming' || scope === 'both') {
+      if (scope === 'IncommingDocument' || scope === 'both') {
         const incomingQuery = `
           SELECT TOP 1 document_id
           FROM ${db}.dbo.incomming_documents
@@ -2869,7 +2869,7 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
       }
 
       // ── BƯỚC 2: Tìm trong outgoing_documents ──────────────────────────────
-      if (scope === 'outgoing' || scope === 'both') {
+      if (scope === 'OutgoingDocument' || scope === 'both') {
         const outgoingQuery = `
           SELECT TOP 1 document_id
           FROM ${db}.dbo.outgoing_documents
@@ -2885,11 +2885,17 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
       }
 
       logger.warn(`[findDocumentIdByOldId] Không tìm thấy document với oldId="${trimmed}" (scope=${scope})`);
-      return null;
+      return {
+        document_id: trimmed,
+        type: scope
+      };
 
     } catch (error) {
       logger.error(`[findDocumentIdByOldId] Lỗi cho oldId="${trimmed}": ${error.message}`);
-      return null;
+      return {
+        document_id: trimmed,
+        type: scope
+      };
     }
   }
 }
