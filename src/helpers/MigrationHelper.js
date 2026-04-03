@@ -869,22 +869,22 @@ class MigrationHelper {
       WHERE name = @val OR username = @val OR code_nd = @val
     `;
 
-    // --- STEP 1: AuthorName ---
-    if (rowData.AuthorName) {
-      const cleanName = this.extractDisplayName(rowData.AuthorName);
-      logger.info(`[robustUserResolver] STEP 1: Checking AuthorName "${rowData.AuthorName}" -> Clean: "${cleanName}"`);
-      const res = await this.queryNewDbTx(selectQuery, { val: cleanName }, transaction);
+    // --- STEP 1: AuthorAccount ---
+    if (rowData.AuthorAccount) {
+      const account = this.extractAccountOnly(rowData.AuthorAccount);
+      logger.info(`[robustUserResolver] STEP 1: Checking AuthorAccount "${rowData.AuthorAccount}" -> Extracted: "${account}"`);
+      const res = await this.queryNewDbTx(selectQuery, { val: account }, transaction);
       if (res?.length) {
         logger.info(`[robustUserResolver] >> SUCCESS via Step 1: Found UID ${res[0].id} (${res[0].name})`);
         return res[0].id;
       }
     }
 
-    // --- STEP 2: AuthorAccount ---
-    if (rowData.AuthorAccount) {
-      const account = this.extractAccountOnly(rowData.AuthorAccount);
-      logger.info(`[robustUserResolver] STEP 2: Checking AuthorAccount "${rowData.AuthorAccount}" -> Extracted: "${account}"`);
-      const res = await this.queryNewDbTx(selectQuery, { val: account }, transaction);
+    // --- STEP 2: AuthorName ---
+    if (rowData.AuthorName) {
+      const cleanName = this.extractDisplayName(rowData.AuthorName);
+      logger.info(`[robustUserResolver] STEP 2: Checking AuthorName "${rowData.AuthorName}" -> Clean: "${cleanName}"`);
+      const res = await this.queryNewDbTx(selectQuery, { val: cleanName }, transaction);
       if (res?.length) {
         logger.info(`[robustUserResolver] >> SUCCESS via Step 2: Found UID ${res[0].id} (${res[0].name})`);
         return res[0].id;
@@ -902,22 +902,22 @@ class MigrationHelper {
       }
     }
 
-    // --- STEP 4: EditorName ---
-    if (rowData.EditorName) {
-      const cleanName = this.extractDisplayName(rowData.EditorName);
-      logger.info(`[robustUserResolver] STEP 4: Checking EditorName "${rowData.EditorName}" -> Clean: "${cleanName}"`);
-      const res = await this.queryNewDbTx(selectQuery, { val: cleanName }, transaction);
+    // --- STEP 4: EditorAccount ---
+    if (rowData.EditorAccount) {
+      const account = this.extractAccountOnly(rowData.EditorAccount);
+      logger.info(`[robustUserResolver] STEP 4: Checking EditorAccount "${rowData.EditorAccount}" -> Extracted: "${account}"`);
+      const res = await this.queryNewDbTx(selectQuery, { val: account }, transaction);
       if (res?.length) {
         logger.info(`[robustUserResolver] >> SUCCESS via Step 4: Found UID ${res[0].id} (${res[0].name})`);
         return res[0].id;
       }
     }
 
-    // --- STEP 5: EditorAccount ---
-    if (rowData.EditorAccount) {
-      const account = this.extractAccountOnly(rowData.EditorAccount);
-      logger.info(`[robustUserResolver] STEP 5: Checking EditorAccount "${rowData.EditorAccount}" -> Extracted: "${account}"`);
-      const res = await this.queryNewDbTx(selectQuery, { val: account }, transaction);
+    // --- STEP 5: EditorName ---
+    if (rowData.EditorName) {
+      const cleanName = this.extractDisplayName(rowData.EditorName);
+      logger.info(`[robustUserResolver] STEP 5: Checking EditorName "${rowData.EditorName}" -> Clean: "${cleanName}"`);
+      const res = await this.queryNewDbTx(selectQuery, { val: cleanName }, transaction);
       if (res?.length) {
         logger.info(`[robustUserResolver] >> SUCCESS via Step 5: Found UID ${res[0].id} (${res[0].name})`);
         return res[0].id;
@@ -2142,7 +2142,7 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
       let roleProcess = 'VANTHU';
       let stageStatus = 'DA_XU_LY';
       let receiverUnit = [];
-      let typeDocument = null; 
+      let typeDocument = null;
 
       // ===== STEP 2: Extract inside / outside parentheses =====
       try {

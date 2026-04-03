@@ -1,0 +1,14 @@
+{
+  "DEFAULT": "Chờ phê duyệt",
+  "MAPPING": {
+    "Soạn thảo": "Chờ phê duyệt",
+    "Phê duyệt": "COMPLETED",
+    "Chờ Thủ trưởng đơn vị duyệt": "WAIT_COMMANDER",
+    "Chờ thủ trưởng phê duyệt": "WAIT_COMMANDER",
+    "Chờ phê duyệt": "Chờ phê duyệt",
+    "Chờ xác nhận mượn": "WAIT_RECEIVE",
+    "Chờ tiếp nhận": "WAIT_RECEIVE",
+    "Chờ chỉ huy": "WAIT_COMMANDER",
+    "Chờ ký biên bản": "WAIT_SIGN"
+  }
+}

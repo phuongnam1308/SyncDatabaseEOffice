@@ -19,6 +19,7 @@ const StreamTgdScheduleMigrationModel = require('../sync-tgd-schedule/migrate/St
 const StreamMissionMigrationModel = require('../sync-mission-schedule/migrate/StreamMissionMigrationModel');
 const StreamCarBookingMigrationModel = require('../sync-car-booking/migrate/StreamCarBookingMigrationModel');
 
+const StreamPassportMigrationModel = require('../sync-passport/migrate/StreamPassportMigrationModel');
 const MODEL_DEFINITIONS = [
   {
     key: 'UNIT_TEST_STREAM_OUTGOING_INCREMENTAL',
@@ -91,6 +92,12 @@ const MODEL_DEFINITIONS = [
     label: 'Đồng bộ lịch đặt xe',
     section: 'realtime',
     ModelClass: StreamCarBookingMigrationModel,
+  },
+  {
+    key: 'STREAM_PASSPORT_MIGRATION',
+    label: 'Đồng bộ phiếu mượn hộ chiếu',
+    section: 'realtime',
+    ModelClass: StreamPassportMigrationModel,
   },
 ];
 
