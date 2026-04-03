@@ -216,7 +216,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
   async getCount(lastSyncTime, lastSyncId = 0) {
     const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
     const normalizedLastSyncId = Number(lastSyncId || 0);
-    const limit = Number(process.env.COMPLETED_LIMIT || 20);
+    const limit = Number(process.env.COMPLETED_LIMIT || 0);
 
     const syncTimeExpr = this.getSyncTimeExpression();
     const query = `
@@ -551,6 +551,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
         ? options.itemIndex
         : (jobState?.total_processed || 0)
     );
+    const recordIndex = options.recordIndex || (itemIndex + 1); // For numbered logging
 
     const sourceLastSyncTime = this.normalizeSyncTime(
       options.sourceLastSyncTime || options.lastSyncTime || jobState?.last_sync_time || DEFAULT_SYNC_TIME
@@ -561,10 +562,16 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
         : (jobState?.last_sync_id || 0)
     );
 
-    const transaction = new sql.Transaction(this.newPool);
-    await transaction.begin();
-
+    let transaction = null;
+    let rowId = null;
     try {
+      // Ensure transaction is safely created
+      if (!this.newPool) {
+        throw new Error('Database pool not initialized');
+      }
+      transaction = new sql.Transaction(this.newPool);
+      await transaction.begin();
+
       const rowData = await this.fetchOneFromStaging({
         lastSyncTime: sourceLastSyncTime,
         lastSyncId: sourceLastSyncId,
@@ -573,7 +580,9 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       });
 
       if (!rowData) {
-        await transaction.commit();
+        if (transaction) {
+          await transaction.commit();
+        }
         return {
           syncJobId,
           itemIndex,
@@ -582,7 +591,8 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
         };
       }
 
-      const result = await this.processRowData(rowData, { transaction });
+      rowId = rowData.ID;
+      const result = await this.processRowData(rowData, { transaction, recordIndex });
 
       // Task-specific: xoá row đã xử lý khỏi staging
       try {
@@ -593,14 +603,17 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
           transaction
         );
       } catch (delErr) {
-        logger.warn('[StreamTaskInIncrementalModel.processOne] Delete from staging error:', delErr.message);
+        logger.warn(`[processOne] Delete from staging error: ${delErr.message}`);
       }
 
-      await transaction.commit();
+      if (transaction) {
+        await transaction.commit();
+      }
 
       return {
         syncJobId,
         itemIndex,
+        recordIndex,
         processed: true,
         done: false,
         rowId: rowData.ID || null,
@@ -608,10 +621,15 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       };
     } catch (error) {
       try {
-        await transaction.rollback();
+        if (transaction) {
+          await transaction.rollback();
+        }
       } catch (rollbackError) {
-        logger.error('[StreamTaskInIncrementalModel.processOne] Rollback failed:', rollbackError);
+        logger.error('[processOne] Rollback failed:', rollbackError);
       }
+      
+      // Enrich error with rowId for better logging
+      error.rowId = rowId;
       throw error;
     }
   }
@@ -623,10 +641,10 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
   /**
    * Validates and applies one task row into destination aggregates.
    * @param {object} rowData
-   * @param {{transaction?: object}} [context]
+   * @param {{transaction?: object, recordIndex?: number}} [context]
    * @returns {Promise<{action:string,idTaskBak:string,affected:number}>}
    */
-  async processRowData(rowData, { transaction } = {}) {
+  async processRowData(rowData, { transaction, recordIndex } = {}) {
     if (!rowData) {
       throw new Error('rowData is required');
     }
@@ -636,7 +654,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       throw new Error('Invalid task ID from staging');
     }
 
-    const res = await this.upsertTaskAggregateById(rowData, { transaction });
+    const res = await this.upsertTaskAggregateById(rowData, { transaction, recordIndex });
     const affected = Number(res?.affected || 0);
 
     if (affected === 0) {
@@ -657,10 +675,10 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
   /**
    * Upserts one task and its related task_users + system_log entities.
    * @param {object} stagingRow
-   * @param {{transaction?: object}} [context]
+   * @param {{transaction?: object, recordIndex?: number}} [context]
    * @returns {Promise<{action:string,idTaskBak:string,newTaskId:string,affected:number}>}
    */
-  async upsertTaskAggregateById(stagingRow, { transaction } = {}) {
+  async upsertTaskAggregateById(stagingRow, { transaction, recordIndex } = {}) {
     if (!stagingRow) {
       return { action: 'none', affected: 0 };
     }
@@ -668,21 +686,23 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     const taskId = String(stagingRow.ID || '').trim();
     const createdAt = stagingRow.Created || new Date().toISOString();
     let totalAffected = 0;
+    const recordNum = recordIndex ? `[${recordIndex}]` : '';
 
     // ── 1. Upsert task chính ──────────────────────────────────────
     const taskResult = await this.taskModel.processSingleRecord(stagingRow, transaction);
 
     if (!taskResult || !taskResult.newTaskId) {
-      logger.warn(`[StreamTaskInIncrementalModel] Task not inserted for ID=${taskId}`);
-      return { action: 'none', affected: 0 };
+      logger.error(`${recordNum} [SYNC FAILED] Task not inserted for ID=${taskId}`);
+      return { action: 'none', affected: 0, failed: true };
     }
 
     const newTaskId = taskResult.newTaskId;
     const createdBy = taskResult?.createdBy || stagingRow.CreatedBy || null;
-    logger.info(`[AggregateSync][Task] taskId=${taskId} newTaskId=${newTaskId} action=${taskResult.action}`);
+    logger.info(`${recordNum} [SYNC OK] task ID=${taskId} → new_id=${newTaskId} action=${taskResult.action}`);
     totalAffected += 1;
 
     // ── 2. Task users (TaskVBDenPermission) ───────────────────────
+    let userErrors = [];
     try {
       const taskUsersRows = await this.queryOldDb(
         `SELECT * FROM ${this.oldDbSchema}.TaskVBDenPermission WHERE TaskId = @taskId`,
@@ -698,22 +718,25 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
             );
             if (userResult && userResult.action !== 'skipped') {
               totalAffected += 1;
+              logger.info(
+                `${recordNum}   [user] userId=${userRow.ID} action=${userResult?.action}`
+              );
             }
-            logger.info(
-              `[AggregateSync][TaskUser] taskId=${taskId} userId=${userRow.ID} action=${userResult?.action}`
-            );
           } catch (userErr) {
-            logger.warn(
-              `[upsertTaskAggregateById] TaskUser process failed for ${userRow.ID}: ${userErr.message}`
-            );
+            const errMsg = `${recordNum} [USER ERROR] userId=${userRow.ID}: ${userErr.message}`;
+            logger.error(errMsg, userErr);
+            userErrors.push(errMsg);
+            throw userErr; // ← CRITICAL: Propagate error to fail transaction
           }
         }
       }
     } catch (userError) {
-      logger.warn(`[upsertTaskAggregateById] TaskUsers sync failed: ${userError.message}`);
+      logger.error(`${recordNum} [FAIL] TaskUsers sync failed: ${userError.message}`);
+      throw userError; // ← CRITICAL: Re-throw to trigger transaction rollback
     }
 
     // ── 3. System log ─────────────────────────────────────────────
+    let logError = null;
     try {
       const logResult = await this.systemLogsModel.createLogForTask(
         { idTask: newTaskId, userInfo: createdBy, createdAt },
@@ -721,18 +744,25 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       );
 
       if (logResult.success) {
-        logger.info(`[AggregateSync][SystemLog] taskId=${newTaskId} logCreated=true`);
+        logger.info(`${recordNum}   [log] logId=${logResult.logId} created=true`);
         totalAffected += 1;
+      } else {
+        throw new Error(`Log creation returned success=false`);
       }
     } catch (logErr) {
-      logger.warn(`[upsertTaskAggregateById] System log creation failed: ${logErr.message}`);
+      const errMsg = `${recordNum} [LOG ERROR] task_id=${newTaskId}: ${logErr.message}`;
+      logger.error(errMsg, logErr);
+      logError = errMsg;
+      throw logErr; // ← CRITICAL: Propagate error to fail transaction
     }
 
     return {
       action: taskResult.action,
       idTaskBak: taskId,
       newTaskId,
-      affected: Math.max(1, totalAffected)
+      affected: Math.max(1, totalAffected),
+      userErrors: userErrors.length > 0 ? userErrors : null,
+      logError: logError
     };
   }
 
@@ -741,49 +771,96 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
   // ═══════════════════════════════════════════════════════════════
 
   /**
-   * Full async processing of all staged tasks.
+   * Full async processing of all staged tasks with numbered logging.
    * @param {string} syncJobId
-   * @returns {Promise<{status, processed, failedCount, cleanup}>}
+   * @returns {Promise<{status, totalCount, processed, succeeded, failed, failedRecords, cleanup}>}
    */
   async processAllAsync(syncJobId = null) {
+    const startTime = Date.now();
+    const failedRecords = [];
+    
     try {
-      logger.info(`[StreamTaskInIncrementalModel.processAllAsync] Starting job ${syncJobId}`);
+      logger.info(`[SYNC START] Job=${syncJobId} ${new Date().toLocaleTimeString()}`);
 
       const listResult = await this.getList(DEFAULT_SYNC_TIME, syncJobId);
-      logger.info(`[StreamTaskInIncrementalModel] Staged ${listResult.stagedCount} tasks`);
+      const totalCount = listResult.stagedCount || 0;
+      
+      logger.info(`[SYNC INFO] Total records to process: ${totalCount}`);
 
       let processed = 0;
-      let failedCount = 0;
+      let succeeded = 0;
+      let failed = 0;
+      
       while (true) {
         try {
-          const result = await this.processOne(syncJobId);
-          if (!result.processed) break;
+          const result = await this.processOne(syncJobId, { 
+            itemIndex: processed,
+            recordIndex: processed + 1 // 1-based for numbering
+          });
+          
+          if (!result.processed) {
+            logger.info(`[SYNC INFO] No more records to process`);
+            break;
+          }
+          
           processed++;
+          succeeded++;
+          
+          // Log numbered success: "1 2 3 4..."
+          logger.info(`[${processed}/${totalCount}] ✓ Record ${result.rowId} synced`);
+          
         } catch (procErr) {
-          logger.error('[StreamTaskInIncrementalModel.processAllAsync]', procErr);
-          failedCount++;
+          failed++;
+          const rowId = procErr.rowId || `unknown`;
+          const errorMsg = procErr.message || String(procErr);
+          
+          failedRecords.push({
+            recordNumber: processed + 1,
+            rowId,
+            error: errorMsg,
+            timestamp: new Date().toISOString()
+          });
+          
+          // Log numbered failure in RED: "❌ [1] Record X failed: error"
+          logger.error(`❌ [${processed + 1}/${totalCount}] Record ${rowId} FAILED: ${errorMsg}`);
+          
+          // Continue processing other records instead of breaking
         }
       }
 
-      logger.info('[StreamTaskInIncrementalModel] Cleanup staging tables');
+      logger.info(`[SYNC CLEANUP] Cleaning up staging tables...`);
+      
       const cleanupResults = {
         taskSync: await this.taskModel.cleanupStagingTable(),
         taskUsersSync: await this.taskUsersModel.cleanupStagingTable?.()
       };
 
+      const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+      
       logger.info(
-        `[StreamTaskInIncrementalModel.processAllAsync] Completed: ${processed} processed, ${failedCount} failed`
+        `[SYNC COMPLETE] Processed: ${processed}, Succeeded: ${succeeded}, Failed: ${failed} (${duration}s)`
       );
 
+      if (failed > 0) {
+        logger.error(
+          `[SYNC WARNING] ${failed} records failed! Details:`,
+          JSON.stringify(failedRecords, null, 2)
+        );
+      }
+
       return {
-        status: 'success',
+        status: failed === 0 ? 'success' : 'partial',
+        totalCount,
         processed,
-        failedCount,
+        succeeded,
+        failed,
+        failedRecords: failed > 0 ? failedRecords : null,
         cleanup: cleanupResults,
-        message: `Synced ${processed} tasks (${failedCount} failed)`
+        duration,
+        message: `Synced ${succeeded}/${processed} tasks (${failed} failed)`
       };
     } catch (error) {
-      logger.error('[StreamTaskInIncrementalModel.processAllAsync]', error);
+      logger.error('[SYNC FATAL ERROR]', error);
       throw error;
     }
   }

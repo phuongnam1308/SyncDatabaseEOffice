@@ -66,9 +66,18 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
       }
 
       const targetTable = `${this.newDbName}.${this.newDbSchema}.${this.newDbTable}`;
+      const userBackupId = String(stagingRow.ID || '').trim();
 
       // 1. Map bản ghi (all 8 columns)
       const mapped = await this.mapSingleRecord(stagingRow);
+
+      // CRITICAL: Validate required fields
+      if (!userBackupId) {
+        throw new Error('User ID is required for task_users');
+      }
+      if (!mapped.task_id || mapped.task_id === null) {
+        throw new Error(`Task ID is required (orphaned user detection) for user ID=${userBackupId}`);
+      }
 
       // 2. Check tồn tại bằng id_user_bak
       const existQuery = `
@@ -109,10 +118,11 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
           INSERT INTO ${targetTable}
           (task_id, process_id, process_name, role, type, id_user_bak, created_at, update_at)
           VALUES
-          (@taskId, @processId, @processName, @role, @type, @idUserBak, @createdAt, @updateAt)
+          (@taskId, @processId, @processName, @role, @type, @idUserBak, @createdAt, @updateAt);
+          SELECT SCOPE_IDENTITY() as id
         `;
 
-        await this.queryNewDbTx(insertQuery, {
+        const result = await this.queryNewDbTx(insertQuery, {
           taskId: mapped.task_id,
           processId: mapped.process_id,
           processName: mapped.process_name,
@@ -123,11 +133,17 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
           createdAt: mapped.created_at
         }, transaction);
 
-        logger.info(`[StreamTaskUsersModel] Inserted task_user ${mapped.id_user_bak}`);
-        return { action: 'inserted', id_user_bak: mapped.id_user_bak, taskId: mapped.task_id };
+        // Verify INSERT success
+        const newId = result && result.length > 0 ? result[0].id : null;
+        if (!newId) {
+          throw new Error(`Insert failed: SCOPE_IDENTITY returned null for user ID=${userBackupId}`);
+        }
+
+        logger.info(`[StreamTaskUsersModel] Inserted task_user ${mapped.id_user_bak} with id=${newId}`);
+        return { action: 'inserted', id_user_bak: mapped.id_user_bak, taskId: mapped.task_id, newId };
       }
     } catch (error) {
-      logger.error('[StreamTaskUsersModel.processSingleRecord]', error);
+      logger.error(`[StreamTaskUsersModel.processSingleRecord] FAILED ID=${stagingRow?.ID}: ${error.message}`, error);
       throw error;
     }
   }
@@ -138,23 +154,46 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
       throw new Error('rawRecord is required');
     }
 
+    // CRITICAL FIX: Use UserType to check existence, but parse Type for value
     let typeValue = null;
-    if (rawRecord.UserType) {
+    if (rawRecord.Type !== undefined && rawRecord.Type !== null) {
       typeValue = parseInt(rawRecord.Type, 10);
       if (isNaN(typeValue)) typeValue = null;
     }
+    
     const processId = await this.helper.mapUserName(rawRecord.UserId) || null;
     // const processName = await this.helper.getUserame(processId) || null; // todo
     // const role = await this.helper.getRoleTask(rawRecord.UserFieldId) || null; // todo
+
+    // Safe date conversion with validation
+    const safeISODate = (dateValue) => {
+      if (!dateValue) return new Date().toISOString();
+      try {
+        const dateObj = new Date(dateValue);
+        if (!isNaN(dateObj.getTime())) {
+          return dateObj.toISOString();
+        }
+      } catch (e) {
+        logger.warn(`[mapSingleRecord] Failed to convert date: ${e.message}`);
+      }
+      return new Date().toISOString();
+    };
+
+    // CRITICAL FIX: No fallback to '1' - require valid ID
+    const userBackupId = String(rawRecord.ID || '').trim();
+    if (!userBackupId) {
+      throw new Error('Missing user ID - cannot map task_users record');
+    }
+
     return {
-      id_user_bak: String(rawRecord.ID || '').trim() || '1',
+      id_user_bak: userBackupId,
       task_id: rawRecord.newTaskId ? parseInt(rawRecord.newTaskId, 10) : null,
       process_id: processId,
       process_name: processId,
       role: rawRecord.UserFieldId || null,
       type: typeValue,
-      created_at: rawRecord.createdAt ? new Date(rawRecord.createdAt).toISOString() : new Date().toISOString(),
-      update_at: rawRecord.Modified ? new Date(rawRecord.Modified).toISOString() : new Date().toISOString()
+      created_at: safeISODate(rawRecord.createdAt),
+      update_at: safeISODate(rawRecord.Modified)
     };
   }
 }

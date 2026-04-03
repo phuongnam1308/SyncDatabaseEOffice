@@ -65,8 +65,14 @@ class StreamTaskMigrationModel extends BaseModel {
       }
 
       const targetTable = `${this.newDbName}.${this.newDbSchema}.${this.newDbTable}`;
+      const backupId = String(stagingRow.ID).trim();
       
       const mapped = await this.mapSingleRecord(stagingRow, transaction);
+
+      // Validate required field: name
+      if (!mapped.name || String(mapped.name).trim() === '') {
+        throw new Error(`Task name is required for ID=${backupId}`);
+      }
 
       const existQuery = `
         SELECT TOP 1 id FROM ${targetTable}
@@ -74,7 +80,7 @@ class StreamTaskMigrationModel extends BaseModel {
       `;
       
       const existing = await this.queryNewDbTx(existQuery, {
-        idTaskBak: String(stagingRow.ID)
+        idTaskBak: backupId
       }, transaction);
       
       if (Array.isArray(existing) && existing.length > 0) {
@@ -117,7 +123,7 @@ class StreamTaskMigrationModel extends BaseModel {
           WHERE id_task_bak = @idTaskBak
         `;
         
-        await this.queryNewDbTx(updateQuery, {
+        const result = await this.queryNewDbTx(updateQuery, {
           code: mapped.code,
           name: mapped.name,
           startDate: mapped.start_date,
@@ -150,13 +156,13 @@ class StreamTaskMigrationModel extends BaseModel {
           templateId: mapped.template_id,
           dependentTaskId: mapped.dependent_task_id,
           isConfidential: mapped.is_confidential,
-          idTaskBak: String(stagingRow.ID)
+          idTaskBak: backupId
         }, transaction);
         
-        logger.info(`[StreamTaskMigrationModel.processSingleRecord] Updated task ${stagingRow.ID}`);
-        return { action: 'updated', idTaskBak: String(stagingRow.ID), newTaskId: existing[0].id };
+        logger.info(`[StreamTaskMigrationModel.processSingleRecord] Updated task ${backupId}`);
+        return { action: 'updated', idTaskBak: backupId, newTaskId: existing[0].id };
       } else {
-        // 3b. Insert new - WITH ALL COLUMNS
+        // 3b. Insert new - WITH ALL COLUMNS + SCOPE_IDENTITY VERIFICATION
         const insertQuery = `
           INSERT INTO ${targetTable}
           (code, name, start_date, end_date, bpmn_id, priority, reminder_time, topic, note,
@@ -208,16 +214,20 @@ class StreamTaskMigrationModel extends BaseModel {
           templateId: mapped.template_id,
           dependentTaskId: mapped.dependent_task_id,
           isConfidential: mapped.is_confidential,
-          idTaskBak: String(stagingRow.ID)
+          idTaskBak: backupId
         }, transaction);
         
+        // CRITICAL: Verify SCOPE_IDENTITY was captured
         const newId = result && result.length > 0 ? result[0].id : null;
+        if (!newId) {
+          throw new Error(`Insert failed: SCOPE_IDENTITY returned null for ID=${backupId}`);
+        }
         
-        logger.info(`[StreamTaskMigrationModel.processSingleRecord] Inserted task ${stagingRow.ID} with new ID ${newId}`);
-        return { action: 'inserted', idTaskBak: String(stagingRow.ID), newTaskId: newId, createdBy: mapped.created_by };
+        logger.info(`[StreamTaskMigrationModel.processSingleRecord] Inserted task ${backupId} with new ID ${newId}`);
+        return { action: 'inserted', idTaskBak: backupId, newTaskId: newId, createdBy: mapped.created_by };
       }
     } catch (error) {
-      logger.error('[StreamTaskMigrationModel.processSingleRecord]', error);
+      logger.error(`[StreamTaskMigrationModel.processSingleRecord] FAILED ID=${stagingRow?.ID}: ${error.message}`, error);
       throw error;
     }
   }
@@ -229,6 +239,7 @@ class StreamTaskMigrationModel extends BaseModel {
     }
 
     const createdBy = await this.helper.mapUserName(rawRecord.CreatedBy) || null;
+    const modifiedBy = await this.helper.mapUserName(rawRecord.ModifiedBy) || null;
 
     const startDate = this.helper.parseDate(rawRecord.StartDate);
     const endDate = this.helper.parseDate(rawRecord.DueDate);
@@ -244,23 +255,36 @@ class StreamTaskMigrationModel extends BaseModel {
       logger.warn(`[mapSingleRecord] Invalid DueDate: ${rawRecord.DueDate} ID=${rawRecord.ID}`);
     }
 
+    // Safe date conversion with validation
+    const safeISODate = (dateObj) => {
+      if (!dateObj) return null;
+      try {
+        if (typeof dateObj.getTime === 'function' && !isNaN(dateObj.getTime())) {
+          return dateObj.toISOString();
+        }
+      } catch (e) {
+        logger.warn(`[mapSingleRecord] Failed to convert date: ${e.message}`);
+      }
+      return null;
+    };
+
     return {
       id_task_bak: String(rawRecord.ID || '').trim() || null,
       name: rawRecord.Title || null,
       doc_id: String(rawRecord.VBId || '').trim() || null,
 
-      start_date: startDate ? startDate.toISOString() : null,
-      end_date: endDate ? endDate.toISOString() : null,
+      start_date: safeISODate(startDate),
+      end_date: safeISODate(endDate),
 
       status: rawRecord.TrangThai ? parseInt(rawRecord.TrangThai, 10) : 1,
       priority: rawRecord.Priority || null,
       note: rawRecord.Content || null,
 
       created_by: createdBy,
-      updated_by: rawRecord.ModifiedBy || null,
+      updated_by: modifiedBy,
 
-      created_at: createdAt ? createdAt.toISOString() : new Date().toISOString(),
-      update_at: updatedAt ? updatedAt.toISOString() : new Date().toISOString(),
+      created_at: safeISODate(createdAt) || new Date().toISOString(),
+      update_at: safeISODate(updatedAt) || new Date().toISOString(),
 
       code: null,
       bpmn_id: null,

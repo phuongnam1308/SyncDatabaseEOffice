@@ -115,7 +115,7 @@ class StreamSystemLogTasksModel extends BaseIncrementalSyncInterface {
           WHERE id = @id
         `;
 
-        await this.queryNewDbTx(
+        const updateResult = await this.queryNewDbTx(
           updateQuery,
           {
             id: existed[0].id,
@@ -147,10 +147,11 @@ class StreamSystemLogTasksModel extends BaseIncrementalSyncInterface {
         INSERT INTO ${tableRef}
         (id, actions, details, user_info, timestamps, created_at, updated_at, task_id, note, id_log_bak)
         VALUES
-        (@id, @actions, @details, @userInfo, @timestamps, @createdAt, @updatedAt, @taskId, @note, @idLogBak)
+        (@id, @actions, @details, @userInfo, @timestamps, @createdAt, @updatedAt, @taskId, @note, @idLogBak);
+        SELECT SCOPE_IDENTITY() as id
       `;
 
-      await this.queryNewDbTx(
+      const insertResult = await this.queryNewDbTx(
         insertQuery,
         {
           id: logId,
@@ -167,6 +168,11 @@ class StreamSystemLogTasksModel extends BaseIncrementalSyncInterface {
         transaction
       );
 
+      // Verify INSERT success
+      if (!insertResult || insertResult.length === 0) {
+        throw new Error(`Insert failed: No result returned for task_id=${taskId}`);
+      }
+
       logger.info(`[StreamSystemLogTasksModel] Created log ${logId} for task_id ${taskId}`);
 
       return {
@@ -182,8 +188,19 @@ class StreamSystemLogTasksModel extends BaseIncrementalSyncInterface {
     }
   }
 
-  /** Generate UUID v4 */
+  /** Generate UUID v4 (improved with crypto fallback) */
   _generateUUID() {
+    // Try using crypto if available (Node.js 15.7.0+)
+    try {
+      const crypto = require('crypto');
+      if (crypto.randomUUID) {
+        return crypto.randomUUID();
+      }
+    } catch (e) {
+      // Fallback
+    }
+    
+    // Fallback to Math.random() based UUID (less ideal but works)
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
       const r = Math.random() * 16 | 0;
       const v = c === 'x' ? r : (r & 0x3 | 0x8);

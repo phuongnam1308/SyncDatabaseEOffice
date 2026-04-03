@@ -227,23 +227,42 @@ class StreamTaskMigrationModel extends BaseModel {
     if (!rawRecord) {
       throw new Error('rawRecord is required');
     }
-    const createdBy = this.helper.mapUserName(rawRecord.CreatedBy) || null;
+
+    const createdBy = await this.helper.mapUserName(rawRecord.CreatedBy) || null;
+    const modifiedBy = await this.helper.mapUserName(rawRecord.ModifiedBy) || null;
+
+    const startDate = this.helper.parseDate(rawRecord.StartDate);
+    const endDate = this.helper.parseDate(rawRecord.DueDate);
+    const createdAt = this.helper.parseDate(rawRecord.Created);
+    const updatedAt = this.helper.parseDate(rawRecord.Modified);
+
+    // log debug data bẩn
+    if (!startDate && rawRecord.StartDate) {
+      logger.warn(`[mapSingleRecord] Invalid StartDate: ${rawRecord.StartDate} ID=${rawRecord.ID}`);
+    }
+
+    if (!endDate && rawRecord.DueDate) {
+      logger.warn(`[mapSingleRecord] Invalid DueDate: ${rawRecord.DueDate} ID=${rawRecord.ID}`);
+    }
+
     return {
-      // Mapping từ old DB
       id_task_bak: String(rawRecord.ID || '').trim() || null,
       name: rawRecord.Title || null,
       doc_id: String(rawRecord.VBId || '').trim() || null,
-      start_date: rawRecord.StartDate ? new Date(rawRecord.StartDate).toISOString() : null,
-      end_date: rawRecord.DueDate ? new Date(rawRecord.DueDate).toISOString() : null,
+
+      start_date: startDate ? startDate.toISOString() : null,
+      end_date: endDate ? endDate.toISOString() : null,
+
       status: rawRecord.TrangThai ? parseInt(rawRecord.TrangThai, 10) : 1,
       priority: rawRecord.Priority || null,
       note: rawRecord.Content || null,
-      created_by: createdBy,
-      updated_by: rawRecord.ModifiedBy || null,
-      created_at: rawRecord.Created ? new Date(rawRecord.Created).toISOString() : new Date().toISOString(),
-      update_at: rawRecord.Modified ? new Date(rawRecord.Modified).toISOString() : new Date().toISOString(),
 
-      // Default values cho columns không map từ old DB
+      created_by: createdBy,
+      updated_by: modifiedBy,
+
+      created_at: createdAt ? createdAt.toISOString() : new Date().toISOString(),
+      update_at: updatedAt ? updatedAt.toISOString() : new Date().toISOString(),
+
       code: null,
       bpmn_id: null,
       reminder_time: null,
