@@ -2,6 +2,23 @@ const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncremental
 const MigrationHelper = require('../../helpers/MigrationHelper');
 const logger = require('../../../utils/logger');
 
+/**
+ * Safely parse dates, treating 'NULL' string as null
+ */
+function safeDateParse(dateValue, fieldName = '') {
+  if (!dateValue) return null;
+  if (typeof dateValue === 'string' && dateValue.toUpperCase() === 'NULL') return null;
+  
+  try {
+    if (typeof dateValue.getTime === 'function' && !isNaN(dateValue.getTime())) {
+      return dateValue.toISOString();
+    }
+  } catch (e) {
+    if (fieldName) logger.warn(`[safeDateParse] Failed to convert ${fieldName}: ${e.message}`);
+  }
+  return null;
+}
+
 /** Maps TaskVBDenPermission → task_users (9 columns with id_user_bak) */
 class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
   constructor() {
@@ -66,15 +83,13 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
       }
 
       const targetTable = `${this.newDbName}.${this.newDbSchema}.${this.newDbTable}`;
-      const userBackupId = String(stagingRow.ID || '').trim();
+      // Generate fake ID if missing (id_user_bak is only for tracking, generates UUID if undefined)
+      const userBackupId = String(stagingRow.ID || this._generateUUID()).trim();
 
       // 1. Map bản ghi (all 8 columns)
-      const mapped = await this.mapSingleRecord(stagingRow);
+      const mapped = await this.mapSingleRecord(stagingRow, userBackupId);
 
-      // CRITICAL: Validate required fields
-      if (!userBackupId) {
-        throw new Error('User ID is required for task_users');
-      }
+      // CRITICAL: Validate required field: task_id (prevent orphaned records)
       if (!mapped.task_id || mapped.task_id === null) {
         throw new Error(`Task ID is required (orphaned user detection) for user ID=${userBackupId}`);
       }
@@ -122,21 +137,29 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
           SELECT SCOPE_IDENTITY() as id
         `;
 
-        const result = await this.queryNewDbTx(insertQuery, {
-          taskId: mapped.task_id,
-          processId: mapped.process_id,
-          processName: mapped.process_name,
-          role: mapped.role,
-          type: mapped.type,
-          idUserBak: mapped.id_user_bak,
-          updateAt: mapped.update_at,
-          createdAt: mapped.created_at
-        }, transaction);
+        let result;
+        try {
+          result = await this.queryNewDbTx(insertQuery, {
+            taskId: mapped.task_id,
+            processId: mapped.process_id,
+            processName: mapped.process_name,
+            role: mapped.role,
+            type: mapped.type,
+            idUserBak: mapped.id_user_bak,
+            updateAt: mapped.update_at,
+            createdAt: mapped.created_at
+          }, transaction);
+        } catch (insertErr) {
+          logger.error(`[StreamTaskUsersModel] INSERT FAILED for user ID=${userBackupId}: ${insertErr.message}`, insertErr);
+          throw insertErr;
+        }
 
         // Verify INSERT success
         const newId = result && result.length > 0 ? result[0].id : null;
         if (!newId) {
-          throw new Error(`Insert failed: SCOPE_IDENTITY returned null for user ID=${userBackupId}`);
+          const msg = `Insert failed: SCOPE_IDENTITY returned null for user ID=${userBackupId}`;
+          logger.error(`[StreamTaskUsersModel] ${msg}`);
+          throw new Error(msg);
         }
 
         logger.info(`[StreamTaskUsersModel] Inserted task_user ${mapped.id_user_bak} with id=${newId}`);
@@ -149,7 +172,7 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
   }
 
   /** Map TaskVBDenPermission → task_users (all 8 columns) */
-  async mapSingleRecord(rawRecord) {
+  async mapSingleRecord(rawRecord, userBackupIdOverride = null) {
     if (!rawRecord) {
       throw new Error('rawRecord is required');
     }
@@ -165,25 +188,12 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
     // const processName = await this.helper.getUserame(processId) || null; // todo
     // const role = await this.helper.getRoleTask(rawRecord.UserFieldId) || null; // todo
 
-    // Safe date conversion with validation
-    const safeISODate = (dateValue) => {
-      if (!dateValue) return new Date().toISOString();
-      try {
-        const dateObj = new Date(dateValue);
-        if (!isNaN(dateObj.getTime())) {
-          return dateObj.toISOString();
-        }
-      } catch (e) {
-        logger.warn(`[mapSingleRecord] Failed to convert date: ${e.message}`);
-      }
-      return new Date().toISOString();
-    };
+    // Use provided override or try to extract from rawRecord, fallback to generated ID
+    const userBackupId = userBackupIdOverride || String(rawRecord.ID || '').trim() || this._generateUUID();
 
-    // CRITICAL FIX: No fallback to '1' - require valid ID
-    const userBackupId = String(rawRecord.ID || '').trim();
-    if (!userBackupId) {
-      throw new Error('Missing user ID - cannot map task_users record');
-    }
+    // Safely parse all date fields - convert to ISO string or null
+    const createdAtParsed = safeDateParse(rawRecord.createdAt, 'createdAt');
+    const modifiedAtParsed = safeDateParse(rawRecord.Modified, 'Modified');
 
     return {
       id_user_bak: userBackupId,
@@ -192,9 +202,29 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
       process_name: processId,
       role: rawRecord.UserFieldId || null,
       type: typeValue,
-      created_at: safeISODate(rawRecord.createdAt),
-      update_at: safeISODate(rawRecord.Modified)
+      created_at: createdAtParsed || new Date().toISOString(),
+      update_at: modifiedAtParsed || new Date().toISOString()
     };
+  }
+
+  /** Generate UUID v4 (improved with crypto fallback) */
+  _generateUUID() {
+    // Try using crypto if available (Node.js 15.7.0+)
+    try {
+      const crypto = require('crypto');
+      if (crypto.randomUUID) {
+        return crypto.randomUUID();
+      }
+    } catch (e) {
+      // Fallback
+    }
+    
+    // Fallback to Math.random() based UUID (less ideal but works)
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+      const r = Math.random() * 16 | 0;
+      const v = c === 'x' ? r : (r & 0x3 | 0x8);
+      return v.toString(16);
+    });
   }
 }
 

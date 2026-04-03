@@ -2,6 +2,23 @@ const BaseModel = require('../../../models/BaseModel');
 const MigrationHelper = require('../../helpers/MigrationHelper');
 const logger = require('../../../utils/logger');
 
+/**
+ * Safely parse dates, treating 'NULL' string as null
+ */
+function safeDateParse(dateValue, fieldName = '') {
+  if (!dateValue) return null;
+  if (typeof dateValue === 'string' && dateValue.toUpperCase() === 'NULL') return null;
+  
+  try {
+    if (typeof dateValue.getTime === 'function' && !isNaN(dateValue.getTime())) {
+      return dateValue.toISOString();
+    }
+  } catch (e) {
+    if (fieldName) logger.warn(`[safeDateParse] Failed to convert ${fieldName}: ${e.message}`);
+  }
+  return null;
+}
+
 /** Maps TaskVBDen → task (35 columns with id_task_bak) */
 class StreamTaskMigrationModel extends BaseModel {
   constructor() {
@@ -181,46 +198,54 @@ class StreamTaskMigrationModel extends BaseModel {
           SELECT SCOPE_IDENTITY() as id
         `;
         
-        const result = await this.queryNewDbTx(insertQuery, {
-          code: mapped.code,
-          name: mapped.name,
-          startDate: mapped.start_date,
-          endDate: mapped.end_date,
-          bpmnId: mapped.bpmn_id,
-          priority: mapped.priority,
-          reminderTime: mapped.reminder_time,
-          topic: mapped.topic,
-          note: mapped.note,
-          repetitiveTask: mapped.repetitive_task,
-          month: mapped.month,
-          repetitiveStart: mapped.repetitive_start,
-          repetitiveEnd: mapped.repetitive_end,
-          parent: mapped.parent,
-          path: mapped.path,
-          progress: mapped.progress,
-          processStatus: mapped.process_status,
-          status: mapped.status,
-          approvalStatus: mapped.approval_status,
-          createdBy: mapped.created_by,
-          updatedBy: mapped.updated_by,
-          recurringFromId: mapped.recurring_from_id,
-          typeTask: mapped.type_task,
-          docId: mapped.doc_id,
-          meetingId: mapped.meeting_id,
-          meetingConclusionId: mapped.meeting_conclusion_id,
-          weekDays: mapped.week_days,
-          projectId: mapped.project_id,
-          typeTaskMeeting: mapped.type_task_meeting,
-          templateId: mapped.template_id,
-          dependentTaskId: mapped.dependent_task_id,
-          isConfidential: mapped.is_confidential,
-          idTaskBak: backupId
-        }, transaction);
+        let result;
+        try {
+          result = await this.queryNewDbTx(insertQuery, {
+            code: mapped.code,
+            name: mapped.name,
+            startDate: mapped.start_date,
+            endDate: mapped.end_date,
+            bpmnId: mapped.bpmn_id,
+            priority: mapped.priority,
+            reminderTime: mapped.reminder_time,
+            topic: mapped.topic,
+            note: mapped.note,
+            repetitiveTask: mapped.repetitive_task,
+            month: mapped.month,
+            repetitiveStart: mapped.repetitive_start,
+            repetitiveEnd: mapped.repetitive_end,
+            parent: mapped.parent,
+            path: mapped.path,
+            progress: mapped.progress,
+            processStatus: mapped.process_status,
+            status: mapped.status,
+            approvalStatus: mapped.approval_status,
+            createdBy: mapped.created_by,
+            updatedBy: mapped.updated_by,
+            recurringFromId: mapped.recurring_from_id,
+            typeTask: mapped.type_task,
+            docId: mapped.doc_id,
+            meetingId: mapped.meeting_id,
+            meetingConclusionId: mapped.meeting_conclusion_id,
+            weekDays: mapped.week_days,
+            projectId: mapped.project_id,
+            typeTaskMeeting: mapped.type_task_meeting,
+            templateId: mapped.template_id,
+            dependentTaskId: mapped.dependent_task_id,
+            isConfidential: mapped.is_confidential,
+            idTaskBak: backupId
+          }, transaction);
+        } catch (insertErr) {
+          logger.error(`[StreamTaskMigrationModel] INSERT FAILED for ID=${backupId}: ${insertErr.message}`, insertErr);
+          throw insertErr;
+        }
         
         // CRITICAL: Verify SCOPE_IDENTITY was captured
         const newId = result && result.length > 0 ? result[0].id : null;
         if (!newId) {
-          throw new Error(`Insert failed: SCOPE_IDENTITY returned null for ID=${backupId}`);
+          const msg = `Insert failed: SCOPE_IDENTITY returned null for ID=${backupId}`;
+          logger.error(`[StreamTaskMigrationModel] ${msg}`);
+          throw new Error(msg);
         }
         
         logger.info(`[StreamTaskMigrationModel.processSingleRecord] Inserted task ${backupId} with new ID ${newId}`);
@@ -241,10 +266,17 @@ class StreamTaskMigrationModel extends BaseModel {
     const createdBy = await this.helper.mapUserName(rawRecord.CreatedBy) || null;
     const modifiedBy = await this.helper.mapUserName(rawRecord.ModifiedBy) || null;
 
-    const startDate = this.helper.parseDate(rawRecord.StartDate);
-    const endDate = this.helper.parseDate(rawRecord.DueDate);
-    const createdAt = this.helper.parseDate(rawRecord.Created);
-    const updatedAt = this.helper.parseDate(rawRecord.Modified);
+    // Parse dates from helper, then apply safeDateParse
+    const startDateRaw = this.helper.parseDate(rawRecord.StartDate);
+    const endDateRaw = this.helper.parseDate(rawRecord.DueDate);
+    const createdAtRaw = this.helper.parseDate(rawRecord.Created);
+    const updatedAtRaw = this.helper.parseDate(rawRecord.Modified);
+
+    // Multiple layers of safety: convert to ISO string or null
+    const startDate = safeDateParse(startDateRaw, 'StartDate');
+    const endDate = safeDateParse(endDateRaw, 'DueDate');
+    const createdAt = safeDateParse(createdAtRaw, 'Created');
+    const updatedAt = safeDateParse(updatedAtRaw, 'Modified');
 
     // log debug data bẩn
     if (!startDate && rawRecord.StartDate) {
@@ -255,26 +287,13 @@ class StreamTaskMigrationModel extends BaseModel {
       logger.warn(`[mapSingleRecord] Invalid DueDate: ${rawRecord.DueDate} ID=${rawRecord.ID}`);
     }
 
-    // Safe date conversion with validation
-    const safeISODate = (dateObj) => {
-      if (!dateObj) return null;
-      try {
-        if (typeof dateObj.getTime === 'function' && !isNaN(dateObj.getTime())) {
-          return dateObj.toISOString();
-        }
-      } catch (e) {
-        logger.warn(`[mapSingleRecord] Failed to convert date: ${e.message}`);
-      }
-      return null;
-    };
-
     return {
       id_task_bak: String(rawRecord.ID || '').trim() || null,
       name: rawRecord.Title || null,
       doc_id: String(rawRecord.VBId || '').trim() || null,
 
-      start_date: safeISODate(startDate),
-      end_date: safeISODate(endDate),
+      start_date: startDate,
+      end_date: endDate,
 
       status: rawRecord.TrangThai ? parseInt(rawRecord.TrangThai, 10) : 1,
       priority: rawRecord.Priority || null,
@@ -283,8 +302,8 @@ class StreamTaskMigrationModel extends BaseModel {
       created_by: createdBy,
       updated_by: modifiedBy,
 
-      created_at: safeISODate(createdAt) || new Date().toISOString(),
-      update_at: safeISODate(updatedAt) || new Date().toISOString(),
+      created_at: createdAt || new Date().toISOString(),
+      update_at: updatedAt || new Date().toISOString(),
 
       code: null,
       bpmn_id: null,

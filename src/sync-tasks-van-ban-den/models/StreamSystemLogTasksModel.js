@@ -1,6 +1,23 @@
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 const logger = require('../../../utils/logger');
 
+/**
+ * Safely parse dates, treating 'NULL' string as null
+ */
+function safeDateParse(dateValue, fieldName = '') {
+  if (!dateValue) return null;
+  if (typeof dateValue === 'string' && dateValue.toUpperCase() === 'NULL') return null;
+  
+  try {
+    if (typeof dateValue.getTime === 'function' && !isNaN(dateValue.getTime())) {
+      return dateValue.toISOString();
+    }
+  } catch (e) {
+    if (fieldName) logger.warn(`[safeDateParse] Failed to convert ${fieldName}: ${e.message}`);
+  }
+  return null;
+}
+
 /** Auto-generate system_log_tasks entries (10 columns with id_log_bak UUID) */
 class StreamSystemLogTasksModel extends BaseIncrementalSyncInterface {
   constructor() {
@@ -83,7 +100,9 @@ class StreamSystemLogTasksModel extends BaseIncrementalSyncInterface {
     }
 
     const tableRef = this.getTableRef();
-    const now = params.createdAt ? params.createdAt : new Date();
+    // Safely parse createdAt with fallback to now, convert to ISO string
+    const parsedCreatedAt = safeDateParse(params.createdAt || new Date(), 'createdAt');
+    const now = parsedCreatedAt || new Date().toISOString();
     const taskId = String(params.idTask).trim();
 
     try {
@@ -151,26 +170,39 @@ class StreamSystemLogTasksModel extends BaseIncrementalSyncInterface {
         SELECT SCOPE_IDENTITY() as id
       `;
 
-      const insertResult = await this.queryNewDbTx(
-        insertQuery,
-        {
-          id: logId,
-          actions: 'POST',
-          details: 'Tạo công việc',
-          userInfo: params.userInfo || null,
-          timestamps: now,
-          createdAt: now,
-          updatedAt: now,
-          taskId,
-          note: params.note || null,
-          idLogBak: logIdBak
-        },
-        transaction
-      );
+      let insertResult;
+      try {
+        // Safe parse all date values before passing to DB
+        const safeTimestamps = safeDateParse(now, 'timestamps') || now;
+        const safeCreatedAt = safeDateParse(now, 'createdAt') || now;
+        const safeUpdatedAt = safeDateParse(new Date(), 'updatedAt') || new Date().toISOString();
+        
+        insertResult = await this.queryNewDbTx(
+          insertQuery,
+          {
+            id: logId,
+            actions: 'POST',
+            details: 'Tạo công việc',
+            userInfo: params.userInfo || null,
+            timestamps: safeTimestamps,
+            createdAt: safeCreatedAt,
+            updatedAt: safeUpdatedAt,
+            taskId,
+            note: params.note || null,
+            idLogBak: logIdBak
+          },
+          transaction
+        );
+      } catch (insertErr) {
+        logger.error(`[StreamSystemLogTasksModel] INSERT FAILED for task_id=${taskId}: ${insertErr.message}`, insertErr);
+        throw insertErr;
+      }
 
       // Verify INSERT success
       if (!insertResult || insertResult.length === 0) {
-        throw new Error(`Insert failed: No result returned for task_id=${taskId}`);
+        const msg = `Insert failed: No result returned for task_id=${taskId}`;
+        logger.error(`[StreamSystemLogTasksModel] ${msg}`);
+        throw new Error(msg);
       }
 
       logger.info(`[StreamSystemLogTasksModel] Created log ${logId} for task_id ${taskId}`);

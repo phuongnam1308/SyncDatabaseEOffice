@@ -852,6 +852,11 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         : (jobState?.last_sync_id || 0)
     );
 
+    // Safety check: ensure pool is initialized
+    if (!this.newPool) {
+      throw new Error('Database pool not initialized');
+    }
+
     const transaction = new sql.Transaction(this.newPool);
     await transaction.begin();
 
