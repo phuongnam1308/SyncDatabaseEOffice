@@ -6,14 +6,20 @@ const swaggerSpec = swaggerJSDoc({
   definition: {
     openapi: '3.0.0',
     info: {
-      title: 'Migration API',
-      version: '1.0.0'
+      title: 'SNP - ĐỒNG BỘ DỮ LIỆU',
+      version: '1.0.0',
+      description: 'Hệ thống đồng bộ dữ liệu EOffice &mdash; SNP'
     },
     servers: [
-      { url: `http://localhost:${process.env.PORT || 3020}/api` }
+      { url: `http://localhost:${process.env.PORT || 3021}/api` },
+      { url: `http://SNP-DongBoDuLieu:${process.env.PORT || 3021}/api` }
     ]
   },
-  apis: ['./controllers/**/*.js', './routes/**/*.js']
+  apis: [
+    './controllers/**/*.js', 
+    './routes/**/*.js',
+    './src/**/*.js'
+  ]
 });
 
 fs.writeFileSync('swagger.json', JSON.stringify(swaggerSpec, null, 2));

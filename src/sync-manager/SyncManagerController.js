@@ -40,7 +40,23 @@ class SyncManagerController extends BaseController {
   // ── Routes ─────────────────────
 
   /**
-   * Starts synchronization for all registered models.
+   * @openapi
+   * /sync-manager-src/start:
+   *   post:
+   *     tags: [Sync Manager]
+   *     summary: Bắt đầu đồng bộ cho tất cả các đối tượng đã đăng ký.
+   *     requestBody:
+   *       content:
+   *         application/json:
+   *           schema:
+   *             type: object
+   *             properties:
+   *               reset:
+   *                 type: boolean
+   *                 description: Nếu là true, sẽ xóa trạng thái cũ và chạy lại từ đầu.
+   *     responses:
+   *       200:
+   *         description: Đã kích hoạt tiến trình đồng bộ thành công.
    */
   startSync = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
@@ -50,7 +66,33 @@ class SyncManagerController extends BaseController {
   });
 
   /**
-   * Starts synchronization for one model.
+   * @openapi
+   * /sync-manager-src/models/{modelName}/start:
+   *   post:
+   *     tags: [Sync Manager]
+   *     summary: Khởi động đồng bộ cho một đối tượng cụ thể.
+   *     parameters:
+   *       - in: path
+   *         name: modelName
+   *         required: true
+   *         schema:
+   *           type: string
+   *         description: Tên của đối tượng (model) cần đồng bộ.
+   *     requestBody:
+   *       content:
+   *         application/json:
+   *           schema:
+   *             type: object
+   *             properties:
+   *               reset:
+   *                 type: boolean
+   *                 description: Chạy lại từ bản ghi đầu tiên.
+   *               batchSize:
+   *                 type: number
+   *                 description: Số lượng bản ghi xử lý mỗi đợt.
+   *     responses:
+   *       200:
+   *         description: Đã kích hoạt đồng bộ đối tượng thành công.
    */
   startModelSync = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
@@ -65,7 +107,21 @@ class SyncManagerController extends BaseController {
   });
 
   /**
-   * Requests pause for a running job.
+   * @openapi
+   * /sync-manager-src/jobs/{jobId}/pause:
+   *   post:
+   *     tags: [Sync Manager]
+   *     summary: Yêu cầu tạm dừng một tiến trình đang chạy.
+   *     parameters:
+   *       - in: path
+   *         name: jobId
+   *         required: true
+   *         schema:
+   *           type: string
+   *         description: ID của phiên đồng bộ (job).
+   *     responses:
+   *       200:
+   *         description: Yêu cầu dừng đã được tiếp nhận.
    */
   pauseJobSync = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
@@ -75,7 +131,21 @@ class SyncManagerController extends BaseController {
   });
 
   /**
-   * Resumes a paused job.
+   * @openapi
+   * /sync-manager-src/jobs/{jobId}/resume:
+   *   post:
+   *     tags: [Sync Manager]
+   *     summary: Tiếp tục một tiến trình đang bị tạm dừng.
+   *     parameters:
+   *       - in: path
+   *         name: jobId
+   *         required: true
+   *         schema:
+   *           type: string
+   *         description: ID của phiên đồng bộ (job).
+   *     responses:
+   *       200:
+   *         description: Tiến trình đã được tiếp tục.
    */
   resumeJobSync = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
@@ -85,7 +155,22 @@ class SyncManagerController extends BaseController {
   });
 
   /**
-   * Returns detail status for a specific sync job.
+   * @openapi
+   * /sync-manager-src/jobs/{jobId}:
+   *   get:
+   *     tags: [Sync Manager]
+   *     summary: Lấy chi tiết trạng thái của một job cụ thể.
+   *     parameters:
+   *       - in: path
+   *         name: jobId
+   *         required: true
+   *         schema:
+   *           type: string
+   *     responses:
+   *       200:
+   *         description: Trạng thái chi tiết của job.
+   *       404:
+   *         description: Không tìm thấy job.
    */
   getJobSyncStatus = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
@@ -150,8 +235,7 @@ class SyncManagerController extends BaseController {
 <html lang="vi">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Migration Dashboard</title>
+  <title>TÂN CẢNG ĐỒNG BỘ - Dashboard</title>
   <link href="/assets/inter/vietnamese.css" rel="stylesheet">
   <link href="/assets/bootstrap-icons/font/bootstrap-icons.css" rel="stylesheet">
   <style>
@@ -544,8 +628,8 @@ class SyncManagerController extends BaseController {
         <div class="dash-header-left">
           <div class="dash-logo"><i class="bi bi-arrow-repeat" style="color:#60a5fa;"></i></div>
           <div>
-            <div class="dash-title">BẢNG ĐIỀU KHIỂN ĐỒNG BỘ</div>
-            <div class="dash-subtitle">Sync Manager &mdash; Realtime SSE</div>
+            <div class="dash-title">SNP - ĐỒNG BỘ DỮ LIỆU</div>
+            <div class="dash-subtitle">Hệ Thống Đồng Bộ Dữ Liệu EOffice &mdash; Realtime</div>
           </div>
         </div>
         <div class="dash-header-right">

@@ -6,14 +6,22 @@
   "scripts": {
     "start": "nodemon index.js",
     "dev": "nodemon index.js",
-    "login": "node auth/login.js",
+    "login": "node auth/login_playwright.js",
     "sync:html": "node src/sync-news-aspx-page/migrate/runHtmlMigration.js",
     "sync:images": "node src/sync-news-aspx-page/migrate/runDownloadImagesFromJson.js",
     "swagger:gen": "node generate-swagger.js",
     "build": "npm run swagger:gen && webpack",
+    "build:exe": "taskkill /F /IM \"SNP - DONG BO DU LIEU.exe\" /T 2>nul || set errorlevel=0 && npm run build && node --experimental-sea-config sea-config.json && node scripts/post-build.js",
     "start:dist": "node dist/app.js",
     "login:new-system": "node auth/newSortAccess.js",
-    "start:session-refresher": "node auth/session-refresher.js"
+    "start:session-refresher": "node auth/session-refresher.js",
+    "all": "npm run login && npm start"
+  },
+  "bin": "dist/app.js",
+  "pkg": {
+    "assets": [
+      "dist/**/*"
+    ]
   },
   "keywords": [
     "migration",
@@ -27,7 +35,7 @@
     "@playwright/test": "^1.45.3",
     "axios": "^1.13.6",
     "axios-ntlm": "^1.4.6",
-    "bcrypt": "^6.0.0",
+    "bcryptjs": "^3.0.3",
     "bootstrap-icons": "^1.13.1",
     "cheerio": "^1.2.0",
     "cors": "^2.8.5",
@@ -48,8 +56,11 @@
   "devDependencies": {
     "archiver": "^7.0.1",
     "copy-webpack-plugin": "^13.0.1",
+    "javascript-obfuscator": "^5.4.1",
     "nodemon": "^3.1.14",
+    "postject": "^1.0.0-alpha.6",
     "webpack": "^5.104.1",
-    "webpack-cli": "^6.0.1"
+    "webpack-cli": "^6.0.1",
+    "webpack-obfuscator": "^3.6.0"
   }
 }
