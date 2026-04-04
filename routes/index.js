@@ -357,9 +357,6 @@ router.use('/sync-outgoing', SyncOutgoingRoutes);
 const SyncTintucRawRoutes = require('../src/sync-news-aspx-page/route');
 router.use('/sync-tintucraw', SyncTintucRawRoutes);
 
-const TaskCopyRoutes = require('../src/sync-tasks/route');
-router.use('/sync-tasks', TaskCopyRoutes);
-
 const SyncMeetingCopyRoutes = require('../src/sync-meeting copy/route');
 router.use('/sync-meeting-copy', SyncMeetingCopyRoutes);
 

@@ -3,7 +3,8 @@ const SyncHandlerModel = require('./SyncHandlerModel');
 
 const OutGoingDocumentModel = require('../sync-outgoing-document/models/StreamOutgoingIncrementalModel');
 const StreamUserMigrationModel = require('../sync-user-copy/migrate/StreamUserMigrationModel');
-const StreamTaskMigrationModel = require('../sync-tasks/migrate/StreamTaskMigrationModel');
+const StreamTaskInIncrementalModel = require('../sync-tasks-van-ban-den/models/StreamTaskInIncrementalModel');
+const StreamTaskOutIncrementalModel = require('../sync-tasks-van-ban-di/models/StreamTaskOutIncrementalModel');
 const StreamSocialMigrationModel = require('../sync-social-resource/migrate/StreamSocialMigrationModel');
 const SyncIncomingDocumentModel = require('../sync-incoming-document/models/SyncIncomingDocumentModel');
 const StreamMeetingMigrationModel = require('../sync-meeting/migrate/StreamMeetingMigrationModel');
@@ -17,6 +18,7 @@ const StreamEventMigrationModel = require('../sync-event/migrate/StreamEventMigr
 const StreamTgdScheduleMigrationModel = require('../sync-tgd-schedule/migrate/StreamTgdScheduleMigrationModel');
 const StreamMissionMigrationModel = require('../sync-mission-schedule/migrate/StreamMissionMigrationModel');
 const StreamCarBookingMigrationModel = require('../sync-car-booking/migrate/StreamCarBookingMigrationModel');
+
 const StreamPassportMigrationModel = require('../sync-passport/migrate/StreamPassportMigrationModel');
 const MODEL_DEFINITIONS = [
   {
@@ -25,13 +27,7 @@ const MODEL_DEFINITIONS = [
     section: 'realtime',
     ModelClass: OutGoingDocumentModel
   },
-  // {
-  //   key: '2_file',
-  //   label: 'Đồng bộ file tài liệu',
-  //   section: 'realtime',
-  //   ModelClass: SyncFileModel,
-  // },
-    {
+  {
     key: 'UNIT_TEST_STREAM_DEPARTMENT_MIGRATION',
     label: 'Đồng bộ phòng ban',
     section: 'realtime',
@@ -44,18 +40,17 @@ const MODEL_DEFINITIONS = [
     ModelClass: StreamUserMigrationModel
   },
   {
-    key: 'UNIT_TEST_STREAM_TASK_MIGRATION',
-    label: 'Đồng bộ công việc từ văn bản đến',
+    key: 'UNIT_TEST_STREAM_TASK_INCOMMING_INCREMENTAL',
+    label: 'Đồng bộ công việc đến',
     section: 'realtime',
-    ModelClass: StreamTaskMigrationModel,
+    ModelClass: StreamTaskInIncrementalModel,
   },
-  // {
-  //   key: 'UNIT_TEST_STREAM_SOCIAL_RESOURCE_MIGRATION1',
-  //   label: 'Đồng bộ tin tức ',
-  //   section: 'realtime',
-  //   ModelClass: StreamSocialMigrationModel,
-  //   // ModelClass: StreamUserMigrationModel
-  // },
+  {
+    key: 'UNIT_TEST_STREAM_TASK_OUTGOING_INCREMENTAL',
+    label: 'Đồng bộ công việc đi',
+    section: 'realtime',
+    ModelClass: StreamTaskOutIncrementalModel,
+  },
   {
     key: 'UNIT_TEST_STREAM_NEWS_ASPX_PAGE_INCREMENTAL',
     label: 'Đồng bộ tin tức ',
@@ -68,12 +63,6 @@ const MODEL_DEFINITIONS = [
     section: 'realtime',
     ModelClass: IncomingDocumentModel,
   },
-  // {
-  //   key: 'UNIT_TEST_STREAM_MEETING_MIGRATION',
-  //   label: 'Đồng bộ Lịch họp ',
-  //   section: 'realtime',
-  //   ModelClass: StreamMeetingMigrationModel,
-  // },
   {
     key: 'STREAM_MEETING_COPY_MIGRATION',
     label: 'Đồng bộ lịch họp',

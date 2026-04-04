@@ -2755,6 +2755,149 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
       return null;
     }
   }
+
+  async getUserDisplayName(userIdOrName, transaction = null) {
+    if (!userIdOrName || typeof userIdOrName !== 'string') return null;
+
+    const trimmed = userIdOrName.trim();
+    if (!trimmed) return null;
+
+    try {
+      // ── BƯỚC 1: Tìm trong DB mới theo nhiều tiêu chí ──────────────────────
+      const newDbQuery = `
+        SELECT TOP 1 name
+        FROM ${process.env.NEW_DB_NAME}.dbo.users
+        WHERE id          = @val
+          OR id_user_bak = @val
+          OR username    = @val
+          OR code_nd     = @val
+          OR name        = @val
+      `;
+
+      const newResult = await this.queryNewDbTx(newDbQuery, { val: trimmed }, transaction);
+      if (newResult?.length) {
+        logger.info(`[getUserDisplayName] Found in New DB: "${trimmed}" -> "${newResult[0].name}"`);
+        return newResult[0].name;
+      }
+
+      // ── BƯỚC 2: Fallback sang DB cũ (PersonalProfile) ─────────────────────
+      if (this.queryOldDb) {
+        const oldDbQuery = `
+          SELECT TOP 1 FullName
+          FROM dbo.PersonalProfile
+          WHERE (TRY_CONVERT(uniqueidentifier, @val) IS NOT NULL AND ID = TRY_CONVERT(uniqueidentifier, @val))
+            OR AccountID = @val
+            OR StaffID   = @val
+            OR FullName  = @val
+        `;
+
+        const oldResult = await this.queryOldDb(oldDbQuery, { val: trimmed });
+        if (oldResult?.length) {
+          const name = this.safeString(oldResult[0].FullName);
+          logger.info(`[getUserDisplayName] Found in Old DB: "${trimmed}" -> "${name}"`);
+          return name;
+        }
+      }
+
+      logger.warn(`[getUserDisplayName] Không tìm thấy tên cho: "${trimmed}"`);
+      return null;
+
+    } catch (error) {
+      logger.error(`[getUserDisplayName] Lỗi cho "${trimmed}": ${error.message}`);
+      return null;
+    }
+  }
+  
+  async getUserFieldName(userFieldId) {
+    if (!userFieldId || typeof userFieldId !== 'string') return null;
+
+    const trimmed = userFieldId.trim();
+    if (!trimmed) return null;
+
+    try {
+      if (!this.queryOldDb) {
+        logger.warn('[getUserFieldName] queryOldDb chưa được khởi tạo.');
+        return null;
+      }
+
+      const query = `
+        SELECT TOP 1 Name
+        FROM ${process.env.OLD_DB_NAME}.dbo.UserField
+        WHERE ID = @userFieldId
+      `;
+
+      const result = await this.queryOldDb(query, { userFieldId: trimmed });
+
+      if (result?.length) {
+        const name = this.safeString(result[0].Name);
+        logger.info(`[getUserFieldName] Found: UserFieldId="${trimmed}" -> Name="${name}"`);
+        return name;
+      }
+
+      logger.warn(`[getUserFieldName] Không tìm thấy UserField với ID: "${trimmed}"`);
+      return null;
+
+    } catch (error) {
+      logger.error(`[getUserFieldName] Lỗi cho UserFieldId="${trimmed}": ${error.message}`);
+      return null;
+    }
+  }
+
+  async findDocumentIdByOldId(oldId, scope = 'both', transaction = null) {
+    if (!oldId) return null;
+
+    const trimmed = String(oldId).trim();
+    if (!trimmed) return null;
+
+    try {
+      const db = process.env.NEW_DB_NAME;
+
+      // ── BƯỚC 1: Tìm trong incoming_documents ──────────────────────────────
+      if (scope === 'IncommingDocument' || scope === 'both') {
+        const incomingQuery = `
+          SELECT TOP 1 document_id
+          FROM ${db}.dbo.incomming_documents
+          WHERE id_incoming_bak    = @oldId
+        `;
+
+        const incomingResult = await this.queryNewDbTx(incomingQuery, { oldId: trimmed }, transaction);
+        if (incomingResult?.length) {
+          const document_id = incomingResult[0].document_id;
+          logger.info(`[findDocumentIdByOldId] Found in incoming_documents: oldId="${trimmed}" -> document_id="${document_id}"`);
+          return { document_id, type: 'IncommingDocument' };
+        }
+      }
+
+      // ── BƯỚC 2: Tìm trong outgoing_documents ──────────────────────────────
+      if (scope === 'OutgoingDocument' || scope === 'both') {
+        const outgoingQuery = `
+          SELECT TOP 1 document_id
+          FROM ${db}.dbo.outgoing_documents
+          WHERE id_outgoing_bak    = @oldId
+        `;
+
+        const outgoingResult = await this.queryNewDbTx(outgoingQuery, { oldId: trimmed }, transaction);
+        if (outgoingResult?.length) {
+          const document_id = outgoingResult[0].document_id;
+          logger.info(`[findDocumentIdByOldId] Found in outgoing_documents: oldId="${trimmed}" -> document_id="${document_id}"`);
+          return { document_id, type: 'OutgoingDocument' };
+        }
+      }
+
+      logger.warn(`[findDocumentIdByOldId] Không tìm thấy document với oldId="${trimmed}" (scope=${scope})`);
+      return {
+        document_id: trimmed,
+        type: scope
+      };
+
+    } catch (error) {
+      logger.error(`[findDocumentIdByOldId] Lỗi cho oldId="${trimmed}": ${error.message}`);
+      return {
+        document_id: trimmed,
+        type: scope
+      };
+    }
+  }
 }
 
 module.exports = MigrationHelper;
