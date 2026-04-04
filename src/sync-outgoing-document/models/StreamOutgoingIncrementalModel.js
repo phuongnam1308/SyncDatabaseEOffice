@@ -288,6 +288,9 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
 
         IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'stage_status')
             ALTER TABLE dbo.outgoing_documents ADD stage_status NVARCHAR(50) NULL;
+
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'outgoing_documents' AND COLUMN_NAME = 'table_backups')
+            ALTER TABLE dbo.outgoing_documents ADD table_backups NVARCHAR(MAX) NULL;
       `);
       logger.info('[OutGoingDocumentModel] Checked and added missing columns (reply_incoming_doc, sign_type, table_backups...) for dbo.outgoing_documents');
     } catch(err) {
@@ -484,7 +487,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         from_create_draf            NVARCHAR(MAX),
         replaced                    NVARCHAR(MAX),
         tb_bak                      NVARCHAR(MAX),
-        table_backup                NVARCHAR(MAX),
+        table_backups                NVARCHAR(MAX),
         send_id_bak_bef_test        NVARCHAR(MAX),
         status_code_bak_bef_test    NVARCHAR(MAX),
         drafter_bak_bef_test        NVARCHAR(MAX),
