@@ -39,23 +39,44 @@ async function postBuild() {
         process.exit(1);
     }
 
-    // 3. Chuyen doi bieu tuong (Icon)
-    console.log('[3/5] Dang xử lý bieu tuong (Icon)...');
+    // 3. Chuyen doi bieu tuong (Icon) - TU DONG TOI UU HOA
+    console.log('[3/5] Dang xử lý bieu tuong (Icon) - Dang nén và thu nhỏ chuẩn Windows...');
     const pngPath = path.join(rootDir, 'icon.png');
     const icoPath = path.join(rootDir, 'icon.ico');
+    const psPath = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+
     if (fs.existsSync(pngPath)) {
         try {
-            const pngBuf = fs.readFileSync(pngPath);
+            const tempPng = path.join(distDir, 'temp_icon_256.png');
+            if (!fs.existsSync(distDir)) fs.mkdirSync(distDir, { recursive: true });
+            
+            const psResizeCmd = `
+                Add-Type -AssemblyName System.Drawing;
+                $img = [System.Drawing.Image]::FromFile('${pngPath}');
+                $bmp = New-Object System.Drawing.Bitmap(256, 256);
+                $g = [System.Drawing.Graphics]::FromImage($bmp);
+                $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic;
+                $g.DrawImage($img, 0, 0, 256, 256);
+                $bmp.Save('${tempPng}', [System.Drawing.Imaging.ImageFormat]::Png);
+                $g.Dispose(); $img.Dispose(); $bmp.Dispose();
+            `.replace(/\n/g, ' ').trim();
+
+            execSync(`"${psPath}" -ExecutionPolicy Bypass -Command "${psResizeCmd}"`);
+
+            const pngBuf = fs.readFileSync(tempPng);
             const head = Buffer.from([0,0,1,0,1,0]);
             const dir = Buffer.alloc(16);
             dir.writeUInt8(0, 0); dir.writeUInt8(0, 1); dir.writeUInt8(0, 2); dir.writeUInt8(0, 3);
             dir.writeUInt16LE(1, 4); dir.writeUInt16LE(32, 6);
             dir.writeUInt32LE(pngBuf.length, 8); dir.writeUInt32LE(22, 12);
+
             fs.writeFileSync(icoPath, Buffer.concat([head, dir, pngBuf]));
             fs.copyFileSync(icoPath, path.join(distDir, 'icon.ico'));
-            console.log('   ✅ Da tao va chep: icon.ico');
+            if (fs.existsSync(tempPng)) fs.unlinkSync(tempPng);
+            console.log('   ✅ DA TU DONG NEN VA TAO: icon.ico (256x256 cực nét)');
         } catch (err) {
-            console.warn('   ⚠️ Khong the tao icon.ico tu png, bo qua.');
+            console.warn('   ⚠️ Khong the tu dong resize icon, dang dung file hien co. Loi:', err.message);
+            if (fs.existsSync(icoPath)) fs.copyFileSync(icoPath, path.join(distDir, 'icon.ico'));
         }
     } else if (fs.existsSync(icoPath)) {
         fs.copyFileSync(icoPath, path.join(distDir, 'icon.ico'));
@@ -145,11 +166,12 @@ async function createBuildShortcut() {
     const psCommand = `
         $desktop = [Environment]::GetFolderPath('Desktop');
         $path = Join-Path $desktop 'SNP - DONG BO DU LIEU.lnk';
+        if (Test-Path $path) { Remove-Item $path -Force }
         $ws = New-Object -ComObject WScript.Shell;
         $s = $ws.CreateShortcut($path);
         $s.TargetPath = '${exePath}';
         $s.WorkingDirectory = '${distDir}';
-        if (Test-Path '${iconPath}') { $s.IconLocation = '${iconPath}'; }
+        if (Test-Path '${iconPath}') { $s.IconLocation = '${iconPath},0'; }
         $s.Save();
     `.replace(/\n/g, ' ').trim();
 
