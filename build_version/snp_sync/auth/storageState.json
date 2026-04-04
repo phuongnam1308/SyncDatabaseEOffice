@@ -1,0 +1,65 @@
+{
+  "cookies": [
+    {
+      "name": "https%3A%2F%2Feoffice%2Esaigonnewport%2Ecom%2Evn%2Ftintuc%2FDiscovery",
+      "value": "WorkspaceSiteName=VGluIHThu6lj&WorkspaceSiteUrl=aHR0cHM6Ly9lb2ZmaWNlLnNhaWdvbm5ld3BvcnQuY29tLnZuL3RpbnR1Yw==&WorkspaceSiteTime=MjAyNi0wMy0xOFQwOTo1MjoxMw==",
+      "domain": "eoffice.saigonnewport.com.vn",
+      "path": "/_vti_bin/Discovery.asmx",
+      "expires": 1776419534.021412,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "WSS_FullScreenMode",
+      "value": "false",
+      "domain": "eoffice.saigonnewport.com.vn",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "FedAuth",
+      "value": "77u/PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0idXRmLTgiPz48U1A+MCMuZnxhZG1lbWJlcnN8bWlnc2VydmljZSwwIy5mfGFkbWVtYmVyc3xtaWdzZXJ2aWNlLDEzNDE4NzMzMTMwMDU2ODQ2MSxUcnVlLFVXUWF1bDNaYTNLTEttUkVaeFNCbk9zYmM4K3JZTEZhRCsxbkowQlEzdjFuYWJXTFVuUG5OVWdDS3BQUDRxQk1tbHZ5cktXOEhydmlxTHpXd2sxRmlwTURqYVAxMzlXeXlWeUlNZWxFQ2VlSE0yNUFkUE84a2VJei8yWVNkM2YrbXRVSE9WQmNXU2crWUdnaWxEZEVzUHhET0RGVHgrSzlJcFN4dW5DTjNKNUg5bXRkSE5kdENmZXE0R21JeVhvT094UEkvSkp4ak1WYzV2dEhnT1QvNGI4VzlvY0xSY0x0N0ExbkEycTBTUDlLYnkwWFk3M2VOZW9yWG5RaDhHOHI2dWlMSEZtbnJ6ZkZJdUdPa3VEbDFNeVVzbnJJYjdIN2tJd0tSNVhqWWtDMFJKZWtaZHE3L00vbjEwQzVBNURWeGsvSjJHOW43NkluVFQzZmw5WUV1dz09LGh0dHBzOi8vZW9mZmljZS5zYWlnb25uZXdwb3J0LmNvbS52bi90aW50dWMvUGFnZXMvZGVmYXVsdC5hc3B4PC9TUD4=",
+      "domain": "eoffice.saigonnewport.com.vn",
+      "path": "/",
+      "expires": 1774259529.863896,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "ASP.NET_SessionId",
+      "value": "ouj4aqif4vh4egcnv55wtx2z",
+      "domain": "eoffice.saigonnewport.com.vn",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "X-CSRF-Token",
+      "value": "9c94507abe9e4e7f8a4a55ebe5b099d3",
+      "domain": "eoffice.saigonnewport.com.vn",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    }
+  ],
+  "origins": [
+    {
+      "origin": "https://eoffice.saigonnewport.com.vn",
+      "localStorage": [
+        {
+          "name": "SPAnimationEnabled",
+          "value": "1"
+        }
+      ]
+    }
+  ]
+}

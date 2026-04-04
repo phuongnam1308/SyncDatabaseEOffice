@@ -11,8 +11,27 @@ class StreamMeetingMigrationController extends BaseController {
     }
 
     /**
-     * HTTP endpoint (POST) để test việc lấy danh sách resource cần sync.
-     * Body/query: { lastSyncTime?, syncJobId? }
+     * @openapi
+     * /sync-meeting/migrate/test-get-list:
+     *   post:
+     *     tags: [Sync Meeting]
+     *     summary: Thử nghiệm lấy danh sách lịch họp cần đồng bộ.
+     *     requestBody:
+     *       content:
+     *         application/json:
+     *           schema:
+     *             type: object
+     *             properties:
+     *               lastSyncTime:
+     *                 type: string
+     *                 format: date-time
+     *                 description: Thời điểm đồng bộ cuối (mặc định 1970).
+     *               syncJobId:
+     *                 type: string
+     *                 description: ID của job đồng bộ hiện tại.
+     *     responses:
+     *       200:
+     *         description: Danh sách các lịch họp tìm được.
      */
     testGetList = this.asyncHandler(async (req, res) => {
         const lastSyncTime = req.body?.lastSyncTime || req.query?.lastSyncTime || DEFAULT_SYNC_TIME;
@@ -29,8 +48,25 @@ class StreamMeetingMigrationController extends BaseController {
     });
 
     /**
-     * HTTP endpoint (POST) để test xử lý một mục trong buffer của job.
-     * Body/query: { syncJobId }
+     * @openapi
+     * /sync-meeting/migrate/test-process-one:
+     *   post:
+     *     tags: [Sync Meeting]
+     *     summary: Thử nghiệm xử lý một bản ghi lịch họp.
+     *     requestBody:
+     *       content:
+     *         application/json:
+     *           schema:
+     *             type: object
+     *             required:
+     *               - syncJobId
+     *             properties:
+     *               syncJobId:
+     *                 type: string
+     *                 description: ID bản ghi để xử lý.
+     *     responses:
+     *       200:
+     *         description: Kết quả xử lý bản ghi.
      */
     testProcessOne = this.asyncHandler(async (req, res) => {
         const syncJobId = req.body?.syncJobId || req.query?.syncJobId;

@@ -1,0 +1,1253 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "SNP - ĐỒNG BỘ DỮ LIỆU",
+    "version": "1.0.0",
+    "description": "Hệ thống đồng bộ dữ liệu EOffice &mdash; SNP"
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3021/api"
+    },
+    {
+      "url": "http://SNP-DongBoDuLieu:3021/api"
+    }
+  ],
+  "paths": {
+    "/migrate/drafter": {
+      "get": {
+        "summary": "Đồng bộ văn bản đi người soạn văn bản của văn bản đi của bảng trung gian",
+        "tags": [
+          "Dong bo van ban di"
+        ]
+      }
+    },
+    "/migrate/files-vanbanbanhanh": {
+      "get": {
+        "summary": "Đông bộ file văn bản ban hành về bảng trung gian",
+        "tags": [
+          "Dong bo file"
+        ]
+      }
+    },
+    "/migrate/file-relations/object-type": {
+      "post": {
+        "summary": "Mapping type_doc sang object_type",
+        "tags": [
+          "File Relations Mapping"
+        ]
+      }
+    },
+    "/migrate/files-vbden": {
+      "get": {
+        "summary": "Đông bộ file văn bản đến về bảng trung gian",
+        "tags": [
+          "Dong bo file"
+        ]
+      }
+    },
+    "/mapping/bookdoc-outgoing": {
+      "get": {
+        "summary": "từ tên sổ văn bản đưa ra được mã số văn bản phù hợp với phần mềm mới",
+        "tags": [
+          "Dong bo van ban di"
+        ]
+      }
+    },
+    "/migrate/bookbanhanh": {
+      "get": {
+        "summary": "đồng bộ sô ban hành đang hoạt động",
+        "tags": [
+          "Dong bo so van ban"
+        ]
+      }
+    },
+    "/migrate/bookbanhanhdelete": {
+      "get": {
+        "summary": "Lưu sổ dữ liệu văn bản đã ban hành đã ở trạng thái xóa",
+        "tags": [
+          "Dong bo so van ban"
+        ]
+      }
+    },
+    "/statistics/bookbanhanh": {
+      "get": {
+        "summary": "Thống kê sổ văn bản đến",
+        "tags": [
+          "Dong bo so van ban"
+        ]
+      }
+    },
+    "/migrate/bookdocuments": {
+      "get": {
+        "summary": "Đồng bộ sổ văn bản đến",
+        "tags": [
+          "Dong bo so van ban"
+        ]
+      }
+    },
+    "/migrate/bookdocumentsdelete": {
+      "get": {
+        "summary": "Đồng bộ số văn bản bản ban hành đã xóa",
+        "tags": [
+          "Dong bo so van ban"
+        ]
+      }
+    },
+    "/statistics/book-total": {
+      "get": {
+        "summary": "Thống kê tổng hợp 4 nguồn văn bản",
+        "tags": [
+          "Dong bo lien ket"
+        ],
+        "responses": {
+          "200": {
+            "description": "Thành công"
+          }
+        }
+      }
+    },
+    "/statistics/donvi": {
+      "get": {
+        "summary": "Thống kê Đơn vị",
+        "tags": [
+          "Dong bo don vi"
+        ]
+      }
+    },
+    "/migrate/donvi": {
+      "get": {
+        "summary": "Đồng bộ dữ liệu đơn vị",
+        "tags": [
+          "Dong bo don vi"
+        ]
+      }
+    },
+    "/migrate/file-relations": {
+      "get": {
+        "summary": "Di chuyển dữ liệu từ files2 sang file_relations2",
+        "tags": [
+          "Migration File Relations"
+        ]
+      }
+    },
+    "/migrate/group": {
+      "get": {
+        "summary": "Đồng bộ nhóm người dùng",
+        "tags": [
+          "Dong bo nhom"
+        ]
+      }
+    },
+    "/statistics/incomingdocuments": {
+      "get": {
+        "summary": "Thống kê văn bản đến",
+        "tags": [
+          "Dong bo van ban den"
+        ]
+      }
+    },
+    "/migrate/incomingdocuments": {
+      "get": {
+        "summary": "Đồng bộ hóa văn bản đến về với bảng trung gian",
+        "tags": [
+          "Dong bo van ban den"
+        ]
+      }
+    },
+    "/migrate/incomingdocumentsdelete": {
+      "get": {
+        "summary": "đồng bộ văn bản đến với trạng thái đã xóa về bảng trung gian",
+        "tags": [
+          "Dong bo van ban den"
+        ]
+      }
+    },
+    "/sync/incoming-document": {
+      "get": {
+        "summary": "Đồng bộ văn bản đến",
+        "tags": [
+          "IncomingDocumentSync"
+        ]
+      }
+    },
+    "/migrate/task2toTask/stats": {
+      "get": {
+        "summary": "Thống kê migration task2 → task",
+        "tags": [
+          "Dong bo cong viec"
+        ],
+        "responses": {
+          "200": {
+            "description": "Thống kê số lượng bản ghi",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "source": {
+                      "type": "object",
+                      "properties": {
+                        "table": {
+                          "type": "string",
+                          "example": "task2"
+                        },
+                        "count": {
+                          "type": "number",
+                          "example": 1200
+                        }
+                      }
+                    },
+                    "destination": {
+                      "type": "object",
+                      "properties": {
+                        "table": {
+                          "type": "string",
+                          "example": "task"
+                        },
+                        "count": {
+                          "type": "number",
+                          "example": 1180
+                        }
+                      }
+                    },
+                    "migrated": {
+                      "type": "number",
+                      "example": 1180
+                    },
+                    "remaining": {
+                      "type": "number",
+                      "example": 20
+                    },
+                    "percentage": {
+                      "type": "string",
+                      "example": "98.33%"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/migrate/task2toTask": {
+      "get": {
+        "summary": "Migration dữ liệu từ task2 sang task",
+        "tags": [
+          "Dong bo cong viec"
+        ],
+        "description": "- Copy toàn bộ dữ liệu từ bảng **task2** sang **task**\n- Không insert trùng (dựa vào id_taskBackups + tb_bak)\n- Gán tb_bak = 'task2'\n- Không insert cột identity `id`\n",
+        "responses": {
+          "200": {
+            "description": "Migration thành công",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "total": {
+                      "type": "number",
+                      "example": 1200
+                    },
+                    "inserted": {
+                      "type": "number",
+                      "example": 1180
+                    },
+                    "skipped": {
+                      "type": "number",
+                      "example": 20
+                    },
+                    "errors": {
+                      "type": "number",
+                      "example": 0
+                    },
+                    "duration": {
+                      "type": "string",
+                      "example": "12.45"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/migrate/task3toTask": {
+      "get": {
+        "summary": "Đồng bộ từ task3 sang task",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/statistics/task": {
+      "get": {
+        "summary": "Thông kê đồng bộ công việc văn bản đến",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/migrate/task-vbden": {
+      "get": {
+        "summary": "Đông bộ công việc văn bản đến về bảng trung gian",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/statistics/task-delete": {
+      "get": {
+        "summary": "Thông kê đồng bộ công việc văn bản đến trạng thái đã xóa",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/migrate/task-vbdendelete": {
+      "get": {
+        "summary": "Đông bộ công việc văn bản đến trạng thái đã xóa về bảng trung gian",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/statistics/task-users2": {
+      "get": {
+        "summary": "Thông kê đồng bộ công việc của người của công việc của văn bản đến nào về bảng trung gian",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/migrate/task-users2": {
+      "get": {
+        "summary": "Đông bộ công việc của người nào của văn bản đến về bảng trung gian",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/mapping/task-users2-process": {
+      "get": {
+        "summary": "Đồng bộ người xử lý công việc ở bảng trung gian",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/mapping/task-users2-process-group": {
+      "get": {
+        "summary": "Đồng bộ nhóm xử lý công việc ở bảng trung gian",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/mapping/task-users2-process-org": {
+      "get": {
+        "summary": "Đồng bộ đơn vị số lý công việc ở bảng trung gian",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/migrate/task-users2-to-task-users": {
+      "get": {
+        "summary": "Migration task_users2 sang task_users (FIX FK)",
+        "tags": [
+          "Migration task_users2 → task_users"
+        ]
+      }
+    },
+    "/migrate/task-users2-to-task-users/stats": {
+      "get": {
+        "summary": "Thống kê migration task_users2 → task_users",
+        "tags": [
+          "Migration task_users2 → task_users"
+        ]
+      }
+    },
+    "/statistics/task-users-vbdi": {
+      "get": {
+        "summary": "Thông kê đồng bộ công việc của người của công việc của văn bản đi nào về bảng trung gian",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/migrate/task-users-vbdi": {
+      "get": {
+        "summary": "Đông bộ công việc của người nào của văn bản đi về bảng trung gian",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/statistics/task-vbdi": {
+      "get": {
+        "summary": "Thông kê đồng bộ công việc văn bản đi",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/migrate/task-vbdi": {
+      "get": {
+        "summary": "Đông bộ công việc văn bản đi về bảng trung gian",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/statistics/usergroup": {
+      "get": {
+        "summary": "Thống kê nhóm người dùng",
+        "tags": [
+          "Dong bo nhom"
+        ]
+      }
+    },
+    "/migrate/usergroup": {
+      "get": {
+        "summary": "Đồng bộ nhóm người dùng",
+        "tags": [
+          "Dong bo nhom"
+        ]
+      }
+    },
+    "/migrate/useringroup": {
+      "get": {
+        "summary": "Đồng bộ liên kết người dùng trong nhóm",
+        "tags": [
+          "Dong bo lien ket"
+        ]
+      }
+    },
+    "/migrate/sender-unit": {
+      "get": {
+        "summary": "Đồng bộ đơn vị gửi từ tên sang mã đơn vị",
+        "tags": [
+          "Dong bo van ban di"
+        ]
+      }
+    },
+    "/migrate/sender-unit/batch/:limit": {
+      "get": {
+        "summary": "Đồng bộ văn bản đi có chia nhiều luồng chạy từ tên đơn vị sang mã đơn vị",
+        "tags": [
+          "Dong bo van ban di"
+        ]
+      }
+    },
+    "/sync/task-users2-type": {
+      "get": {
+        "summary": "Đồng bộ trạng thái xử lý công việc ở bảng trung gian",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/statistics/task-users-taskid": {
+      "get": {
+        "summary": "thông kê các cập nhật chưa khớp mã công việc cũ so với mã mới",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/update/task-users-taskid": {
+      "get": {
+        "summary": "đồng bộ về mã mới công việc về phần mềm mới",
+        "tags": [
+          "Dong bo cong viec"
+        ]
+      }
+    },
+    "/test/incomming/create-audit": {
+      "post": {
+        "summary": "Tạo audit từ từng văn bản đến (incomming_documents2)",
+        "tags": [
+          "Dong bo van ban den"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "example": {
+                "display_name": "Văn thư TCT",
+                "role": "VAN_THU",
+                "action_code": "CREATE",
+                "roleProcess": "VAN_THU",
+                "stage_status": "CHUA_XU_LY",
+                "curStatusCode": 1
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Tạo audit thành công"
+          }
+        }
+      }
+    },
+    "/test/incomming/backup-before-test": {
+      "get": {
+        "summary": "Backup status_code, sender_unit, receiver_unit trước khi test",
+        "tags": [
+          "Dong bo van ban den"
+        ],
+        "responses": {
+          "200": {
+            "description": "Backup thành công"
+          }
+        }
+      }
+    },
+    "/test/incomming/update-bpmn-version": {
+      "post": {
+        "summary": "Update bpmn_version cho incomming_documents2",
+        "tags": [
+          "Dong bo van ban den"
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "example": {
+                "bpmn_version": "PHUC_DAP_DV_CON"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Update thành công"
+          }
+        }
+      }
+    },
+    "/test/incomming/bulk-update": {
+      "post": {
+        "summary": "Update hàng loạt status_code, sender_unit, receiver_unit cho incomming_documents2",
+        "tags": [
+          "Dong bo van ban den"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "example": {
+                "status_code": 7,
+                "sender_unit": "DON_VI_GUI_MOI",
+                "receiver_unit": "DON_VI_NHAN_MOI"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Update thành công"
+          }
+        }
+      }
+    },
+    "/test/backup-outgoing-before-status-test": {
+      "get": {
+        "summary": "Backup outgoing_documents trước khi test",
+        "tags": [
+          "Dong bo van ban di"
+        ]
+      }
+    },
+    "/test/fake-outgoing-data": {
+      "post": {
+        "summary": "Fake toàn bộ outgoing_documents (1 query, chạy lâu)",
+        "tags": [
+          "Dong bo van ban di"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "example": {
+                "senderUnit": "FAKE_SENDER_UNIT",
+                "drafter": "FAKE_DRAFTER"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Fake dữ liệu thành công"
+          }
+        }
+      }
+    },
+    "/test/outgoing-to-audit": {
+      "post": {
+        "summary": "Sinh dữ liệu audit test từ outgoing_documents2",
+        "tags": [
+          "Dong bo van ban di"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "example": {
+                "user_id": "USER_TEST_01",
+                "role": "VAN_THU",
+                "action_code": "CREATE",
+                "receiver": "USER_TEST_01",
+                "receiver_unit": "DON_VI_TEST",
+                "roleProcess": "PROCESS_TEST",
+                "action": "CREATE",
+                "stage_status": "DRAFT"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Tạo audit test thành công"
+          }
+        }
+      }
+    },
+    "/test/create-task-audit": {
+      "post": {
+        "summary": "Tạo audit từ task + task_users",
+        "tags": [
+          "Audit Test"
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "user_id": {
+                    "type": "string",
+                    "default": "6915f2387e39c2ba33cef79a"
+                  },
+                  "role": {
+                    "type": "string",
+                    "default": "NGUOI_CHU_CHI"
+                  },
+                  "action_code": {
+                    "type": "string",
+                    "default": "PHE_DUYET"
+                  },
+                  "to_node_id": {
+                    "type": "string",
+                    "default": "Event_0uchici"
+                  },
+                  "details": {
+                    "type": "string",
+                    "default": "{\"note\":\"he duyet cho toi\"}"
+                  },
+                  "action": {
+                    "type": "string",
+                    "default": "Đồng ý phê duyệt"
+                  },
+                  "stage_status": {
+                    "type": "string",
+                    "default": "PHE_DUYET"
+                  },
+                  "type_document": {
+                    "type": "string",
+                    "default": "Task"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/update/files2-name-from-path": {
+      "get": {
+        "summary": "Cập nhật file_name từ file_path trong bảng files2",
+        "tags": [
+          "Update File Names in files2"
+        ]
+      }
+    },
+    "/update/incoming-sender-unit": {
+      "get": {
+        "summary": "Cập nhật tên đơn vị thành mã đơn vị cho văn bản đến ở bảng trung gian",
+        "tags": [
+          "Dong bo van ban den"
+        ],
+        "responses": {
+          "200": {
+            "description": "Lấy thống kê thành công"
+          },
+          "500": {
+            "description": "Lỗi hệ thống"
+          }
+        }
+      }
+    },
+    "/migrate/incoming-documents": {
+      "get": {
+        "summary": "Đồng bộ từ bảng trung gian văn bản đến về với bảng văn bản đến chính thức",
+        "tags": [
+          "Dong bo van ban den"
+        ]
+      }
+    },
+    "/sync/outgoing-sender-unit": {
+      "get": {
+        "summary": "Chuẩn hóa lại sender_unit văn bản đi cho dữ liệu cũ",
+        "tags": [
+          "Dong bo van ban di"
+        ]
+      }
+    },
+    "/update/incoming-book-document-id": {
+      "get": {
+        "summary": "Cập nhật từ tên sổ văn bản ra được mã sổ văn bản cho văn bản đến ở bảng trung gian",
+        "tags": [
+          "Dong bo van ban den"
+        ],
+        "responses": {
+          "200": {
+            "description": "Lấy thống kê thành công"
+          },
+          "500": {
+            "description": "Lỗi hệ thống"
+          }
+        }
+      }
+    },
+    "/update/incoming-status-code": {
+      "get": {
+        "summary": "Cập nhật trạng thái văn bản đến ở bảng trung gian",
+        "tags": [
+          "Dong bo van ban den"
+        ],
+        "responses": {
+          "200": {
+            "description": "Lấy thống kê thành công"
+          },
+          "500": {
+            "description": "Lỗi hệ thống"
+          }
+        }
+      }
+    },
+    "/sync/file-documents": {
+      "post": {
+        "summary": "Sync file từ bảng sync sang bảng chính",
+        "tags": [
+          "Sync"
+        ]
+      }
+    },
+    "/sync-manager-src/start": {
+      "post": {
+        "tags": [
+          "Sync Manager"
+        ],
+        "summary": "Bắt đầu đồng bộ cho tất cả các đối tượng đã đăng ký.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reset": {
+                    "type": "boolean",
+                    "description": "Nếu là true, sẽ xóa trạng thái cũ và chạy lại từ đầu."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Đã kích hoạt tiến trình đồng bộ thành công."
+          }
+        }
+      }
+    },
+    "/sync-manager-src/models/{modelName}/start": {
+      "post": {
+        "tags": [
+          "Sync Manager"
+        ],
+        "summary": "Khởi động đồng bộ cho một đối tượng cụ thể.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "modelName",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Tên của đối tượng (model) cần đồng bộ."
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reset": {
+                    "type": "boolean",
+                    "description": "Chạy lại từ bản ghi đầu tiên."
+                  },
+                  "batchSize": {
+                    "type": "number",
+                    "description": "Số lượng bản ghi xử lý mỗi đợt."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Đã kích hoạt đồng bộ đối tượng thành công."
+          }
+        }
+      }
+    },
+    "/sync-manager-src/jobs/{jobId}/pause": {
+      "post": {
+        "tags": [
+          "Sync Manager"
+        ],
+        "summary": "Yêu cầu tạm dừng một tiến trình đang chạy.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "jobId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "ID của phiên đồng bộ (job)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Yêu cầu dừng đã được tiếp nhận."
+          }
+        }
+      }
+    },
+    "/sync-manager-src/jobs/{jobId}/resume": {
+      "post": {
+        "tags": [
+          "Sync Manager"
+        ],
+        "summary": "Tiếp tục một tiến trình đang bị tạm dừng.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "jobId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "ID của phiên đồng bộ (job)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tiến trình đã được tiếp tục."
+          }
+        }
+      }
+    },
+    "/sync-manager-src/jobs/{jobId}": {
+      "get": {
+        "tags": [
+          "Sync Manager"
+        ],
+        "summary": "Lấy chi tiết trạng thái của một job cụ thể.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "jobId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Trạng thái chi tiết của job."
+          },
+          "404": {
+            "description": "Không tìm thấy job."
+          }
+        }
+      }
+    },
+    "/sync-meeting/migrate/test-get-list": {
+      "post": {
+        "tags": [
+          "Sync Meeting"
+        ],
+        "summary": "Thử nghiệm lấy danh sách lịch họp cần đồng bộ.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "lastSyncTime": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Thời điểm đồng bộ cuối (mặc định 1970)."
+                  },
+                  "syncJobId": {
+                    "type": "string",
+                    "description": "ID của job đồng bộ hiện tại."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Danh sách các lịch họp tìm được."
+          }
+        }
+      }
+    },
+    "/sync-meeting/migrate/test-process-one": {
+      "post": {
+        "tags": [
+          "Sync Meeting"
+        ],
+        "summary": "Thử nghiệm xử lý một bản ghi lịch họp.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "syncJobId"
+                ],
+                "properties": {
+                  "syncJobId": {
+                    "type": "string",
+                    "description": "ID bản ghi để xử lý."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Kết quả xử lý bản ghi."
+          }
+        }
+      }
+    },
+    "/sync-passport/migrate/test-get-list": {
+      "post": {
+        "tags": [
+          "Sync Passport"
+        ],
+        "summary": "Thử nghiệm lấy danh sách phiếu mượn hộ chiếu cần đồng bộ.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "lastSyncTime": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Thời điểm đồng bộ cuối (mặc định 1970)."
+                  },
+                  "syncJobId": {
+                    "type": "string",
+                    "description": "ID của job đồng bộ hiện tại."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Danh sách các phiếu mượn hộ chiếu tìm được."
+          }
+        }
+      }
+    },
+    "/sync-passport/migrate/test-process-one": {
+      "post": {
+        "tags": [
+          "Sync Passport"
+        ],
+        "summary": "Thử nghiệm xử lý (đồng bộ) một bản ghi phiếu mượn hộ chiếu.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "syncJobId"
+                ],
+                "properties": {
+                  "syncJobId": {
+                    "type": "string",
+                    "description": "ID của bản ghi/ID Job để xử lý."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Kết quả xử lý bản ghi."
+          }
+        }
+      }
+    },
+    "/migrate/stream-user": {
+      "post": {
+        "summary": "Chạy migration user theo luồng (Stream)",
+        "description": "Di chuyển dữ liệu từ DB cũ sang mới theo từng batch, tránh quá tải RAM.",
+        "tags": [
+          "Stream User Migration"
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "limit": {
+                    "type": "integer",
+                    "description": "Tổng số bản ghi muốn chạy (0 = chạy hết)",
+                    "example": 0
+                  },
+                  "batch": {
+                    "type": "integer",
+                    "description": "Số bản ghi xử lý mỗi đợt",
+                    "example": 100
+                  },
+                  "lastProcessedId": {
+                    "type": "integer",
+                    "description": "Tiếp tục chạy từ sau ID này (Resume)",
+                    "example": 0
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Migration hoàn tất"
+          },
+          "500": {
+            "description": "Lỗi hệ thống"
+          }
+        }
+      }
+    },
+    "/migrate/stream-user/status": {
+      "get": {
+        "summary": "Xem trạng thái dữ liệu User (Cũ vs Mới)",
+        "tags": [
+          "Stream User Migration"
+        ],
+        "responses": {
+          "200": {
+            "description": "Trả về số lượng bản ghi ở 2 DB"
+          }
+        }
+      }
+    },
+    "/user/migrate/stream-user/sync-departments": {
+      "post": {
+        "summary": "API chạy riêng bước đồng bộ phòng ban",
+        "description": "API này chạy logic hậu xử lý - tạo Organization Units từ Department của User và cập nhật lại ParentID.",
+        "tags": [
+          "Migration Stream User"
+        ],
+        "responses": {
+          "200": {
+            "description": "Đồng bộ thành công"
+          },
+          "500": {
+            "description": "Lỗi hệ thống"
+          }
+        }
+      }
+    },
+    "/user/migrate/stream-user": {
+      "post": {
+        "summary": "Chạy di chuyển dữ liệu người dùng theo từng đợt (stream/batch)",
+        "description": "API này khởi động quá trình di chuyển dữ liệu người dùng từ cơ sở dữ liệu nguồn sang cơ sở dữ liệu đích.\nQuá trình này được thực hiện theo từng đợt (batch) để tránh quá tải hệ thống và đảm bảo hiệu suất.\nCó thể tùy chỉnh tổng số lượng bản ghi cần lấy và kích thước của mỗi đợt.\n",
+        "tags": [
+          "Migration Stream User"
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "limit": {
+                    "type": "number",
+                    "description": "Giới hạn tổng số bản ghi cần di chuyển. Nếu đặt là 0, sẽ di chuyển tất cả.",
+                    "default": 0
+                  },
+                  "batch": {
+                    "type": "number",
+                    "description": "Số lượng bản ghi được xử lý trong mỗi đợt (batch).",
+                    "default": 100
+                  },
+                  "lastProcessedId": {
+                    "type": "number",
+                    "description": "ID của bản ghi cuối cùng đã được xử lý ở lần chạy trước. Quá trình sẽ bắt đầu từ ID kế tiếp.",
+                    "default": 0
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Quá trình di chuyển đã được bắt đầu thành công."
+          },
+          "500": {
+            "description": "Lỗi máy chủ hoặc có lỗi xảy ra trong quá trình di chuyển."
+          }
+        }
+      }
+    },
+    "/user/migrate/stream-user/status": {
+      "get": {
+        "summary": "Lấy thông tin trạng thái của quá trình di chuyển dữ liệu người dùng",
+        "description": "API này cho phép theo dõi tiến trình của quá trình di chuyển, bao gồm số lượng bản ghi đã xử lý, tổng số, và trạng thái hiện tại.",
+        "tags": [
+          "Migration Stream User"
+        ],
+        "responses": {
+          "200": {
+            "description": "Trả về đối tượng chứa thông tin trạng thái chi tiết của quá trình di chuyển.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "totalToMigrate": {
+                      "type": "number",
+                      "description": "Tổng số bản ghi cần di chuyển."
+                    },
+                    "migratedCount": {
+                      "type": "number",
+                      "description": "Số bản ghi đã di chuyển thành công."
+                    },
+                    "remainingCount": {
+                      "type": "number",
+                      "description": "Số bản ghi còn lại."
+                    },
+                    "status": {
+                      "type": "string",
+                      "description": "Trạng thái hiện tại của quá trình (ví dụ: IDLE, RUNNING, DONE, ERROR)"
+                    },
+                    "lastProcessedId": {
+                      "type": "number",
+                      "description": "ID của bản ghi cuối cùng đã được xử lý."
+                    },
+                    "error": {
+                      "type": "object",
+                      "description": "Thông tin lỗi nếu có."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {},
+  "tags": [
+    {
+      "name": "Dong bo file",
+      "description": "Đồng bộ file từ phần mềm cũ sang phần mềm mới"
+    },
+    {
+      "name": "File Relations Mapping",
+      "description": "Mapping type_doc -> object_type"
+    },
+    {
+      "name": "Dong bo so van ban",
+      "description": "Đồng bộ số văn bản ban hành số văn bản đến , số văn bản đi"
+    },
+    {
+      "name": "Dong bo don vi",
+      "description": "Đồng bộ đơn vị , đươn vị xử lý đến vào phần mềm cũ"
+    },
+    {
+      "name": "Migration File Relations",
+      "description": "Đồng bộ quan hệ file từ file2 sang file_relations2"
+    },
+    {
+      "name": "Dong bo nhom",
+      "description": "Đồng bộ nhóm người tổ chức , đơn vị , nhóm từ phần mềm cũ sang phần mềm mới"
+    },
+    {
+      "name": "Dong bo van ban den",
+      "description": "Đồng bộ văn bản đến từ phần mềm cũ sang phần mềm mới"
+    },
+    {
+      "name": "Dong bo cong viec",
+      "description": "Đồng bộ công việc từ phần mềm cũ sang phần mềm mới"
+    },
+    {
+      "name": "Migration task_users2 → task_users",
+      "description": "Đồng bộ user xử lý công việc (map task_id mới)"
+    },
+    {
+      "name": "Dong bo lien ket",
+      "description": "Đồng bộ liên kết của đơn vị , tổ chức"
+    },
+    {
+      "name": "Audit Test"
+    },
+    {
+      "name": "Update File Names in files2",
+      "description": "Cập nhật file_name từ file_path trong bảng files2"
+    },
+    {
+      "name": "Stream User Migration",
+      "description": "API di chuyển dữ liệu người dùng theo cơ chế Stream (Batch) tối ưu bộ nhớ"
+    },
+    {
+      "name": "Migration Stream User",
+      "description": "(MỚI) Các API để di chuyển dữ liệu người dùng (user) theo từng đợt (batch), tối ưu cho lượng dữ liệu lớn."
+    }
+  ]
+}

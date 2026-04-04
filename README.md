@@ -1,276 +1,52 @@
-# Hệ thống Migration Dữ liệu SQL Server
+# 🚢 SNP - ĐỒNG BỘ DỮ LIỆU - SOURCE CODE ⚓
 
-Hệ thống migration dữ liệu từ SQL Server cũ (DataEOfficeSNP) sang SQL Server mới (camunda) với kiến trúc MVC.
+Đây là mã nguồn hệ thống đồng bộ dữ liệu EOffice chuyên dụng cho Tân Cảng. Dự án đã tích hợp mã hóa bảo mật (Obfuscation) và quy trình đóng gói ứng dụng Windows chuyên nghiệp.
 
-## 📋 Mô tả
+## 🛠 Yêu cầu phát triển
+*   **Node.js**: Phiên bản 18 trở lên.
+*   **Tiền xử lý**: Cần cài thư viện Chrome để module `playwright` có thể chạy tự động đăng nhập.
 
-Migration dữ liệu từ bảng `PhongBan` sang bảng `organization_units` với các tính năng:
+## 🚀 Các lệnh vận hành quan trọng (Scripts)
 
-- ✅ Mapping tự động các trường dữ liệu
-- ✅ Xử lý ID trùng lặp (lưu vào `Id_backups`)
-- ✅ Batch processing để tối ưu hiệu suất
-- ✅ Logging chi tiết
-- ✅ API REST để quản lý
-- ✅ CLI mode để chạy migration trực tiếp
-
-## 🚀 Cài đặt
-
-### 1. Clone project và cài đặt dependencies
-
-```bash
-cd chuyen-doi-tan-cang
-npm install
+### 1. Đăng nhập & Lấy Session (Quan trọng nhất)
+Trước khi chạy bất kỳ tiến trình đồng bộ nào, bạn cần đảm bảo đã có session đăng nhập hợp lệ:
+```powershell
+npm run login
 ```
+*Lệnh này sẽ tự động bật Chrome, đăng nhập và lưu Cookie vào file `auth/storageState.json`.*
 
-### 2. Cấu hình môi trường
-
-Chỉnh sửa file `.env` với thông tin database của bạn:
-
-```env
-# Database cũ
-OLD_DB_SERVER=192.168.0.148
-OLD_DB_NAME=DataEOfficeSNP
-OLD_DB_USER=lifetex
-OLD_DB_PASSWORD=12345678
-
-# Database mới
-NEW_DB_SERVER=192.168.0.999
-NEW_DB_NAME=camunda
-NEW_DB_USER=lifetex
-NEW_DB_PASSWORD=cccjjj
+### 2. Phát triển & Chạy thử
+```powershell
+npm run all
 ```
+*Lệnh này sẽ tự động chạy Login sau đó bật Server đồng bộ (`npm start`).*
 
-## 📖 Sử dụng
-
-### Chế độ 1: Chạy migration trực tiếp (CLI)
-
-```bash
-npm run migrate
+### 3. Đóng gói mã hóa (Build Webpack)
+Để tạo ra sản phẩm không lộ code nguồn:
+```powershell
+npm run build
 ```
+*Kết quả sẽ nằm trong thư mục `dist`. Toàn bộ code đã được mã hóa/ẩn giấu logic.*
 
-### Chế độ 2: Chạy API Server
-
-```bash
-# Development
-npm run dev
-
-# Production
-npm start
+### 4. Tạo bộ cài Windows (EXE)
+Để tạo ra file thực thi duy nhất mang đi máy khác:
+```powershell
+npm run build:exe
 ```
+*Tệp `.exe` sẽ được sinh ra trong `dist/`. Đã cài đặt tự bật trình duyệt khi chạy.*
 
-Server sẽ chạy tại: `http://localhost:3000`
+## 📦 Cấu trúc thư mục đóng gói (Portable)
+Sau khi build, bạn chỉ cần gửi thư mục `dist/` đi. Bên trong bao gồm:
+1.  **`SNP - DONG BO DU LIEU.exe`**: File ứng dụng chính.
+2.  **`.env`**: File cấu hình Database và Hostname.
+3.  **`auth/`**: Thư mục chứa session đăng nhập (Người nhận sẽ không cần login lại).
+4.  **`setup_domain.bat`**: Script cấu hình tên miền `SNP-DongBoDuLieu`.
+5.  **`HUONG_DAN.md`**: Bản hướng dẫn sử dụng tiếng Việt cho người dùng cuối.
 
-## 🌐 API Endpoints
-
-### 1. Health Check
-```http
-GET /api/health
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "message": "Server đang hoạt động",
-  "data": {
-    "status": "OK",
-    "timestamp": "2025-01-09T...",
-    "uptime": 123.45,
-    "environment": "development"
-  }
-}
-```
-
-### 2. Kiểm tra kết nối Database
-```http
-GET /api/check-connection
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "message": "Kiểm tra kết nối thành công",
-  "data": {
-    "oldDb": {
-      "connected": true,
-      "recordCount": 150
-    },
-    "newDb": {
-      "connected": true,
-      "recordCount": 0
-    }
-  }
-}
-```
-
-### 3. Lấy thống kê Migration
-```http
-GET /api/statistics
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "message": "Lấy thống kê thành công",
-  "data": {
-    "source": {
-      "database": "DataEOfficeSNP",
-      "table": "PhongBan",
-      "count": 150
-    },
-    "destination": {
-      "database": "camunda",
-      "table": "organization_units",
-      "count": 145
-    },
-    "migrated": 145,
-    "remaining": 5,
-    "percentage": "96.67"
-  }
-}
-```
-
-### 4. Thực hiện Migration
-```http
-POST /api/migrate/phongban
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "message": "Migration hoàn thành",
-  "data": {
-    "total": 150,
-    "inserted": 145,
-    "duplicates": 5,
-    "errors": 0,
-    "duration": "2.35"
-  }
-}
-```
-
-## 📊 Mapping Dữ liệu
-
-| Database Cũ (PhongBan) | Database Mới (organization_units) |
-|------------------------|-----------------------------------|
-| ID                     | id (hoặc Id_backups nếu trùng)    |
-| TitleVn                | name                              |
-| Code                   | code                              |
-| ParentID               | parentId                          |
-
-### Các trường được tạo tự động:
-
-- `type`: null
-- `status`: 1
-- `display_order`: 0
-- `created_at`: timestamp hiện tại
-- `updated_at`: timestamp hiện tại
-- `table_backups`: "PhongBan"
-
-## 🔧 Cấu hình
-
-### Batch Size
-
-Điều chỉnh số lượng record xử lý mỗi batch trong `.env`:
-
-```env
-BATCH_SIZE=100
-```
-
-### Logging
-
-Bật/tắt logging:
-
-```env
-ENABLE_LOGGING=true
-LOG_LEVEL=info  # error, warn, info, debug
-```
-
-Logs được lưu tại thư mục `logs/`:
-- `error.log` - Chỉ lỗi
-- `combined.log` - Tất cả logs
-- `migration.log` - Migration logs
-
-## 📁 Cấu trúc thư mục
-
-```
-chuyen-doi-tan-cang/
-├── config/          # Cấu hình database và mapping
-├── db/              # Quản lý kết nối database
-├── models/          # Models (PhongBan, Base)
-├── controllers/     # Controllers (Migration, Base)
-├── services/        # Business logic
-├── routes/          # API routes
-├── utils/           # Utilities (logger, helpers)
-├── logs/            # Log files
-├── .env             # Environment variables
-└── index.js         # Entry point
-```
-
-## ⚠️ Xử lý ID trùng lặp
-
-Khi ID từ database cũ đã tồn tại trong database mới:
-
-1. ID gốc được lưu vào trường `Id_backups`
-2. Trường `id` để trống, database sẽ tự generate ID mới
-3. Ghi log cảnh báo về ID trùng
-
-## 🧪 Testing
-
-Sử dụng file `POSTMAN_COLLECTION.json` để test API.
-
-Import vào Postman và chạy các request:
-1. Health Check
-2. Check Connection
-3. Get Statistics
-4. Migrate PhongBan
-
-## 📝 Logs
-
-Xem logs realtime:
-
-```bash
-# Tất cả logs
-tail -f logs/combined.log
-
-# Chỉ lỗi
-tail -f logs/error.log
-
-# Migration logs
-tail -f logs/migration.log
-```
-
-## 🐛 Troubleshooting
-
-### Lỗi kết nối database
-
-Kiểm tra:
-- Server IP và Port
-- Username/Password
-- Database name
-- Firewall settings
-
-### Migration chạy chậm
-
-Tăng `BATCH_SIZE` trong `.env`:
-```env
-BATCH_SIZE=200  # Hoặc cao hơn
-```
-
-### Lỗi ID trùng
-
-Kiểm tra dữ liệu đã migrate trước đó. Có thể:
-- Xóa dữ liệu bảng `organization_units` trước khi migrate lại
-- Hoặc để hệ thống tự xử lý (lưu vào `Id_backups`)
-
-## 📞 Support
-
-Nếu có vấn đề, kiểm tra logs hoặc liên hệ team phát triển.
+## 🎨 Tên miền & Thương hiệu
+*   **Hostname**: Hệ thống được cấu hình mặc định chạy tại `http://SNP-DongBoDuLieu:3021`.
+*   **Port**: Cổng mặc định là `3021`.
+*   **Tài liệu API**: Truy cập `/swagger` để xem toàn bộ tài liệu API offline.
 
 ---
-
-**Phiên bản:** 1.0.0  
-**Ngày cập nhật:** 09/01/2025
+**⚓ Đội ngũ phát triển SNP - ĐỒNG BỘ DỮ LIỆU**

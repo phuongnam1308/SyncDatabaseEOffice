@@ -75,7 +75,7 @@ router.post('/migrate/stream-user', StreamUserMigrationController.runStreamMigra
  *                   description: Số bản ghi còn lại.
  *                 status:
  *                   type: string
- *                   description: Trạng thái hiện tại của quá trình (ví dụ: 'IDLE', 'RUNNING', 'DONE', 'ERROR').
+ *                   description: "Trạng thái hiện tại của quá trình (ví dụ: IDLE, RUNNING, DONE, ERROR)"
  *                 lastProcessedId:
  *                   type: number
  *                   description: ID của bản ghi cuối cùng đã được xử lý.
