@@ -201,7 +201,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
       text_symbols: textSymbols,
       replaced: this.helper.mapBit(0),
       tb_bak: this.helper.mapBit(1),
-      table_backup: 'outgoing_documents_sync'
+      table_backups: 'outgoing_documents_sync'
     };
   }
 
@@ -261,7 +261,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
         from_create_draf,
         replaced,
         tb_bak,
-        table_backup
+        table_backups
       )
       VALUES (
         @document_id,
@@ -317,7 +317,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
         @from_create_draf,
         @replaced,
         @tb_bak,
-        @table_backup
+        @table_backups
       )
     `;
 
@@ -379,7 +379,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
         from_create_draf = @from_create_draf,
         replaced = @replaced,
         tb_bak = @tb_bak,
-        table_backup = @table_backup
+        table_backups = @table_backups
       WHERE id_outgoing_bak = @id_outgoing_bak
     `;
 
@@ -446,7 +446,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
       replaced: record.replaced ?? 0,
       id_outgoing_bak: record.id_outgoing_bak ?? null,
       tb_bak: record.tb_bak ?? 1,
-      table_backup: record.table_backup ?? 'outgoing_documents_sync'
+      table_backups: record.table_backups ?? 'outgoing_documents_sync'
     };
   }
 }

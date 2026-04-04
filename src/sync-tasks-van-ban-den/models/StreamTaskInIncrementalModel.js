@@ -414,8 +414,8 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
 
     // Task có thể có nhiều URL file — mở rộng dễ dàng nếu cần thêm field
     const fileUrlFields = [
-      { field: 'HoSoDuThaoUrl', objectType: 'docDraft'   },
-      { field: 'HoSoXuLyUrl',   objectType: 'docProcess'  },
+      { field: 'HoSoDuThaoUrl', objectType: 'taskdocuments'   },
+      { field: 'HoSoXuLyUrl',   objectType: 'taskdocuments'  },
     ];
 
     let anySuccess = false;
@@ -544,18 +544,12 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
   // ═══════════════════════════════════════════════════════════════
 
   /**
-   * Loads incremental source records from OLD DB after current cursor (DESC).
    * @param {string} lastSyncTime
    * @param {number} [lastSyncId=0]
-   * @param {number|null} [take=null]
-   * @param {number} [offset=0]
    * @returns {Promise<object[]>}
    */
-  async fetchListFromOldDb(lastSyncTime, lastSyncId = 0, take = null, offset = 0) {
+  async fetchListFromOldDb(lastSyncTime, lastSyncId = 0) {
     const syncTimeExpr = this.getSyncTimeExpression();
-    const safeTake = Number.isFinite(Number(take)) && Number(take) > 0 ? Number(take) : null;
-    const safeOffset = Number.isFinite(Number(offset)) && Number(offset) >= 0 ? Number(offset) : 0;
-
     const query = `
       ;WITH source_rows AS (
         SELECT
@@ -582,13 +576,12 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
         __sync_time DESC,
         ISNULL(__sync_id_num, 9223372036854775807) DESC,
         ID DESC
-      ${safeTake ? 'OFFSET @offset ROWS FETCH NEXT @take ROWS ONLY' : ''}
+      OFFSET ${Number(process.env.BEGIN_LIMIT || 0)} ROWS FETCH NEXT ${Number(process.env.COMPLETED_LIMIT || 100)} ROWS ONLY
     `;
 
     return this.queryOldDb(query, {
       lastSyncTime,
-      lastSyncId: Number(lastSyncId || 0),
-      ...(safeTake ? { take: safeTake, offset: safeOffset } : {})
+      lastSyncId: Number(lastSyncId || 0)
     });
   }
 
@@ -680,14 +673,9 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
     const normalizedLastSyncId = Number(lastSyncId || 0);
 
-    const stageBatchSize = 1000;
-    const stageOffset = Number(process.env.BEGIN_LIMIT || 0);
-
     const rows = await this.fetchListFromOldDb(
       normalizedLastSyncTime,
-      normalizedLastSyncId,
-      stageBatchSize,
-      stageOffset
+      normalizedLastSyncId
     );
     const stageResult = await this.syncOldToStaging(rows);
 
