@@ -76,8 +76,8 @@ class StreamCommentMigrationModel extends BaseModel {
   async _mapRecord(record, documentId, transaction) {
     if (!record?.ID) return null;
 
-    const userId = await this.helper.mapUserName(record.Author, transaction);
     const userName = this.helper.extractDisplayName(record.Author);
+    const userId = await this.helper.mapUserName(userName, transaction);
 
     const id = Date.now() * 1000 + Math.floor(Math.random() * 1000);
     return {
