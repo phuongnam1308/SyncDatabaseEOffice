@@ -171,6 +171,12 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
         'ensureStagingTableExists'
       );
 
+      // ADD: Ensure all necessary columns exist (e.g. ItemId)
+      await withDeadlockRetry(
+        () => this.ensureStagingTableColumns(),
+        'ensureStagingTableColumns'
+      );
+
       this._fileService = new FileService(this.newPool);
 
       this._syncCommentModel = [];
@@ -377,6 +383,74 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
 
     await this.queryNewDb(createQuery);
     logger.info('[StreamTaskInIncrementalModel] task_sync staging table ready');
+  }
+
+  /**
+   * Đảm bảo tất cả các cột cần thiết tồn tại trong bảng staging.
+   * Nếu thiếu cột (ví dụ: ItemId mới bổ sung), nó sẽ tự động ALTER TABLE ADD.
+   */
+  async ensureStagingTableColumns() {
+    const table = this.getStagingTableRef();
+    const tableName = this.newTableSync;
+    const dbName = this.newDbName;
+
+    // Danh sách các cột cần check (theo schema chuẩn ở ensureStagingTableExists)
+    const requiredColumns = [
+      { name: 'VBId',                   type: 'NVARCHAR(MAX)' },
+      { name: 'DepartmentId',           type: 'NVARCHAR(MAX)' },
+      { name: 'ParentId',               type: 'NVARCHAR(MAX)' },
+      { name: 'Title',                  type: 'NVARCHAR(MAX)' },
+      { name: 'DanhGia',                type: 'NVARCHAR(MAX)' },
+      { name: 'DeBaoCao',               type: 'NVARCHAR(MAX)' },
+      { name: 'DeBiet',                 type: 'NVARCHAR(MAX)' },
+      { name: 'DeThucHien',             type: 'NVARCHAR(MAX)' },
+      { name: 'DuocHuy',                type: 'NVARCHAR(MAX)' },
+      { name: 'DiemChatLuong',          type: 'NVARCHAR(MAX)' },
+      { name: 'DiemThoiGian',           type: 'NVARCHAR(MAX)' },
+      { name: 'DiemDanhGia',            type: 'NVARCHAR(MAX)' },
+      { name: 'StartDate',              type: 'NVARCHAR(MAX)' },
+      { name: 'DueDate',                type: 'NVARCHAR(MAX)' },
+      { name: 'CompletedDate',          type: 'NVARCHAR(MAX)' },
+      { name: 'HoanTatTuDong',          type: 'NVARCHAR(MAX)' },
+      { name: 'HoSoDuThaoId',           type: 'NVARCHAR(MAX)' },
+      { name: 'HoSoDuThaoUrl',          type: 'NVARCHAR(MAX)' },
+      { name: 'HoSoXuLyUrl',            type: 'NVARCHAR(MAX)' },
+      { name: 'Percent',                type: 'NVARCHAR(MAX)' },
+      { name: 'TrangThai',              type: 'NVARCHAR(MAX)' },
+      { name: 'Priority',               type: 'NVARCHAR(MAX)' },
+      { name: 'YKienCuaNguoiGiaiQuyet', type: 'NVARCHAR(MAX)' },
+      { name: 'YKienChiDao',            type: 'NVARCHAR(MAX)' },
+      { name: 'ModuleId',               type: 'NVARCHAR(MAX)' },
+      { name: 'SiteName',               type: 'NVARCHAR(MAX)' },
+      { name: 'ListName',               type: 'NVARCHAR(MAX)' },
+      { name: 'ItemId',                 type: 'NVARCHAR(MAX)' },
+      { name: 'Modified',               type: 'NVARCHAR(MAX)' },
+      { name: 'Created',                type: 'NVARCHAR(MAX)' },
+      { name: 'ModifiedBy',             type: 'NVARCHAR(MAX)' },
+      { name: 'CreatedBy',              type: 'NVARCHAR(MAX)' },
+      { name: 'MigrateFlg',             type: 'NVARCHAR(MAX)' },
+      { name: 'MigrateErrFlg',          type: 'NVARCHAR(MAX)' },
+      { name: 'MigrateErrMess',         type: 'NVARCHAR(MAX)' },
+      { name: 'ParentTaskID',           type: 'NVARCHAR(MAX)' },
+      { name: 'id_task_bak',            type: 'NVARCHAR(MAX)' }
+    ];
+
+    for (const col of requiredColumns) {
+      const colName = col.name === 'Percent' ? '[Percent]' : col.name;
+      const query = `
+        IF NOT EXISTS (
+          SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS
+          WHERE TABLE_NAME = '${tableName}' AND COLUMN_NAME = '${col.name}'
+        )
+        BEGIN
+          ALTER TABLE ${table} ADD ${colName} ${col.type} NULL;
+          PRINT 'Added missing column ${col.name} to ${tableName}';
+        END
+      `;
+      await this.queryNewDb(query);
+    }
+
+    logger.info(`[StreamTaskInIncrementalModel] Verified staging table columns for ${tableName}`);
   }
 
   /**
