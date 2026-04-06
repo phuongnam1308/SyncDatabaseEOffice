@@ -34,6 +34,9 @@ const OUTGOING_CATEGORIES = new Set([
 // Import cấu hình quy trình từ file JSON
 const config = require("../config");
 class SyncAuditModel extends BaseModel {
+  // Static flag to ensure schema initialization runs only once across all instances
+  static _schemaInitPromise = null;
+
   /**
    * Khởi tạo đối tượng SyncAuditModel.
    * @param {string} oldDbTable - Tên bảng trong CSDL cũ chứa dữ liệu audit cần đồng bộ.
@@ -61,56 +64,117 @@ class SyncAuditModel extends BaseModel {
   }
 
   /**
-   * Khởi tạo kết nối và các cấu trúc dữ liệu nếu cần
+   * Khởi tạo kết nối và các cấu trúc dữ liệu nếu cần.
+   * Sử dụng static promise để đảm bảo check bảng/cột chỉ chạy 1 lần duy nhất
+   * (tránh overhead khi call 47 lần mỗi vòng lặp).
    */
   async initialize() {
     if (typeof super.initialize === 'function') {
       await super.initialize();
     }
 
-    try {
-      const auxiliaryTables = [
-        'incomming_assignment',
-        'incomming_current_state',
-        'outgoing_assignment',
-        'outgoing_current_state'
-      ];
-
-      let initQueries = `
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'table_backups')
-            ALTER TABLE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} ADD table_backups NVARCHAR(255) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'type_document')
-            ALTER TABLE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} ADD type_document VARCHAR(100) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'processed_by')
-            ALTER TABLE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} ADD processed_by VARCHAR(100) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'acting_as')
-            ALTER TABLE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} ADD acting_as VARCHAR(100) NULL;
-
-        -- Thêm các cột mới cho workflow process
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'status_code')
-            ALTER TABLE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} ADD status_code VARCHAR(50) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'bpmn_version')
-            ALTER TABLE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} ADD bpmn_version VARCHAR(100) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'type_of_process')
-            ALTER TABLE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} ADD type_of_process VARCHAR(100) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'curStatusCode')
-            ALTER TABLE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} ADD curStatusCode INT NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'role')
-            ALTER TABLE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} ADD [role] VARCHAR(100) NULL;
-      `;
-
-      // Thêm table_backups cho các bảng phụ
-      for (const table of auxiliaryTables) {
-        initQueries += `
-          IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${table}' AND COLUMN_NAME = 'table_backups')
-              ALTER TABLE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${table} ADD table_backups NVARCHAR(255) NULL;
-        `;
-      }
-
-      await this.queryNewDb(initQueries);
-    } catch(e) {
-      logger.warn(`[SyncAuditModel] Lỗi khởi tạo cấu trúc cột (table_backups, workflow columns): ${e.message}`);
+    // Nếu đã/đang init rồi thì trả về promise đó luôn
+    if (SyncAuditModel._schemaInitPromise) {
+      return SyncAuditModel._schemaInitPromise;
     }
+
+    // Khởi tạo block check schema duy nhất
+    SyncAuditModel._schemaInitPromise = (async () => {
+      try {
+        const dbName = process.env.NEW_DB_NAME;
+        const schema = this.newDbSchema;
+
+        // Danh sách các bảng và cột cần check robustly
+        const schemaCheckList = [
+          {
+            table: 'audit',
+            cols: [
+              { name: 'table_backups',   type: 'NVARCHAR(255)' },
+              { name: 'type_document',   type: 'VARCHAR(100)'  },
+              { name: 'processed_by',    type: 'VARCHAR(100)'  },
+              { name: 'acting_as',       type: 'VARCHAR(100)'  },
+              { name: 'status_code',     type: 'VARCHAR(50)'   },
+              { name: 'bpmn_version',    type: 'VARCHAR(100)'  },
+              { name: 'type_of_process', type: 'VARCHAR(100)'  },
+              { name: 'curStatusCode',   type: 'INT'           },
+              { name: 'role',            type: 'VARCHAR(100)'  }
+            ]
+          },
+          {
+            table: 'incomming_assignment',
+            cols: [
+              { name: 'table_backups',   type: 'NVARCHAR(255)' },
+              { name: 'last_audit_id',   type: 'INT'           }
+            ]
+          },
+          {
+            table: 'incomming_current_state',
+            cols: [
+              { name: 'table_backups',     type: 'NVARCHAR(255)' },
+              { name: 'is_completed_doc',   type: 'BIT'           },
+              { name: 'has_open_workitem',  type: 'BIT'           },
+              { name: 'is_transfer_to_room', type: 'BIT'           },
+              { name: 'last_audit_id',     type: 'INT'           },
+              { name: 'last_audit_time',   type: 'DATETIME2'     }
+            ]
+          },
+          {
+            table: 'outgoing_assignment',
+            cols: [
+              { name: 'table_backups',   type: 'NVARCHAR(255)' },
+              { name: 'receiver_unit',   type: 'NVARCHAR(100)' },
+              { name: 'is_creator',      type: 'BIT'           },
+              { name: 'last_audit_id',   type: 'INT'           }
+            ]
+          },
+          {
+            table: 'outgoing_current_state',
+            cols: [
+              { name: 'table_backups',              type: 'NVARCHAR(255)' },
+              { name: 'has_ban_hanh',               type: 'BIT'           },
+              { name: 'has_da_xu_ly',               type: 'BIT'           },
+              { name: 'has_ht_vbtt',                type: 'BIT'           },
+              { name: 'is_completed_doc',           type: 'BIT'           },
+              { name: 'last_da_xu_ly_audit_id',     type: 'INT'           },
+              { name: 'has_tra_lai_after_da_xu_ly', type: 'BIT'           },
+              { name: 'has_open_workitem',          type: 'BIT'           },
+              { name: 'is_transfer_to_room',        type: 'BIT'           },
+              { name: 'last_audit_id',              type: 'INT'           },
+              { name: 'last_audit_time',            type: 'DATETIME2'     }
+            ]
+          }
+        ];
+
+        let sqlScript = '';
+        for (const target of schemaCheckList) {
+          const fullTableName = `${dbName}.${schema}.${target.table}`;
+          for (const col of target.cols) {
+            sqlScript += `
+              IF NOT EXISTS (
+                SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_NAME = '${target.table}' AND COLUMN_NAME = '${col.name}'
+              )
+              BEGIN
+                ALTER TABLE ${fullTableName} ADD [${col.name}] ${col.type} NULL;
+              END
+            `;
+          }
+        }
+
+        if (sqlScript) {
+          await this.queryNewDb(sqlScript);
+          logger.info('[SyncAuditModel] Global audit schema check/migration completed once (optimized).');
+        }
+
+      } catch (err) {
+        logger.error('[SyncAuditModel] Global schema initialization failed:', err.message);
+        // Reset promise so it can retry later if needed
+        SyncAuditModel._schemaInitPromise = null;
+        throw err;
+      }
+    })();
+
+    return SyncAuditModel._schemaInitPromise;
   }
 
   /**

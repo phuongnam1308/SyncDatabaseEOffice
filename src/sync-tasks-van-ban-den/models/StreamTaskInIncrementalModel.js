@@ -1,12 +1,8 @@
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 const logger = require('../../../utils/logger');
 const sql = require('mssql');
-const StreamTaskMigrationModel = require('./StreamTaskMigrationModel');
-const StreamTaskUsersModel = require('./StreamTaskUsersModel');
-const StreamSystemLogTasksModel = require('./StreamSystemLogTasksModel');
 
 const { v4: uuidv4 } = require('uuid');
-const SyncCommentModel = require('../../sync-document-comment/SyncCommentModel');
 const FileService = require('../../sync-file-copy/Fileuploadservice');
 const { downloadFile: spDownload } = require('../../sync-file-copy/SharePointAuthService');
 
@@ -156,6 +152,11 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     await super.initialize();
 
     try {
+      // Late require to break potential circular dependencies
+      const StreamTaskMigrationModel = require('./StreamTaskMigrationModel');
+      const StreamTaskUsersModel = require('./StreamTaskUsersModel');
+      const StreamSystemLogTasksModel = require('./StreamSystemLogTasksModel');
+
       this.taskModel = new StreamTaskMigrationModel();
       await this.taskModel.initialize();
 
@@ -178,6 +179,9 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       );
 
       this._fileService = new FileService(this.newPool);
+
+      // Late require SyncCommentModel
+      const SyncCommentModel = require('../../sync-document-comment/SyncCommentModel');
 
       this._syncCommentModel = [];
       const baseCommentModel = new SyncCommentModel(COMMENT_TABLES[0]);
