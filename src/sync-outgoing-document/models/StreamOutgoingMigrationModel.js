@@ -51,7 +51,8 @@ class StreamOutgoingMigrationModel extends BaseModel {
         return {
           action: "updated",
           affected: 1,
-          documentId: existing[0].document_id
+          documentId: existing[0].document_id,
+          drafter: mapped.drafter ?? null
         };
       }
 
@@ -60,7 +61,8 @@ class StreamOutgoingMigrationModel extends BaseModel {
       return {
         action: "inserted",
         affected: 1,
-        documentId: mapped.document_id
+        documentId: mapped.document_id,
+        drafter: mapped.drafter ?? null
       };
 
     } catch (error) {

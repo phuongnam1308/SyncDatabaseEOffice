@@ -1142,7 +1142,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         affected: Number(totalAffected || 0)
       };
     }
-
+    const drafter = documentResult.drafter;
     /* ====== thêm file====== */
     try {
       if (oldRecord?.Files) {
@@ -1229,7 +1229,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
             const model = modelMap.get(tableName) || firstModel;
             
             try {
-              const result = await model.processSingleRecord(rawAudit, documentId, transaction);
+              const result = await model.processSingleRecord(rawAudit, documentId, transaction, drafter);
               if (!result) continue;
               
               logger.info(
@@ -1283,6 +1283,12 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
           } catch (mapErr) {
             logger.warn(`[AutoCreateAudit] mapUserName failed for "${creatorName}": ${mapErr.message}`);
           }
+        }
+
+        // Fallback: nếu vẫn không resolve được creatorId (VANTHU_USER_ID cũng null) → dùng drafter
+        // đảm bảo cột created_by và receiver trong audit không bao giờ NULL.
+        if (!creatorId && drafter) {
+          creatorId = String(drafter).trim();
         }
 
         // Xác định type_document dựa trên loại

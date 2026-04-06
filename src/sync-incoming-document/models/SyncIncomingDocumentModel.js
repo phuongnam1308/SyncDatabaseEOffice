@@ -819,7 +819,8 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
                 return {
                     action: "updated",
                     affected: 1,
-                    documentId: existing[0].document_id
+                    documentId: existing[0].document_id,
+                    drafter: mapped.drafter ?? null
                 };
             }
 
@@ -828,7 +829,8 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
             return {
                 action: "inserted",
                 affected: 1,
-                documentId: mapped.document_id
+                documentId: mapped.document_id,
+                drafter: mapped.drafter ?? null
             };
 
         } catch (error) {
@@ -1085,6 +1087,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         return {
             // Core fields
             document_id: `${Date.now()}${Math.floor(Math.random() * 10000)}`,
+            drafter: drafter ?? null,   // Expose để caller dùng làm fallback cho audit
             status_code: statusCode,
             stage_status: stageStatus,
             // curStatusCode: curStatusCode,

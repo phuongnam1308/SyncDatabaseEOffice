@@ -325,7 +325,7 @@ class SyncAuditModel extends BaseModel {
    * @param {number} documentId - ID của văn bản trong CSDL mới.
    * @param {object} transaction - Đối tượng transaction của CSDL.
    */
-  async processSingleRecord(rawRecord, documentId, transaction = null) {
+  async processSingleRecord(rawRecord, documentId, transaction = null, drafter = null) {
     if (!rawRecord || !documentId) return null;
 
     let inserted = 0;
@@ -337,7 +337,8 @@ class SyncAuditModel extends BaseModel {
       const mapped = await this._mapSingleRecord(
         rawRecord,
         documentId,
-        transaction
+        transaction,
+        drafter
       );
 
       if (!mapped) {
@@ -662,7 +663,7 @@ class SyncAuditModel extends BaseModel {
    * @returns {object|null} - Đối tượng dữ liệu đã được map hoặc null.
    * @private
    */
-  async _mapSingleRecord(record, documentId, transaction) {
+  async _mapSingleRecord(record, documentId, transaction, drafter = null) {
     if (!record?.ID || !documentId)
       return null;
 
@@ -699,9 +700,16 @@ class SyncAuditModel extends BaseModel {
     const parsedRoleProcess = actionParsed.roleProcess || parsed.roleProcess || 'VANTHU';
     const parsedRole = parsed.parsedRole || null; // Role của người nhận bóc từ text
 
-    // ── FALLBACK: Nếu receiver rỗng → tự động lấy ID người xử lý (user_id) đắp vào ──
+    // ── FALLBACK 1: Nếu receiver rỗng → tự động lấy ID người xử lý (user_id) đắp vào ──
     if ((!receiver || receiver.length === 0) && user_id) {
       receiver = [user_id];
+    }
+
+    // ── FALLBACK 2: Nếu vẫn rỗng (user_id cũng null) → dùng drafter từ outgoing_documents ──
+    // drafter được truyền vào từ bên ngoài sau khi đã map xong document,
+    // đảm bảo cột receiver trong audit không bao giờ NULL.
+    if ((!receiver || receiver.length === 0) && drafter) {
+      receiver = [String(drafter).trim()].filter(Boolean);
     }
 
     // Chuẩn hóa chuỗi hành động thô và tạo đối tượng JSON cho cột 'details'
@@ -754,7 +762,8 @@ class SyncAuditModel extends BaseModel {
         record.ID,
         100
       ),
-      created_by: user_id || process.env.VANTHU_USER_ID,
+      // Ưu tiên: user_id → VANTHU_USER_ID → drafter (đảm bảo created_by không NULL)
+      created_by: user_id || (drafter ? String(drafter).trim() : null) || process.env.VANTHU_USER_ID,
       receiver,
       receiver_unit: receiverUnit,
       group_: this._normalizeTextField(
