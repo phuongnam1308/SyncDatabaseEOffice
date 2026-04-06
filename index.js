@@ -68,14 +68,12 @@ const ensureDesktopShortcut = () => {
   const psCommand = `
     $desktop = [Environment]::GetFolderPath('Desktop');
     $path = Join-Path $desktop '${shortcutName}';
-    if (-not (Test-Path $path)) {
-      $ws = New-Object -ComObject WScript.Shell;
-      $s = $ws.CreateShortcut($path);
-      $s.TargetPath = '${exePath}';
-      $s.WorkingDirectory = '${exeDir}';
-      if (Test-Path '${iconPath}') { $s.IconLocation = '${iconPath}'; }
-      $s.Save();
-    }
+    $ws = New-Object -ComObject WScript.Shell;
+    $s = $ws.CreateShortcut($path);
+    $s.TargetPath = '${exePath}';
+    $s.WorkingDirectory = '${exeDir}';
+    if (Test-Path '${iconPath}') { $s.IconLocation = '${iconPath},0'; }
+    $s.Save();
   `.replace(/\n/g, ' ').trim();
 
   // Su dung duong dan tuyet doi de tranh loi Windows ko nhan ra lenh powershell
