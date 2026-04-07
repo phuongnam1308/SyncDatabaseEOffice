@@ -630,27 +630,28 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
       ;WITH source_rows AS (
         SELECT
           *,
-          ${syncTimeExpr} AS __sync_time,
+          ${syncTimeExpr} AS _sync_time_val,
           TRY_CONVERT(
             BIGINT,
             NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
-          ) AS __sync_id_num
+          ) AS _sync_id_val
         FROM ${this.oldDbSchema}.${this.oldDbTable}
       )
       SELECT
         *,
-        ISNULL(__sync_id_num, 0) AS __sync_id
+        _sync_time_val AS __sync_time,
+        ISNULL(_sync_id_val, 0) AS __sync_id
       FROM source_rows
       WHERE (
-        __sync_time < @lastSyncTime
+        _sync_time_val < @lastSyncTime
         OR (
-          __sync_time = @lastSyncTime
-          AND ISNULL(__sync_id_num, 9223372036854775807) < @lastSyncId
+          _sync_time_val = @lastSyncTime
+          AND ISNULL(_sync_id_val, 9223372036854775807) < @lastSyncId
         )
       )
       ORDER BY
-        __sync_time DESC,
-        ISNULL(__sync_id_num, 9223372036854775807) DESC,
+        _sync_time_val DESC,
+        ISNULL(_sync_id_val, 9223372036854775807) DESC,
         ID DESC
       OFFSET ${Number(process.env.BEGIN_LIMIT || 0)} ROWS FETCH NEXT ${Number(process.env.COMPLETED_LIMIT || 100)} ROWS ONLY
     `;
@@ -798,28 +799,29 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
       ;WITH source_rows AS (
         SELECT
           *,
-          ${syncTimeExpr} AS __sync_time,
+          ${syncTimeExpr} AS _sync_time_val,
           TRY_CONVERT(
             BIGINT,
             NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
-          ) AS __sync_id_num
+          ) AS _sync_id_val
         FROM ${stagingTableRef}
       ),
       staged AS (
         SELECT
           *,
+          _sync_time_val AS __sync_time,
           ROW_NUMBER() OVER (
             ORDER BY
-              __sync_time DESC,
-              ISNULL(__sync_id_num, 9223372036854775807) DESC,
+              _sync_time_val DESC,
+              ISNULL(_sync_id_val, 9223372036854775807) DESC,
               ID DESC
           ) AS rn
         FROM source_rows
         WHERE (
-          __sync_time < @lastSyncTime
+          _sync_time_val < @lastSyncTime
           OR (
-            __sync_time = @lastSyncTime
-            AND ISNULL(__sync_id_num, 9223372036854775807) < @lastSyncId
+            _sync_time_val = @lastSyncTime
+            AND ISNULL(_sync_id_val, 9223372036854775807) < @lastSyncId
           )
         )
       )
