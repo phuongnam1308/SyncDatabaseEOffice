@@ -677,7 +677,7 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
       return { stagedCount: 0 };
     }
 
-    const internalColumns = new Set(['__sync_time', '__sync_id', '__sync_id_num']);
+    const internalColumns = new Set(['__sync_time', '__sync_id', '__sync_id_num', '_sync_time_val', '_sync_id_val']);
     const columns = Object.keys(rows[0] || {}).filter((column) => !internalColumns.has(column));
     if (!columns.length) {
       return { stagedCount: 0 };
