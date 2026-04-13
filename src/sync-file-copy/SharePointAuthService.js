@@ -76,8 +76,12 @@ async function refreshAuth() {
       _isRefreshing = false;
       if (code === 0) {
         logger.info('[SharePointAuth] Tự động làm mới Token THÀNH CÔNG.');
-        _cachedCookie = null; // Reset để getCookie() đọc lại file mới
-        resolve(true);
+        logger.info('[SharePointAuth] ⏳ Đang đợi 5 phút (300s) để hệ thống SharePoint ổn định phiên mới...');
+        setTimeout(() => {
+          logger.info('[SharePointAuth] ✓ Đã hết thời gian chờ ổn định. Bắt đầu cho phép tải file.');
+          _cachedCookie = null; // Reset để getCookie() đọc lại file mới
+          resolve(true);
+        }, 300000); // 5 phút
       } else {
         logger.error(`[SharePointAuth] Tự động làm mới Token THẤT BẠI (Exit code ${code}).`);
         reject(new Error('Background login failed'));
@@ -98,7 +102,7 @@ async function refreshAuth() {
  * Download file từ SharePoint với cookie xác thực.
  * Tự động login và retry nếu phát hiện hết hạn.
  */
-async function downloadFile(url, retryCount = 0, timeoutMs = 60000) {
+async function downloadFile(url, retryCount = 0, timeoutMs = 600000) {
   let cookie = getCookie();
 
   const doRequest = () =>

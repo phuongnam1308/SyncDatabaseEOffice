@@ -1,4 +1,4 @@
-const logger = require('../../../utils/logger');
+﻿const logger = require('../../../utils/logger');
 const sql = require('mssql');
 const { v4: uuidv4 } = require("uuid");
 const SyncCommentModel = require('../../sync-document-comment/SyncCommentModel');
@@ -36,6 +36,10 @@ function detectFileType(buffer) {
   return { mime:'application/octet-stream', ext:'bin' };
 }
 const DEFAULT_SYNC_TIME = '9999-12-31T23:59:59.999Z';
+
+// Lọc bản ghi cũ hơn ngưỡng này. Đặt trong .env với key SYNC_MIN_DATE.
+// Để lấy toàn bộ lịch sử, hãy đặt thành: 1753-01-01T00:00:00.000Z
+const SYNC_MIN_DATE = process.env.SYNC_MIN_DATE || '2026-01-01T00:00:00.000Z';
 
 const AUDIT_TABLES = [
   'LuanChuyenVanBan',
@@ -358,7 +362,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         )
       )
       -- Chỉ lấy bản ghi từ năm 2026 trở đi
-      AND __sync_time >= '2026-01-01T00:00:00.000Z'
+      AND __sync_time >= '${SYNC_MIN_DATE}'
     `;
 
     const rows = await this.queryOldDb(query, {
@@ -671,7 +675,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         )
       )
       -- Chỉ lấy bản ghi từ năm 2026 trở đi
-      AND __sync_time >= '2026-01-01T00:00:00.000Z'
+      AND __sync_time >= '${SYNC_MIN_DATE}'
       ORDER BY
         __sync_time DESC,
         ISNULL(__sync_id_num, 9223372036854775807) DESC,
@@ -820,10 +824,38 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       logger.info(`🔥 [OutGoingDoc] Batch ${i + 1}/${numIterations} staged: ${totalStaged}/${totalCount}. LastSyncTime: ${nextSyncTime}, LastSyncId: ${nextSyncId}`);
     }
 
+    // Fix Bug #3: Đếm số bản ghi THỰC TẾ trong staging có thể xử lý theo cursor hiện tại
+    // Không dùng totalStaged (số vừa staged lần này) vì khi Resume getList() không stage gì mới → totalStaged=0
+    // → SyncHandlerModel tính remaining = 0 - totalProcessed ≤ 0 → COMPLETED sai ngay lập tức
+    const stagingTableRef = this.getStagingTableRef();
+    const syncTimeExprStaging = this.getSyncTimeExpression();
+    let pendingCount = 0;
+    try {
+      const pendingRes = await this.queryNewDb(`
+        ;WITH src AS (
+          SELECT
+            ${syncTimeExprStaging} AS _t,
+            TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')) AS _id
+          FROM ${stagingTableRef}
+        )
+        SELECT COUNT(1) AS cnt FROM src
+        WHERE (
+          _t < @lastSyncTime
+          OR (_t = @lastSyncTime AND ISNULL(_id, 9223372036854775807) < @lastSyncId)
+        )
+        AND _t >= '${SYNC_MIN_DATE}'
+      `, { lastSyncTime: nextSyncTime, lastSyncId: Number(nextSyncId || 0) });
+      pendingCount = Number(pendingRes?.[0]?.cnt || 0);
+    } catch (e) {
+      logger.warn(`[OutGoingDoc] Không đếm được pending staging: ${e.message}`);
+      pendingCount = totalStaged;
+    }
+    logger.info(`[OutGoingDoc] Pending records trong Staging có thể xử lý: ${pendingCount}`);
+
     return {
       syncJobId,
-      rows: [], // Không giữ toàn bộ hàng trong bộ nhớ
-      totalCount: totalStaged,
+      rows: [],
+      totalCount: pendingCount,
       stagedCount: totalStaged,
       sourceLastSyncTime: normalizedLastSyncTime,
       sourceLastSyncId: normalizedLastSyncId,
@@ -950,11 +982,11 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       ;WITH source_rows AS (
         SELECT
           *,
-          ${syncTimeExpr} AS __sync_time,
+          ${syncTimeExpr} AS _sync_time_val,
           TRY_CONVERT(
             BIGINT,
             NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
-          ) AS __sync_id_num
+          ) AS _sync_id_val
         FROM ${stagingTableRef}
       ),
       staged AS (
@@ -962,19 +994,19 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
           *,
           ROW_NUMBER() OVER (
             ORDER BY
-              __sync_time DESC,
-              ISNULL(__sync_id_num, 9223372036854775807) DESC,
+              _sync_time_val DESC,
+              ISNULL(_sync_id_val, 9223372036854775807) DESC,
               ID DESC
           ) AS rn
         FROM source_rows
         WHERE (
-          __sync_time < @lastSyncTime
+          _sync_time_val < @lastSyncTime
           OR (
-            __sync_time = @lastSyncTime
-            AND ISNULL(__sync_id_num, 9223372036854775807) < @lastSyncId
+            _sync_time_val = @lastSyncTime
+            AND ISNULL(_sync_id_val, 9223372036854775807) < @lastSyncId
           )
         )
-        AND __sync_time >= '2026-01-01T00:00:00.000Z'
+        AND _sync_time_val >= '${SYNC_MIN_DATE}'
       )
       SELECT TOP 1 *
       FROM staged

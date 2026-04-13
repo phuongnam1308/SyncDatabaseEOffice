@@ -10,29 +10,40 @@ console.log(`- Executable: ${process.execPath}`);
 console.log(`- CWD: ${process.cwd()}`);
 console.log(`- Mode: ${isSeaApp ? 'EXE (Production)' : 'NodeJS (Development)'}`);
 
+let chromium = null;
+
 /**
  * Ham nap Playwright mot cach an toan, ho tro ca EXE va Dev
  */
 function getPlaywright() {
   if (chromium) return chromium;
 
-  const isSeaApp = process.execPath.toLowerCase().endsWith('.exe');
-  if (isSeaApp) {
+  const execPath = process.execPath.toLowerCase();
+  const isNode = execPath.endsWith('node.exe') || execPath.endsWith('node');
+  const isExe = execPath.endsWith('.exe');
+
+  // 1. Thu nap theo kieu SEA (neu la file EXE thuc thu)
+  if (!isNode && isExe) {
     try {
       const { createRequire } = require('module');
       const seaRootDir = path.dirname(process.execPath);
       const myRequire = createRequire(path.join(seaRootDir, 'index.js'));
       chromium = myRequire('playwright').chromium;
+      if (chromium) console.log('✅ Loaded Playwright via SEA require');
     } catch (e) {
-      console.error('❌ SEA Playwright Load Error:', e.message);
+      // Khong can bao loi o day vi se fallback xuong duoi
     }
-  } else {
+  }
+
+  // 2. Fallback nap theo kieu Development (NodeJS) neu SEA fail hoac khong phai SEA
+  if (!chromium) {
     try {
       chromium = require('playwright').chromium;
     } catch (e) {
-      console.error('❌ Dev Playwright Load Error:', e.message);
+      console.error('❌ Playwright Load Error (Dev):', e.message);
     }
   }
+
   return chromium;
 }
 
@@ -82,6 +93,7 @@ async function login(options = {}) {
   }
 
   let browser;
+  let page;
   try {
     const launchOptions = {
       headless: !headed,
@@ -89,13 +101,14 @@ async function login(options = {}) {
       args: ['--ignore-certificate-errors', '--no-sandbox', '--disable-setuid-sandbox']
     };
 
-    browser = await chromium.launch(launchOptions);
+    browser = await chrom.launch(launchOptions);
     const context = await browser.newContext({
       viewport: { width: 1280, height: 720 },
       ignoreHTTPSErrors: true
     });
 
-    const page = await context.newPage();
+    const pageInternal = await context.newPage();
+    page = pageInternal;
 
     console.log(`Navigating to ${startUrl}...`);
     // Chờ trang chủ tải xong hoàn toàn và mạng ổn định
@@ -142,12 +155,13 @@ async function login(options = {}) {
 
     // Bước 3: Submit form
     console.log('Step 3: Submitting login form...');
-    await page.click(loginBtnSelector);
+    // Tăng timeout lên 10 phút vì hệ thống cực chậm
+    await page.click(loginBtnSelector, { timeout: 600000 });
 
     // Bước 4: Chờ xác thực thành công (Quay lại trang chủ hoặc tìm dấu hiệu đã đăng nhập)
     console.log('Step 4: Waiting for authentication to complete...');
     // Chờ cho đến khi mạng hết bận (load xong trang sau login)
-    await page.waitForLoadState('networkidle', { timeout: 90000 });
+    await page.waitForLoadState('networkidle', { timeout: 600000 });
     
     // Đợi một trong các dấu hiệu thành công xuất hiện
     await Promise.race([

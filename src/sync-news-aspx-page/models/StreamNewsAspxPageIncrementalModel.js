@@ -698,9 +698,12 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
       total: totalToSync,
       jobId: syncJobId
     });
-
+    
     // =========================================================================
-    // ĐÓNG GÓI PHASE 1: KÉO DỮ LIỆU MỚI (ASC)
+    // BUOC 0.5: THU LAI CAC BAI BI LOI TIMEOUT (RETRY_WAITING) - CHAY SONG SONG
+    // =========================================================================
+    await this.retryFailedParallel(syncJobId);
+
     // =========================================================================
     const runPhase1 = async () => {
       let p1Staged = 0;
@@ -929,7 +932,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
       FROM (
         SELECT *, ROW_NUMBER() OVER (ORDER BY TimeLastModified DESC, DocId DESC) AS __rn
         FROM ${table}
-        WHERE ISNULL(DownloadStatus, '') NOT IN ('OK', 'ERROR')
+        WHERE ISNULL(DownloadStatus, '') NOT IN ('OK', 'ERROR', 'RETRY_WAITING')
       ) AS sub
       WHERE __rn = ${beginLimit + 1}
     `;
@@ -1079,7 +1082,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
       }
 
       await this._markDownloadResult(docId, {
-        status: 'ERROR',
+        status: 'RETRY_WAITING',
         error: errMsg,
         downloadedAt: null,
       });
@@ -1096,19 +1099,17 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
       // XỬ LÝ ĐẶC BIỆT CHO LỖI 404: Không dừng Job, tự động chuyển sang file tiếp theo
       if (is404) {
         logger.warn(`[Downloader] Bỏ qua bài viết lỗi 404 và CHẠY TIẾP bài khác, không dừng Job.`);
+        await this._markDownloadResult(docId, {
+          status: 'ERROR', // 404 thì coi như lỗi vĩnh viễn
+          error: errMsg,
+          downloadedAt: null,
+        });
         return { action: 'skipped_404', error: errMsg };
       }
 
-      // Thay vì ném lỗi làm sập Job, ta yêu cầu hệ thống chuyển sang trạng thái TẠM DỪNG.
-      try {
-        const SyncManagerService = require('../../sync-manager/SyncManagerService');
-        if (syncJobId) SyncManagerService.pauseJob(syncJobId);
-        logger.warn(`[Downloader] Đã chuyển Job sang trạng thái TẠM DỪNG do mất kết nối. Đồng chí có thể bấm "Tiếp" trên Dashboard khi mạng ổn định.`);
-      } catch (errPause) {
-        logger.error(`[Downloader] Lỗi khi cố gắng tạm dừng Job: ${errPause.message}`);
-      }
-
-      return { action: 'pause_requested', error: errMsg };
+      // Thay vì dừng Job, ta thông báo bài này sẽ được thử lại song song sau.
+      logger.warn(`[Downloader] Đã chuyển bài viết ${rowData?.LeafName} sang trạng thái RETRY_WAITING. Sẽ thử lại sau.`);
+      return { action: 'retry_queued', error: errMsg };
     }
 
     const html = buffer.toString('utf8');
@@ -1527,6 +1528,42 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
       return val.substring(0, maxLen);
     }
     return val;
+  }
+
+  /**
+   * Thục hiện thừ lại các bài viết bị lỗi Timeout ở đợt trước (RETRY_WAITING)
+   * Chạy song song để tối ưu thời gian.
+   */
+  async retryFailedParallel(syncJobId) {
+    const table = this.getStagingTableRef();
+    try {
+      const pendingRows = await this.queryNewDb(`
+        SELECT * FROM ${table} WHERE DownloadStatus = 'RETRY_WAITING'
+      `);
+
+      if (!pendingRows || pendingRows.length === 0) return;
+
+      logger.info(`[RETRY] Phát hiện ${pendingRows.length} bài viết đang đợi thử lại. Bắt đầu xử lý song song...`);
+
+      // Chia nhỏ để chạy song song (mỗi đợt 5 bài để không làm SharePoint "ngộp")
+      const chunkSize = 5;
+      for (let i = 0; i < pendingRows.length; i += chunkSize) {
+        const chunk = pendingRows.slice(i, i + chunkSize);
+        logger.info(`[RETRY] Đang xử lý nhóm bài viết ${i + 1} -> ${Math.min(i + chunkSize, pendingRows.length)}...`);
+        
+        await Promise.all(chunk.map(async (row) => {
+          try {
+            await this.processRowData(row, syncJobId);
+          } catch (err) {
+            logger.error(`[RETRY] Thử lại thất bại cho ${row.LeafName}: ${err.message}`);
+          }
+        }));
+      }
+      
+      logger.info(`[RETRY] Hoàn tất quá trình thử lại song song.`);
+    } catch (err) {
+      logger.error(`[RETRY] Lỗi nghiêm trọng trong quá trình retry: ${err.message}`);
+    }
   }
 }
 

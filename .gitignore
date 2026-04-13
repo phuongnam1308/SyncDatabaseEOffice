@@ -13,3 +13,4 @@ build/
 tintucraw/*
 logs/*
 build_version/
+upload/

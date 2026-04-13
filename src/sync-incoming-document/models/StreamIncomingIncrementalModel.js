@@ -41,6 +41,11 @@ const {
 
 const DEFAULT_SYNC_TIME = '1753-01-01T00:00:00.000Z';
 
+// Lọc bản ghi cũ hơn ngưỡng này. Đặt trong .env với key SYNC_MIN_DATE.
+// Ví dụ: SYNC_MIN_DATE=2026-01-01T00:00:00.000Z
+// Để tắt filter (lấy toàn bộ lịch sử), để trống hoặc đặt bằng '1753-01-01T00:00:00.000Z'
+const SYNC_MIN_DATE = process.env.SYNC_MIN_DATE || '2026-01-01T00:00:00.000Z';
+
 const AUDIT_TABLES = [
   'LuanChuyenVanBan',
   'LuanChuyenVanBan_ATPC',
@@ -313,6 +318,12 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
     if (Number.isNaN(dateValue.getTime())) return DEFAULT_SYNC_TIME;
     // Chế độ ASC: Nếu cursor quá cũ, ép về 1753
     if (dateValue.getFullYear() <= 1753) return DEFAULT_SYNC_TIME;
+    // Fix #4: Chặn cursor tương lai (> now(VN) + 1h buffer) để tránh skip toàn bộ data
+    const maxAllowed = new Date(Date.now() + 8 * 60 * 60 * 1000); // UTC+7 + 1h safe buffer
+    if (dateValue > maxAllowed) {
+      logger.warn(`[IncomingDocumentModel.normalizeSyncTime] Cursor tương lai bị reset về DEFAULT: ${value}`);
+      return DEFAULT_SYNC_TIME;
+    }
     return dateValue.toISOString();
   }
 
@@ -413,7 +424,7 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
         )
       )
       -- Chỉ lấy bản ghi từ năm 2026 trở đi
-      AND __sync_time >= '2026-01-01T00:00:00.000Z'
+      AND __sync_time >= '${SYNC_MIN_DATE}'
       ${toTimeFilter}
       ORDER BY
         __sync_time ASC,
@@ -472,7 +483,7 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
         )
       )
       -- Chỉ lấy bản ghi từ năm 2026 trở đi
-      AND __sync_time >= '2026-01-01T00:00:00.000Z'
+      AND __sync_time >= '${SYNC_MIN_DATE}'
       ${toTimeFilter}
     `;
 
@@ -692,10 +703,22 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
 
       logger.info(`[IncomingDocumentModel] Hoàn tất hút ${allRowsCount} bản ghi về Staging. Staged=${totalStagedCount}`);
 
+      // Fix #3: Đếm số bản ghi THỰC TẾ trong staging chưa xử lý (pending)
+      // Không dùng allRowsCount (số vừa staged lần này) vì khi Resume nó = 0
+      // → SyncHandlerModel sẽ tính remaining = 0 → COMPLETED sai
+      const pendingCountRes = await this.queryNewDb(`
+        SELECT COUNT(1) AS cnt
+        FROM ${stagingTableRef}
+        WHERE ISNULL(MigrateFlg, 0) = 0
+          AND ISNULL(MigrateErrFlg, 0) = 0
+      `);
+      const pendingCount = Number(pendingCountRes?.[0]?.cnt || 0);
+      logger.info(`[IncomingDocumentModel] Pending records trong Staging chưa xử lý: ${pendingCount}`);
+
       return {
         syncJobId,
         rows: [],
-        totalCount: allRowsCount,
+        totalCount: pendingCount,
         stagedCount: totalStagedCount,
         sourceLastSyncTime: normalizedLastSyncTime,
         sourceLastSyncId: normalizedLastSyncId,
@@ -760,9 +783,6 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
       throw error;
     }
 
-    const lastSyncTime = this.normalizeSyncTime(jobState?.last_sync_time);
-    const lastSyncId = Number(jobState?.last_sync_id || 0);
-
     let rowData = null;
     let transaction = null;
 
@@ -773,6 +793,8 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
 
       if (!rowData) {
         logger.info(`[IncomingDocumentModel] Không còn dữ liệu trong staging (cần xử lý) cho job ${syncJobId}.`);
+        // Deferred cursor: cập nhật cursor lên MAX(Modified) sau khi toàn bộ staging xong
+        await this.finalizeProcessingCursor(syncJobId);
         return {
           syncJobId,
           processed: false,
@@ -789,18 +811,16 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
 
       const result = await this.processRowData(rowData, { transaction });
 
-      const nextSyncTime = this.extractRowSyncTime(rowData) || lastSyncTime;
-      const nextSyncId = this.extractRowSyncId(rowData) || lastSyncId;
-
-      // Update Cursor & Success count
+      // Deferred Cursor strategy: KHÔNG update last_sync_time theo từng record.
+      // Với ORDER BY DESC (newest-first), record đầu tiên = mới nhất.
+      // Nếu update cursor ngay, nó sẽ nhảy lên tương lai sau 1 bước.
+      // Thay vào đó: chỉ tăng counter, cursor được finalize ở cuối (finalizeProcessingCursor).
       await this.queryNewDbTx(
         `UPDATE sync_jobs
          SET total_processed = ISNULL(total_processed, 0) + 1,
-             total_success   = ISNULL(total_success, 0) + 1,
-             last_sync_time  = @lastSyncTime,
-             last_sync_id    = @lastSyncId
+             total_success   = ISNULL(total_success, 0) + 1
          WHERE job_id = @syncJobId`,
-        { syncJobId, lastSyncTime: nextSyncTime, lastSyncId: nextSyncId },
+        { syncJobId },
         transaction
       );
 
@@ -841,6 +861,43 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
   }
 
   /**
+   * Cập nhật cursor (last_sync_time, last_sync_id) lên MAX(Modified) của tất cả bản ghi
+   * đã xử lý thành công trong staging (MigrateFlg=1).
+   * Gọi một lần duy nhất ở cuối job (khi fetchOneFromStaging trả null).
+   * Đây là phần cốt lõi của "Deferred Cursor" pattern.
+   * @param {string} syncJobId
+   * @returns {Promise<void>}
+   */
+  async finalizeProcessingCursor(syncJobId) {
+    try {
+      const stagingTableRef = this.getStagingTableRef();
+      const res = await this.queryNewDb(`
+        SELECT
+          MAX(TRY_CONVERT(datetime2, Modified)) AS maxTime,
+          MAX(TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(ID)), ''))) AS maxId
+        FROM ${stagingTableRef}
+        WHERE ISNULL(MigrateFlg, 0) = 1
+      `);
+      if (res?.[0]?.maxTime) {
+        const finalTime = new Date(res[0].maxTime).toISOString();
+        const finalId   = Number(res[0].maxId || 0);
+        await this.queryNewDb(
+          `UPDATE sync_jobs
+           SET last_sync_time = @t,
+               last_sync_id   = @id
+           WHERE job_id = @jobId`,
+          { t: finalTime, id: finalId, jobId: syncJobId }
+        );
+        logger.info(`[IncomingDocumentModel] Cursor finalized: last_sync_time=${finalTime}, last_sync_id=${finalId}`);
+      } else {
+        logger.info(`[IncomingDocumentModel] finalizeProcessingCursor: không có bản ghi đã xử lý, cursor giữ nguyên.`);
+      }
+    } catch (err) {
+      logger.warn(`[IncomingDocumentModel.finalizeProcessingCursor] Lỗi khi finalize cursor: ${err.message}`);
+    }
+  }
+
+  /**
    * Reads one deterministic row from staging based on source cursor and item index.
    * @param {{lastSyncTime:string,lastSyncId?:number,itemIndex:number,transaction?:object}} context
    * @returns {Promise<object|null>}
@@ -848,8 +905,10 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
   async fetchOneFromStaging() {
     try {
       const stagingTableRef = this.getStagingTableRef();
-      // Ưu tiên bản ghi có Modified mới nhất trước (newest-first),
-      // sau đó dùng ID số (lớn nhất) làm tie-breaker khi cùng Modified.
+      // Newest-first (DESC): xử lý bản ghi MỚI NHẤT trước.
+      // An toàn vì dùng "Deferred Cursor" pattern:
+      //   → Cursor KHÔNG update theo từng record (tránh nhảy lên tương lai)
+      //   → Cursor chỉ được finalize 1 lần sau khi staging rống (finalizeProcessingCursor)
       const query = `
       SELECT TOP 1 *
       FROM ${stagingTableRef}

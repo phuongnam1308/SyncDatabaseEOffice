@@ -1,4 +1,4 @@
-const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
+﻿const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 const logger = require('../../../utils/logger');
 const sql = require('mssql');
 
@@ -8,6 +8,11 @@ const { downloadFile: spDownload } = require('../../sync-file-copy/SharePointAut
 const MigrationHelper = require('../../helpers/MigrationHelper');
 
 const DEFAULT_SYNC_TIME = '9999-12-31T23:59:59.999Z';
+
+// Lọc bản ghi cũ hơn ngưỡng này. Đặt trong .env với key SYNC_MIN_DATE.
+// Ví dụ: SYNC_MIN_DATE=2026-01-01T00:00:00.000Z
+// Để tắt filter (lấy toàn bộ lịch sử), để trống hoặc đặt thành 1753-01-01T00:00:00.000Z
+const SYNC_MIN_DATE = process.env.SYNC_MIN_DATE || '2026-01-01T00:00:00.000Z';
 
 // ─── Deadlock retry config ────────────────────────────────────────────────────
 const DEADLOCK_MAX_RETRIES = 3;
@@ -622,7 +627,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
         )
       )
       -- Chỉ lấy bản ghi từ năm 2026 trở đi
-      AND __sync_time >= '2026-01-01T00:00:00.000Z'
+        AND _sync_time_val >= '${SYNC_MIN_DATE}'
     `;
 
     const rows = await this.queryOldDb(query, {
@@ -671,7 +676,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
         )
       )
       -- Chỉ lấy bản ghi từ năm 2026 trở đi
-      AND _sync_time_val >= '2026-01-01T00:00:00.000Z'
+        AND _sync_time_val >= '${SYNC_MIN_DATE}'
       ORDER BY
         _sync_time_val DESC,
         ISNULL(_sync_id_val, 9223372036854775807) DESC,
@@ -824,10 +829,38 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       logger.info(`🔥 [StreamTaskIn] Batch ${i + 1}/${numIterations} staged: ${totalStaged}/${totalCount}. LastSyncTime: ${nextSyncTime}, LastSyncId: ${nextSyncId}`);
     }
 
+    // Fix Bug #3: Đếm số bản ghi THỰC TẾ trong staging có thể xử lý theo cursor hiện tại
+    // Không dùng totalStaged (số vừa staged lần này) vì khi Resume getList() không stage gì mới → totalStaged=0
+    // → SyncHandlerModel tính remaining = 0 - totalProcessed ≤ 0 → COMPLETED sai ngay lập tức
+    const stagingTableRef = this.getStagingTableRef();
+    const syncTimeExprStaging = this.getSyncTimeExpression();
+    let pendingCount = 0;
+    try {
+      const pendingRes = await this.queryNewDb(`
+        ;WITH src AS (
+          SELECT
+            ${syncTimeExprStaging} AS _t,
+            TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')) AS _id
+          FROM ${stagingTableRef}
+        )
+        SELECT COUNT(1) AS cnt FROM src
+        WHERE (
+          _t < @lastSyncTime
+          OR (_t = @lastSyncTime AND ISNULL(_id, 9223372036854775807) < @lastSyncId)
+        )
+        AND _t >= '${SYNC_MIN_DATE}'
+      `, { lastSyncTime: nextSyncTime, lastSyncId: Number(nextSyncId || 0) });
+      pendingCount = Number(pendingRes?.[0]?.cnt || 0);
+    } catch (e) {
+      logger.warn(`[StreamTaskIn] Không đếm được pending staging: ${e.message}`);
+      pendingCount = totalStaged;
+    }
+    logger.info(`[StreamTaskIn] Pending records trong Staging có thể xử lý: ${pendingCount}`);
+
     return {
       syncJobId,
-      rows: [], // Không giữ tất cả rows trong bộ nhớ
-      totalCount: totalStaged,
+      rows: [],
+      totalCount: pendingCount,
       stagedCount: totalStaged,
       sourceLastSyncTime: normalizedLastSyncTime,
       sourceLastSyncId: normalizedLastSyncId,
@@ -864,7 +897,6 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       staged AS (
         SELECT
           *,
-          _sync_time_val AS __sync_time,
           ROW_NUMBER() OVER (
             ORDER BY
               _sync_time_val DESC,
@@ -879,7 +911,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
             AND ISNULL(_sync_id_val, 9223372036854775807) < @lastSyncId
           )
         )
-        AND _sync_time_val >= '2026-01-01T00:00:00.000Z'
+          AND _sync_time_val >= '${SYNC_MIN_DATE}'
       )
       SELECT TOP 1 *
       FROM staged
