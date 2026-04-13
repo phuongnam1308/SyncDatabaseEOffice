@@ -51,7 +51,8 @@ class StreamOutgoingMigrationModel extends BaseModel {
         return {
           action: "updated",
           affected: 1,
-          documentId: existing[0].document_id
+          documentId: existing[0].document_id,
+          drafter: mapped.drafter ?? null
         };
       }
 
@@ -60,7 +61,8 @@ class StreamOutgoingMigrationModel extends BaseModel {
       return {
         action: "inserted",
         affected: 1,
-        documentId: mapped.document_id
+        documentId: mapped.document_id,
+        drafter: mapped.drafter ?? null
       };
 
     } catch (error) {
@@ -93,7 +95,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
     const senderUnit = (await this.helper.mapSenderUnitId(
       this.helper.safeString(oldRecord.DonVi),
       transaction)) || process.env.DEFAULT_RECEIVER_UNIT_ID;
-    
+
     // Đảm bảo drafter không bao giờ là chuỗi 'NULL'
     let drafterRaw = this.helper.safeString(oldRecord.NguoiSoanThaoText || oldRecord.CreatedBy);
     const drafter = (await this.helper.mapUserDrafter(

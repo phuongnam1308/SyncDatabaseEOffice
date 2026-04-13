@@ -19,7 +19,7 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
     //_clone_for_sync';
     this.migrationHelper = new MigrationHelper(
       (...args) => this.queryNewDbTx(...args),
-      (...args) => this.queryOldDb?.(...args) ?? null
+      (...args) => this.queryOldDb?.(...args) ?? null,
     );
   }
 
@@ -32,11 +32,11 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
 
     // Tự động chuyển cột id sang NVARCHAR để chấp nhận ID dạng bình thường (Mã NV)
     try {
-        const tableRef = this.newDbName
-          ? `${this.newDbName}.${this.newDbSchema}.${this.newDbTable}`
-          : `${this.newDbSchema}.${this.newDbTable}`;
+      const tableRef = this.newDbName
+        ? `${this.newDbName}.${this.newDbSchema}.${this.newDbTable}`
+        : `${this.newDbSchema}.${this.newDbTable}`;
 
-        await this.queryNewDb(`
+      await this.queryNewDb(`
             BEGIN TRY
                 -- 1. Tìm và xóa Khóa chính (Primary Key) hiện hữu để có thể sửa cột id
                 DECLARE @pkname NVARCHAR(200);
@@ -57,20 +57,25 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
                     THROW;
             END CATCH
         `);
-        logger.info(`[StreamUserMigrationModel] ID column in ${this.newDbTable} ensured to be NVARCHAR with PK reset.`);
-        // Đảm bảo các cột mới có trong bảng (resilience)
-        const columnsToAdd = [
-          { name: 'id_user_del_bak', type: 'nvarchar(255) COLLATE SQL_Latin1_General_CP1_CI_AS NULL' },
-          { name: 'contentSignImage', type: 'int NULL' },
-          { name: 'paraphSignImage', type: 'int NULL' },
-          { name: 'paraphSignTransparentImage', type: 'int NULL' },
-          { name: 'contentSignTransparentImage', type: 'int NULL' },
-          { name: 'stampSignImage', type: 'int NULL' },
-          { name: 'table_backups', type: 'nvarchar(255) COLLATE SQL_Latin1_General_CP1_CI_AS NULL' }
-        ];
+      logger.info(
+        `[StreamUserMigrationModel] ID column in ${this.newDbTable} ensured to be NVARCHAR with PK reset.`,
+      );
+      // Đảm bảo các cột mới có trong bảng (resilience)
+      const columnsToAdd = [
+        {
+          name: 'id_user_del_bak',
+          type: 'nvarchar(255) COLLATE SQL_Latin1_General_CP1_CI_AS NULL',
+        },
+        { name: 'contentSignImage', type: 'int NULL' },
+        { name: 'paraphSignImage', type: 'int NULL' },
+        { name: 'paraphSignTransparentImage', type: 'int NULL' },
+        { name: 'contentSignTransparentImage', type: 'int NULL' },
+        { name: 'stampSignImage', type: 'int NULL' },
+        { name: 'table_backups', type: 'nvarchar(255) COLLATE SQL_Latin1_General_CP1_CI_AS NULL' },
+      ];
 
-        for (const col of columnsToAdd) {
-            await this.queryNewDb(`
+      for (const col of columnsToAdd) {
+        await this.queryNewDb(`
                 IF NOT EXISTS (
                     SELECT * FROM sys.columns
                     WHERE object_id = OBJECT_ID('${tableRef}') AND name = '${col.name}'
@@ -79,9 +84,11 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
                     ALTER TABLE ${tableRef} ADD ${col.name} ${col.type};
                 END
             `);
-        }
+      }
     } catch (e) {
-        logger.warn(`[StreamUserMigrationModel] Failed to alter id column or ensure columns: ${e.message}`);
+      logger.warn(
+        `[StreamUserMigrationModel] Failed to alter id column or ensure columns: ${e.message}`,
+      );
     }
   }
 
@@ -317,35 +324,138 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
         const lowerKw = keyword.normalize('NFC').toLowerCase();
         const noAccKw = this.normalizeVietnamese(keyword);
 
-        const matched =
-          lowerPos.includes(lowerKw) ||
-          noAccent.includes(noAccKw);
+        const matched = lowerPos.includes(lowerKw) || noAccent.includes(noAccKw);
 
         if (matched) {
-          console.log(
-            '[mapPositionToRoles] position=' + JSON.stringify(position)
-            + ' matched keyword=' + JSON.stringify(keyword)
-            + ' → ' + roles.length + ' processKey(s): ' + roles.map(r => r.processKey).join(', ')
-          );
           return JSON.stringify(roles);
         }
       }
     }
 
-    console.warn('[mapPositionToRoles] position=' + JSON.stringify(position) + ' → không match keyword nào, trả []');
     return '[]';
   }
 
-  mapRecordForUpsert(oldRecord) {
-    const username = oldRecord.AccountName || '';
-
-    let code_nd = username;
-    const backslashIndex = username.lastIndexOf('\\');
-    if (backslashIndex > -1) {
-      code_nd = username.substring(backslashIndex + 1);
+  async processAvatar(imageHtml, username) {
+    if (!imageHtml) {
+      // logger.debug(`[StreamUserMigrationModel][Avatar] processAvatar: imageHtml trống cho user ${username}`);
+      return '[]';
     }
 
-    let name = (oldRecord.FullName || username || 'Unknown').trim();
+    logger.info(
+      `[StreamUserMigrationModel][Avatar] [1] Đầu vào chuỗi HTML ảnh của user ${username}: ${imageHtml}`,
+    );
+
+    // Match URL inside src
+    const match = imageHtml.match(/src=['"]([^'"]+)['"]/i);
+    if (!match) {
+      logger.info(
+        `[StreamUserMigrationModel][Avatar] [1.1] Không tìm thấy 'src=' hợp lệ trong chuỗi HTML của user ${username}`,
+      );
+      return '[]';
+    }
+
+    let imgUrl = match[1];
+    logger.info(`[StreamUserMigrationModel][Avatar] [2] Trích xuất cấu trúc gốc URL: ${imgUrl}`);
+
+    if (imgUrl.startsWith('/')) {
+      imgUrl = 'https://eoffice.saigonnewport.com.vn' + imgUrl;
+      logger.info(
+        `[StreamUserMigrationModel][Avatar] [2.1] Đã Normalize URL tải ảnh thành: ${imgUrl}`,
+      );
+    }
+
+    logger.info(
+      `[StreamUserMigrationModel][Avatar] [3] Chuẩn bị gửi request tải ảnh xuống cho user ${username} từ URL: ${imgUrl}`,
+    );
+
+    try {
+      const { downloadFile } = require('../../sync-file-copy/SharePointAuthService');
+      const FileUploadService = require('../../sync-file-copy/Fileuploadservice');
+      const path = require('path');
+
+      const fileBuffer = await downloadFile(imgUrl);
+      if (!fileBuffer || fileBuffer.length === 0) {
+        logger.warn(
+          `[StreamUserMigrationModel][Avatar] [3.1] CẢNH BÁO: Không có dữ liệu Buffer trả về khi tải ảnh cho user ${username} (File trống)`,
+        );
+        return '[]';
+      }
+
+      logger.info(
+        `[StreamUserMigrationModel][Avatar] [4] Tải thành công Buffer ảnh (Kích thước: ${fileBuffer.length} bytes). Định chuyển nhượng sang FileUploadService...`,
+      );
+
+      let originalName = 'avatar.png';
+      try {
+        const parsedUrl = new URL(imgUrl);
+        const segments = parsedUrl.pathname.split('/');
+        const lastSegment = segments[segments.length - 1];
+        if (lastSegment) {
+          originalName = decodeURIComponent(lastSegment.split('?')[0]);
+        }
+        logger.info(
+          `[StreamUserMigrationModel][Avatar] [4.1] Đã bóc tách tên File nhận định ban đầu: ${originalName}`,
+        );
+      } catch (e) {
+        logger.info(
+          `[StreamUserMigrationModel][Avatar] [4.1] Lỗi bóc tách URL, lấy tên fallback mặc định: ${originalName}`,
+        );
+      }
+
+      const uploader = new FileUploadService();
+      logger.info(
+        `[StreamUserMigrationModel][Avatar] [5] Đang call "uploader.uploadToNewSystem" với params: { originalName: '${originalName}', objectType: '', objectId: '' } cho user ${username}...`,
+      );
+
+      const apiResponse = await uploader.uploadToNewSystem({
+        fileBuffer,
+        originalName,
+        objectType: '',
+        objectId: '',
+      });
+
+      logger.info(
+        `[StreamUserMigrationModel][Avatar] [6] KẾT QUẢ thô từ uploader.uploadToNewSystem trả về: ${JSON.stringify(apiResponse)}`,
+      );
+
+      if (apiResponse && apiResponse.id) {
+        logger.info(
+          `[StreamUserMigrationModel][Avatar] [7] Upload Avatar thành công cho user ${username}. File ID trên hệ thống mới: ${apiResponse.id}`,
+        );
+        return JSON.stringify(apiResponse);
+      } else {
+        logger.warn(
+          `[StreamUserMigrationModel][Avatar] [7.1] THẤT BẠI: Response không trả về field 'id' hợp lệ cho user ${username}. Gửi chuỗi rỗng []`,
+        );
+      }
+    } catch (err) {
+      logger.warn(
+        `[StreamUserMigrationModel][Avatar] [LỖI] Lỗi ném ra từ catch block khi tải/upload Avatar từ url ${imgUrl} cho user ${username}: ` +
+          err.message +
+          ` | Stack: ${err.stack}`,
+      );
+    }
+    return '[]';
+  }
+
+  async mapRecordForUpsert(oldRecord) {
+    let email_user = this.safeString(oldRecord.Email);
+    let code_nd = this.safeString(oldRecord.StaffID);
+
+    // If code_nd is not available, derive it from email
+    if (!code_nd && email_user) {
+      const atIndex = email_user.indexOf('@');
+      if (atIndex > -1) {
+        code_nd = email_user.substring(0, atIndex);
+      } else {
+        const backslashIndex = email_user.lastIndexOf('\\');
+        if (backslashIndex > -1) {
+          code_nd = email_user.substring(backslashIndex + 1);
+        }
+      }
+    }
+
+    let name = (oldRecord.FullName || email_user || 'Unknown').trim();
     const hyphenIndex = name.indexOf('-');
     if (hyphenIndex > -1) {
       name = name.substring(0, hyphenIndex).trim();
@@ -353,24 +463,22 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
 
     // Nếu code_nd trông không giống mã nhân viên (quá dài hoặc chứa tên đầy đủ),
     // sử dụng hàm buildAbbreviatedCode để tạo mã ndc chuẩn.
-    if (!code_nd || code_nd.length > 10 || code_nd.includes(' ')) {
+    if (!code_nd || code_nd.length > 100 || code_nd.includes(' ')) {
       code_nd = this.migrationHelper.buildAbbreviatedCode(name);
     }
 
-    let email_user = this.safeString(oldRecord.Email);
-    if (!email_user && code_nd) {
-      email_user = `${code_nd}@saigonnewport.com.vn`;
-    }
-
     const position = this.safeString(oldRecord.Position);
+    const uploadedAvatar = await this.processAvatar(oldRecord.Image, code_nd);
 
     return {
       id: uuidv4(),
-      password: process.env.DEFAULT_PASSWORD ||'$2b$10$Ohcqw9J1YStppJHeYdoD5.yWjnCm5Mt7MQxWoIMNc0LBwbFRW1DU2',
+      password:
+        process.env.DEFAULT_PASSWORD ||
+        '$2b$10$Ohcqw9J1YStppJHeYdoD5.yWjnCm5Mt7MQxWoIMNc0LBwbFRW1DU2',
       name,
-      avatar: oldRecord.Image || '[]',
+      avatar: uploadedAvatar !== '[]' && uploadedAvatar ? uploadedAvatar : '[]',
       code_nd,
-      username: oldRecord.AccountName,
+      username: code_nd,
       email_user,
       phone_number_user: this.safeString(oldRecord.Mobile),
       position: position,
@@ -383,7 +491,7 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
         if (mappedRoles && mappedRoles !== '[]') return mappedRoles;
         let envRoles = process.env.ROLES_DEFAULT;
         if (envRoles && envRoles.trim() !== '') return envRoles;
-        return (ROLES_DEFAULT && ROLES_DEFAULT.length > 0) ? JSON.stringify(ROLES_DEFAULT) : '[]';
+        return ROLES_DEFAULT && ROLES_DEFAULT.length > 0 ? JSON.stringify(ROLES_DEFAULT) : '[]';
       })(),
       organization_name: null,
       organization_code: null,
@@ -421,17 +529,57 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
       paraphSignImage: null,
       paraphSignTransparentImage: null,
       contentSignTransparentImage: null,
-      stampSignImage: null
+      stampSignImage: null,
     };
+  }
+
+  /**
+   * @param {string} lastSyncTime - ISO datetime hoặc giá trị mặc định để lấy từ thời điểm đó về sau
+   * @returns {Promise<number>} tổng số bản ghi từ CSDL cũ
+   */
+  async getCount(lastSyncTime, lastSyncId = 0) {
+    const query = `
+      ;WITH source_rows AS (
+        SELECT
+          *,
+          COALESCE(TRY_CONVERT(datetime2, Modified), TRY_CONVERT(datetime2, NgayTao)) AS __sync_time,
+          TRY_CONVERT(
+            BIGINT,
+            NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
+          ) AS __sync_id_num
+        FROM ${this.oldDbSchema}.${this.oldDbTable}
+      )
+      SELECT COUNT(1) AS total
+      FROM source_rows
+      WHERE (
+        StaffID IS NOT NULL AND LTRIM(RTRIM(StaffID)) <> ''
+        AND (
+          __sync_time > @lastSyncTime
+          OR (
+            __sync_time = @lastSyncTime
+            AND ISNULL(__sync_id_num, -9223372036854775808) > @lastSyncId
+          )
+        )
+      )
+    `;
+
+    const rows = await this.queryOldDb(query, {
+      lastSyncTime,
+      lastSyncId: Number(lastSyncId || 0),
+    });
+    return rows?.[0]?.total || 0;
   }
 
   /**
    * Lấy danh sách user từ CSDL cũ sau `lastSyncTime`.
    * Trả về mảng bản ghi (ID, AccountName, FullName, Modified, NgayTao) đã sắp xếp theo thời gian sửa/tao.
    * @param {string} lastSyncTime - ISO datetime hoặc giá trị mặc định để lấy từ thời điểm đó về sau
+   * @param {number} lastSyncId - ID cuối cùng đã đồng bộ
+   * @param {number} limit - Số lượng bản ghi cần lấy
+   * @param {number} offset - Vị trí bắt đầu lấy
    * @returns {Promise<Array>} danh sách bản ghi từ CSDL cũ
    */
-  async fetchListFromOldDb(lastSyncTime, lastSyncId = 0) {
+  async fetchListFromOldDb(lastSyncTime, lastSyncId = 0, limit = null, offset = null) {
     const query = `
       ;WITH source_rows AS (
         SELECT
@@ -448,21 +596,27 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
         ISNULL(__sync_id_num, 0) AS __sync_id
       FROM source_rows
       WHERE (
-        __sync_time > @lastSyncTime
-        OR (
-          __sync_time = @lastSyncTime
-          AND ISNULL(__sync_id_num, -9223372036854775808) > @lastSyncId
+        StaffID IS NOT NULL AND LTRIM(RTRIM(StaffID)) <> ''
+        AND (
+          __sync_time > @lastSyncTime
+          OR (
+            __sync_time = @lastSyncTime
+            AND ISNULL(__sync_id_num, -9223372036854775808) > @lastSyncId
+          )
         )
       )
       ORDER BY
         __sync_time ASC,
         ISNULL(__sync_id_num, -9223372036854775808) ASC,
         ID ASC
+      ${limit != null ? 'OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY' : ''}
     `;
 
     return this.queryOldDb(query, {
       lastSyncTime,
-      lastSyncId: Number(lastSyncId || 0)
+      lastSyncId: Number(lastSyncId || 0),
+      limit: limit != null ? Number(limit) : null,
+      offset: offset != null ? Number(offset) : 0,
     });
   }
 
@@ -499,11 +653,15 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
       const query = `
         IF EXISTS (SELECT 1 FROM ${stagingTableRef} WHERE ID = @ID)
         BEGIN
-          ${nonIdColumns.length > 0 ? `
+          ${
+            nonIdColumns.length > 0
+              ? `
           UPDATE ${stagingTableRef}
           SET ${updateClause}
-          WHERE ID = @ID;` : `
-          SELECT 1 AS noop;`}
+          WHERE ID = @ID;`
+              : `
+          SELECT 1 AS noop;`
+          }
         END
         ELSE
         BEGIN
@@ -525,31 +683,62 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
 
     const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
     const normalizedLastSyncId = Number(lastSyncId || 0);
-    const rows = await this.fetchListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId);
-    const stageResult = await this.syncOldToStaging(rows);
+
+    const batchSize = Number(process.env.STAGING_FETCH_BATCH_SIZE || 2000);
+
+    // 1. Đếm tổng và cập nhật Dashboard
+    const totalCount = await this.getCount(normalizedLastSyncTime, normalizedLastSyncId);
+    logger.info(`[StreamUserMigration] Tổng số bản ghi (User) cần hút về Staging: ${totalCount}`);
+
+    await this.queryNewDb(`UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`, {
+      total: totalCount,
+      jobId: syncJobId,
+    });
+
+    const numIterations = Math.ceil(totalCount / batchSize);
+    let totalProcessed = 0;
+    let totalStaged = 0;
 
     let nextSyncTime = normalizedLastSyncTime;
     let nextSyncId = normalizedLastSyncId;
 
-    for (const row of rows) {
-      const rowTime = this.extractRowSyncTime(row);
-      const rowId = this.extractRowSyncId(row);
-      if (!rowTime) continue;
-      if (this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId)) {
-        nextSyncTime = rowTime;
-        nextSyncId = rowId;
+    // 2. Chạy vòng lặp theo gói batchSize
+    for (let i = 0; i < numIterations; i++) {
+      const offset = i * batchSize;
+      const rows = await this.fetchListFromOldDb(
+        normalizedLastSyncTime,
+        normalizedLastSyncId,
+        batchSize,
+        offset,
+      );
+      if (!rows || rows.length === 0) break;
+
+      const stageResult = await this.syncOldToStaging(rows);
+      totalStaged += Number(stageResult?.stagedCount || 0);
+      totalProcessed += rows.length;
+
+      // Cập nhật cursor từ batch hiện tại
+      for (const row of rows) {
+        const rowTime = this.extractRowSyncTime(row);
+        const rowId = this.extractRowSyncId(row);
+        if (rowTime && this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId)) {
+          nextSyncTime = rowTime;
+          nextSyncId = rowId;
+        }
       }
+
+      logger.info(`🔥 [StreamUserMigration] Đã kéo được ${totalProcessed}/${totalCount} bản ghi về Staging...`);
     }
 
     return {
       syncJobId,
-      rows,
-      totalCount: rows.length,
-      stagedCount: Number(stageResult?.stagedCount || 0),
+      rows: [],
+      totalCount: totalProcessed,
+      stagedCount: totalStaged,
       sourceLastSyncTime: normalizedLastSyncTime,
       sourceLastSyncId: normalizedLastSyncId,
       lastSyncTime: nextSyncTime,
-      lastSyncId: nextSyncId
+      lastSyncId: nextSyncId,
     };
   }
 
@@ -571,7 +760,7 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
       FROM sync_jobs
       WHERE job_id = @syncJobId
       `,
-      { syncJobId }
+      { syncJobId },
     );
 
     return rows?.[0] || null;
@@ -584,18 +773,17 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
 
     const jobState = await this.getSyncJobState(syncJobId);
     const itemIndex = Number(
-      options.itemIndex != null
-        ? options.itemIndex
-        : (jobState?.total_processed || 0)
+      options.itemIndex != null ? options.itemIndex : jobState?.total_processed || 0,
     );
 
     const sourceLastSyncTime = this.normalizeSyncTime(
-      options.sourceLastSyncTime || options.lastSyncTime || jobState?.last_sync_time || DEFAULT_SYNC_TIME
+      options.sourceLastSyncTime ||
+        options.lastSyncTime ||
+        jobState?.last_sync_time ||
+        DEFAULT_SYNC_TIME,
     );
     const sourceLastSyncId = Number(
-      options.sourceLastSyncId != null
-        ? options.sourceLastSyncId
-        : (jobState?.last_sync_id || 0)
+      options.sourceLastSyncId != null ? options.sourceLastSyncId : jobState?.last_sync_id || 0,
     );
 
     const rowData = await this.fetchOneFromStaging({
@@ -609,7 +797,7 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
         syncJobId,
         itemIndex,
         processed: false,
-        done: true
+        done: true,
       };
     }
 
@@ -620,7 +808,7 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
       processed: true,
       done: false,
       rowId: rowData.ID || null,
-      result
+      result,
     };
   }
 
@@ -666,9 +854,9 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
       {
         lastSyncTime,
         lastSyncId: Number(lastSyncId || 0),
-        rowNumber
+        rowNumber,
       },
-      transaction
+      transaction,
     );
 
     if (!rows?.length) {
@@ -699,7 +887,7 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
     return {
       action: res.action || 'upsert',
       backupId,
-      affected: Number(res.affected || 0)
+      affected: Number(res.affected || 0),
     };
   }
 
@@ -714,17 +902,20 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
    * @returns {Promise<{action:string,affected:number}>}
    */
   async upsertUserById(rowDataOrBackupId, fallbackNameOrTransaction, maybeTransaction) {
-    const isRowDataInput = rowDataOrBackupId && typeof rowDataOrBackupId === 'object' && !Array.isArray(rowDataOrBackupId);
+    const isRowDataInput =
+      rowDataOrBackupId &&
+      typeof rowDataOrBackupId === 'object' &&
+      !Array.isArray(rowDataOrBackupId);
     const rowData = isRowDataInput
       ? rowDataOrBackupId
       : {
-        ID: rowDataOrBackupId,
-        AccountName: String(rowDataOrBackupId || ''),
-        FullName: String(fallbackNameOrTransaction || '')
-      };
+          ID: rowDataOrBackupId,
+          AccountName: String(rowDataOrBackupId || ''),
+          FullName: String(fallbackNameOrTransaction || ''),
+        };
     const transaction = isRowDataInput ? fallbackNameOrTransaction : maybeTransaction;
 
-    const mapped = this.mapRecordForUpsert(rowData);
+    const mapped = await this.mapRecordForUpsert(rowData);
     if (!mapped.id) throw new Error('backupId is required');
 
     // Resolve parent: dùng processSenderUnit để chuẩn hoá tên Department
@@ -748,12 +939,12 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
           const orgRows = await this.queryNewDbTx(
             `SELECT TOP 1 id FROM ${orgRef} WHERE LTRIM(RTRIM(name)) = @name AND status = 1`,
             { name: normalizedDept },
-            transaction
+            transaction,
           );
           parentId = orgRows?.length ? orgRows[0].id : null;
         }
         if (!parentId) {
-          parentId = USER_PAREN_DEFAULT || '68afb3a1cb36081f0bba5dd6'
+          parentId = USER_PAREN_DEFAULT || '68afb3a1cb36081f0bba5dd6';
         }
         // ③ Gán vào parent
         mapped.parent = parentId;
@@ -772,59 +963,75 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
       : `${this.newDbSchema}.${this.newDbTable}`;
 
     const query = `
-      IF EXISTS (SELECT 1 FROM ${tableRef} WHERE id_user_bak = @id_user_bak)
+      DECLARE @existingId nvarchar(100);
+      DECLARE @existingUpdatedAt datetime2;
+
+      SELECT TOP 1
+        @existingId = id,
+        @existingUpdatedAt = updated_at
+      FROM ${tableRef}
+      WHERE username = @username;
+
+      IF @existingId IS NOT NULL
       BEGIN
-        UPDATE ${tableRef}
-        SET password = @password,
-            name = @name,
-            avatar = @avatar,
-            code_nd = @code_nd,
-            username = @username,
-            email_user = @email_user,
-            phone_number_user = @phone_number_user,
-            position = @position,
-            leader = @leader,
-            address_user = @address_user,
-            description = @description,
-            role = @role,
-            roles_by_process = @roles_by_process,
-            organization_name = @organization_name,
-            organization_code = @organization_code,
-            organization_type = @organization_type,
-            orders = @orders,
-            birthday = @birthday,
-            gender = @gender,
-            identification_card = @identification_card,
-            contact_time = @contact_time,
-            parent = @parent,
-            wso2_user_id = @wso2_user_id,
-            keycloak_user_id = @keycloak_user_id,
-            status = @status,
-            author = @author,
-            role_group_source_authorized = @role_group_source_authorized,
+        IF @existingUpdatedAt >= @old_modified
+        BEGIN
+          SELECT 0 AS affected, 'skipped' AS action;
+        END
+        ELSE
+        BEGIN
+          UPDATE ${tableRef}
+          SET
+            name = COALESCE(NULLIF(LTRIM(RTRIM(@name)), ''), name),
+            avatar = COALESCE(NULLIF(LTRIM(RTRIM(@avatar)), ''), avatar),
+            code_nd = COALESCE(NULLIF(LTRIM(RTRIM(@code_nd)), ''), code_nd),
+            email_user = COALESCE(NULLIF(LTRIM(RTRIM(@email_user)), ''), email_user),
+            phone_number_user = COALESCE(NULLIF(LTRIM(RTRIM(@phone_number_user)), ''), phone_number_user),
+            position = COALESCE(NULLIF(LTRIM(RTRIM(@position)), ''), position),
+            leader = COALESCE(NULLIF(LTRIM(RTRIM(@leader)), ''), leader),
+            address_user = COALESCE(NULLIF(LTRIM(RTRIM(@address_user)), ''), address_user),
+            description = COALESCE(NULLIF(LTRIM(RTRIM(@description)), ''), description),
+            role = COALESCE(NULLIF(LTRIM(RTRIM(@role)), ''), role),
+            roles_by_process = COALESCE(NULLIF(LTRIM(RTRIM(@roles_by_process)), ''), roles_by_process),
+            organization_name = COALESCE(NULLIF(LTRIM(RTRIM(@organization_name)), ''), organization_name),
+            organization_code = COALESCE(NULLIF(LTRIM(RTRIM(@organization_code)), ''), organization_code),
+            organization_type = COALESCE(NULLIF(LTRIM(RTRIM(@organization_type)), ''), organization_type),
+            orders = COALESCE(@orders, orders),
+            birthday = COALESCE(@birthday, birthday),
+            gender = COALESCE(NULLIF(LTRIM(RTRIM(@gender)), ''), gender),
+            identification_card = COALESCE(NULLIF(LTRIM(RTRIM(@identification_card)), ''), identification_card),
+            contact_time = COALESCE(@contact_time, contact_time),
+            parent = COALESCE(@parent, parent),
+            wso2_user_id = COALESCE(NULLIF(LTRIM(RTRIM(@wso2_user_id)), ''), wso2_user_id),
+            keycloak_user_id = COALESCE(NULLIF(LTRIM(RTRIM(@keycloak_user_id)), ''), keycloak_user_id),
+            status = COALESCE(@status, status),
+            author = COALESCE(NULLIF(LTRIM(RTRIM(@author)), ''), author),
+            role_group_source_authorized = COALESCE(NULLIF(LTRIM(RTRIM(@role_group_source_authorized)), ''), role_group_source_authorized),
             updated_at = @updated_at,
-            name_authorized = @name_authorized,
-            AccountID = @AccountID,
-            FullName = @FullName,
-            Department = @Department,
-            DepartmentId = @DepartmentId,
-            PhongBanID = @PhongBanID,
-            SimKySo1 = @SimKySo1,
-            SimKySo2 = @SimKySo2,
-            DepartmentManager = @DepartmentManager,
-            IsTCT = @IsTCT,
-            ImagePath = @ImagePath,
-            SignImage = @SignImage,
-            SignImageSmall = @SignImageSmall,
-            table_backups = @table_backups,
-            id_user_del_bak = @id_user_del_bak,
-            contentSignImage = @contentSignImage,
-            paraphSignImage = @paraphSignImage,
-            paraphSignTransparentImage = @paraphSignTransparentImage,
-            contentSignTransparentImage = @contentSignTransparentImage,
-            stampSignImage = @stampSignImage
-        WHERE id_user_bak = @id_user_bak;
-        SELECT @@ROWCOUNT AS affected, 'updated' AS action;
+            name_authorized = COALESCE(NULLIF(LTRIM(RTRIM(@name_authorized)), ''), name_authorized),
+            AccountID = COALESCE(NULLIF(LTRIM(RTRIM(@AccountID)), ''), AccountID),
+            FullName = COALESCE(NULLIF(LTRIM(RTRIM(@FullName)), ''), FullName),
+            Department = COALESCE(NULLIF(LTRIM(RTRIM(@Department)), ''), Department),
+            DepartmentId = COALESCE(NULLIF(LTRIM(RTRIM(@DepartmentId)), ''), DepartmentId),
+            PhongBanID = COALESCE(NULLIF(LTRIM(RTRIM(@PhongBanID)), ''), PhongBanID),
+            SimKySo1 = COALESCE(NULLIF(LTRIM(RTRIM(@SimKySo1)), ''), SimKySo1),
+            SimKySo2 = COALESCE(NULLIF(LTRIM(RTRIM(@SimKySo2)), ''), SimKySo2),
+            DepartmentManager = COALESCE(NULLIF(LTRIM(RTRIM(@DepartmentManager)), ''), DepartmentManager),
+            IsTCT = COALESCE(@IsTCT, IsTCT),
+            ImagePath = COALESCE(NULLIF(LTRIM(RTRIM(@ImagePath)), ''), ImagePath),
+            SignImage = COALESCE(NULLIF(LTRIM(RTRIM(@SignImage)), ''), SignImage),
+            SignImageSmall = COALESCE(NULLIF(LTRIM(RTRIM(@SignImageSmall)), ''), SignImageSmall),
+            table_backups = COALESCE(NULLIF(LTRIM(RTRIM(@table_backups)), ''), table_backups),
+            id_user_bak = COALESCE(NULLIF(LTRIM(RTRIM(@id_user_bak)), ''), id_user_bak),
+            id_user_del_bak = COALESCE(NULLIF(LTRIM(RTRIM(@id_user_del_bak)), ''), id_user_del_bak),
+            contentSignImage = COALESCE(@contentSignImage, contentSignImage),
+            paraphSignImage = COALESCE(@paraphSignImage, paraphSignImage),
+            paraphSignTransparentImage = COALESCE(@paraphSignTransparentImage, paraphSignTransparentImage),
+            contentSignTransparentImage = COALESCE(@contentSignTransparentImage, contentSignTransparentImage),
+            stampSignImage = COALESCE(@stampSignImage, stampSignImage)
+          WHERE id = @existingId;
+          SELECT @@ROWCOUNT AS affected, 'updated' AS action;
+        END
       END
       ELSE
       BEGIN
@@ -854,12 +1061,19 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
       END
     `;
 
-    const params = { ...mapped };
+    const oldModifiedStr = rowData.__sync_time || rowData.Modified || rowData.NgayTao;
+    // ensure parsing logic handles empty cases correctly, JS new Date() does not error on empty but gives Invalid Date, so do it right:
+    const old_modified =
+      oldModifiedStr && !Number.isNaN(new Date(oldModifiedStr).getTime())
+        ? new Date(oldModifiedStr)
+        : new Date(0);
+
+    const params = { ...mapped, old_modified };
     const result = await this.queryNewDbTx(query, params, transaction);
     const row = Array.isArray(result) && result[0] ? result[0] : result;
     return {
       action: row?.action || (row?.affected ? 'updated' : 'none'),
-      affected: Number(row?.affected || 0)
+      affected: Number(row?.affected || 0),
     };
   }
 
@@ -872,7 +1086,7 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
       `
       SELECT COUNT(1) AS total
       FROM ${this.newDbSchema}.${this.newDbTable}
-      `
+      `,
     );
     return Number(rows?.[0]?.total || 0);
   }

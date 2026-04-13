@@ -91,7 +91,7 @@ class SyncStateRepository extends BaseModel {
             totalErrors: j.total_errors || 0,
             error: j.error_message
           };
-          
+
           jobsMap[j.job_id] = jobData;
           syncLogs[j.job_id] = { ...jobData }; // Clone vào syncLogs
 
@@ -141,9 +141,9 @@ class SyncStateRepository extends BaseModel {
       }
 
       // TRẢ VỀ ĐÚNG CẤU TRÚC mà dashboard cần
-      return { 
-        entities, 
-        jobs: jobsMap, 
+      return {
+        entities,
+        jobs: jobsMap,
         syncLogs,           // QUAN TRỌNG: thiếu cái này là không hiển thị tiến trình
         isRunning,
         registeredCount: models?.length || 0
@@ -152,10 +152,10 @@ class SyncStateRepository extends BaseModel {
     } catch (error) {
       logger.error('[SyncStateRepository] Error getting dashboard data:', error);
       // Trả về cấu trúc rỗng nhưng đầy đủ
-      return { 
-        entities: {}, 
-        jobs: {}, 
-        syncLogs: {}, 
+      return {
+        entities: {},
+        jobs: {},
+        syncLogs: {},
         isRunning: false,
         registeredCount: 0
       };
@@ -252,6 +252,27 @@ class SyncStateRepository extends BaseModel {
       recordId: recordId ?? null,
       errorMessage: String(errorMessage || '')
     });
+  }
+
+  /**
+   * Đổi tên model trong database (Dùng để sửa lỗi legacy/technical keys)
+   * Cập nhật cả bảng models và Jobs để giữ tính nhất quán.
+   */
+  async renameModel(oldName, newName) {
+    if (oldName === newName) return;
+    try {
+      // 1. Cập nhật bảng models
+      const q1 = `UPDATE ${this.tblModels} SET model_name = @newName WHERE model_name = @oldName`;
+      await this.queryNewDb(q1, { oldName, newName });
+      
+      // 2. Cập nhật bảng jobs
+      const q2 = `UPDATE ${this.tblJobs} SET model_name = @newName WHERE model_name = @oldName`;
+      await this.queryNewDb(q2, { oldName, newName });
+
+      logger.info(`[SyncStateRepository] Đã đổi tên model từ "${oldName}" sang "${newName}"`);
+    } catch (error) {
+      logger.error(`[SyncStateRepository] Lỗi khi đổi tên model ${oldName}:`, error);
+    }
   }
 
   _mapJobToParams(job) {

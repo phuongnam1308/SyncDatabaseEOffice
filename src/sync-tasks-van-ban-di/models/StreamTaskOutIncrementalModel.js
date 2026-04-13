@@ -1,12 +1,8 @@
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 const logger = require('../../../utils/logger');
 const sql = require('mssql');
-const StreamTaskMigrationModel = require('./StreamTaskMigrationModel');
-const StreamTaskUsersModel = require('./StreamTaskUsersModel');
-const StreamSystemLogTasksModel = require('./StreamSystemLogTasksModel');
 
 const { v4: uuidv4 } = require('uuid');
-const SyncCommentModel = require('../../sync-document-comment/SyncCommentModel');
 const FileService = require('../../sync-file-copy/Fileuploadservice');
 const { downloadFile: spDownload } = require('../../sync-file-copy/SharePointAuthService');
 
@@ -156,6 +152,11 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
     await super.initialize();
 
     try {
+      // Late require to break potential circular dependencies
+      const StreamTaskMigrationModel = require('./StreamTaskMigrationModel');
+      const StreamTaskUsersModel = require('./StreamTaskUsersModel');
+      const StreamSystemLogTasksModel = require('./StreamSystemLogTasksModel');
+
       this.taskModel = new StreamTaskMigrationModel();
       await this.taskModel.initialize();
 
@@ -171,7 +172,16 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
         'ensureStagingTableExists'
       );
 
+      // ADD: Ensure all necessary columns exist (e.g. ItemId)
+      await withDeadlockRetry(
+        () => this.ensureStagingTableColumns(),
+        'ensureStagingTableColumns'
+      );
+
       this._fileService = new FileService(this.newPool);
+
+      // Late require SyncCommentModel
+      const SyncCommentModel = require('../../sync-document-comment/SyncCommentModel');
 
       // init comment models — chỉ initialize() 1 lần, share pool cho 47 instances
       this._syncCommentModel = [];
@@ -381,6 +391,74 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
   }
 
   /**
+   * Đảm bảo tất cả các cột cần thiết tồn tại trong bảng staging (task_sync_out).
+   * Nếu thiếu cột (ví dụ: ItemId), nó sẽ tự động ALTER TABLE ADD.
+   */
+  async ensureStagingTableColumns() {
+    const table = this.getStagingTableRef();
+    const tableName = this.newTableSync;
+    const dbName = this.newDbName;
+
+    // Danh sách các cột cần check (theo schema chuẩn ở ensureStagingTableExists)
+    const requiredColumns = [
+      { name: 'VBId',                   type: 'NVARCHAR(MAX)' },
+      { name: 'DepartmentId',           type: 'NVARCHAR(MAX)' },
+      { name: 'ParentId',               type: 'NVARCHAR(MAX)' },
+      { name: 'Title',                  type: 'NVARCHAR(MAX)' },
+      { name: 'DanhGia',                type: 'NVARCHAR(MAX)' },
+      { name: 'DeBaoCao',               type: 'NVARCHAR(MAX)' },
+      { name: 'DeBiet',                 type: 'NVARCHAR(MAX)' },
+      { name: 'DeThucHien',             type: 'NVARCHAR(MAX)' },
+      { name: 'DuocHuy',                type: 'NVARCHAR(MAX)' },
+      { name: 'DiemChatLuong',          type: 'NVARCHAR(MAX)' },
+      { name: 'DiemThoiGian',           type: 'NVARCHAR(MAX)' },
+      { name: 'DiemDanhGia',            type: 'NVARCHAR(MAX)' },
+      { name: 'StartDate',              type: 'NVARCHAR(MAX)' },
+      { name: 'DueDate',                type: 'NVARCHAR(MAX)' },
+      { name: 'CompletedDate',          type: 'NVARCHAR(MAX)' },
+      { name: 'HoanTatTuDong',          type: 'NVARCHAR(MAX)' },
+      { name: 'HoSoDuThaoId',           type: 'NVARCHAR(MAX)' },
+      { name: 'HoSoDuThaoUrl',          type: 'NVARCHAR(MAX)' },
+      { name: 'HoSoXuLyUrl',            type: 'NVARCHAR(MAX)' },
+      { name: 'Percent',                type: 'NVARCHAR(MAX)' },
+      { name: 'TrangThai',              type: 'NVARCHAR(MAX)' },
+      { name: 'Priority',               type: 'NVARCHAR(MAX)' },
+      { name: 'YKienCuaNguoiGiaiQuyet', type: 'NVARCHAR(MAX)' },
+      { name: 'YKienChiDao',            type: 'NVARCHAR(MAX)' },
+      { name: 'ModuleId',               type: 'NVARCHAR(MAX)' },
+      { name: 'SiteName',               type: 'NVARCHAR(MAX)' },
+      { name: 'ListName',               type: 'NVARCHAR(MAX)' },
+      { name: 'ItemId',                 type: 'NVARCHAR(MAX)' },
+      { name: 'Modified',               type: 'NVARCHAR(MAX)' },
+      { name: 'Created',                type: 'NVARCHAR(MAX)' },
+      { name: 'ModifiedBy',             type: 'NVARCHAR(MAX)' },
+      { name: 'CreatedBy',              type: 'NVARCHAR(MAX)' },
+      { name: 'MigrateFlg',             type: 'NVARCHAR(MAX)' },
+      { name: 'MigrateErrFlg',          type: 'NVARCHAR(MAX)' },
+      { name: 'MigrateErrMess',         type: 'NVARCHAR(MAX)' },
+      { name: 'ParentTaskID',           type: 'NVARCHAR(MAX)' },
+      { name: 'id_task_bak',            type: 'NVARCHAR(MAX)' }
+    ];
+
+    for (const col of requiredColumns) {
+      const colName = col.name === 'Percent' ? '[Percent]' : col.name;
+      const query = `
+        IF NOT EXISTS (
+          SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS
+          WHERE TABLE_NAME = '${tableName}' AND COLUMN_NAME = '${col.name}'
+        )
+        BEGIN
+          ALTER TABLE ${table} ADD ${colName} ${col.type} NULL;
+          PRINT 'Added missing column ${col.name} to ${tableName}';
+        END
+      `;
+      await this.queryNewDb(query);
+    }
+
+    logger.info(`[StreamTaskOutIncrementalModel] Verified staging table columns for ${tableName}`);
+  }
+
+  /**
    * Force-rebuilds the staging table (DROP + CREATE).
    * Gọi thủ công khi cần migration schema — KHÔNG gọi lúc startup.
    */
@@ -493,15 +571,18 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
   // ═══════════════════════════════════════════════════════════════
 
   /**
-   * Tính tổng số bản ghi cần đồng bộ, cap theo COMPLETED_LIMIT nếu có.
-   * @param {string} lastSyncTime
-   * @param {number} [lastSyncId=0]
-   * @returns {Promise<number>}
+   * Alias cho getCount để đồng nhất với SyncHandlerModel.
    */
   async getCount(lastSyncTime, lastSyncId = 0) {
+    return this.countListFromOldDb(lastSyncTime, lastSyncId);
+  }
+
+  /**
+   * Đếm tổng số bản ghi cần đồng bộ.
+   */
+  async countListFromOldDb(lastSyncTime, lastSyncId = 0) {
     const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
     const normalizedLastSyncId = Number(lastSyncId || 0);
-    const limit = Number(process.env.COMPLETED_LIMIT || 0);
 
     const syncTimeExpr = this.getSyncTimeExpression();
     const query = `
@@ -523,6 +604,8 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
           AND ISNULL(__sync_id_num, 9223372036854775807) < @lastSyncId
         )
       )
+      -- Chỉ lấy bản ghi từ năm 2026 trở đi
+      AND __sync_time >= '2026-01-01T00:00:00.000Z'
     `;
 
     const rows = await this.queryOldDb(query, {
@@ -530,11 +613,7 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
       lastSyncId: normalizedLastSyncId
     });
 
-    const total = Number(rows?.[0]?.total || 0);
-    if (Number.isFinite(limit) && limit > 0) {
-      return Math.min(total, limit);
-    }
-    return total;
+    return Number(rows?.[0]?.total || 0);
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -546,40 +625,49 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
    * @param {number} [lastSyncId=0]
    * @returns {Promise<object[]>}
    */
-  async fetchListFromOldDb(lastSyncTime, lastSyncId = 0) {
+  /**
+   * Lấy danh sách bản ghi kèm phân trang.
+   */
+  async fetchListFromOldDb(lastSyncTime, lastSyncId = 0, limit = null, offset = 0) {
     const syncTimeExpr = this.getSyncTimeExpression();
     const query = `
       ;WITH source_rows AS (
         SELECT
           *,
-          ${syncTimeExpr} AS __sync_time,
+          ${syncTimeExpr} AS _sync_time_val,
           TRY_CONVERT(
             BIGINT,
             NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
-          ) AS __sync_id_num
+          ) AS _sync_id_val
         FROM ${this.oldDbSchema}.${this.oldDbTable}
       )
       SELECT
         *,
-        ISNULL(__sync_id_num, 0) AS __sync_id
+        _sync_time_val AS __sync_time,
+        ISNULL(_sync_id_val, 0) AS __sync_id
       FROM source_rows
       WHERE (
-        __sync_time < @lastSyncTime
+        _sync_time_val < @lastSyncTime
         OR (
-          __sync_time = @lastSyncTime
-          AND ISNULL(__sync_id_num, 9223372036854775807) < @lastSyncId
+          _sync_time_val = @lastSyncTime
+          AND ISNULL(_sync_id_val, 9223372036854775807) < @lastSyncId
         )
       )
+      -- Chỉ lấy bản ghi từ năm 2026 trở đi
+      AND _sync_time_val >= '2026-01-01T00:00:00.000Z'
       ORDER BY
-        __sync_time DESC,
-        ISNULL(__sync_id_num, 9223372036854775807) DESC,
+        _sync_time_val DESC,
+        ISNULL(_sync_id_val, 9223372036854775807) DESC,
         ID DESC
-      OFFSET ${Number(process.env.BEGIN_LIMIT || 0)} ROWS FETCH NEXT ${Number(process.env.COMPLETED_LIMIT || 100)} ROWS ONLY
+      OFFSET @offset ROWS
+      ${limit ? `FETCH NEXT @limit ROWS ONLY` : ''}
     `;
 
     return this.queryOldDb(query, {
       lastSyncTime,
-      lastSyncId: Number(lastSyncId || 0)
+      lastSyncId: Number(lastSyncId || 0),
+      limit: limit ? Number(limit) : null,
+      offset: Number(offset || 0)
     });
   }
 
@@ -598,7 +686,7 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
       return { stagedCount: 0 };
     }
 
-    const internalColumns = new Set(['__sync_time', '__sync_id', '__sync_id_num']);
+    const internalColumns = new Set(['__sync_time', '__sync_id', '__sync_id_num', '_sync_time_val', '_sync_id_val']);
     const columns = Object.keys(rows[0] || {}).filter((column) => !internalColumns.has(column));
     if (!columns.length) {
       return { stagedCount: 0 };
@@ -671,30 +759,59 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
     const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
     const normalizedLastSyncId = Number(lastSyncId || 0);
 
-    const rows = await this.fetchListFromOldDb(
-      normalizedLastSyncTime,
-      normalizedLastSyncId
-    );
-    const stageResult = await this.syncOldToStaging(rows);
+    const batchSize = Number(process.env.STAGING_FETCH_BATCH_SIZE || 2000);
 
+    // 1. Đếm tổng và cập nhật Dashboard
+    const totalCount = await this.countListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId);
+    logger.info(`[StreamTaskOut] Tổng số bản ghi cần sync: ${totalCount} (LastTime: ${normalizedLastSyncTime}, LastId: ${normalizedLastSyncId})`);
+
+    await this.queryNewDb(`UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`, {
+      total: totalCount,
+      jobId: syncJobId
+    });
+
+    const numIterations = Math.ceil(totalCount / batchSize);
+    let totalStaged = 0;
     let nextSyncTime = normalizedLastSyncTime;
     let nextSyncId = normalizedLastSyncId;
 
-    for (const row of rows) {
-      const rowTime = this.extractRowSyncTime(row);
-      const rowId = this.extractRowSyncId(row);
-      if (!rowTime) continue;
-      if (this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId)) {
-        nextSyncTime = rowTime;
-        nextSyncId = rowId;
+    // 2. Chạy vòng lặp theo gói batchSize
+    for (let i = 0; i < numIterations; i++) {
+      const begin = i * batchSize;
+      const rows = await this.fetchListFromOldDb(
+        normalizedLastSyncTime,
+        normalizedLastSyncId,
+        batchSize,
+        begin
+      );
+      if (!rows || rows.length === 0) break;
+
+      const stageResult = await this.syncOldToStaging(rows);
+      totalStaged += Number(stageResult?.stagedCount || 0);
+
+      // Cập nhật cursor và LOG chi tiết từng bản ghi
+      for (const row of rows) {
+        const rowTime = this.extractRowSyncTime(row);
+        const rowId = this.extractRowSyncId(row);
+        if (!rowTime) continue;
+
+        const isAhead = this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId);
+        logger.info(`  └─ [Compare] rowID: ${row.ID} | T: ${rowTime} ID: ${rowId} vs Cursor(T: ${nextSyncTime} ID: ${nextSyncId}) -> Ahead: ${isAhead}`);
+
+        if (isAhead) {
+          nextSyncTime = rowTime;
+          nextSyncId = rowId;
+        }
       }
+
+      logger.info(`🔥 [StreamTaskOut] Batch ${i + 1}/${numIterations} staged: ${totalStaged}/${totalCount}. LastSyncTime: ${nextSyncTime}, LastSyncId: ${nextSyncId}`);
     }
 
     return {
       syncJobId,
-      rows,
-      totalCount: rows.length,
-      stagedCount: Number(stageResult?.stagedCount || 0),
+      rows: [], // Không giữ tất cả rows trong bộ nhớ
+      totalCount: totalStaged,
+      stagedCount: totalStaged,
       sourceLastSyncTime: normalizedLastSyncTime,
       sourceLastSyncId: normalizedLastSyncId,
       lastSyncTime: nextSyncTime,
@@ -720,30 +837,32 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
       ;WITH source_rows AS (
         SELECT
           *,
-          ${syncTimeExpr} AS __sync_time,
+          ${syncTimeExpr} AS _sync_time_val,
           TRY_CONVERT(
             BIGINT,
             NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
-          ) AS __sync_id_num
+          ) AS _sync_id_val
         FROM ${stagingTableRef}
       ),
       staged AS (
         SELECT
           *,
+          _sync_time_val AS __sync_time,
           ROW_NUMBER() OVER (
             ORDER BY
-              __sync_time DESC,
-              ISNULL(__sync_id_num, 9223372036854775807) DESC,
+              _sync_time_val DESC,
+              ISNULL(_sync_id_val, 9223372036854775807) DESC,
               ID DESC
           ) AS rn
         FROM source_rows
         WHERE (
-          __sync_time < @lastSyncTime
+          _sync_time_val < @lastSyncTime
           OR (
-            __sync_time = @lastSyncTime
-            AND ISNULL(__sync_id_num, 9223372036854775807) < @lastSyncId
+            _sync_time_val = @lastSyncTime
+            AND ISNULL(_sync_id_val, 9223372036854775807) < @lastSyncId
           )
         )
+        AND _sync_time_val >= '2026-01-01T00:00:00.000Z'
       )
       SELECT TOP 1 *
       FROM staged

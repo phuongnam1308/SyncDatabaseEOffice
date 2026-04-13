@@ -75,7 +75,7 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
   // ---------------------------------------------------------------------------
   async _syncToAssignment(audit, auditId, transaction) {
     const {
-      document_id, time, receiver, receiver_unit,
+      document_id, time, receiver, receiver_unit, created_by,
       roleProcess, stage_status, action_code
     } = audit;
 
@@ -96,7 +96,7 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
       const isCreator = CREATOR_ACTION_CODES?.has(action_code) ? 1 : 0;
 
       const allReceivers = [
-        ...(receiver ? [{ rec: receiver, unit: receiver_unit || null }] : []),
+        ...(receiver ? [{ rec: receiver || created_by, unit: receiver_unit || null }] : []),
         ...(receiver_unit && receiver_unit !== receiver
           ? [{ rec: receiver_unit, unit: receiver_unit }]
           : [])
@@ -149,7 +149,7 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
   // ---------------------------------------------------------------------------
   async _syncToCurrentState(audit, auditId, transaction) {
     const {
-      document_id, time, receiver, receiver_unit,
+      document_id, time, receiver, receiver_unit, created_by,
       roleProcess, stage_status, action_code
     } = audit;
 
@@ -161,7 +161,7 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
     const isHtVbtt   = (stageUp === STAGE.HT_VBTT || stageUp === STAGE.BAN_HANH_DU_THAO) ? 1 : 0;
     const isCompleted = isBanHanh;
 
-    const currentReceiver = receiver || receiver_unit;
+    const currentReceiver = receiver || receiver_unit || created_by;
 
     await this.queryNewDbTx(
       `MERGE ${process.env.NEW_DB_NAME}.dbo.outgoing_current_state AS tgt

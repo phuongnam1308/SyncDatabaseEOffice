@@ -39,7 +39,7 @@ const {
   CATEGORY_INCOMING_INTERNAL
 } = require('../../sync-audit/SyncAuditModel');
 
-const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
+const DEFAULT_SYNC_TIME = '1753-01-01T00:00:00.000Z';
 
 const AUDIT_TABLES = [
   'LuanChuyenVanBan',
@@ -144,7 +144,7 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
    * Configures source/staging tables and nested migration models for Incoming incremental sync.
    */
   constructor() {
-    super({ modelName: '3_incoming' });
+    super({ modelName: 'STREAM_INCOMING_INCREMENTAL' });
     this.newDbName = process.env.NEW_DB_NAME;
     this.oldDbSchema = 'dbo';
     this.oldDbTable = 'VanBanDen';
@@ -308,9 +308,11 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
    * @returns {string}
    */
   normalizeSyncTime(value) {
-    if (!value) return DEFAULT_SYNC_TIME;
+    if (!value || value === '2100-01-01T00:00:00.000Z') return DEFAULT_SYNC_TIME;
     const dateValue = new Date(value);
     if (Number.isNaN(dateValue.getTime())) return DEFAULT_SYNC_TIME;
+    // Chế độ ASC: Nếu cursor quá cũ, ép về 1753
+    if (dateValue.getFullYear() <= 1753) return DEFAULT_SYNC_TIME;
     return dateValue.toISOString();
   }
 
@@ -347,6 +349,7 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
   isCursorAhead(aTime, aId, bTime, bId) {
     const ta = new Date(aTime || DEFAULT_SYNC_TIME).getTime();
     const tb = new Date(bTime || DEFAULT_SYNC_TIME).getTime();
+    // Chế độ ASC: "Đi trước" nghĩa là mới hơn
     if (ta > tb) return true;
     if (ta < tb) return false;
     return Number(aId || 0) > Number(bId || 0);
@@ -359,6 +362,12 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
   getSyncTimeExpression() {
     return `
       COALESCE(
+        TRY_CONVERT(datetime2, Modified, 105),
+        TRY_CONVERT(datetime2, Created, 105),
+
+        TRY_CONVERT(datetime2, Modified, 120),
+        TRY_CONVERT(datetime2, Created, 120),
+
         TRY_CONVERT(datetime2, Modified),
         TRY_CONVERT(datetime2, Created)
       )
@@ -366,14 +375,20 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
   }
 
   /**
-   * Loads incremental source records from OLD DB after current cursor.
-   * @param {string} lastSyncTime
+   * Lấy TẤT CẢ bản ghi từ CSDL cũ về bảng trung gian theo cursor.
+   * COMPLETED_LIMIT chỉ được dùng ở bước trung gian → bảng chính (processOne).
+   * @param {string} lastSyncTime - cursor từ (exclusive)
    * @param {number} [lastSyncId=0]
+   * @param {string|null} [toTime=null] - giới hạn trên (inclusive).
+   * @param {number} [offset=0]
+   * @param {number} [limit=2000]
    * @returns {Promise<object[]>}
    */
-  async fetchListFromOldDb(lastSyncTime, lastSyncId = 0) {
+  async fetchListFromOldDb(lastSyncTime, lastSyncId = 0, toTime = null, offset = 0, limit = 2000) {
     try {
       const syncTimeExpr = this.getSyncTimeExpression();
+      const toTimeFilter = toTime ? `AND (__sync_time IS NULL OR __sync_time <= @toTime)` : '';
+
       const query = `
       ;WITH source_rows AS (
         SELECT
@@ -390,31 +405,91 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
         ISNULL(__sync_id_num, 0) AS __sync_id
       FROM source_rows
       WHERE (
-        __sync_time > @lastSyncTime
+        @lastSyncTime = '1753-01-01T00:00:00.000Z'
+        OR __sync_time > @lastSyncTime
         OR (
           __sync_time = @lastSyncTime
-          AND ISNULL(__sync_id_num, -9223372036854775808) > @lastSyncId
+          AND ISNULL(__sync_id_num, 0) > @lastSyncId
         )
       )
+      -- Chỉ lấy bản ghi từ năm 2026 trở đi
+      AND __sync_time >= '2026-01-01T00:00:00.000Z'
+      ${toTimeFilter}
       ORDER BY
         __sync_time ASC,
-        ISNULL(__sync_id_num, -9223372036854775808) ASC,
+        ISNULL(__sync_id_num, 0) ASC,
         ID ASC
-      OFFSET ${Number(process.env.BEGIN_LIMIT || 0)} ROWS FETCH NEXT ${Number(process.env.COMPLETED_LIMIT || 100)} ROWS ONLY
+      OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY
     `;
 
-      return await this.queryOldDb(query, {
+      const params = {
         lastSyncTime,
-        lastSyncId: Number(lastSyncId || 0)
-      });
+        lastSyncId: Number(lastSyncId || 0),
+        offset: Number(offset || 0),
+        limit: Number(limit || 2000)
+      };
+      if (toTime) params.toTime = toTime;
+      return await this.queryOldDb(query, params);
     } catch (error) {
-      logger.error(`[IncomingDocumentModel.fetchListFromOldDb] Failed to fetch list from old DB with lastSyncTime=${lastSyncTime}, lastSyncId=${lastSyncId}: ${error.message}`, { stack: error.stack });
+      logger.error(`[IncomingDocumentModel.fetchListFromOldDb] Failed to fetch list: ${error.message}`);
       throw error;
     }
   }
 
   /**
-   * Upserts source rows into staging table so process phase can read deterministic snapshots.
+   * Alias for countListFromOldDb to support SyncHandlerModel.
+   */
+  async getCount(lastSyncTime, lastSyncId = 0) {
+    return this.countListFromOldDb(lastSyncTime, lastSyncId);
+  }
+
+  /**
+   * Đếm tổng số bản ghi cần hút từ CSDL cũ.
+   */
+  async countListFromOldDb(lastSyncTime, lastSyncId = 0, toTime = null) {
+    try {
+      const syncTimeExpr = this.getSyncTimeExpression();
+      const toTimeFilter = toTime ? `AND (__sync_time IS NULL OR __sync_time <= @toTime)` : '';
+
+      const query = `
+      ;WITH source_rows AS (
+        SELECT
+          ${syncTimeExpr} AS __sync_time,
+          TRY_CONVERT(
+            BIGINT,
+            NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
+          ) AS __sync_id_num
+        FROM ${this.oldDbSchema}.${this.oldDbTable}
+      )
+      SELECT COUNT(1) AS total
+      FROM source_rows
+      WHERE (
+        @lastSyncTime = '1753-01-01T00:00:00.000Z'
+        OR __sync_time > @lastSyncTime
+        OR (
+          __sync_time = @lastSyncTime
+          AND ISNULL(__sync_id_num, 0) > @lastSyncId
+        )
+      )
+      -- Chỉ lấy bản ghi từ năm 2026 trở đi
+      AND __sync_time >= '2026-01-01T00:00:00.000Z'
+      ${toTimeFilter}
+    `;
+
+      const params = { lastSyncTime, lastSyncId: Number(lastSyncId || 0) };
+      if (toTime) params.toTime = toTime;
+      const res = await this.queryOldDb(query, params);
+      return Number(res?.[0]?.total || 0);
+    } catch (error) {
+      logger.error(`[IncomingDocumentModel.countListFromOldDb] Failed to count: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Upserts source rows into staging table dùng BATCH MERGE để tăng tốc.
+   * Thay vì row-by-row, gom tất cả rows vào một TVP (Table-Valued-like) qua VALUES list.
+   * Mỗi batch tối đa STAGING_BATCH_SIZE rows (default 100) để tránh tham số quá lớn.
    * @param {object[]} rows
    * @param {{transaction?: object}} [context]
    * @returns {Promise<{stagedCount:number}>}
@@ -438,47 +513,77 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
     const nonIdColumns = columns.filter((column) => column !== 'ID');
     const safeNonIdColumns = nonIdColumns.map((column) => this.sanitizeColumnName(column));
     const stagingTableRef = this.getStagingTableRef();
+    // SQL Server giới hạn tối đa 2100 params. Tự động tính batch size an toàn:
+    // maxParams = 2000 (để dư một khoảng an toàn), numCols = số cột thực tế
+    const numCols = columns.length || 1;
+    const safeBatchByParams = Math.max(1, Math.floor(2000 / numCols));
+    const configuredBatch  = Number(process.env.STAGING_BATCH_SIZE || 50);
+    const BATCH_SIZE = Math.min(configuredBatch, safeBatchByParams);
+
+    // Chia rows thành các mini-batch
+    const batches = [];
+    for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+      batches.push(rows.slice(i, i + BATCH_SIZE));
+    }
+
+    let totalStaged = 0;
 
     try {
-      for (const row of rows) {
-        const rawId = row?.ID;
-        if (rawId == null || String(rawId).trim() === '') {
-          throw new Error('Row ID is required for staging');
+      for (const batch of batches) {
+        // Validate IDs
+        for (const row of batch) {
+          if (row?.ID == null || String(row.ID).trim() === '') {
+            throw new Error('Row ID is required for staging');
+          }
         }
 
+        // Xây dựng MERGE với VALUES list
+        // Mỗi row dùng param prefix r{i}_col
+        const valueParts = [];
         const params = {};
-        for (const column of columns) {
-          params[column] = row[column];
+
+        for (let i = 0; i < batch.length; i++) {
+          const row = batch[i];
+          const rowParamNames = columns.map((col) => `@r${i}_${col}`);
+          valueParts.push(`(${rowParamNames.join(', ')})`);
+          for (const col of columns) {
+            let val = row[col];
+            // Chuyển Date object thành ISO string
+            if (val instanceof Date) val = val.toISOString();
+            else if (val !== null && val !== undefined) val = String(val);
+            params[`r${i}_${col}`] = val != null ? val : null;
+          }
         }
 
-        const updateClause = safeNonIdColumns
-          .map((columnName, idx) => `${columnName} = @${nonIdColumns[idx]}`)
-          .join(', ');
+        const updateSetClause = nonIdColumns.length > 0
+          ? nonIdColumns.map((col) => `tgt.${this.sanitizeColumnName(col)} = src.${this.sanitizeColumnName(col)}`).join(',\n             ')
+          : 'tgt.[ID] = tgt.[ID]'; // noop if no non-id cols
 
-        const query = `
-        IF EXISTS (SELECT 1 FROM ${stagingTableRef} WHERE ID = @ID)
-        BEGIN
-          ${nonIdColumns.length > 0 ? `
-          UPDATE ${stagingTableRef}
-          SET ${updateClause}
-          WHERE ID = @ID;` : `
-          SELECT 1 AS noop;`}
-        END
-        ELSE
-        BEGIN
-          INSERT INTO ${stagingTableRef} (${safeColumns.join(', ')})
-          VALUES (${columns.map((column) => `@${column}`).join(', ')});
-        END
-      `;
+        const mergeQuery = `
+        MERGE ${stagingTableRef} AS tgt
+        USING (
+          SELECT ${columns.map((col) => `${this.sanitizeColumnName(col)}`).join(', ')}
+          FROM (VALUES ${valueParts.join(',\n          ')}) AS v(${safeColumns.join(', ')})
+        ) AS src ON tgt.[ID] = src.[ID]
+        WHEN MATCHED AND (
+          tgt.[Modified] IS NULL
+          OR TRY_CONVERT(datetime2, src.[Modified]) > TRY_CONVERT(datetime2, tgt.[Modified])
+        ) THEN UPDATE SET
+             ${updateSetClause}
+        WHEN NOT MATCHED BY TARGET THEN
+          INSERT (${safeColumns.join(', ')})
+          VALUES (${safeColumns.map((c) => `src.${c}`).join(', ')});
+        `;
 
-        await this.queryNewDbTx(query, params, transaction);
+        await this.queryNewDbTx(mergeQuery, params, transaction);
+        totalStaged += batch.length;
       }
     } catch (error) {
-      logger.error(`[IncomingDocumentModel.syncOldToStaging] Failed to sync to staging table: ${error.message}`, { stack: error.stack });
+      logger.error(`[IncomingDocumentModel.syncOldToStaging] Failed to batch merge staging: ${error.message}`, { stack: error.stack });
       throw error;
     }
 
-    return { stagedCount: rows.length };
+    return { stagedCount: totalStaged };
   }
 
   /**
@@ -496,31 +601,106 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
 
       const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
       const normalizedLastSyncId = Number(lastSyncId || 0);
-      const rows = await this.fetchListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId);
-      const stageResult = await this.syncOldToStaging(rows);
 
-      let nextSyncTime = normalizedLastSyncTime;
-      let nextSyncId = normalizedLastSyncId;
+      let currentSyncTime = normalizedLastSyncTime;
+      let currentSyncId = normalizedLastSyncId;
 
-      for (const row of rows) {
-        const rowTime = this.extractRowSyncTime(row);
-        const rowId = this.extractRowSyncId(row);
-        if (!rowTime) continue;
-        if (this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId)) {
-          nextSyncTime = rowTime;
-          nextSyncId = rowId;
+      // ---------------------------------------------------------------
+      // Tính toán window thời gian:
+      //   fromTime = MAX(Modified) ở bảng trung gian - LOOKBACK_HOURS (default 1h)
+      //   toTime   = thời gian hiện tại UTC + 7h (giờ VN hiện tại)
+      // ---------------------------------------------------------------
+      const stagingTableRef = this.getStagingTableRef();
+      const lookbackHours = Number(process.env.STAGING_LOOKBACK_HOURS || 1);
+      const nowUtc = new Date();
+      // toTime = now + 7h (bù múi giờ VN cho DB lưu giờ VN)
+      const toTime = new Date(nowUtc.getTime() + 7 * 60 * 60 * 1000).toISOString();
+
+      if (currentSyncTime === DEFAULT_SYNC_TIME) {
+        // Lấy mốc lớn nhất từ bảng trung gian bằng TRY_CONVERT để xử lý đúng
+        const maxRes = await this.queryNewDb(
+          `SELECT MAX(TRY_CONVERT(datetime2, Modified)) AS maxTime FROM ${stagingTableRef}`
+        );
+        if (maxRes?.[0]?.maxTime) {
+          const rawMax = new Date(maxRes[0].maxTime);
+          // Trừ lookback để re-sync các bản ghi gần nhất tránh bỏ sót
+          const fromDate = new Date(rawMax.getTime() - lookbackHours * 60 * 60 * 1000);
+          currentSyncTime = fromDate.toISOString();
+          logger.info(`[IncomingDocumentModel] Mốc cursor tự động: MAX(staging)=${rawMax.toISOString()} - ${lookbackHours}h => fromTime=${currentSyncTime}`);
         }
       }
 
+      logger.info(`[IncomingDocumentModel] Window đồng bộ: [${currentSyncTime}] → [${toTime}]`);
+
+      let totalStagedCount = 0;
+      let allRowsCount = 0;
+
+      const totalCountToFetch = await this.countListFromOldDb(currentSyncTime, currentSyncId, toTime);
+      logger.info(`[IncomingDocumentModel] Tổng số bản ghi cần hút về Staging: ${totalCountToFetch}`);
+
+      // Cập nhật Dashboard ngay lập tức để người dùng thấy tổng số bản ghi
+      await this.queryNewDb(`UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`, {
+        total: totalCountToFetch,
+        jobId: syncJobId
+      });
+
+      const fetchBatchSize = Number(process.env.STAGING_FETCH_BATCH_SIZE || 2000);
+
+      const numIterations = Math.ceil(totalCountToFetch / fetchBatchSize);
+
+      // 2 vòng for: Outer loop theo batch size, Inner loop xử lý batch đó
+      for (let i = 0; i < numIterations; i++) {
+        const offset = i * fetchBatchSize;
+        // Fetch một batch dùng mốc thời gian cố định và offset tăng dần
+        const rows = await this.fetchListFromOldDb(currentSyncTime, currentSyncId, toTime, offset, fetchBatchSize);
+        if (!rows || rows.length === 0) break;
+
+        // Inner loop (xử lý batch) - Ở đây syncOldToStaging đã xử lý batch MERGE
+        let transaction = null;
+        let stageResult = null;
+        try {
+          transaction = new sql.Transaction(this.newPool);
+          await transaction.begin();
+          stageResult = await this.syncOldToStaging(rows, { transaction });
+          await transaction.commit();
+        } catch (err) {
+          if (transaction) await transaction.rollback().catch(() => {});
+          logger.error(`[IncomingDocumentModel] Failed to sync batch to staging at offset ${offset}: ${err.message}`);
+          throw err;
+        }
+
+        totalStagedCount += Number(stageResult?.stagedCount || 0);
+        allRowsCount += rows.length;
+
+        // Tiến cursor (dùng cho log hoặc nếu cần fallback)
+        for (const row of rows) {
+          const rowTime = this.extractRowSyncTime(row);
+          const rowId = this.extractRowSyncId(row);
+          if (!rowTime) continue;
+
+          const isAhead = this.isCursorAhead(rowTime, rowId, currentSyncTime, currentSyncId);
+          logger.info(`  └─ [Compare] rowID: ${row.ID} | T: ${rowTime} ID: ${rowId} vs Cursor(T: ${currentSyncTime} ID: ${currentSyncId}) -> Ahead: ${isAhead}`);
+
+          if (isAhead) {
+            currentSyncTime = rowTime;
+            currentSyncId = rowId;
+          }
+        }
+
+        logger.info(`[IncomingDocumentModel] >> Tiến độ: ${allRowsCount}/${totalCountToFetch} bản ghi (Staged=${totalStagedCount})`);
+      }
+
+      logger.info(`[IncomingDocumentModel] Hoàn tất hút ${allRowsCount} bản ghi về Staging. Staged=${totalStagedCount}`);
+
       return {
         syncJobId,
-        rows,
-        totalCount: rows.length,
-        stagedCount: Number(stageResult?.stagedCount || 0),
+        rows: [],
+        totalCount: allRowsCount,
+        stagedCount: totalStagedCount,
         sourceLastSyncTime: normalizedLastSyncTime,
         sourceLastSyncId: normalizedLastSyncId,
-        lastSyncTime: nextSyncTime,
-        lastSyncId: nextSyncId
+        lastSyncTime: currentSyncTime,
+        lastSyncId: currentSyncId
       };
     } catch (error) {
       logger.error(`[IncomingDocumentModel.getList] Failed to get list for syncJobId=${syncJobId}: ${error.message}`, { stack: error.stack });
@@ -574,67 +754,88 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
     }
 
     let jobState;
-    let itemIndex;
     try {
       jobState = await this.getSyncJobState(syncJobId);
-      itemIndex = Number(
-        options.itemIndex != null
-          ? options.itemIndex
-          : (jobState?.total_processed || 0)
-      );
     } catch (error) {
-      logger.error(`[IncomingDocumentModel.processOne] Failed to get job state or determine item index for syncJobId=${syncJobId}: ${error.message}`, { stack: error.stack });
       throw error;
     }
 
-    const sourceLastSyncTime = this.normalizeSyncTime(
-      options.sourceLastSyncTime || options.lastSyncTime || jobState?.last_sync_time || DEFAULT_SYNC_TIME
-    );
-    const sourceLastSyncId = Number(
-      options.sourceLastSyncId != null
-        ? options.sourceLastSyncId
-        : (jobState?.last_sync_id || 0)
-    );
+    const lastSyncTime = this.normalizeSyncTime(jobState?.last_sync_time);
+    const lastSyncId = Number(jobState?.last_sync_id || 0);
 
-    const transaction = new sql.Transaction(this.newPool);
+    let rowData = null;
+    let transaction = null;
 
     try {
-      await transaction.begin();
-      const rowData = await this.fetchOneFromStaging({
-        lastSyncTime: sourceLastSyncTime,
-        lastSyncId: sourceLastSyncId,
-        itemIndex,
-        transaction
-      });
+      const stagingTableRef = this.getStagingTableRef();
+
+      rowData = await this.fetchOneFromStaging();
 
       if (!rowData) {
-        await transaction.commit();
+        logger.info(`[IncomingDocumentModel] Không còn dữ liệu trong staging (cần xử lý) cho job ${syncJobId}.`);
         return {
           syncJobId,
-          itemIndex,
           processed: false,
           done: true
         };
       }
 
+      const rowId = rowData.ID || null;
+      const current = Number(jobState?.total_processed || 0) + 1;
+      logger.info(`[IncomingDocumentModel] Process ${current}: record ID=${rowId}`);
+
+      transaction = new sql.Transaction(this.newPool);
+      await transaction.begin();
+
       const result = await this.processRowData(rowData, { transaction });
+
+      const nextSyncTime = this.extractRowSyncTime(rowData) || lastSyncTime;
+      const nextSyncId = this.extractRowSyncId(rowData) || lastSyncId;
+
+      // Update Cursor & Success count
+      await this.queryNewDbTx(
+        `UPDATE sync_jobs
+         SET total_processed = ISNULL(total_processed, 0) + 1,
+             total_success   = ISNULL(total_success, 0) + 1,
+             last_sync_time  = @lastSyncTime,
+             last_sync_id    = @lastSyncId
+         WHERE job_id = @syncJobId`,
+        { syncJobId, lastSyncTime: nextSyncTime, lastSyncId: nextSyncId },
+        transaction
+      );
+
+      // Mark staging row as processed successfully
+      await this.queryNewDbTx(
+        `UPDATE ${stagingTableRef} SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE ID = @ID`,
+        { ID: rowId },
+        transaction
+      );
+
       await transaction.commit();
 
       return {
         syncJobId,
-        itemIndex,
         processed: true,
         done: false,
-        rowId: rowData.ID || null,
+        rowId,
         result
       };
     } catch (error) {
-      try {
-        await transaction.rollback();
-      } catch (rollbackError) {
-        logger.error(`[IncomingDocumentModel.processOne] Rollback failed for syncJobId=${syncJobId}, itemIndex=${itemIndex}:`, rollbackError);
+      if (transaction) {
+        try {
+          await transaction.rollback();
+        } catch (rollbackError) {}
       }
-      logger.error(`[IncomingDocumentModel.processOne] Failed to process item for syncJobId=${syncJobId}, itemIndex=${itemIndex}: ${error.message}`, { stack: error.stack });
+
+      // If failed, mark as error in staging so we skip it next time!
+      if (rowData && rowData.ID) {
+        try {
+           const stagingTableRef = this.getStagingTableRef();
+           await this.queryNewDb(`UPDATE ${stagingTableRef} SET MigrateErrFlg = 1, MigrateErrMess = @Err WHERE ID = @ID`, { ID: rowData.ID, Err: String(error.message).slice(0, 1000) });
+        } catch (updateErr) {}
+      }
+
+      logger.error(`[IncomingDocumentModel.processOne] Failed row ID=${rowData?.ID}: ${error.message}`);
       throw error;
     }
   }
@@ -644,64 +845,24 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
    * @param {{lastSyncTime:string,lastSyncId?:number,itemIndex:number,transaction?:object}} context
    * @returns {Promise<object|null>}
    */
-  async fetchOneFromStaging({ lastSyncTime, lastSyncId = 0, itemIndex, transaction } = {}) {
+  async fetchOneFromStaging() {
     try {
-      const rowNumber = Number(itemIndex || 0) + 1;
       const stagingTableRef = this.getStagingTableRef();
-      const syncTimeExpr = this.getSyncTimeExpression();
+      // Ưu tiên bản ghi có Modified mới nhất trước (newest-first),
+      // sau đó dùng ID số (lớn nhất) làm tie-breaker khi cùng Modified.
       const query = `
-      ;WITH source_rows AS (
-        SELECT
-          *,
-          ${syncTimeExpr} AS __sync_time,
-          TRY_CONVERT(
-            BIGINT,
-            NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
-          ) AS __sync_id_num
-        FROM ${stagingTableRef}
-      ),
-      staged AS (
-        SELECT
-          *,
-          ROW_NUMBER() OVER (
-            ORDER BY
-              __sync_time ASC,
-              ISNULL(__sync_id_num, -9223372036854775808) ASC,
-              ID ASC
-          ) AS rn
-        FROM source_rows
-        WHERE (
-          __sync_time > @lastSyncTime
-          OR (
-            __sync_time = @lastSyncTime
-            AND ISNULL(__sync_id_num, -9223372036854775808) > @lastSyncId
-          )
-        )
-      )
       SELECT TOP 1 *
-      FROM staged
-      WHERE rn = @rowNumber
-    `;
+      FROM ${stagingTableRef}
+      WHERE ISNULL(MigrateFlg, 0) = 0
+        AND ISNULL(MigrateErrFlg, 0) = 0
+      ORDER BY TRY_CONVERT(datetime2, Modified) DESC,
+               TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(ID)), '')) DESC
+      `;
 
-      const rows = await this.queryNewDbTx(
-        query,
-        {
-          lastSyncTime,
-          lastSyncId: Number(lastSyncId || 0),
-          rowNumber
-        },
-        transaction
-      );
-
-      if (!rows?.length) {
-        return null;
-      }
-
-      const row = { ...rows[0] };
-      delete row.rn;
-      return row;
+      const rows = await this.queryNewDb(query);
+      return rows?.length ? rows[0] : null;
     } catch (error) {
-      logger.error(`[IncomingDocumentModel.fetchOneFromStaging] Failed to fetch itemIndex=${itemIndex} with lastSyncTime=${lastSyncTime}, lastSyncId=${lastSyncId}: ${error.message}`, { stack: error.stack });
+      logger.error(`[IncomingDocumentModel.fetchOneFromStaging] Failed to fetch: ${error.message}`);
       throw error;
     }
   }
@@ -912,33 +1073,38 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
    * @param {{transaction?: object}} [context]
    * @returns {Promise<{action:string,affected:number}>}
    */
-  async upsertDocumentAggregateById(oldRecord, { transaction } = {}) {
-    const id = String(oldRecord?.ID || '').trim();
-    try {
-      if (!oldRecord) {
-        return { action: 'none', affected: 0 };
-      }
+    async upsertDocumentAggregateById(oldRecord, { transaction } = {}) {
+        const id = String(oldRecord?.ID || '').trim();
+        try {
+            if (!oldRecord) {
+                return { action: 'none', affected: 0 };
+            }
 
-      if (!this._IncomingMigrationModels) {
-        throw new Error(`[upsertDocumentAggregateById] Model not initialized for ID=${id}`);
-      }
+            logger.info(`[AggregateSync][START] Bắt đầu xử lý bản ghi ID=${id} từ Staging.`);
 
-      let totalAffected = 0;
+            if (!this._IncomingMigrationModels) {
+                throw new Error(`[upsertDocumentAggregateById] Model not initialized for ID=${id}`);
+            }
 
-      const documentResult = await this._IncomingMigrationModels.processSingleRecord(
-        oldRecord,
-        transaction
-      );
+            let totalAffected = 0;
 
-      if (!documentResult || documentResult.affected === 0) {
-        return { action: 'none', affected: 0 };
-      }
-      logger.info(
-        `[AggregateSync][Document] documentId=${documentResult.documentId} action=${documentResult?.action} affected=${documentResult?.affected}`
-      );
+            logger.info(`[AggregateSync][STEP 1] Xử lý mapping và chèn vào bảng chính incomming_documents cho ID=${id}...`);
+            const documentResult = await this._IncomingMigrationModels.processSingleRecord(
+                oldRecord,
+                transaction
+            );
+
+            if (!documentResult || documentResult.affected === 0) {
+                logger.warn(`[AggregateSync][STEP 1] Bản ghi ID=${id} KHÔNG được chèn/cập nhật vào bảng chính.`);
+                return { action: 'none', affected: 0 };
+            }
+            logger.info(
+                `[AggregateSync][STEP 1] Thành công cho ID=${id} -> documentId=${documentResult.documentId} action=${documentResult?.action} affected=${documentResult?.affected}`
+            );
 
       totalAffected += Number(documentResult.affected || 0);
       const documentId = documentResult.documentId;
+      const drafter = documentResult.drafter ?? null;
 
       if (!documentId) {
         return {
@@ -969,23 +1135,26 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
               oldRecord.YKienLanhDaoVPDN, documentId, id, 'VanBanDen', 'YKienLanhDaoVPDN', transaction
            );
         }
-        if (oldRecord?.YKienCuaLDVPChoVanThu) {
-           totalParsedComments += await this._IncomingMigrationModels.helper.parseAndInsertHtmlComments(
-              oldRecord.YKienCuaLDVPChoVanThu, documentId, id, 'VanBanDen', 'YKienCuaLDVPChoVanThu', transaction
-           );
-        }
-        if (totalParsedComments > 0) {
-          logger.info(`[AggregateSync][ParsedHTMLComments] documentId=${documentId} newly extracted comments=${totalParsedComments}`);
-        }
-      } catch (htmlCommentErr) {
-        logger.warn(`[upsertDocumentAggregateById] Lỗi parse HTML YKien ID=${id}: ${htmlCommentErr.message}`);
-      }
+                if (oldRecord?.YKienCuaLDVPChoVanThu) {
+                    totalParsedComments += await this._IncomingMigrationModels.helper.parseAndInsertHtmlComments(
+                        oldRecord.YKienCuaLDVPChoVanThu, documentId, id, 'VanBanDen', 'YKienCuaLDVPChoVanThu', transaction
+                    );
+                }
+                if (totalParsedComments > 0) {
+                    logger.info(`[AggregateSync][STEP 3] ID=${id} -> parse thành công = ${totalParsedComments} comments từ phân vùng Ý kiến Lãnh đạo.`);
+                } else {
+                    logger.info(`[AggregateSync][STEP 3] ID=${id} -> KHÔNG có ý kiến lãnh đạo HTML nào cần bóc.`);
+                }
+            } catch (htmlCommentErr) {
+                logger.warn(`[upsertDocumentAggregateById] Lỗi parse HTML YKien ID=${id}: ${htmlCommentErr.message}`);
+            }
 
-      // ══════════════════════════════════════════════════════════════
-      // AGGREGATED AUDIT SYNC: Gộp tất cả audit từ các bảng và xử lý theo thứ tự thời gian
-      // ══════════════════════════════════════════════════════════════
-      const auditModels = this._syncAuditModel || [];
-      if (auditModels.length > 0) {
+            // ══════════════════════════════════════════════════════════════
+            // AGGREGATED AUDIT SYNC: Gộp tất cả audit từ các bảng và xử lý theo thứ tự thời gian
+            // ══════════════════════════════════════════════════════════════
+            logger.info(`[AggregateSync][STEP 4] Bắt đầu tổng hợp Audit Trails từ ${AUDIT_TABLES.length} bảng liên quan cho ID=${id}...`);
+            const auditModels = this._syncAuditModel || [];
+            if (auditModels.length > 0) {
         try {
           const auditTableNames = auditModels.map(m => m.oldDbTable);
           const firstModel = auditModels[0];
@@ -1011,7 +1180,7 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
               const model = modelMap.get(tableName) || firstModel;
 
               try {
-                const result = await model.processSingleRecord(rawAudit, documentId, transaction);
+                const result = await model.processSingleRecord(rawAudit, documentId, transaction, drafter);
                 if (!result) continue;
 
                 logger.info(
@@ -1050,9 +1219,11 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
             : null;
           const createdDate = parsedDate || new Date();
 
-          let creatorId = process.env.VANTHU_USER_ID;
+          // Ưu tiên dùng drafter (người đã tạo văn bản), nếu không có mới dùng Máy Văn Thư làm dự phòng
+          let creatorId = drafter || process.env.VANTHU_USER_ID;
           let displayName = creatorName;
-          if (this.helper && creatorName) {
+
+          if (this.helper && creatorName && !creatorId) {
             try {
               const cleanName = this.helper.extractDisplayName
                 ? this.helper.extractDisplayName(creatorName)
@@ -1138,12 +1309,16 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
       //   }
       // }
 
+      logger.info(
+        `[AggregateSync][DONE] Tổng kết ID=${id}: Tác động ${totalAffected} bản ghi liên hệ (Bao gồm File, Ý kiến, Audit).`
+      );
+
       return {
         action: documentResult.action || 'upsert',
         affected: Number(totalAffected || 0)
       };
     } catch (error) {
-      logger.error(`[IncomingDocumentModel.upsertDocumentAggregateById] Failed to upsert document aggregate for ID=${id}: ${error.message}`, { stack: error.stack, oldRecord });
+      logger.error(`[AggregateSync][ERROR] Thất bại xử lý tích hợp cũ-mới cho bản ghi ID=${id} - Lỗi: ${error.message}`);
       throw error;
     }
   }

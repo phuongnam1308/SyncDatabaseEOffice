@@ -1,3 +1,4 @@
+const { v4: uuidv4 } = require('uuid');
 const MigrationHelper = require('../../helpers/MigrationHelper');
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 const { tableMappings } = require('./config');
@@ -9,7 +10,7 @@ const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 
 class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
   constructor() {
-    super({ modelName: 'STREAM_MEETING_MIGRATION' });
+    super({ modelName: 'STREAM_MEETING_COPY_MIGRATION' });
 
     // Config bảng cũ
     this.oldConfig = tableMappings.meeting;
@@ -391,13 +392,31 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     return Number(aId || 0) > Number(bId || 0);
   }
 
-  async fetchListFromOldDb(lastSyncTime, lastSyncId = 0) {
+  async getCount(lastSyncTime, lastSyncId = 0) {
     const listIds = this.oldConfig.listIds || [];
     const listIdsStr = listIds.map(id => `'${id}'`).join(',');
-    console.log(`[StreamMeetingMigrationModel] Fetching list from old DB since ${lastSyncTime} (ID > ${lastSyncId})...`);
+    const query = `
+        SELECT COUNT(*) AS total
+        FROM [${this.oldDbName}].[dbo].[AllUserData] ud
+        WHERE ud.[tp_ListId] IN (${listIdsStr})
+        AND ud.tp_RowOrdinal = 0
+        AND ud.[tp_IsCurrent] = 1
+        AND ud.[tp_DeleteTransactionId] = 0x0
+        AND (
+            ud.[tp_Modified] > @lastSyncTime
+            OR (
+                ud.[tp_Modified] = @lastSyncTime
+                AND ud.[tp_ID] > @lastSyncId
+            )
+        )
+    `;
+    const rows = await this.queryOldDb(query, { lastSyncTime, lastSyncId: Number(lastSyncId || 0) });
+    return Number(rows?.[0]?.total || 0);
+  }
 
-    const completedLimit = Number(process.env.COMPLETED_LIMIT || 500);
-    const beginLimit = Number(process.env.BEGIN_LIMIT || 0);
+  async fetchListFromOldDb(lastSyncTime, lastSyncId = 0, offset = 0, limit = 2000) {
+    const listIds = this.oldConfig.listIds || [];
+    const listIdsStr = listIds.map(id => `'${id}'`).join(',');
 
     const query = `
         SELECT
@@ -483,12 +502,14 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
             )
         )
         ORDER BY ud.[tp_Modified] ASC, ud.[tp_ID] ASC
-        OFFSET ${beginLimit} ROWS FETCH NEXT ${completedLimit} ROWS ONLY;
+        OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
     `;
 
-    const rows = await this.queryOldDb(query, {
-      lastSyncTime,
-      lastSyncId: Number(lastSyncId || 0)
+    const rows = await this.queryOldDb(query, { 
+      lastSyncTime, 
+      lastSyncId: Number(lastSyncId || 0),
+      offset: Number(offset || 0),
+      limit: Number(limit || 2000)
     });
     console.log(`[StreamMeetingMigrationModel] Fetched ${rows.length} rows from old DB`);
     return rows;
@@ -533,24 +554,50 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
     const normalizedLastSyncId = Number(lastSyncId || 0);
 
-    const rows = await this.fetchListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId);
-    const stageResult = await this.syncOldToStaging(rows);
+    const totalCount = await this.getCount(normalizedLastSyncTime, normalizedLastSyncId);
+    console.log(`[StreamMeetingMigrationModel] Total records to sync: ${totalCount}`);
 
+    // Cập nhật Dashboard ngay lập tức
+    await this.queryNewDb(`UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`, {
+      total: totalCount,
+      jobId: syncJobId
+    });
+
+    const fetchBatchSize = Number(process.env.STAGING_FETCH_BATCH_SIZE || 2000);
+    const numIterations = Math.ceil(totalCount / fetchBatchSize);
+
+    let totalStagedCount = 0;
     let nextSyncTime = normalizedLastSyncTime;
     let nextSyncId = normalizedLastSyncId;
-    for (const row of rows) {
-      const rowTime = this.extractRowSyncTime(row);
-      const rowId = this.extractRowSyncId(row);
-      if (!rowTime) continue;
-      if (this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId)) {
-        nextSyncTime = rowTime;
-        nextSyncId = rowId;
-      }
+
+    for (let i = 0; i < numIterations; i++) {
+        const offset = i * fetchBatchSize;
+        console.log(`[StreamMeetingMigrationModel] Fetching batch ${i + 1}/${numIterations} (Offset: ${offset}, Limit: ${fetchBatchSize})`);
+        
+        const rows = await this.fetchListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId, offset, fetchBatchSize);
+        if (!rows || rows.length === 0) break;
+
+        const stageResult = await this.syncOldToStaging(rows);
+        totalStagedCount += Number(stageResult?.stagedCount || rows.length || 0);
+
+        for (const row of rows) {
+            const rowTime = this.extractRowSyncTime(row);
+            const rowId = this.extractRowSyncId(row);
+            if (rowTime && this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId)) {
+                nextSyncTime = rowTime;
+                nextSyncId = rowId;
+            }
+        }
+        console.log(`[StreamMeetingMigrationModel] Staged progressive: ${totalStagedCount}/${totalCount}`);
     }
 
-    return {
-      syncJobId, rows, totalCount: rows.length, stagedCount: Number(stageResult?.stagedCount || 0),
-      lastSyncTime: nextSyncTime, lastSyncId: nextSyncId
+    return { 
+        syncJobId, 
+        rows: [], 
+        totalCount: totalCount, 
+        stagedCount: totalStagedCount,
+        lastSyncTime: nextSyncTime, 
+        lastSyncId: nextSyncId 
     };
   }
 
@@ -948,14 +995,17 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
 
   async getExistingColumns(tableName, schema = 'dbo') {
     const query = `
-      SELECT COLUMN_NAME, DATA_TYPE
+      SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH
       FROM [${this.newDbName}].INFORMATION_SCHEMA.COLUMNS
       WHERE TABLE_NAME = @tableName AND TABLE_SCHEMA = @schema
     `;
     const result = await this.queryNewDb(query, { tableName, schema });
-    // Trả về Map [tên_cột_lowercase] -> [kiểu_dữ_liệu]
+    // Trả về Map [tên_cột_lowercase] -> { type, maxLength }
     const colMap = new Map();
-    result.forEach(r => colMap.set(r.COLUMN_NAME.toLowerCase(), r.DATA_TYPE.toLowerCase()));
+    result.forEach(r => colMap.set(r.COLUMN_NAME.toLowerCase(), {
+      type: r.DATA_TYPE.toLowerCase(),
+      maxLength: r.CHARACTER_MAXIMUM_LENGTH
+    }));
     return colMap;
   }
 
@@ -969,13 +1019,27 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     const insertVals = [];
     const updateSet = [];
 
+    // Helper function for safe trimming
+    const applySafeCast = (colName, val) => {
+      const colMeta = existingCols.get(colName.toLowerCase());
+      if (!colMeta) return val;
+      const { type, maxLength } = colMeta;
+      if (typeof val === 'string' && maxLength && maxLength > 0) {
+        if (val.length > maxLength) {
+          console.warn(`[StreamMeetingMigrationModel] Truncating column [${colName}]: length ${val.length} > ${maxLength}. Value: "${val.substring(0, 20)}..."`);
+          return val.substring(0, maxLength);
+        }
+      }
+      return val;
+    };
+
     // Tự động sinh ID nếu bảng có cột 'id' (case-insensitive) nhưng mapping không có
     if (existingCols.has('id') && !params.hasOwnProperty('id')) {
         const hasIdInMapping = Object.values(fieldMapping).some(v => v.toLowerCase() === 'id') ||
                               Object.keys(defaultValues || {}).some(v => v.toLowerCase() === 'id');
         if (!hasIdInMapping) {
             const newId = uuidv4().toUpperCase();
-            params['id'] = newId;
+            params['id'] = applySafeCast('id', newId);
             insertCols.push('[id]');
             insertVals.push('@id');
             // Thường không update ID
@@ -986,7 +1050,9 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
       if (!existingCols.has(newField.toLowerCase())) continue;
       const value = rawData[oldField];
       if (value === undefined || value === null) continue;
-      params[newField] = value;
+      
+      const safeValue = applySafeCast(newField, value);
+      params[newField] = safeValue;
       insertCols.push(`[${newField}]`);
       insertVals.push(`@${newField}`);
 
@@ -999,7 +1065,9 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     for (const [newField, valueFn] of Object.entries(defaultValues || {})) {
       if (!existingCols.has(newField.toLowerCase())) continue;
       if (!params.hasOwnProperty(newField)) {
-        params[newField] = typeof valueFn === 'function' ? valueFn(rawData) : valueFn;
+        const rawVal = typeof valueFn === 'function' ? valueFn(rawData) : valueFn;
+        const safeValue = applySafeCast(newField, rawVal);
+        params[newField] = safeValue;
         insertCols.push(`[${newField}]`);
         insertVals.push(`@${newField}`);
 
@@ -1010,11 +1078,14 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
       }
     }
 
-    for (const [col, type] of existingCols.entries()) {
-      if (!params.hasOwnProperty(col)) {
+    for (const [colName, colMeta] of existingCols.entries()) {
+      if (!params.hasOwnProperty(colName)) {
         // Tự động fake dữ liệu dựa trên kiểu dữ liệu của cột
         let fallback = null;
-        if (type.includes('char') || type.includes('text')) {
+        const { type } = colMeta;
+        if (colName.toLowerCase() === 'charman_type' || colName.toLowerCase() === 'chairman_type') {
+          fallback = 'USER';
+        } else if (type.includes('char') || type.includes('text')) {
           fallback = 'Chưa xác định (Auto-fake)';
         } else if (type.includes('int') || type.includes('decimal') || type.includes('float') || type.includes('numeric')) {
           fallback = 0;
@@ -1025,11 +1096,12 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
         }
 
         if (fallback !== null) {
-          params[col] = fallback;
-          insertCols.push(`[${col}]`);
-          insertVals.push(`@${col}`);
-          if (col.toLowerCase() !== 'id' && col.toLowerCase() !== 'created_at') {
-            updateSet.push(`[${col}] = @${col}`);
+          const safeValue = applySafeCast(colName, fallback);
+          params[colName] = safeValue;
+          insertCols.push(`[${colName}]`);
+          insertVals.push(`@${colName}`);
+          if (colName.toLowerCase() !== 'id' && colName.toLowerCase() !== 'created_at') {
+            updateSet.push(`[${colName}] = @${colName}`);
           }
         }
       }

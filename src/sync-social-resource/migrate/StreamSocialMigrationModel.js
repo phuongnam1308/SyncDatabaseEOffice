@@ -160,10 +160,9 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
         return Number(aId || 0) > Number(bId || 0);
     }
 
-    async fetchListFromOldDb(lastSyncTime, lastSyncId = 0) {
+    async fetchListFromOldDb(lastSyncTime, lastSyncId = 0, offset = 0, limit = 2000) {
         // Giả định bảng cũ là Social_otherResource (DataEOfficeSNP)
         // Sử dụng ROW_NUMBER() OVER (PARTITION BY r.ID) để khử trùng bản ghi (thực tế dữ liệu cũ đang bị nhân đôi do lỗi quét/insert)
-        const topClause = this.maxSyncRows > 0 ? 'TOP (@maxRows)' : '';
         const query = `
       ;WITH source_rows AS (
         SELECT
@@ -180,14 +179,13 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
           ROW_NUMBER() OVER (PARTITION BY r.ID ORDER BY r.PostTime DESC, r.Created DESC) as rn_dedup
         FROM ${this.oldDbName}.${this.oldDbSchema}.${this.oldDbTable} r
         OUTER APPLY (
-            SELECT TOP 1 Subject 
-            FROM ${this.oldDbName}.SNP.CodeItem 
+            SELECT TOP 1 Subject
+            FROM ${this.oldDbName}.SNP.CodeItem
             WHERE SPItemId = r.ItemId
             ORDER BY ID DESC -- Lấy bản ghi mới nhất nếu có nhiều Subject
         ) ci
       )
       SELECT
-        ${topClause}
         *,
         ISNULL(__sync_id_num, 0) AS __sync_id
       FROM source_rows
@@ -201,15 +199,15 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
       ORDER BY
         __sync_time ASC,
         ISNULL(__sync_id_num, -2147483648) ASC
+      OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY
     `;
 
         const params = {
             lastSyncTime,
-            lastSyncId: Number(lastSyncId || 0)
+            lastSyncId: Number(lastSyncId || 0),
+            offset: Number(offset || 0),
+            limit: Number(limit || 2000)
         };
-        if (this.maxSyncRows > 0) {
-            params.maxRows = this.maxSyncRows;
-        }
 
         return this.queryOldDb(query, params);
     }
@@ -320,27 +318,54 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
         const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
         const normalizedLastSyncId = Number(lastSyncId || 0);
 
-        // Đọc data Cũ về Staging
-        const rows = await this.fetchListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId);
-        const stageResult = await this.syncOldToStaging(rows);
+        const totalCount = await this.getCount(normalizedLastSyncTime, normalizedLastSyncId);
+        console.log(`[StreamSocialMigrationModel] Total records needing sync: ${totalCount}`);
 
+        // Cập nhật Dashboard ngay lập tức để người dùng thấy tổng số bản ghi
+        await this.queryNewDb(`UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`, {
+            total: totalCount,
+            jobId: syncJobId
+        });
+
+        const fetchBatchSize = Number(process.env.STAGING_FETCH_BATCH_SIZE || 2000);
+        const numIterations = Math.ceil(totalCount / fetchBatchSize);
+
+        let totalStagedCount = 0;
         let nextSyncTime = normalizedLastSyncTime;
         let nextSyncId = normalizedLastSyncId;
 
-        for (const row of rows) {
-            const rowTime = this.extractRowSyncTime(row);
-            const rowId = this.extractRowSyncId(row);
-            if (!rowTime) continue;
-            if (this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId)) {
-                nextSyncTime = rowTime;
-                nextSyncId = rowId;
+        for (let i = 0; i < numIterations; i++) {
+            const offset = i * fetchBatchSize;
+            logger.info(`[StreamSocialMigrationModel] Fetching batch ${i + 1}/${numIterations} (Offset: ${offset}, Limit: ${fetchBatchSize})`);
+
+            const rows = await this.fetchListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId, offset, fetchBatchSize);
+            if (!rows || rows.length === 0) break;
+
+            const stageResult = await this.syncOldToStaging(rows);
+            totalStagedCount += Number(stageResult?.stagedCount || rows.length || 0);
+
+            // Cập nhật cursor và LOG chi tiết từng bản ghi
+            for (const row of rows) {
+                const rowTime = this.extractRowSyncTime(row);
+                const rowId = this.extractRowSyncId(row);
+                if (!rowTime) continue;
+
+                const isAhead = this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId);
+                logger.info(`  └─ [Compare] rowID: ${row.ID} | T: ${rowTime} ID: ${rowId} vs Cursor(T: ${nextSyncTime} ID: ${nextSyncId}) -> Ahead: ${isAhead}`);
+
+                if (isAhead) {
+                    nextSyncTime = rowTime;
+                    nextSyncId = rowId;
+                }
             }
+            logger.info(`🔥 [StreamSocialMigrationModel] Batch ${i + 1}/${numIterations} staged: ${totalStagedCount}/${totalCount}. LastSyncTime: ${nextSyncTime}, LastSyncId: ${nextSyncId}`);
         }
 
         return {
-            syncJobId, rows,
-            totalCount: rows.length,
-            stagedCount: Number(stageResult?.stagedCount || 0),
+            syncJobId,
+            rows: [],
+            totalCount: totalCount,
+            stagedCount: totalStagedCount,
             sourceLastSyncTime: normalizedLastSyncTime,
             sourceLastSyncId: normalizedLastSyncId,
             lastSyncTime: nextSyncTime,
@@ -495,7 +520,7 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
                                   Object.keys(defaultValues || {}).some(v => v.toLowerCase() === 'id') ||
                                   Object.keys(fixedValues || {}).some(v => v.toLowerCase() === 'id');
             if (!hasIdInMapping) {
-                // Kiểm tra xem ID có phải là IDENTITY không? Ở đây Social target table 'news' có vẻ dùng IDENTITY 
+                // Kiểm tra xem ID có phải là IDENTITY không? Ở đây Social target table 'news' có vẻ dùng IDENTITY
                 // nhưng để chắc chắn, ta kiểm tra nếu mapping không cung cấp ID thì ta để DB tự sinh HOẶC ta sinh UUID.
                 // Thường các bảng render mới dùng UUID NVARCHAR(255).
                 // Nếu resultNews.newsId dùng SCOPE_IDENTITY() thì news.id là INT IDENTITY.
@@ -529,7 +554,7 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
         for (const [newField, value] of Object.entries(params)) {
             insertCols.push(this.sanitizeColumnName(newField));
             insertVals.push(`@${newField}`);
-            
+
             // 🔥 NEVER update ID or created_at
             if (newField.toLowerCase() !== 'id' && newField.toLowerCase() !== 'created_at') {
                 updateSet.push(`${this.sanitizeColumnName(newField)} = @${newField}`);
@@ -549,7 +574,7 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
               UPDATE ${tableRef} SET ${updateSet.length ? updateSet.join(', ') : `${this.sanitizeColumnName(externalKeyField)} = ${this.sanitizeColumnName(externalKeyField)}`}
               OUTPUT INSERTED.id INTO @OutputTable
               WHERE ${this.sanitizeColumnName(externalKeyField)} = @_externalKeyValue;
-              
+
               SELECT @affected = @@ROWCOUNT;
               SELECT (SELECT TOP 1 id FROM @OutputTable) AS id, @affected AS affected, 'updated' AS action;
           END
@@ -558,7 +583,7 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
               INSERT INTO ${tableRef} (${insertCols.join(', ')})
               OUTPUT INSERTED.id INTO @OutputTable
               VALUES (${insertVals.join(', ')});
-              
+
               SELECT @affected = @@ROWCOUNT;
               SELECT (SELECT TOP 1 id FROM @OutputTable) AS id, @affected AS affected, 'inserted' AS action;
           END
@@ -566,9 +591,9 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
 
         const result = await this.queryNewDbTx(query, params, transaction);
         const row = Array.isArray(result) ? result[0] : result;
-        return { 
-            id: row?.id || null, 
-            action: row?.action || (row?.affected ? 'updated' : 'none'), 
+        return {
+            id: row?.id || null,
+            action: row?.action || (row?.affected ? 'updated' : 'none'),
             affected: Number(row?.affected || 0),
             newsId: row?.id || null // For Social compatibility
         };

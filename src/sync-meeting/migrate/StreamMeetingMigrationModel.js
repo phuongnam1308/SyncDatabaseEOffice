@@ -280,7 +280,10 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
       const rowId = this.extractRowSyncId(row);
       if (!rowTime) continue;
 
-      if (this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId)) {
+      const isAhead = this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId);
+      logger.info(`  └─ [Compare] rowID: ${row.ID} | T: ${rowTime} ID: ${rowId} vs Cursor(T: ${nextSyncTime} ID: ${nextSyncId}) -> Ahead: ${isAhead}`);
+
+      if (isAhead) {
         nextSyncTime = rowTime;
         nextSyncId = rowId;
       }

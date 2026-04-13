@@ -5,7 +5,7 @@ const sql = require('mssql');
 const BaseIncrementalSyncInterface = require("../../sync-manager/BaseIncrementalSyncInterface");
 const MigrationHelper = require("../../helpers/MigrationHelper");
 
-const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
+const DEFAULT_SYNC_TIME = '1753-01-01T00:00:00.000Z';
 
 class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
     constructor() {
@@ -213,7 +213,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
                 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_id_incoming_bak_v2' AND object_id = OBJECT_ID('${mainTableRef}'))
                     CREATE INDEX idx_id_incoming_bak_v2 ON ${mainTableRef}(id_incoming_bak);
             END
-            
+
             /*
             IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'CoQuanGui2')
                 ALTER TABLE ${mainTableRef} ADD CoQuanGui2 NVARCHAR(MAX) NULL;
@@ -313,14 +313,17 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
     isCursorAhead(aTime, aId, bTime, bId) {
         const ta = new Date(aTime || DEFAULT_SYNC_TIME).getTime();
         const tb = new Date(bTime || DEFAULT_SYNC_TIME).getTime();
+        // Chế độ ASC: "Đi trước" nghĩa là mới hơn
         if (ta > tb) return true;
         if (ta < tb) return false;
         return Number(aId || 0) > Number(bId || 0);
     }
     normalizeSyncTime(value) {
-        if (!value) return DEFAULT_SYNC_TIME;
+        if (!value || value === '2100-01-01T00:00:00.000Z') return DEFAULT_SYNC_TIME;
         const dateValue = new Date(value);
         if (Number.isNaN(dateValue.getTime())) return DEFAULT_SYNC_TIME;
+        // Chế độ ASC: Nếu cursor quá cũ, ép về 1753
+        if (dateValue.getFullYear() <= 1753) return DEFAULT_SYNC_TIME;
         return dateValue.toISOString();
     }
     parseStatus(value) {
@@ -435,7 +438,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
    * @param {string} lastSyncTime - ISO datetime hoặc giá trị mặc định để lấy từ thời điểm đó về sau
    * @returns {Promise<Array>} danh sách bản ghi từ CSDL cũ
    */
-    async fetchListFromOldDb(lastSyncTime, lastSyncId = 0) {
+    async fetchListFromOldDb(lastSyncTime, lastSyncId = 0, offset = 0, limit = 100) {
         const query = `
     ;WITH source_rows AS (
         SELECT
@@ -448,22 +451,11 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
             [ForwardType], [Modified], [Created], [ModifiedBy], [CreatedBy], [ModuleId],
             [SiteName], [ListName], [ItemId], [MigrateFlg], [YearMonth], [MigrateErrFlg],
             [MigrateErrMess], [ItemVBPHOld], [DGPId],
-            COALESCE(
-                TRY_CONVERT(datetime2, Modified, 105),
-                TRY_CONVERT(datetime2, Created, 105),
-
-                TRY_CONVERT(datetime2, Modified, 120),
-                TRY_CONVERT(datetime2, Created, 120),
-
-                TRY_CONVERT(datetime2, Modified),
-                TRY_CONVERT(datetime2, Created)
-            ) AS __sync_time,
-
+            ${this.getSyncTimeExpression()} AS __sync_time,
             TRY_CONVERT(
                 BIGINT,
                 NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
             ) AS __sync_id_num
-
         FROM ${this.oldDbSchema}.${this.oldDbTable}
     )
     SELECT
@@ -473,30 +465,70 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
     WHERE
         __sync_time IS NOT NULL
         AND (
-            __sync_time > @lastSyncTime
+            @lastSyncTime = '1753-01-01T00:00:00.000Z'
+            OR __sync_time > @lastSyncTime
             OR (
                 __sync_time = @lastSyncTime
-                AND ISNULL(__sync_id_num, -9223372036854775808) > @lastSyncId
+                AND ISNULL(__sync_id_num, 0) > @lastSyncId
             )
         )
     ORDER BY
         __sync_time ASC,
-        ISNULL(__sync_id_num, -9223372036854775808) ASC,
+        ISNULL(__sync_id_num, 0) ASC,
         ID ASC
-        OFFSET ${Number(process.env.BEGIN_LIMIT || 0)} ROWS FETCH NEXT ${Number(process.env.COMPLETED_LIMIT || 100)} ROWS ONLY
+    OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY
     `;
 
         const params = {
             lastSyncTime,
-            lastSyncId: Number(lastSyncId || 0)
+            lastSyncId: Number(lastSyncId || 0),
+            offset: Number(offset || 0),
+            limit: Number(limit || 100)
         };
 
-        console.log('========== OLD DB SYNC QUERY ==========');
-        console.log('lastSyncTime:', lastSyncTime);
-        console.log('lastSyncId:', params.lastSyncId);
-        console.log('========================================');
-
         return this.queryOldDb(query, params);
+    }
+
+    /**
+     * Alias for countListFromOldDb to support SyncHandlerModel.
+     */
+    async getCount(lastSyncTime, lastSyncId = 0) {
+        return this.countListFromOldDb(lastSyncTime, lastSyncId);
+    }
+
+    /**
+     * Đếm tổng số bản ghi từ CSDL cũ.
+     */
+    async countListFromOldDb(lastSyncTime, lastSyncId = 0) {
+        const query = `
+    ;WITH source_rows AS (
+        SELECT
+            ${this.getSyncTimeExpression()} AS __sync_time,
+            TRY_CONVERT(
+                BIGINT,
+                NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
+            ) AS __sync_id_num
+        FROM ${this.oldDbSchema}.${this.oldDbTable}
+    )
+    SELECT COUNT(1) AS total
+    FROM source_rows
+    WHERE
+        __sync_time IS NOT NULL
+        AND (
+            @lastSyncTime = '1753-01-01T00:00:00.000Z'
+            OR __sync_time > @lastSyncTime
+            OR (
+                __sync_time = @lastSyncTime
+                AND ISNULL(__sync_id_num, 0) > @lastSyncId
+            )
+        )
+    `;
+        const params = {
+            lastSyncTime,
+            lastSyncId: Number(lastSyncId || 0)
+        };
+        const res = await this.queryOldDb(query, params);
+        return Number(res?.[0]?.total || 0);
     }
 
     async syncOldToStaging(rows, { transaction } = {}) {
@@ -535,7 +567,8 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
           ${nonIdColumns.length > 0 ? `
           UPDATE ${stagingTableRef}
           SET ${updateClause}
-          WHERE ID = @ID;` : `
+          WHERE ID = @ID
+            AND (Modified IS NULL OR TRY_CONVERT(datetime2, @Modified, 121) > TRY_CONVERT(datetime2, Modified, 121));` : `
           SELECT 1 AS noop;`}
         END
         ELSE
@@ -553,39 +586,73 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
 
 
     async getList(lastSyncTime, syncJobId, lastSyncId = 0) {
-        if (!syncJobId) {
-            throw new Error('syncJobId is required');
-        }
-
-        const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
-        const normalizedLastSyncId = Number(lastSyncId || 0);
-        const rows = await this.fetchListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId);
-        // const limitRows = rows.slice(0, 200); // Giới hạn số bản ghi lấy về để tránh quá tải
-        const stageResult = await this.syncOldToStaging(rows);
-
-        let nextSyncTime = normalizedLastSyncTime;
-        let nextSyncId = normalizedLastSyncId;
-
-        for (const row of rows) {
-            const rowTime = this.extractRowSyncTime(row);
-            const rowId = this.extractRowSyncId(row);
-            if (!rowTime) continue;
-            if (this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId)) {
-                nextSyncTime = rowTime;
-                nextSyncId = rowId;
+        try {
+            if (!syncJobId) {
+                throw new Error('syncJobId is required');
             }
-        }
 
-        return {
-            syncJobId,
-            rows,
-            totalCount: rows.length,
-            stagedCount: Number(stageResult?.stagedCount || 0),
-            sourceLastSyncTime: normalizedLastSyncTime,
-            sourceLastSyncId: normalizedLastSyncId,
-            lastSyncTime: nextSyncTime,
-            lastSyncId: nextSyncId
-        };
+            const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
+            const normalizedLastSyncId = Number(lastSyncId || 0);
+
+            let currentSyncTime = normalizedLastSyncTime;
+            let currentSyncId = normalizedLastSyncId;
+
+            if (currentSyncTime === DEFAULT_SYNC_TIME) {
+                const stagingTableRef = this.getStagingTableRef();
+                const maxRes = await this.queryNewDb(`SELECT MAX(Modified) as maxTime FROM ${stagingTableRef}`);
+                if (maxRes?.[0]?.maxTime) {
+                    currentSyncTime = this.normalizeSyncTime(maxRes[0].maxTime);
+                    logger.info(`[SyncIncomingDocumentModel] Tự động lấy mốc thời gian lớn nhất từ bảng trung gian: ${currentSyncTime}`);
+                }
+            }
+
+            let totalStagedCount = 0;
+            let allRowsCount = 0;
+
+            const totalCountToFetch = await this.countListFromOldDb(currentSyncTime, currentSyncId);
+            logger.info(`[SyncIncomingDocumentModel] Tổng số bản ghi cần đồng bộ: ${totalCountToFetch}`);
+
+            const fetchLimit = Number(process.env.COMPLETED_LIMIT || 100);
+
+            // 2 vòng for: Outer loop theo batch size, Inner loop xử lý batch đó
+            for (let offset = 0; offset < totalCountToFetch; offset += fetchLimit) {
+                const rows = await this.fetchListFromOldDb(currentSyncTime, currentSyncId, offset, fetchLimit);
+                if (!rows || rows.length === 0) break;
+
+                // Sync batch to staging
+                const stageResult = await this.syncOldToStaging(rows);
+                totalStagedCount += Number(stageResult?.stagedCount || 0);
+                allRowsCount += rows.length;
+
+                // Cập nhật cursor (dùng cho mốc log/tiến trình)
+                for (const row of rows) {
+                    const rowTime = this.extractRowSyncTime(row);
+                    const rowId = this.extractRowSyncId(row);
+                    if (rowTime && this.isCursorAhead(rowTime, rowId, currentSyncTime, currentSyncId)) {
+                        currentSyncTime = rowTime;
+                        currentSyncId = rowId;
+                    }
+                }
+
+                logger.info(`[SyncIncomingDocumentModel] >> Tiến độ: ${allRowsCount}/${totalCountToFetch} bản ghi (Staged=${totalStagedCount})`);
+            }
+
+            logger.info(`[SyncIncomingDocumentModel] Hoàn tất đẩy ${allRowsCount} bản ghi về Staging.`);
+
+            return {
+                syncJobId,
+                rows: [],
+                totalCount: allRowsCount,
+                stagedCount: totalStagedCount,
+                sourceLastSyncTime: normalizedLastSyncTime,
+                sourceLastSyncId: normalizedLastSyncId,
+                lastSyncTime: currentSyncTime,
+                lastSyncId: currentSyncId
+            };
+        } catch (error) {
+            logger.error(`[SyncIncomingDocumentModel.getList] Failed to get list for syncJobId=${syncJobId}: ${error.message}`, { stack: error.stack });
+            throw error;
+        }
     }
     /**
    * Đếm số user hiện có trong bảng `user_clone_for_sync` (schema mặc định của service).
@@ -630,6 +697,12 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
     getSyncTimeExpression() {
         return `
       COALESCE(
+        TRY_CONVERT(datetime2, Modified, 105),
+        TRY_CONVERT(datetime2, Created, 105),
+
+        TRY_CONVERT(datetime2, Modified, 120),
+        TRY_CONVERT(datetime2, Created, 120),
+
         TRY_CONVERT(datetime2, Modified),
         TRY_CONVERT(datetime2, Created)
       )
@@ -641,60 +714,86 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
             throw new Error('syncJobId is required');
         }
 
-        const jobState = await this.getSyncJobState(syncJobId);
-        const itemIndex = Number(
-            options.itemIndex != null
-                ? options.itemIndex
-                : (jobState?.total_processed || 0)
-        );
+        let jobState;
+        try {
+            jobState = await this.getSyncJobState(syncJobId);
+        } catch (error) {
+            throw error;
+        }
 
-        const sourceLastSyncTime = this.normalizeSyncTime(
-            options.sourceLastSyncTime || options.lastSyncTime || jobState?.last_sync_time || DEFAULT_SYNC_TIME
-        );
-        const sourceLastSyncId = Number(
-            options.sourceLastSyncId != null
-                ? options.sourceLastSyncId
-                : (jobState?.last_sync_id || 0)
-        );
+        const lastSyncTime = this.normalizeSyncTime(jobState?.last_sync_time);
+        const lastSyncId = Number(jobState?.last_sync_id || 0);
 
-        const transaction = new sql.Transaction(this.newPool);
-        await transaction.begin();
+        let rowData = null;
+        let transaction = null;
 
         try {
-            const rowData = await this.fetchOneFromStaging({
-                lastSyncTime: sourceLastSyncTime,
-                lastSyncId: sourceLastSyncId,
-                itemIndex,
-                transaction
-            });
+            const stagingTableRef = this.getStagingTableRef();
+
+            rowData = await this.fetchOneFromStaging();
 
             if (!rowData) {
-                await transaction.commit();
+                logger.info(`[SyncIncomingDocumentModel] Không còn dữ liệu trong staging để xử lý cho job ${syncJobId}.`);
                 return {
                     syncJobId,
-                    itemIndex,
                     processed: false,
                     done: true
                 };
             }
 
+            const rowId = rowData.ID || null;
+            const current = Number(jobState?.total_processed || 0) + 1;
+            logger.info(`[SyncIncomingDocumentModel] Process ${current}: record ID=${rowId}`);
+
+            transaction = new sql.Transaction(this.newPool);
+            await transaction.begin();
+
             const result = await this.processRowData(rowData, { transaction });
+
+            const nextSyncTime = this.extractRowSyncTime(rowData) || lastSyncTime;
+            const nextSyncId = this.extractRowSyncId(rowData) || lastSyncId;
+
+            await this.queryNewDbTx(
+                `UPDATE sync_jobs
+                 SET total_processed = ISNULL(total_processed, 0) + 1,
+                     total_success   = ISNULL(total_success, 0) + 1,
+                     last_sync_time  = @lastSyncTime,
+                     last_sync_id    = @lastSyncId
+                 WHERE job_id = @syncJobId`,
+                { syncJobId, lastSyncTime: nextSyncTime, lastSyncId: nextSyncId },
+                transaction
+            );
+
+            await this.queryNewDbTx(
+                `UPDATE ${stagingTableRef} SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE ID = @ID`,
+                { ID: rowId },
+                transaction
+            );
+
             await transaction.commit();
 
             return {
                 syncJobId,
-                itemIndex,
                 processed: true,
                 done: false,
-                rowId: rowData.ID || null,
+                rowId,
                 result
             };
         } catch (error) {
-            try {
-                await transaction.rollback();
-            } catch (rollbackError) {
-                logger.error('[OutGoingDocumentModel.processOne] rollback failed:', rollbackError);
+            if (transaction) {
+                try {
+                    await transaction.rollback();
+                } catch (rollbackError) {}
             }
+
+            if (rowData && rowData.ID) {
+                try {
+                    const stagingTableRef = this.getStagingTableRef();
+                    await this.queryNewDb(`UPDATE ${stagingTableRef} SET MigrateErrFlg = 1, MigrateErrMess = @Err WHERE ID = @ID`, { ID: rowData.ID, Err: String(error.message).slice(0, 1000) });
+                } catch (updateErr) {}
+            }
+
+            logger.error(`[SyncIncomingDocumentModel.processOne] Failed row ID=${rowData?.ID}: ${error.message}`);
             throw error;
         }
     }
@@ -722,61 +821,23 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
             affected
         };
     }
-    async fetchOneFromStaging({ lastSyncTime, lastSyncId = 0, itemIndex, transaction } = {}) {
-        const rowNumber = Number(itemIndex || 0) + 1;
-        const stagingTableRef = this.getStagingTableRef();
-        const syncTimeExpr = this.getSyncTimeExpression();
-        const query = `
-      ;WITH source_rows AS (
-        SELECT
-          *,
-          ${syncTimeExpr} AS __sync_time,
-          TRY_CONVERT(
-            BIGINT,
-            NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
-          ) AS __sync_id_num
-        FROM ${stagingTableRef}
-      ),
-      staged AS (
-        SELECT
-          *,
-          ROW_NUMBER() OVER (
-            ORDER BY
-              __sync_time ASC,
-              ISNULL(__sync_id_num, -9223372036854775808) ASC,
-              ID ASC
-          ) AS rn
-        FROM source_rows
-        WHERE (
-          __sync_time > @lastSyncTime
-          OR (
-            __sync_time = @lastSyncTime
-            AND ISNULL(__sync_id_num, -9223372036854775808) > @lastSyncId
-          )
-        )
-      )
-      SELECT TOP 1 *
-      FROM staged
-      WHERE rn = @rowNumber
-    `;
+    async fetchOneFromStaging() {
+        try {
+            const stagingTableRef = this.getStagingTableRef();
+            const query = `
+            SELECT TOP 1 *
+            FROM ${stagingTableRef}
+            WHERE ISNULL(MigrateFlg, 0) = 0
+              AND ISNULL(MigrateErrFlg, 0) = 0
+            ORDER BY TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(ID)), '')) DESC
+            `;
 
-        const rows = await this.queryNewDbTx(
-            query,
-            {
-                lastSyncTime,
-                lastSyncId: Number(lastSyncId || 0),
-                rowNumber
-            },
-            transaction
-        );
-
-        if (!rows?.length) {
-            return null;
+            const rows = await this.queryNewDb(query);
+            return rows?.length ? rows[0] : null;
+        } catch (error) {
+            logger.error(`[SyncIncomingDocumentModel.fetchOneFromStaging] Failed to fetch: ${error.message}`);
+            throw error;
         }
-
-        const row = { ...rows[0] };
-        delete row.rn;
-        return row;
     }
     async processSingleRecord(rowData, transaction) {
         if (!rowData || typeof rowData !== "object") {
@@ -792,8 +853,10 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         }
 
         try {
+            logger.info(`[SyncIncomingDocumentModel][STEP 1.1] Bắt đầu Mapping dữ liệu từ Staging sang Model mới cho record ID=${rowData.ID}`);
             // 1. Map raw -> main structure
             const mapped = await this._mapSingleRecord(rowData, transaction);
+            logger.info(`[SyncIncomingDocumentModel][STEP 1.2] Mapping hoàn tất -> document_id mới: ${mapped?.document_id}`);
 
             if (!mapped?.document_id) {
                 throw new Error("Mapped document_id is required");
@@ -819,7 +882,8 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
                 return {
                     action: "updated",
                     affected: 1,
-                    documentId: existing[0].document_id
+                    documentId: existing[0].document_id,
+                    drafter: mapped.drafter ?? null
                 };
             }
 
@@ -828,7 +892,8 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
             return {
                 action: "inserted",
                 affected: 1,
-                documentId: mapped.document_id
+                documentId: mapped.document_id,
+                drafter: mapped.drafter ?? null
             };
 
         } catch (error) {
@@ -1085,6 +1150,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         return {
             // Core fields
             document_id: `${Date.now()}${Math.floor(Math.random() * 10000)}`,
+            drafter: drafter ?? null,   // Expose để caller dùng làm fallback cho audit
             status_code: statusCode,
             stage_status: stageStatus,
             // curStatusCode: curStatusCode,

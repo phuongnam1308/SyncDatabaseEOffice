@@ -41,14 +41,20 @@ class SyncHandlerModel {
 
       if (!preparedJobs.has(jobId)) {
         const listResult = await this.syncModel.getList(lastTime, jobId, lastSyncId);
+        // Khi Resume sau server restart, `nextIndex` phải bắt đầu từ số records đã xử lý trước đó
+        // (context.totalProcessed) chứ không phải 0, để SyncManagerService không emit lại từ đầu.
+        const resumeIndex = Number(cursor.totalProcessed || 0);
         preparedJobs.set(jobId, {
           totalCount: Number(listResult?.totalCount || 0),
           syncTime: listResult?.lastSyncTime || lastTime,
           syncId: Number(listResult?.lastSyncId || lastSyncId || 0),
           sourceTime: listResult?.sourceLastSyncTime || lastTime,
           sourceId: Number(listResult?.sourceLastSyncId || lastSyncId || 0),
-          nextIndex: 0
+          nextIndex: resumeIndex
         });
+        if (resumeIndex > 0) {
+          logger.info(`[SyncHandlerModel] Resuming jobId=${jobId}: nextIndex restored to ${resumeIndex} (totalProcessed from context).`);
+        }
       }
 
       const state = preparedJobs.get(jobId);

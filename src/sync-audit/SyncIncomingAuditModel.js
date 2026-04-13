@@ -78,7 +78,7 @@ class SyncIncomingAuditModel extends SyncAuditModel {
   // ---------------------------------------------------------------------------
   async _syncToAssignment(audit, auditId, transaction) {
     const {
-      document_id, created_at, receiver, receiver_unit,
+      document_id, created_at, receiver, receiver_unit, created_by,
       roleProcess, stage_status
     } = audit;
 
@@ -96,7 +96,7 @@ class SyncIncomingAuditModel extends SyncAuditModel {
       // 2. Validate input chính
       if (!stage_status || !roleProcess) return;
 
-      const allReceivers = [receiver, receiver_unit].filter(Boolean);
+      const allReceivers = [receiver || created_by, receiver_unit].filter(Boolean);
       if (allReceivers.length === 0) return;
 
       // 3. Loại duplicate receiver + role
@@ -139,7 +139,7 @@ class SyncIncomingAuditModel extends SyncAuditModel {
   // ---------------------------------------------------------------------------
   async _syncToCurrentState(audit, auditId, transaction) {
     const {
-      document_id, time, receiver, receiver_unit,
+      document_id, time, receiver, receiver_unit, created_by,
       roleProcess, stage_status, action_code
     } = audit;
 
@@ -149,7 +149,7 @@ class SyncIncomingAuditModel extends SyncAuditModel {
     // Văn bản đến được coi là hoàn tất khi ở trạng thái DA_XU_LY
     const isCompleted = (stageUp === STAGE.HOAN_THANH_VAN_BAN) ? 1 : 0;
     // Ưu tiên hiển thị cá nhân làm receiver chính trong current_state
-    const currentReceiver = receiver || receiver_unit;
+    const currentReceiver = receiver || receiver_unit || created_by;
 
     // SCHEMA incomming_current_state: document_id, current_stage_status, current_action_code, current_receiver, current_role_process, current_deadline, last_audit_id, last_audit_time, is_transfer_to_room, has_open_workitem, is_completed_doc, updated_at
     await this.queryNewDbTx(

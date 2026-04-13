@@ -26,7 +26,7 @@ class SyncManager {
     this.job = null;
   }
 
-  async run(syncFn) {
+  async run(syncFn, options = {}) {
     const jobId = Date.now();
     this.job = new SyncJob(jobId, this.modelName);
     this.job.startTime = new Date();
@@ -35,7 +35,32 @@ class SyncManager {
 
     try {
       const lastSyncTime = await this.getLastSyncTime();
-      await syncFn(lastSyncTime, this.job);
+      
+      // Nếu syncFn là một object chứa count, fetch, process (theo pattern mới)
+      if (typeof syncFn === 'object' && syncFn.count && syncFn.fetch && syncFn.process) {
+        const total = await syncFn.count(lastSyncTime);
+        this.job.totalItems = total;
+        logger.info(`[SyncManager][${this.modelName}] Total items to sync: ${total}`);
+        
+        const batchSize = options.batchSize || 100;
+        let processedCount = 0;
+
+        for (let offset = 0; offset < total; offset += batchSize) {
+          const batch = await syncFn.fetch(lastSyncTime, batchSize, offset);
+          if (!batch || batch.length === 0) break;
+
+          for (const item of batch) {
+            await syncFn.process(item, this.job);
+            processedCount++;
+            await this.job.updateProgress(processedCount);
+          }
+          logger.info(`[SyncManager][${this.modelName}] Processed ${processedCount}/${total}`);
+        }
+      } else {
+        // Fallback cho syncFn cũ (function duy nhất)
+        await syncFn(lastSyncTime, this.job);
+      }
+
       this.job.status = 'completed';
       this.job.endTime = new Date();
       logger.info(`[SyncManager][${this.modelName}] Job ${jobId} completed.`);

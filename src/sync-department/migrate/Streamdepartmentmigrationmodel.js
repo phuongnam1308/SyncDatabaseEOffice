@@ -33,7 +33,7 @@ class StreamDepartmentMigrationModel extends BaseIncrementalSyncInterface {
   async initialize() {
     await super.initialize();
     await this.ensureStagingTable();
-    
+
     try {
       await this.queryNewDb(`
         IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'organization_units' AND COLUMN_NAME = 'table_backups')

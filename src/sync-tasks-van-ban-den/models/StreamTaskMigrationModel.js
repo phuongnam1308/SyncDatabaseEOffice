@@ -42,31 +42,66 @@ class StreamTaskMigrationModel extends BaseModel {
   }
 
   /**
-   * Ensure id_task_bak column exists, add if missing
+   * Ensure necessary columns exist in the main task table, add if missing.
    */
   async ensureTaskTableColumns() {
     try {
       const targetTable = `${this.newDbName}.${this.newDbSchema}.${this.newDbTable}`;
-      
-      // Check if id_task_bak column exists
-      const checkColQuery = `
-        SELECT 1 FROM ${this.newDbName}.INFORMATION_SCHEMA.COLUMNS
-        WHERE TABLE_SCHEMA = '${this.newDbSchema}'
-          AND TABLE_NAME = '${this.newDbTable}'
-          AND COLUMN_NAME = 'id_task_bak'
-      `;
-      
-      const existing = await this.queryNewDb(checkColQuery, {});
-      
-      if (!existing || existing.length === 0) {
-        // Column doesn't exist - ADD it
-        const alterQuery = `
-          ALTER TABLE ${targetTable}
-          ADD id_task_bak NVARCHAR(255) NULL
+      const dbName = this.newDbName;
+      const tableName = this.newDbTable;
+
+      // Danh sách các cột quan trọng cần có trong bảng [task]
+      const requiredColumns = [
+        { name: 'id_task_bak',            type: 'NVARCHAR(255)' },
+        { name: 'code',                   type: 'NVARCHAR(255)' },
+        { name: 'name',                   type: 'NVARCHAR(MAX)' },
+        { name: 'start_date',             type: 'DATETIME2'     },
+        { name: 'end_date',               type: 'DATETIME2'     },
+        { name: 'bpmn_id',                type: 'NVARCHAR(255)' },
+        { name: 'priority',               type: 'NVARCHAR(50)'  },
+        { name: 'reminder_time',          type: 'INT'           },
+        { name: 'topic',                  type: 'NVARCHAR(MAX)' },
+        { name: 'note',                   type: 'NVARCHAR(MAX)' },
+        { name: 'repetitive_task',        type: 'BIT'           },
+        { name: 'month',                  type: 'INT'           },
+        { name: 'repetitive_start',       type: 'DATETIME2'     },
+        { name: 'repetitive_end',         type: 'DATETIME2'     },
+        { name: 'parent',                 type: 'NVARCHAR(255)' },
+        { name: 'path',                   type: 'NVARCHAR(MAX)' },
+        { name: 'progress',               type: 'INT'           },
+        { name: 'process_status',         type: 'NVARCHAR(50)'  },
+        { name: 'status',                 type: 'INT'           },
+        { name: 'approval_status',        type: 'NVARCHAR(50)'  },
+        { name: 'created_by',             type: 'NVARCHAR(255)' },
+        { name: 'updated_by',             type: 'NVARCHAR(255)' },
+        { name: 'recurring_from_id',      type: 'INT'           },
+        { name: 'type_task',              type: 'NVARCHAR(50)'  },
+        { name: 'doc_id',                 type: 'INT'           },
+        { name: 'meeting_id',             type: 'INT'           },
+        { name: 'meeting_conclusion_id',  type: 'INT'           },
+        { name: 'week_days',              type: 'NVARCHAR(255)' },
+        { name: 'project_id',             type: 'INT'           },
+        { name: 'type_task_meeting',      type: 'NVARCHAR(50)'  },
+        { name: 'template_id',            type: 'INT'           },
+        { name: 'dependent_task_id',      type: 'INT'           },
+        { name: 'is_confidential',        type: 'BIT'           }
+      ];
+
+      for (const col of requiredColumns) {
+        const checkColQuery = `
+          SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS
+          WHERE TABLE_NAME = '${tableName}' AND COLUMN_NAME = '${col.name}'
         `;
-        
-        await this.queryNewDb(alterQuery, {});
-        logger.info('Added id_task_bak column to task table');
+        const existing = await this.queryNewDb(checkColQuery, {});
+
+        if (!existing || existing.length === 0) {
+          const alterQuery = `
+            ALTER TABLE ${targetTable}
+            ADD [${col.name}] ${col.type} NULL
+          `;
+          await this.queryNewDb(alterQuery, {});
+          logger.info(`Added missing column ${col.name} to ${tableName} table`);
+        }
       }
     } catch (err) {
       logger.error('ensureTaskTableColumns failed:', err.message);

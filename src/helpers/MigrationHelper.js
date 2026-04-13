@@ -15,6 +15,37 @@ class MigrationHelper {
     this.queryNewDbTx = dbQueryFn;
     this.queryOldDb = queryOldDbFn;
     this.mapStatus = this.mapStatusOutgoing.bind(this);
+    this.deptCache = new Map(); // Local cache for department IDs
+  }
+
+  /**
+   * Đảm bảo các cột kỹ thuật tồn tại trong bảng (Self-healing schema)
+   * @param {string} dbName
+   * @param {string} tableName
+   * @param {Object} columnsMap { columnName: dataType }
+   */
+  async ensureColumnsExist(dbName, tableName, columnsMap, transaction = null) {
+    try {
+      const dbPrefix = dbName ? `${dbName}.` : "";
+
+      for (const [colName, dataType] of Object.entries(columnsMap)) {
+        const checkQuery = `
+          SELECT 1 FROM ${dbName || 'dbo'}.INFORMATION_SCHEMA.COLUMNS
+          WHERE TABLE_NAME = @tableName
+            AND COLUMN_NAME = @colName
+        `;
+
+        const exists = await this.queryNewDbTx(checkQuery, { tableName, colName }, transaction);
+
+        if (!exists || exists.length === 0) {
+          logger.info(`[MigrationHelper] Dang khoi tao cot thieu: ${tableName}.${colName} (${dataType})`);
+          const alterQuery = `ALTER TABLE ${dbPrefix}dbo.${tableName} ADD [${colName}] ${dataType}`;
+          await this.queryNewDbTx(alterQuery, {}, transaction);
+        }
+      }
+    } catch (err) {
+      logger.error(`[MigrationHelper] ensureColumnsExist failed for ${tableName}: ${err.message}`);
+    }
   }
 
   /**
@@ -235,6 +266,32 @@ class MigrationHelper {
       .replace(/Đ/g, "D");
   }
 
+  /**
+   * Mạnh tay hơn normalizeText: dùng để làm key duy nhất chống trùng lặp
+   * Ví dụ: "Phòng Kế Toán" -> "phong_ke_toan"
+   */
+  normalizeUnitName(text) {
+    if (!text || typeof text !== "string") return "";
+    
+    // 1. Bỏ dấu tiếng Việt
+    let str = this.removeVietnameseTones(text.trim());
+    
+    // 2. Chuyển lowercase
+    str = str.toLowerCase();
+    
+    // 3. Thay thế ký tự đặc biệt (bao gồm cả -, và space dư thừa) thành '_'
+    // Giữ lại chữ cái và số
+    str = str.replace(/[^a-z0-9]/g, "_");
+    
+    // 4. Gom nhiều dấu '_' liên tiếp thành 1
+    str = str.replace(/_+/g, "_");
+    
+    // 5. Trim '_' ở đầu và cuối
+    str = str.replace(/^_+|_+$/g, "");
+    
+    return str || "_";
+  }
+
   async processDocumentType(value) {
     try {
       if (typeof value !== "string") return null;
@@ -418,29 +475,90 @@ class MigrationHelper {
     }
   }
 
+  /**
+   * Đảm bảo schema của bảng organization_units có cột normalized_name và index UX.
+   */
+  async _ensureOrganizationUnitsSchema(transaction = null) {
+    if (this._schemaReady) return;
+
+    try {
+      const dbName = process.env.NEW_DB_NAME;
+      const checkColumn = `
+        IF NOT EXISTS (
+          SELECT * FROM INFORMATION_SCHEMA.COLUMNS 
+          WHERE TABLE_NAME = 'organization_units' AND COLUMN_NAME = 'normalized_name'
+        )
+        BEGIN
+          ALTER TABLE ${dbName}.dbo.organization_units ADD normalized_name NVARCHAR(255) NULL;
+        END
+      `;
+      await this.queryNewDbTx(checkColumn, {}, transaction);
+
+      const checkIndex = `
+        IF NOT EXISTS (
+          SELECT * FROM sys.indexes 
+          WHERE name = 'UX_org_unit_name' AND object_id = OBJECT_ID('organization_units')
+        )
+        BEGIN
+          -- Xóa duplicates nếu có trước khi tạo UNIQUE INDEX (optional but recommended)
+          -- Ở đây mình chỉ tạo index, nếu có duplicate SQL sẽ báo lỗi, giúp admin biết để dọn.
+          CREATE UNIQUE INDEX UX_org_unit_name ON ${dbName}.dbo.organization_units (normalized_name) WHERE normalized_name IS NOT NULL;
+        END
+      `;
+      await this.queryNewDbTx(checkIndex, {}, transaction);
+
+      this._schemaReady = true;
+    } catch (err) {
+      logger.error(`[_ensureOrganizationUnitsSchema] Lỗi: ${err.message}`);
+    }
+  }
+
   async mapSenderUnitId(value, transaction = null) {
     try {
-      const normalizedName = this.processSenderUnit(value);
-      if (!normalizedName) return null;
+      const originalName = this.processSenderUnit(value);
+      if (!originalName) return null;
 
+      const normalizedKey = this.normalizeUnitName(originalName);
+      
+      // 1. Check local cache
+      if (this.deptCache.has(normalizedKey)) {
+        return this.deptCache.get(normalizedKey);
+      }
+
+      // 2. Đảm bảo DB schema (chỉ chạy 1 lần)
+      await this._ensureOrganizationUnitsSchema(transaction);
+
+      // 3. Query DB mới (bằng normalized_name trước)
       const selectQuery = `
-        SELECT TOP 1 id
+        SELECT TOP 1 id, name, normalized_name
         FROM ${process.env.NEW_DB_NAME}.dbo.organization_units
-        WHERE LTRIM(RTRIM(name)) = @name
-          AND status = 1
+        WHERE normalized_name = @normalizedKey
+           OR (normalized_name IS NULL AND LTRIM(RTRIM(name)) = @name)
       `;
 
       let result = await this.queryNewDbTx(
         selectQuery,
-        { name: normalizedName },
+        { normalizedKey, name: originalName },
         transaction,
       );
 
       if (result?.length) {
-        return result[0].id;
+        const foundId = result[0].id;
+        
+        // Nếu record cũ chưa có normalized_name -> cập nhật luôn
+        if (!result[0].normalized_name) {
+          await this.queryNewDbTx(
+            `UPDATE ${process.env.NEW_DB_NAME}.dbo.organization_units SET normalized_name = @normalizedKey WHERE id = @foundId`,
+            { normalizedKey, foundId },
+            transaction
+          );
+        }
+
+        this.deptCache.set(normalizedKey, foundId);
+        return foundId;
       }
 
-      // ===== SYNC FULL FROM OLD DEPARTMENT =====
+      // 4. Tìm trong DB cũ (áp dụng cho trường hợp đồng bộ lần đầu)
       const oldDeptQuery = `
         SELECT TOP 1 *
         FROM ${process.env.OLD_DB_NAME}.dbo.Department
@@ -448,142 +566,103 @@ class MigrationHelper {
           AND (Status = 1 OR Status IS NULL)
       `;
 
-      const oldDept = await this.queryOldDb(oldDeptQuery, { name: normalizedName });
+      const oldDept = await this.queryOldDb(oldDeptQuery, { name: originalName });
       if (oldDept?.length) {
         const dept = oldDept[0];
         const oldId = dept.ID;
 
+        // Check xem đã sync theo ID_backups chưa
         const existedQuery = `
-          SELECT TOP 1 id
-          FROM ${process.env.NEW_DB_NAME}.dbo.organization_units
-          WHERE Id_backups = @oldId
+          SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.organization_units WHERE Id_backups = @oldId
         `;
-
-        const existed = await this.queryNewDbTx(
-          existedQuery,
-          { oldId },
-          transaction,
-        );
+        const existed = await this.queryNewDbTx(existedQuery, { oldId }, transaction);
 
         if (existed?.length) {
-          return existed[0].id;
+          const foundId = existed[0].id;
+          // Cập nhật normalized_name để lần sau query nhanh
+          await this.queryNewDbTx(
+            `UPDATE ${process.env.NEW_DB_NAME}.dbo.organization_units SET normalized_name = @normalizedKey WHERE id = @foundId`,
+            { normalizedKey, foundId },
+            transaction
+          );
+          this.deptCache.set(normalizedKey, foundId);
+          return foundId;
         }
 
+        // Tạo mới từ oldDept
         let parentId = null;
-
         if (dept.ParentID) {
-          const parentBackupQuery = `
-            SELECT TOP 1 id
-            FROM ${process.env.NEW_DB_NAME}.dbo.organization_units
-            WHERE Id_backups = @parentOldId
-          `;
-
           const parentExisted = await this.queryNewDbTx(
-            parentBackupQuery,
+            `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.organization_units WHERE Id_backups = @parentOldId`,
             { parentOldId: dept.ParentID },
-            transaction,
+            transaction
           );
-
           parentId = parentExisted?.length ? parentExisted[0].id : null;
         }
 
         const newId = `${Date.now()}${Math.floor(Math.random() * 10000)}`;
-
         const insertFromOldQuery = `
           INSERT INTO ${process.env.NEW_DB_NAME}.dbo.organization_units (
-            id,
-            name,
-            code,
-            phone_number,
-            address,
-            display_order,
-            status,
-            parentId,
-            created_at,
-            updated_at,
-            Id_backups,
-            table_backups
+            id, name, normalized_name, code, phone_number, address, display_order, status, parentId, created_at, updated_at, Id_backups, table_backups
           )
           VALUES (
-            @id,
-            @name,
-            @code,
-            @phone,
-            @address,
-            @displayOrder,
-            1,
-            @parentId,
-            @createdAt,
-            @updatedAt,
-            @oldId,
-            'stream_migration'
+            @id, @name, @normalizedKey, @code, @phone, @address, @displayOrder, 1, @parentId, @createdAt, @updatedAt, @oldId, 'stream_migration'
           )
         `;
 
         try {
-          await this.queryNewDbTx(
-            insertFromOldQuery,
-            {
-              id: newId,
-              name: dept.Title?.trim(),
-              code: dept.Code || dept.Title?.trim(),
-              phone: dept.PhoneNumber || null,
-              address: dept.Address || null,
-              displayOrder: dept.Order ?? null,
-              parentId,
-              createdAt: this.parseDate(dept.Created) ?? new Date(),
-              updatedAt: this.parseDate(dept.Modified) ?? this.parseDate(dept.Created) ?? new Date(),
-              oldId,
-            },
-            transaction,
-          );
+          await this.queryNewDbTx(insertFromOldQuery, {
+            id: newId,
+            name: dept.Title?.trim(),
+            normalizedKey,
+            code: dept.Code || dept.Title?.trim(),
+            phone: dept.PhoneNumber || null,
+            address: dept.Address || null,
+            displayOrder: dept.Order ?? null,
+            parentId,
+            createdAt: this.parseDate(dept.Created) ?? new Date(),
+            updatedAt: this.parseDate(dept.Modified) ?? this.parseDate(dept.Created) ?? new Date(),
+            oldId,
+          }, transaction);
 
-          logger.warn(
-            `[mapSenderUnitId] Synced Department: ${dept.Title}, newId=${newId}, oldId=${oldId}`,
-          );
-
+          logger.info(`[mapSenderUnitId] ✅ Synced Department: ${dept.Title} (${normalizedKey}), id=${newId}`);
+          this.deptCache.set(normalizedKey, newId);
           return newId;
         } catch (insertError) {
-          // race condition fallback
-          const retry = await this.queryNewDbTx(
-            existedQuery,
-            { oldId },
-            transaction,
-          );
-          return retry?.length ? retry[0].id : null;
+          // Race condition fallback
+          const retry = await this.queryNewDbTx(existedQuery, { oldId }, transaction);
+          const foundId = retry?.length ? retry[0].id : null;
+          if (foundId) this.deptCache.set(normalizedKey, foundId);
+          return foundId;
         }
       }
-      // ===== END SYNC BLOCK =====
-      const id = `${Date.now()}${Math.floor(Math.random() * 10000)}`;
-      const code = normalizedName;
 
+      // 5. Nếu hoàn toàn mới (không có trong cũ)
+      const newId = `${Date.now()}${Math.floor(Math.random() * 10000)}`;
       const insertQuery = `
         INSERT INTO ${process.env.NEW_DB_NAME}.dbo.organization_units (
-          id, name, code, status, created_at, updated_at, table_backups
+          id, name, normalized_name, code, status, created_at, updated_at, table_backups
         )
-        VALUES (@id, @name, @code, 1, GETDATE(), GETDATE(), 'stream_migration')
+        VALUES (@id, @name, @normalizedKey, @code, 1, GETDATE(), GETDATE(), 'stream_migration')
       `;
 
       try {
-        await this.queryNewDbTx(
-          insertQuery,
-          { id, name: normalizedName, code },
-          transaction,
-        );
-        logger.warn(
-          `[mapSenderUnitId] Created new organization: ${normalizedName}, id: ${id}`,
-        );
-        return id;
+        await this.queryNewDbTx(insertQuery, { 
+          id: newId, 
+          name: originalName, 
+          normalizedKey,
+          code: normalizedKey 
+        }, transaction);
+        
+        logger.info(`[mapSenderUnitId] ✨ Created NEW department: ${originalName} (${normalizedKey}), id: ${newId}`);
+        this.deptCache.set(normalizedKey, newId);
+        return newId;
       } catch (insertError) {
-        logger.warn(
-          `[mapSenderUnitId] Insert fail, retry select: ${insertError.message}`,
-        );
-        const retry = await this.queryNewDbTx(
-          selectQuery,
-          { name: normalizedName },
-          transaction,
-        );
-        return retry?.length ? retry[0].id : null;
+        // Cuối cùng, chọn lại record vừa được job song song tạo
+        const finalRetry = await this.queryNewDbTx(selectQuery, { normalizedKey, name: originalName }, transaction);
+        const foundId = finalRetry?.length ? finalRetry[0].id : null;
+        if (foundId) this.deptCache.set(normalizedKey, foundId);
+        return foundId;
       }
     } catch (error) {
       logger.error(`[mapSenderUnitId] Error value="${value}": ${error.message}`);
@@ -2807,7 +2886,7 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
       return null;
     }
   }
-  
+
   async getUserFieldName(userFieldId) {
     if (!userFieldId || typeof userFieldId !== 'string') return null;
 

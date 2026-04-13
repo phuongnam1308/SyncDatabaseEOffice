@@ -324,12 +324,18 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
   }
 
   /**
-   * Tính tổng số bản ghi cần đồng bộ, cap theo COMPLETED_LIMIT nếu có
+   * Alias cho getCount để đồng nhất với SyncHandlerModel.
    */
   async getCount(lastSyncTime, lastSyncId = 0) {
+    return this.countListFromOldDb(lastSyncTime, lastSyncId);
+  }
+
+  /**
+   * Đếm tổng số bản ghi cần đồng bộ.
+   */
+  async countListFromOldDb(lastSyncTime, lastSyncId = 0) {
     const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
     const normalizedLastSyncId = Number(lastSyncId || 0);
-    const limit = Number(process.env.COMPLETED_LIMIT || 20);
 
     const syncTimeExpr = this.getSyncTimeExpression();
     const query = `
@@ -351,6 +357,8 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
           AND ISNULL(__sync_id_num, 9223372036854775807) < @lastSyncId
         )
       )
+      -- Chỉ lấy bản ghi từ năm 2026 trở đi
+      AND __sync_time >= '2026-01-01T00:00:00.000Z'
     `;
 
     const rows = await this.queryOldDb(query, {
@@ -358,11 +366,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       lastSyncId: normalizedLastSyncId
     });
 
-    const total = Number(rows?.[0]?.total || 0);
-    if (Number.isFinite(limit) && limit > 0) {
-      return Math.min(total, limit);
-    }
-    return total;
+    return Number(rows?.[0]?.total || 0);
   }
 
   /**
@@ -494,7 +498,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         stage_status               NVARCHAR(50),
         curStatusCode              NVARCHAR(10),
 
-        CONSTRAINT PK_outgoing_documents_temp PRIMARY KEY (ID)
+        CONSTRAINT PK_outgoing_documents_sync PRIMARY KEY (ID)
       );
       `;
 
@@ -640,15 +644,10 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
   }
 
   /**
-   * Loads incremental source records from OLD DB after current cursor.
-   * @param {string} lastSyncTime
-   * @param {number} [lastSyncId=0]
-   * @returns {Promise<object[]>}
+   * Lấy danh sách bản ghi kèm phân trang.
    */
-  async fetchListFromOldDb(lastSyncTime, lastSyncId = 0, take = null, offset = null) {
+  async fetchListFromOldDb(lastSyncTime, lastSyncId = 0, limit = null, offset = 0) {
     const syncTimeExpr = this.getSyncTimeExpression();
-    const safeTake = Number.isFinite(Number(take)) && Number(take) > 0 ? Number(take) : null;
-    const safeOffset = Number.isFinite(Number(offset)) && Number(offset) >= 0 ? Number(offset) : 0;
     const query = `
       ;WITH source_rows AS (
         SELECT
@@ -671,18 +670,25 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
           AND ISNULL(__sync_id_num, 9223372036854775807) < @lastSyncId
         )
       )
+      -- Chỉ lấy bản ghi từ năm 2026 trở đi
+      AND __sync_time >= '2026-01-01T00:00:00.000Z'
       ORDER BY
         __sync_time DESC,
         ISNULL(__sync_id_num, 9223372036854775807) DESC,
         ID DESC
-      ${safeTake ? 'OFFSET @offset ROWS FETCH NEXT @take ROWS ONLY' : ''}
+      OFFSET @offset ROWS
+      ${limit ? `FETCH NEXT @limit ROWS ONLY` : ''}
     `;
 
-    return this.queryOldDb(query, {
+    logger.info(`[OutGoingDoc.fetchListFromOldDb] Fetching: lastSyncTime=${lastSyncTime}, lastSyncId=${lastSyncId}, limit=${limit}, offset=${offset}`);
+    const results = await this.queryOldDb(query, {
       lastSyncTime,
       lastSyncId: Number(lastSyncId || 0),
-      ...(safeTake ? { take: safeTake, offset: safeOffset } : {})
+      limit: limit ? Number(limit) : null,
+      offset: Number(offset || 0)
     });
+    logger.info(`[OutGoingDoc.fetchListFromOldDb] Fetched ${results?.length || 0} rows.`);
+    return results;
   }
 
   /**
@@ -742,18 +748,18 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         END
       `;
 
+      const existing = await this.queryNewDbTx(`SELECT 1 FROM ${stagingTableRef} WHERE ID = @ID`, { ID: rawId }, transaction);
+      const isUpdate = existing && existing.length > 0;
+
       await this.queryNewDbTx(query, params, transaction);
+      logger.info(`  └─ [Staging] ID: ${rawId} | Action: ${isUpdate ? 'UPDATE' : 'INSERT'}`);
     }
 
     return { stagedCount: rows.length };
   }
 
   /**
-   * Builds one staged incremental list for a sync job and returns cursor progression info.
-   * @param {string} lastSyncTime
-   * @param {string} syncJobId
-   * @param {number} [lastSyncId=0]
-   * @returns {Promise<object>}
+   * Lấy danh sách bản ghi và đẩy vào Staging dùng cơ chế Iterative Batching.
    */
   async getList(lastSyncTime, syncJobId, lastSyncId = 0) {
     if (!syncJobId) {
@@ -763,35 +769,62 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
     const normalizedLastSyncId = Number(lastSyncId || 0);
 
-    const stageBatchSize = 1000; // Giới hạn 1000 bản ghi trước
-    const stageOffset = Number(process.env.BEGIN_LIMIT || 0);
+    const batchSize = Number(process.env.STAGING_FETCH_BATCH_SIZE || 2000);
 
-    const rows = await this.fetchListFromOldDb(
-      normalizedLastSyncTime,
-      normalizedLastSyncId,
-      Number.isFinite(stageBatchSize) && stageBatchSize > 0 ? stageBatchSize : null,
-      Number.isFinite(stageOffset) && stageOffset >= 0 ? stageOffset : 0
-    );
-    const stageResult = await this.syncOldToStaging(rows);
+    // 1. Đếm tổng và cập nhật Dashboard
+    const totalCount = await this.countListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId);
+    logger.info(`[OutGoingDoc] Tổng số bản ghi cần sync: ${totalCount} (LastTime: ${normalizedLastSyncTime}, LastId: ${normalizedLastSyncId})`);
 
+    await this.queryNewDb(`UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`, {
+      total: totalCount,
+      jobId: syncJobId
+    });
+
+    const numIterations = Math.ceil(totalCount / batchSize);
+    let totalStaged = 0;
     let nextSyncTime = normalizedLastSyncTime;
     let nextSyncId = normalizedLastSyncId;
 
-    for (const row of rows) {
-      const rowTime = this.extractRowSyncTime(row);
-      const rowId = this.extractRowSyncId(row);
-      if (!rowTime) continue;
-      if (this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId)) {
-        nextSyncTime = rowTime;
-        nextSyncId = rowId;
+    // 2. Chạy vòng lặp theo các gói batchSize
+    for (let i = 0; i < numIterations; i++) {
+      const begin = i * batchSize;
+      const rows = await this.fetchListFromOldDb(
+        normalizedLastSyncTime,
+        normalizedLastSyncId,
+        batchSize,
+        begin
+      );
+      if (!rows || rows.length === 0) break;
+
+      const stageResult = await this.syncOldToStaging(rows);
+      totalStaged += Number(stageResult?.stagedCount || 0);
+
+      // Cập nhật cursor và LOG chi tiết từng bản ghi
+      for (const row of rows) {
+        const rowTime = this.extractRowSyncTime(row);
+        const rowId = this.extractRowSyncId(row);
+        if (!rowTime) {
+            logger.warn(`  └─ [Compare] rowID: ${row.ID} | T: NULL - Skipping`);
+            continue;
+        }
+
+        const isAhead = this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId);
+        logger.info(`  └─ [Compare] rowID: ${row.ID} | T: ${rowTime} ID: ${rowId} vs Cursor(T: ${nextSyncTime} ID: ${nextSyncId}) -> Ahead: ${isAhead}`);
+
+        if (isAhead) {
+          nextSyncTime = rowTime;
+          nextSyncId = rowId;
+        }
       }
+
+      logger.info(`🔥 [OutGoingDoc] Batch ${i + 1}/${numIterations} staged: ${totalStaged}/${totalCount}. LastSyncTime: ${nextSyncTime}, LastSyncId: ${nextSyncId}`);
     }
 
     return {
       syncJobId,
-      rows,
-      totalCount: rows.length,
-      stagedCount: Number(stageResult?.stagedCount || 0),
+      rows: [], // Không giữ toàn bộ hàng trong bộ nhớ
+      totalCount: totalStaged,
+      stagedCount: totalStaged,
       sourceLastSyncTime: normalizedLastSyncTime,
       sourceLastSyncId: normalizedLastSyncId,
       lastSyncTime: nextSyncTime,
@@ -854,6 +887,8 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         ? options.sourceLastSyncId
         : (jobState?.last_sync_id || 0)
     );
+
+    logger.info(`[OutGoingDoc.processOne] Starting: job=${syncJobId}, index=${itemIndex}, Cursor(T: ${sourceLastSyncTime}, ID: ${sourceLastSyncId})`);
 
     // Safety check: ensure pool is initialized
     if (!this.newPool) {
@@ -939,6 +974,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
             AND ISNULL(__sync_id_num, 9223372036854775807) < @lastSyncId
           )
         )
+        AND __sync_time >= '2026-01-01T00:00:00.000Z'
       )
       SELECT TOP 1 *
       FROM staged
@@ -974,6 +1010,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     if (!rowData) {
       throw new Error('rowData is required');
     }
+    logger.info(`[OutGoingDoc.processRowData] Processing ID: ${rowData.ID}`);
 
     const backupId = String(rowData.ID || '').trim();
     if (!backupId) {
@@ -1032,6 +1069,8 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         }
       }
 
+      logger.info(`[ThemFileDinhKem][Outgoing] Record ${oldRecord?.ID}: Found ${filesToProcess.length} files to process.`);
+
       for (const relativePath of filesToProcess) {
         if (!relativePath || !relativePath.includes('/')) {
           logger.warn(`[ThemFileDinhKem][Outgoing] Skipping invalid path part: "${relativePath}" for record ${oldRecord?.ID}`);
@@ -1074,7 +1113,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
           type_doc: 'docDraft',
         };
 
-        await fileSvc.uploadAndInsert({
+        const result = await fileSvc.uploadAndInsert({
           fileBuffer: buffer,
           originalName: fileName,
           mimeType,
@@ -1083,6 +1122,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
           folder: 'outgoing',
           localFolder: 'outgoing'
         });
+        logger.info(`  └─ [File] Uploaded: ${fileName} | Success: ${!!result}`);
       }
 
       return true;
@@ -1103,13 +1143,15 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     if (!oldRecord) {
       return { action: 'none', affected: 0 };
     }
-    const id = String(oldRecord.ID || '').trim();
-    const oldDbRecord = id
-      ? await this.getByIdFromOldDb(id).catch(err => {
-          logger.warn(`[upsertDocumentAggregateById] Không lấy được old record ID=${id}: ${err.message}`);
-          return null;
-        })
-      : null;
+    const id = String(oldRecord?.ID || '').trim();
+    logger.info(`[AggregateSync][START] Outgoing Aggregate ID: ${id}`);
+    try {
+      const oldDbRecord = id
+        ? await this.getByIdFromOldDb(id).catch(err => {
+            logger.warn(`[upsertDocumentAggregateById] Không lấy được old record ID=${id}: ${err.message}`);
+            return null;
+          })
+        : null;
     if (!this._outGoingMigrationModels) {
       throw new Error(`[upsertDocumentAggregateById] Model not initialized for ID=${id}`);
     }
@@ -1142,7 +1184,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         affected: Number(totalAffected || 0)
       };
     }
-
+    const drafter = documentResult.drafter;
     /* ====== thêm file====== */
     try {
       if (oldRecord?.Files) {
@@ -1198,7 +1240,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
          );
       }
       if (totalParsedComments > 0) {
-        logger.info(`[AggregateSync][ParsedHTMLComments] documentId=${documentId} newly extracted comments=${totalParsedComments}`);
+        logger.info(`  └─ [ParsedHTMLComments] Extracted ${totalParsedComments} comments from HTML fields.`);
       }
     } catch (htmlCommentErr) {
       logger.warn(`[upsertDocumentAggregateById] Lỗi parse HTML YKien ID=${id}: ${htmlCommentErr.message}`);
@@ -1212,7 +1254,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       try {
         const auditTableNames = auditModels.map(m => m.oldDbTable);
         const firstModel = auditModels[0];
-        
+
         // Lấy tất cả audit từ tất cả các bảng, đã được sắp xếp chronologically bên trong method này
         const allRawAudits = await firstModel.fetchAllAuditsAcrossTables(
           id,
@@ -1227,11 +1269,11 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
           for (const rawAudit of allRawAudits) {
             const tableName = rawAudit.__source_table;
             const model = modelMap.get(tableName) || firstModel;
-            
+
             try {
-              const result = await model.processSingleRecord(rawAudit, documentId, transaction);
+              const result = await model.processSingleRecord(rawAudit, documentId, transaction, drafter);
               if (!result) continue;
-              
+
               logger.info(
                 `[AggregateSync][Audit] table=${tableName} documentId=${documentId} inserted=${result?.inserted || 0} updated=${result?.updated || 0}`
               );
@@ -1270,9 +1312,11 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         const createdDate = parsedDate || new Date();
 
         // Resolve creator ID qua MigrationHelper.mapUserName
-        let creatorId = process.env.VANTHU_USER_ID;
+        // Ưu tiên dùng drafter (người đã tạo văn bản), nếu không có mới dùng Máy Văn Thư làm dự phòng
+        let creatorId = drafter || process.env.VANTHU_USER_ID;
         let displayName = creatorName;
-        if (this.helper && creatorName) {
+
+        if (this.helper && creatorName && !creatorId) {
           try {
             const cleanName = this.helper.extractDisplayName
               ? this.helper.extractDisplayName(creatorName)
@@ -1362,10 +1406,14 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     // }
     // logic xu
 
-    return {
-      action: documentResult.action || 'upsert',
-      affected: Number(totalAffected || 0)
-    };
+      return {
+        action: documentResult.action || 'upsert',
+        affected: Number(totalAffected || 0)
+      };
+    } catch (error) {
+      logger.error(`[AggregateSync][ERROR] Thất bại xử lý tích hợp cũ-mới cho bản ghi ID=${id} - Lỗi: ${error.message}`);
+      throw error;
+    }
   }
 }
 

@@ -1,69 +1,45 @@
 require('dotenv').config();
-const { spawn } = require('child_process');
-const path = require('path');
+const { downloadFile, refreshAuth } = require('../src/sync-file-copy/SharePointAuthService');
 const logger = require('../utils/logger');
+const path = require('path');
 
-const LOGIN_SCRIPT_PATH = path.join(__dirname, 'login.js');
-const REFRESH_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
+const CHECK_INTERVAL_MS = 10 * 60 * 1000; // Kiểm tra mỗi 10 phút
 
-function runLoginScript() {
-  return new Promise((resolve, reject) => {
-    logger.info('[SessionRefresher] Starting login script execution...');
-    
-    const child = spawn('node', [LOGIN_SCRIPT_PATH], { stdio: 'pipe' });
-
-    let stdout = '';
-    let stderr = '';
-
-    child.stdout.on('data', (data) => {
-      const output = data.toString();
-      stdout += output;
-      logger.info(`[LoginScript-STDOUT] ${output.trim()}`);
-    });
-
-    child.stderr.on('data', (data) => {
-      const output = data.toString();
-      stderr += output;
-      logger.error(`[LoginScript-STDERR] ${output.trim()}`);
-    });
-
-    child.on('close', (code) => {
-      if (code === 0) {
-        logger.info('[SessionRefresher] Login script finished successfully.');
-        resolve(stdout);
-      } else {
-        logger.error(`[SessionRefresher] Login script exited with error code ${code}.`);
-        reject(new Error(`Login script failed. Full stderr:
-${stderr}`));
-      }
-    });
-
-    child.on('error', (err) => {
-      logger.error(`[SessionRefresher] Failed to start login script: ${err.message}`);
-      reject(err);
-    });
-  });
-}
-
-async function refreshSession() {
+async function checkAndRefreshIfNeeded() {
+  const testUrl = `${process.env.BASE_URL || 'https://eoffice.saigonnewport.com.vn'}/tintuc/Pages/default.aspx`;
+  
+  logger.info(`[SessionRefresher] Đang kiểm tra Session định kỳ...`);
+  
   try {
-    await runLoginScript();
-    logger.info('[SessionRefresher] SharePoint session has been refreshed successfully.');
+    // downloadFile đã có logic tự động refreshAuth() bên trong nếu phát hiện hết hạn.
+    // Việc gọi ở đây giúp chúng ta "hớt tay trên" trước khi các job sync lớn bắt đầu.
+    await downloadFile(testUrl);
+    logger.info('[SessionRefresher] SharePoint Session hiện tại vẫn còn hiệu lực.');
   } catch (error) {
-    logger.error(`[SessionRefresher] An error occurred during session refresh: ${error.message}`);
-    // We continue the loop even if one run fails.
+    logger.warn(`[SessionRefresher] Phát hiện Session hết hạn hoặc lỗi: ${error.message}. Đang thử khôi phục...`);
+    try {
+        await refreshAuth();
+        logger.info('[SessionRefresher] SharePoint Session đã được làm mới thành công.');
+    } catch (refreshErr) {
+        logger.error(`[SessionRefresher] KHÔNG THỂ khôi phục Session: ${refreshErr.message}`);
+    }
   }
 }
 
 function startSessionRefresher() {
-  logger.info('[SessionRefresher] Starting SharePoint session refresher service.');
-  logger.info(`[SessionRefresher] Session will be refreshed every ${REFRESH_INTERVAL_MS / 60000} minutes.`);
+  logger.info('[SessionRefresher] Dịch vụ tự động duy trì Session đã được kích hoạt.');
+  logger.info(`[SessionRefresher] Tần suất kiểm tra: ${CHECK_INTERVAL_MS / 60000} phút/lần.`);
   
-  // 1. Run once immediately at the start.
-  refreshSession();
+  // 1. Chạy kiểm tra ngay lập tức khi khởi động.
+  checkAndRefreshIfNeeded();
 
-  // 2. Then, run on the specified interval.
-  setInterval(refreshSession, REFRESH_INTERVAL_MS);
+  // 2. Định kỳ kiểm tra.
+  setInterval(checkAndRefreshIfNeeded, CHECK_INTERVAL_MS);
 }
 
-startSessionRefresher();
+// Nếu chạy trực tiếp file này (không phải require)
+if (require.main === module) {
+  startSessionRefresher();
+}
+
+module.exports = { startSessionRefresher };

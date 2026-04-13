@@ -2,61 +2,64 @@ const path = require('path');
 const fs = require('fs');
 
 // Tự động nhận diện môi trường SEA (EXE) hay Dev
-const isSeaApp = process.execPath.toLowerCase().endsWith('.exe');
+// Sửa lỗi: node.exe cũng kết thúc bằng .exe nên cần check tên file
+const isSeaApp = path.basename(process.execPath).toLowerCase() !== 'node.exe' && process.execPath.toLowerCase().endsWith('.exe');
 
 console.log('--- MOI TRUONG HE THONG ---');
 console.log(`- Executable: ${process.execPath}`);
 console.log(`- CWD: ${process.cwd()}`);
 console.log(`- Mode: ${isSeaApp ? 'EXE (Production)' : 'NodeJS (Development)'}`);
 
-let chromium;
-if (isSeaApp) {
-    try {
-        const { createRequire } = require('module');
-        const seaRootDir = path.dirname(process.execPath);
-        const nodeModulesPath = path.join(seaRootDir, 'node_modules');
-        
-        console.log(`- Sea Root: ${seaRootDir}`);
-        if (!fs.existsSync(nodeModulesPath)) {
-            console.error('❌ KHONG TIM THAY node_modules ben canh file EXE!');
-            console.log('  (Vui long dam bao co thu muc node_modules trong thu muc cai dat)');
-        }
+/**
+ * Ham nap Playwright mot cach an toan, ho tro ca EXE va Dev
+ */
+function getPlaywright() {
+  if (chromium) return chromium;
 
-        const myRequire = createRequire(path.join(seaRootDir, 'index.js'));
-        chromium = myRequire('playwright').chromium;
-        console.log('✅ Da nap Playwright tu thu muc ngoai.');
-    } catch (e) {
-        console.error('❌ SEA Loader Error:', e.message);
-    }
-} else {
-    // Chế độ DEV (npm start)
+  const isSeaApp = process.execPath.toLowerCase().endsWith('.exe');
+  if (isSeaApp) {
     try {
-        chromium = require('playwright').chromium;
-        console.log('✅ Da nap Playwright (Standard Require).');
+      const { createRequire } = require('module');
+      const seaRootDir = path.dirname(process.execPath);
+      const myRequire = createRequire(path.join(seaRootDir, 'index.js'));
+      chromium = myRequire('playwright').chromium;
     } catch (e) {
-        console.error('❌ Dev Loader Error: Khong tim thay playwright trong node_modules goc!');
-        console.log('  (Loi: ' + e.message + ')');
+      console.error('❌ SEA Playwright Load Error:', e.message);
     }
+  } else {
+    try {
+      chromium = require('playwright').chromium;
+    } catch (e) {
+      console.error('❌ Dev Playwright Load Error:', e.message);
+    }
+  }
+  return chromium;
 }
-console.log('---------------------------');
-require('dotenv').config();
 
-async function login() {
+async function login(options = {}) {
+  // Nap thu vien truoc khi dung
+  const chrom = getPlaywright();
+  if (!chrom) {
+    console.error('❌ KHONG THE NAP PLAYWRIGHT. Vui long kiem tra node_modules!');
+    return;
+  }
   const baseUrl = process.env.BASE_URL || 'https://eoffice.saigonnewport.com.vn';
-  const startUrl = `${baseUrl}/tintuc/Pages/default.aspx`;
-  const username = process.env.USERNAME;
-  const password = process.env.PASSWORD;
+  const startUrl = process.env.AUTH_URL || `${baseUrl}/tintuc/Pages/default.aspx`;
+  const username = process.env.SHAREPOINT_USERNAME || process.env.USERNAME;
+  const password = process.env.SHAREPOINT_PASSWORD || process.env.PASSWORD;
   const storageStatePath = process.env.STORAGE_STATE_PATH || 'auth/storageState.json';
-  const headed = process.env.HEADED === 'true';
+  
+  // Ưu tiên tham số truyền vào từ Controller (ví dụ từ nút bấm Dashboard)
+  const headed = options.forceHeaded === true || process.env.HEADED === 'true';
 
-  // Tự động tìm kiếm trình duyệt có sẵn trên Windows
+  // Tự động tìm kiếm trình duyệt có sẵn trên Windows - Ưu tiên Chrome hàng đầu
   const possiblePaths = [
     process.env.CHROME_PATH,
     'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
     'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+    path.join(process.env.LOCALAPPDATA || '', 'Google\\Chrome\\Application\\chrome.exe'),
     'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-    'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-    path.join(process.env.LOCALAPPDATA || '', 'Google\\Chrome\\Application\\chrome.exe')
+    'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe'
   ].filter(Boolean);
 
   let executablePath = null;
@@ -130,6 +133,13 @@ async function login() {
     console.log('Filling password...');
     await page.fill(passSelector, password);
 
+    // Tích vào ô "Đăng nhập tự động" (Remember Me) nếu có
+    const rememberMeSelector = 'input[id*="RememberMe"]';
+    if (await page.isVisible(rememberMeSelector)) {
+      console.log('Checking "Remember Me" checkbox...');
+      await page.check(rememberMeSelector);
+    }
+
     // Bước 3: Submit form
     console.log('Step 3: Submitting login form...');
     await page.click(loginBtnSelector);
@@ -153,6 +163,13 @@ async function login() {
 
     await context.storageState({ path: storageStatePath });
     console.log(`✓ Auth state saved successfully to: ${storageStatePath}`);
+
+    // Trích xuất cookie để lưu vào file cookie.txt (phục vụ SharePointAuthService)
+    const state = JSON.parse(fs.readFileSync(storageStatePath, 'utf8'));
+    const cookieString = state.cookies.map(c => `${c.name}=${c.value}`).join('; ');
+    const cookiePath = path.join(authDir, 'cookie.txt');
+    fs.writeFileSync(cookiePath, cookieString);
+    console.log(`✓ Cookie string saved to: ${cookiePath}`);
 
   } catch (error) {
     console.error('✘ ERROR:', error.message);

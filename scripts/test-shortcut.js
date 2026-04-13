@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 
 // Gia lap viec tao shortcut giong het nhu trong bộ máy Build
-const shortcutName = 'SNP - TEST SHORTCUT.lnk';
+const shortcutName = 'SNP - DONG BO DU LIEU.lnk';
 const rootDir = path.join(__dirname, '..');
 const distDir = path.join(rootDir, 'dist');
 const exePath = path.join(distDir, 'SNP - DONG BO DU LIEU.exe');
