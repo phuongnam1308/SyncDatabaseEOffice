@@ -254,7 +254,7 @@ class SyncAuditModel extends BaseModel {
         .join(", ");
 
       categoryFilter = `
-        AND LTRIM(RTRIM(ISNULL(Category, ''))) IN (${placeholders})
+        AND Category IN (${placeholders})
       `;
 
       // Thêm giá trị của các category vào parameters cho câu truy vấn
@@ -275,7 +275,7 @@ class SyncAuditModel extends BaseModel {
       SELECT *
       FROM ${this.oldDbSchema}.${this.oldDbTable}
       WHERE (
-          LTRIM(RTRIM(ISNULL(VBId, ''))) = @oldDocumentId -- Tìm kiếm theo cột VBId
+          VBId = @oldDocumentId -- Tìm kiếm theo cột VBId
       )
       ${categoryFilter} -- Áp dụng bộ lọc category nếu có
       ORDER BY
@@ -321,14 +321,14 @@ class SyncAuditModel extends BaseModel {
 
         if (normalizedCategories.length) {
           const placeholders = normalizedCategories.map((_, idx) => `@category${idx}`).join(", ");
-          categoryFilter = `AND LTRIM(RTRIM(ISNULL(Category, ''))) IN (${placeholders})`;
+          categoryFilter = `AND Category IN (${placeholders})`;
           normalizedCategories.forEach((cat, idx) => { params[`category${idx}`] = cat; });
         }
 
         const query = `
           SELECT *, '${tableName}' as __source_table
           FROM ${this.oldDbSchema}.${tableName}
-          WHERE LTRIM(RTRIM(ISNULL(VBId, ''))) = @oldDocumentId
+          WHERE VBId = @oldDocumentId
           ${categoryFilter}
         `;
 

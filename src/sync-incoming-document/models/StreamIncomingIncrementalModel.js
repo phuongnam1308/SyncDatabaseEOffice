@@ -1004,10 +1004,10 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
 
       logger.info(`[DEBUG][ThemFileDinhKem] Record ${oldRecord.ID}: Found ${filesToProcess.length} files to process: ${filesToProcess.join(', ')}`);
 
-      for (const relativePath of filesToProcess) {
+      const uploadPromises = filesToProcess.map(async (relativePath) => {
         if (!relativePath.includes('/')) {
             logger.warn(`[ThemFileDinhKem] Skipping invalid path part: "${relativePath}" for record ${oldRecord.ID}`);
-            continue;
+            return;
         }
 
         const fullUrl = `${baseUrl}${relativePath}`;
@@ -1024,7 +1024,7 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
           logger.info(`[DEBUG][ThemFileDinhKem] Tai file thanh cong: ${fileName} | Dung luong: ${buffer.length} bytes`);
         } catch (downloadErr) {
           logger.error(`[ThemFileDinhKem] Failed to download file from ${fullUrl}: ${downloadErr.message}`);
-          continue; // Skip this file and continue with the next one.
+          return; // Skip this file and return
         }
 
         const fileType = detectFileType(buffer);
@@ -1064,7 +1064,9 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
         });
 
         logger.info(`[DEBUG][ThemFileDinhKem] [KET QUA] Da hoan tat upload cho file ${fileName}. result: ${JSON.stringify(result)}`);
-      }
+      });
+
+      await Promise.all(uploadPromises);
 
       return true;
     } catch (error) {
@@ -1148,10 +1150,12 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
             let totalAffected = 0;
 
             logger.info(`[AggregateSync][STEP 1] Xử lý mapping và chèn vào bảng chính incomming_documents cho ID=${id}...`);
+            const _timeStep1 = Date.now();
             const documentResult = await this._IncomingMigrationModels.processSingleRecord(
                 oldRecord,
                 transaction
             );
+            logger.info(`[PERF] STEP 1 (Document) took ${Date.now() - _timeStep1}ms for ID=${id}`);
 
             if (!documentResult || documentResult.affected === 0) {
                 logger.warn(`[AggregateSync][STEP 1] Bản ghi ID=${id} KHÔNG được chèn/cập nhật vào bảng chính.`);
@@ -1174,9 +1178,12 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
 
       const newRrecord = await this.getByIdFromStaging(id, transaction);
       logger.info(`[DEBUG][upsertDocumentAggregateById] Bat dau goi ThemFileDinhKem cho documentId: ${documentId}`);
+      const _timeStep2 = Date.now();
       await this.ThemFileDinhKem(oldRecord, newRrecord, documentId);
+      logger.info(`[PERF] STEP 2 (Files) took ${Date.now() - _timeStep2}ms for ID=${id}`);
 
       /* ====== Phân tách bình luận từ HTML (Ý kiến lãnh đạo SP cũ) ====== */
+      const _timeStep3 = Date.now();
       try {
         let totalParsedComments = 0;
         if (oldRecord?.YKienLanhDao) {
@@ -1207,11 +1214,13 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
             } catch (htmlCommentErr) {
                 logger.warn(`[upsertDocumentAggregateById] Lỗi parse HTML YKien ID=${id}: ${htmlCommentErr.message}`);
             }
+            logger.info(`[PERF] STEP 3 (HTML Comments) took ${Date.now() - _timeStep3}ms for ID=${id}`);
 
             // ══════════════════════════════════════════════════════════════
             // AGGREGATED AUDIT SYNC: Gộp tất cả audit từ các bảng và xử lý theo thứ tự thời gian
             // ══════════════════════════════════════════════════════════════
             logger.info(`[AggregateSync][STEP 4] Bắt đầu tổng hợp Audit Trails từ ${AUDIT_TABLES.length} bảng liên quan cho ID=${id}...`);
+            const _timeStep4 = Date.now();
             const auditModels = this._syncAuditModel || [];
             if (auditModels.length > 0) {
         try {
@@ -1260,6 +1269,7 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
           );
         }
       }
+      logger.info(`[PERF] STEP 4 (Audits) took ${Date.now() - _timeStep4}ms for ID=${id}`);
 
       // ══════════════════════════════════════════════════════════════
       // AUTO-CREATE AUDIT: Nếu document_id chưa có audit nào → tạo 1 bản ghi CREATE

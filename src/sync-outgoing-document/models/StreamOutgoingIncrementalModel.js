@@ -1,4 +1,4 @@
-﻿const logger = require('../../../utils/logger');
+const logger = require('../../../utils/logger');
 const sql = require('mssql');
 const { v4: uuidv4 } = require("uuid");
 const SyncCommentModel = require('../../sync-document-comment/SyncCommentModel');
@@ -1103,10 +1103,10 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
 
       logger.info(`[ThemFileDinhKem][Outgoing] Record ${oldRecord?.ID}: Found ${filesToProcess.length} files to process.`);
 
-      for (const relativePath of filesToProcess) {
+      const uploadPromises = filesToProcess.map(async (relativePath) => {
         if (!relativePath || !relativePath.includes('/')) {
           logger.warn(`[ThemFileDinhKem][Outgoing] Skipping invalid path part: "${relativePath}" for record ${oldRecord?.ID}`);
-          continue;
+          return;
         }
 
         const fullUrl = `${baseUrl}${relativePath}`;
@@ -1117,7 +1117,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
           buffer = await spDownload(fullUrl);
         } catch (downloadErr) {
           logger.error(`[ThemFileDinhKem][Outgoing] Failed to download file from ${fullUrl}: ${downloadErr.message}`);
-          continue;
+          return;
         }
 
         const fileType = detectFileType(buffer);
@@ -1155,7 +1155,9 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
           localFolder: 'outgoing'
         });
         logger.info(`  └─ [File] Uploaded: ${fileName} | Success: ${!!result}`);
-      }
+      });
+
+      await Promise.all(uploadPromises);
 
       return true;
     } catch (error) {
@@ -1190,10 +1192,12 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
 
     let totalAffected = 0;
 
+    const _timeStep1 = Date.now();
     const documentResult = await this._outGoingMigrationModels.processSingleRecord(
       oldRecord,
       transaction
     );
+    logger.info(`[PERF] STEP 1 (Document) took ${Date.now() - _timeStep1}ms for ID=${id}`);
 
     if (!documentResult || documentResult.affected === 0) {
       return { action: 'none', affected: 0 };
@@ -1220,6 +1224,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     /* ====== thêm file====== */
     try {
       if (oldRecord?.Files) {
+        const _timeStep2 = Date.now();
         const ok = await this.ThemFileDinhKem(
           oldRecord,
           {
@@ -1231,6 +1236,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         logger.info(
           `[AggregateSync][Files] documentId=${documentId} migrated=${ok}`
         );
+        logger.info(`[PERF] STEP 2 (Files) took ${Date.now() - _timeStep2}ms for ID=${id}`);
       }
     } catch (fileErr) {
       logger.warn(
@@ -1239,6 +1245,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     }
 
     /* ====== Phân tách bình luận từ HTML (Ý kiến lãnh đạo SP cũ) ====== */
+    const _timeStep3 = Date.now();
     try {
       let totalParsedComments = 0;
       if (oldRecord?.YKien) {
@@ -1277,10 +1284,12 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     } catch (htmlCommentErr) {
       logger.warn(`[upsertDocumentAggregateById] Lỗi parse HTML YKien ID=${id}: ${htmlCommentErr.message}`);
     }
+    logger.info(`[PERF] STEP 3 (HTML Comments) took ${Date.now() - _timeStep3}ms for ID=${id}`);
 
     // ══════════════════════════════════════════════════════════════
     // AGGREGATED AUDIT SYNC: Gộp tất cả audit từ các bảng và xử lý theo thứ tự thời gian
     // ══════════════════════════════════════════════════════════════
+    const _timeStep4 = Date.now();
     const auditModels = this._syncAuditModel || [];
     if (auditModels.length > 0) {
       try {
@@ -1324,6 +1333,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         );
       }
     }
+    logger.info(`[PERF] STEP 4 (Audits) took ${Date.now() - _timeStep4}ms for ID=${id}`);
 
     // ══════════════════════════════════════════════════════════════
     // AUTO-CREATE AUDIT: Nếu document_id chưa có audit nào → tạo 1 bản ghi CREATE
