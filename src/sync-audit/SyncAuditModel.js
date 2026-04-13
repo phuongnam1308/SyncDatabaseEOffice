@@ -301,35 +301,123 @@ class SyncAuditModel extends BaseModel {
    * @param {string|number} oldDocumentId - ID của văn bản trong CSDL cũ.
    * @param {string[]} tableNames - Danh sách các bảng audit cần truy vấn.
    * @param {string[]} categories - Mảng các danh mục để lọc (nếu có).
+   * @param {{minDate?: string|Date}} options - Tuỳ chọn tối ưu truy vấn.
    */
   async fetchAllAuditsAcrossTables(
     oldDocumentId,
     tableNames = [],
-    categories = null
+    categories = null,
+    options = {}
   ) {
-    if (!oldDocumentId || !tableNames.length) return [];
+    if (!oldDocumentId || !Array.isArray(tableNames) || tableNames.length === 0) {
+      return [];
+    }
 
-    const allRecords = [];
     const normalizedDocumentId = String(oldDocumentId).trim();
+    const safeTableNames = this._sanitizeTableNames(tableNames);
+    const normalizedCategories = this._normalizeCategories(categories);
 
-    // Thực hiện truy vấn song song trên tất cả các bảng để tối ưu hiệu suất
-    const fetchPromises = tableNames.map(async (tableName) => {
+    if (!safeTableNames.length) {
+      return [];
+    }
+
+    try {
+      return await this._fetchAllAuditsAcrossTablesUnion(
+        normalizedDocumentId,
+        safeTableNames,
+        normalizedCategories,
+        options
+      );
+    } catch (unionErr) {
+      logger.warn(
+        `[SyncAuditModel.fetchAllAuditsAcrossTables] UNION optimization failed, fallback to parallel queries. reason=${unionErr.message}`
+      );
+      return this._fetchAllAuditsAcrossTablesLegacy(
+        normalizedDocumentId,
+        safeTableNames,
+        normalizedCategories,
+        options
+      );
+    }
+  }
+
+  /**
+   * Optimized path: single UNION ALL query for all audit tables.
+   * @private
+   */
+  async _fetchAllAuditsAcrossTablesUnion(
+    normalizedDocumentId,
+    safeTableNames,
+    normalizedCategories,
+    options = {}
+  ) {
+    const params = { oldDocumentId: normalizedDocumentId };
+    const categoryFilter = this._buildCategoryFilterClause(normalizedCategories, params, "src");
+    const minDateFilter = this._buildMinDateFilterClause(options, params, "src");
+    const sortTimeExpr = this._getAuditSortTimeExpr("src");
+
+    const unionParts = safeTableNames.map((tableName) => `
+      SELECT
+        src.*,
+        N'${tableName}' AS __source_table,
+        ${sortTimeExpr} AS __sync_sort_time,
+        TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), src.ID))), '')) AS __sync_sort_id
+      FROM ${this.oldDbSchema}.[${tableName}] src
+      WHERE LTRIM(RTRIM(CONVERT(nvarchar(255), src.VBId))) = @oldDocumentId
+      ${categoryFilter}
+      ${minDateFilter}
+    `);
+
+    const query = `
+      SELECT *
+      FROM (
+        ${unionParts.join("\nUNION ALL\n")}
+      ) AS audits
+      ORDER BY
+        audits.__sync_sort_time ASC,
+        ISNULL(audits.__sync_sort_id, 0) ASC,
+        TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), audits.ID))), '')) ASC
+    `;
+
+    const rows = await this.queryOldDb(query, params);
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return [];
+    }
+
+    // Xóa cột kỹ thuật dùng cho ORDER BY trước khi trả về.
+    for (const row of rows) {
+      if (row && typeof row === "object") {
+        delete row.__sync_sort_time;
+        delete row.__sync_sort_id;
+      }
+    }
+
+    return rows;
+  }
+
+  /**
+   * Backward-compatible path: parallel query per table.
+   * @private
+   */
+  async _fetchAllAuditsAcrossTablesLegacy(
+    normalizedDocumentId,
+    safeTableNames,
+    normalizedCategories,
+    options = {}
+  ) {
+    const allRecords = [];
+
+    const fetchPromises = safeTableNames.map(async (tableName) => {
       try {
         const params = { oldDocumentId: normalizedDocumentId };
-        let categoryFilter = "";
-        const normalizedCategories = this._normalizeCategories(categories);
-
-        if (normalizedCategories.length) {
-          const placeholders = normalizedCategories.map((_, idx) => `@category${idx}`).join(", ");
-          categoryFilter = `AND Category IN (${placeholders})`;
-          normalizedCategories.forEach((cat, idx) => { params[`category${idx}`] = cat; });
-        }
-
+        const categoryFilter = this._buildCategoryFilterClause(normalizedCategories, params);
+        const minDateFilter = this._buildMinDateFilterClause(options, params);
         const query = `
-          SELECT *, '${tableName}' as __source_table
-          FROM ${this.oldDbSchema}.${tableName}
-          WHERE VBId = @oldDocumentId
+          SELECT *, N'${tableName}' as __source_table
+          FROM ${this.oldDbSchema}.[${tableName}]
+          WHERE LTRIM(RTRIM(CONVERT(nvarchar(255), VBId))) = @oldDocumentId
           ${categoryFilter}
+          ${minDateFilter}
         `;
 
         return await this.queryOldDb(query, params);
@@ -340,28 +428,106 @@ class SyncAuditModel extends BaseModel {
     });
 
     const results = await Promise.all(fetchPromises);
-
-    // Gộp tất cả các bản ghi từ các bảng
     for (const batch of results) {
       if (Array.isArray(batch)) {
         allRecords.push(...batch);
       }
     }
 
-    // Sắp xếp chronologically dựa trên NgayTao
     allRecords.sort((a, b) => {
       const timeA = this.helper.parseDate(a.NgayTao) || new Date(0);
       const timeB = this.helper.parseDate(b.NgayTao) || new Date(0);
-
       if (timeA.getTime() !== timeB.getTime()) {
         return timeA.getTime() - timeB.getTime();
       }
-
-      // Nếu thời gian bằng nhau, dùng ID làm tie-breaker (giả định ID tăng dần theo thời gian)
       return (Number(a.ID) || 0) - (Number(b.ID) || 0);
     });
 
     return allRecords;
+  }
+
+  /**
+   * SQL expression chuẩn hoá thời gian audit để sort/filter.
+   * @private
+   */
+  _getAuditSortTimeExpr(alias = "") {
+    const p = alias ? `${alias}.` : "";
+    return `
+      COALESCE(
+        TRY_CONVERT(datetime2, ${p}NgayTao, 120),
+        TRY_CONVERT(datetime2, ${p}NgayTao, 121),
+        TRY_CONVERT(datetime2, ${p}NgayTao, 103),
+        TRY_CONVERT(datetime2, ${p}NgayTao, 105),
+        TRY_CONVERT(datetime2, ${p}NgayTao),
+        CONVERT(datetime2, '1900-01-01T00:00:00')
+      )
+    `;
+  }
+
+  /**
+   * Build clause lọc Category với params an toàn.
+   * @private
+   */
+  _buildCategoryFilterClause(normalizedCategories, params, alias = "") {
+    if (!Array.isArray(normalizedCategories) || normalizedCategories.length === 0) {
+      return "";
+    }
+
+    const placeholders = normalizedCategories
+      .map((_, idx) => `@category${idx}`)
+      .join(", ");
+    normalizedCategories.forEach((category, idx) => {
+      params[`category${idx}`] = category;
+    });
+
+    const p = alias ? `${alias}.` : "";
+    return `AND ${p}Category IN (${placeholders})`;
+  }
+
+  /**
+   * Build clause lọc tối thiểu theo thời gian audit (opt-in qua options.minDate).
+   * @private
+   */
+  _buildMinDateFilterClause(options, params, alias = "") {
+    const minDateRaw = options && options.minDate ? this._normalizeTextField(options.minDate) : null;
+    if (!minDateRaw) {
+      return "";
+    }
+
+    const minDate = new Date(minDateRaw);
+    if (Number.isNaN(minDate.getTime())) {
+      logger.warn(`[SyncAuditModel] Invalid minDate=${minDateRaw}. Ignore minDate filter.`);
+      return "";
+    }
+
+    params.auditMinDate = minDate;
+    const sortTimeExpr = this._getAuditSortTimeExpr(alias);
+    return `AND ${sortTimeExpr} >= @auditMinDate`;
+  }
+
+  /**
+   * Chỉ giữ tên bảng hợp lệ để tránh SQL injection trong dynamic UNION.
+   * @private
+   */
+  _sanitizeTableNames(tableNames = []) {
+    const safe = [];
+    const seen = new Set();
+
+    for (const tableNameRaw of tableNames) {
+      const tableName = String(tableNameRaw || "").trim();
+      if (!tableName) continue;
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(tableName)) {
+        logger.warn(`[SyncAuditModel] Skip invalid table name: ${tableName}`);
+        continue;
+      }
+
+      const key = tableName.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      safe.push(tableName);
+    }
+
+    return safe;
   }
 
   /**

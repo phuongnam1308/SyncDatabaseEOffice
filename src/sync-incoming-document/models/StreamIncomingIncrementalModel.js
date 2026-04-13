@@ -45,6 +45,7 @@ const DEFAULT_SYNC_TIME = '1753-01-01T00:00:00.000Z';
 // Ví dụ: SYNC_MIN_DATE=2026-01-01T00:00:00.000Z
 // Để tắt filter (lấy toàn bộ lịch sử), để trống hoặc đặt bằng '1753-01-01T00:00:00.000Z'
 const SYNC_MIN_DATE = process.env.SYNC_MIN_DATE || '2026-01-01T00:00:00.000Z';
+const AUDIT_MIN_DATE = (process.env.AUDIT_MIN_DATE || '').trim();
 
 const AUDIT_TABLES = [
   'LuanChuyenVanBan',
@@ -157,6 +158,7 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
     this.newTableSync = 'incomming_documents_sync';
 
     this._syncAuditModel = [];
+    this._syncAuditModelMap = new Map();
     this._syncCommentModel = [];
     this._IncomingMigrationModels = null;
     this._fileService = null;
@@ -182,6 +184,7 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
       }
 
       this._syncAuditModel = [];
+      this._syncAuditModelMap = new Map();
       this._syncCommentModel = [];
 
       this._IncomingMigrationModels = new SyncIncomingDocumentModel();
@@ -193,6 +196,7 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
         const model = new SyncIncomingAuditModel(table);
         await model.initialize();
         this._syncAuditModel.push(model);
+        this._syncAuditModelMap.set(table, model);
       }
 
       // for (const table of COMMENT_TABLES) {
@@ -1223,52 +1227,61 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
             const _timeStep4 = Date.now();
             const auditModels = this._syncAuditModel || [];
             if (auditModels.length > 0) {
-        try {
-          const auditTableNames = auditModels.map(m => m.oldDbTable);
-          const firstModel = auditModels[0];
-
-          // Lấy tất cả audit từ tất cả các bảng, đã được sắp xếp chronologically bên trong method này
-          const allRawAudits = await firstModel.fetchAllAuditsAcrossTables(
-            id,
-            auditTableNames,
-            [
-              CATEGORY_INCOMING_TCT,
-              CATEGORY_INCOMING,
-              CATEGORY_INCOMING_INTERNAL,
-              CATEGORY_INCOMING_SUBMIT
-            ] // Categories cho văn bản đến
-          );
-
-          if (allRawAudits.length > 0) {
-            // Tạo map để tìm nhanh model xử lý dựa trên tên bảng
-            const modelMap = new Map(auditModels.map(m => [m.oldDbTable, m]));
-
-            for (const rawAudit of allRawAudits) {
-              const tableName = rawAudit.__source_table;
-              const model = modelMap.get(tableName) || firstModel;
-
               try {
-                const result = await model.processSingleRecord(rawAudit, documentId, transaction, drafter);
-                if (!result) continue;
+                const auditTableNames = auditModels.map(m => m.oldDbTable);
+                const firstModel = auditModels[0];
+                const auditFetchOptions = AUDIT_MIN_DATE ? { minDate: AUDIT_MIN_DATE } : {};
 
-                logger.info(
-                  `[AggregateSync][Audit] table=${tableName} documentId=${documentId} inserted=${result?.inserted || 0} updated=${result?.updated || 0}`
+                // fetchAllAuditsAcrossTables ưu tiên chạy UNION ALL (1 query),
+                // fallback về cơ chế cũ nếu schema không tương thích.
+                const allRawAudits = await firstModel.fetchAllAuditsAcrossTables(
+                  id,
+                  auditTableNames,
+                  [
+                    CATEGORY_INCOMING_TCT,
+                    CATEGORY_INCOMING,
+                    CATEGORY_INCOMING_INTERNAL,
+                    CATEGORY_INCOMING_SUBMIT
+                  ],
+                  auditFetchOptions
                 );
-                totalAffected += Number(result.inserted || 0);
-                totalAffected += Number(result.updated || 0);
-              } catch (auditErr) {
+
+                if (allRawAudits.length > 0) {
+                  let auditInserted = 0;
+                  let auditUpdated = 0;
+                  let auditProcessed = 0;
+
+                  for (const rawAudit of allRawAudits) {
+                    const tableName = rawAudit.__source_table;
+                    const model = this._syncAuditModelMap.get(tableName) || firstModel;
+
+                    try {
+                      const result = await model.processSingleRecord(rawAudit, documentId, transaction, drafter);
+                      if (!result) continue;
+
+                      auditProcessed += 1;
+                      auditInserted += Number(result.inserted || 0);
+                      auditUpdated += Number(result.updated || 0);
+                    } catch (auditErr) {
+                      logger.warn(
+                        `[upsertDocumentAggregateById] Audit migrate failed for table=${tableName}, source ID=${id}, target documentId=${documentId}: ${auditErr.message}`, { stack: auditErr.stack }
+                      );
+                    }
+                  }
+
+                  totalAffected += auditInserted;
+                  totalAffected += auditUpdated;
+
+                  logger.info(
+                    `[AggregateSync][STEP 4] ID=${id} processed=${auditProcessed}/${allRawAudits.length} inserted=${auditInserted} updated=${auditUpdated}`
+                  );
+                }
+              } catch (error) {
                 logger.warn(
-                  `[upsertDocumentAggregateById] Audit migrate failed for table=${tableName}, source ID=${id}, target documentId=${documentId}: ${auditErr.message}`, { stack: auditErr.stack }
+                  `[upsertDocumentAggregateById] Aggregated fetch audit failed for ID=${id}: ${error.message}`, { stack: error.stack }
                 );
               }
             }
-          }
-        } catch (error) {
-          logger.warn(
-            `[upsertDocumentAggregateById] Aggregated fetch audit failed for ID=${id}: ${error.message}`, { stack: error.stack }
-          );
-        }
-      }
       logger.info(`[PERF] STEP 4 (Audits) took ${Date.now() - _timeStep4}ms for ID=${id}`);
 
       // ══════════════════════════════════════════════════════════════
