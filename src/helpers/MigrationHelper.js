@@ -746,7 +746,7 @@ class MigrationHelper {
 
       const isIdFormat = /^\d+$/.test(trimmed) || /^[0-9a-f-]{32,}$/i.test(trimmed);
       if (isIdFormat) {
-        const checkNewQuery = `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users WHERE id = @id`;
+        const checkNewQuery = `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users WHERE id = @id OR id_user_bak = @id`;
         const existedNew = await this.queryNewDbTx(checkNewQuery, { id: trimmed }, transaction);
         if (existedNew?.length) return existedNew[0].id;
         return trimmed;
@@ -841,7 +841,7 @@ class MigrationHelper {
       // 1. Tìm trong DB mới (theo ID, Username, hoặc Name)
       const checkNewQuery = `
         SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users
-        WHERE id = @val OR username = @val OR name = @val OR code_nd = @val
+        WHERE id = @val OR username = @val OR name = @val OR code_nd = @val OR id_user_bak = @val
       `;
       const existedNew = await this.queryNewDbTx(checkNewQuery, { val: trimmed }, transaction);
       if (existedNew?.length) {
@@ -945,7 +945,7 @@ class MigrationHelper {
     const selectQuery = `
       SELECT TOP 1 id, name, username, code_nd
       FROM ${process.env.NEW_DB_NAME}.dbo.users
-      WHERE name = @val OR username = @val OR code_nd = @val
+      WHERE name = @val OR username = @val OR code_nd = @val OR id_user_bak = @val
     `;
 
     // --- STEP 1: AuthorAccount ---
@@ -2769,7 +2769,7 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
       if (!username) return null;
 
       // 2. Tìm trong bảng users (Tìm theo username HOẶC code_nd)
-      const findQuery = `SELECT TOP 1 id FROM [${process.env.NEW_DB_NAME}].[dbo].[users] WHERE username = @username OR code_nd = @username`;
+      const findQuery = `SELECT TOP 1 id FROM [${process.env.NEW_DB_NAME}].[dbo].[users] WHERE username = @username OR code_nd = @username OR id_user_bak = @username`;
       const findResult = await this.queryNewDbTx(findQuery, { username }, transaction);
       if (findResult && findResult.length > 0) {
         return findResult[0].id;
