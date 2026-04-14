@@ -9,7 +9,7 @@ const tableMappings = {
 
     fieldMapping: {
       // ID gốc để trace
-      ID: 'id_taskBackups',
+      id: 'id_taskBackups',
 
       code: 'code',
       name: 'name',

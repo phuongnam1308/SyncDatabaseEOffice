@@ -15,7 +15,7 @@ class TaskModel extends BaseModel {
   async getAllFromOldDb() {
     try {
       const query = `
-        SELECT TOP (1000) 
+        SELECT 
           [ID],
           [VBId],
           [DepartmentId],

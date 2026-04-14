@@ -41,7 +41,9 @@ class MigrationTaskUsersVBDiService {
 
         for (const old of batch) {
           try {
-            const exists = await this.model.findByBackupKeys(old.TaskId, old.UserId);
+            const mappedRole = this.mapRoleValue(config, old.UserFieldName);
+
+            const exists = await this.model.findByBackupKeys(old.TaskId, old.UserId, mappedRole);
             if (exists) {
               totalSkipped++;
               continue;
@@ -50,8 +52,7 @@ class MigrationTaskUsersVBDiService {
             let newRecord = mapFieldValues(old, config.fieldMapping, config.defaultValues);
 
             // Mapping role đặc biệt cho VBĐi
-            const original = old.UserFieldName?.trim();
-            newRecord.role = config.roleValueMapping[original] || original || null;
+            newRecord.role = mappedRole;
 
             if (newRecord.update_at && !(typeof newRecord.update_at === 'string')) {
               newRecord.update_at = new Date(newRecord.update_at).toISOString();
@@ -99,6 +100,36 @@ class MigrationTaskUsersVBDiService {
 
   async close() {
     await this.model.close();
+  }
+
+  mapRoleValue(config, roleName) {
+    const raw = (roleName || '').toString().trim();
+    if (!raw) return null;
+
+    if (config.roleValueMapping[raw]) {
+      return config.roleValueMapping[raw];
+    }
+
+    const normalized = raw
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9]/g, '')
+      .toLowerCase();
+
+    const roleAliases = {
+      groupuyquyenlanhdaotct: 'assigner',
+      groupthaythelanhdaotct: 'assigner',
+      nguoiphanviec: 'assigner',
+      assignedto: 'director',
+      nguoichutri: 'main',
+      chutri: 'main',
+      nguoiphoihop: 'coordinator',
+      phoihop: 'coordinator',
+      nguoixem: 'viewer',
+      xem: 'viewer'
+    };
+
+    return roleAliases[normalized] || raw;
   }
 }
 

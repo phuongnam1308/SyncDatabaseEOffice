@@ -25,6 +25,12 @@ const tableMappings = {
     roleValueMapping: {
       'NguoiPhanViec': 'assigner',
       'AssignedTo':    'director',
+      'NguoiChuTri':  'main',
+      'ChuTri':       'main',
+      'NguoiPhoiHop': 'coordinator',
+      'PhoiHop':      'coordinator',
+      'NguoiXem':     'viewer',
+      'Xem':          'viewer',
       // thêm mapping khác nếu có
       // default nếu không match → giữ nguyên hoặc null
     },

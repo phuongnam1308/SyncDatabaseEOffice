@@ -91,6 +91,15 @@ class MigrationTaskService {
                 newRecord.priority = null;
             }
 
+            // Xử lý ngày tháng: nếu thiếu end_date hoặc end_date <= start_date, set end_date = start_date + 7 ngày
+            if (newRecord.start_date) {
+              const startDate = new Date(newRecord.start_date);
+              const endDate = newRecord.end_date ? new Date(newRecord.end_date) : null;
+              if (!endDate || isNaN(endDate.getTime()) || endDate.getTime() <= startDate.getTime()) {
+                newRecord.end_date = new Date(startDate.getTime() + 7 * 24 * 60 * 60 * 1000); // +7 ngày
+              }
+            }
+
             // Cập nhật update_at = ngày hiện tại
             newRecord.update_at = new Date();
 
