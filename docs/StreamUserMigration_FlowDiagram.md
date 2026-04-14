@@ -80,7 +80,7 @@ START: testGetList()
   │   │   └─> Return syncJobId (reuse)
   │   │
   │   └─ Nếu syncJobId = null:
-  │       ├─> SyncManagerService.createJob(UNIT_TEST_MODEL_NAME)
+  │       ├─> await SyncManagerService.createJob(UNIT_TEST_MODEL_NAME)
   │       │   └─> Tạo row mới trong sync_jobs
   │       │       └─> Ghi vào sync_models (FK check)
   │       │

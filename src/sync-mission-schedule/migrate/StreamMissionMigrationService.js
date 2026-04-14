@@ -32,7 +32,7 @@ class StreamMissionMigrationService {
     async _buildOrReuseJob(syncJobId = null) {
         if (syncJobId) return syncJobId;
         await SyncManagerService.ensureStateLoaded();
-        const created = SyncManagerService.createJob(UNIT_TEST_MODEL_NAME, { reset: false, batchSize: 1 });
+        const created = await SyncManagerService.createJob(UNIT_TEST_MODEL_NAME, { reset: false, batchSize: 1 });
         const jobId = created.jobId;
         await this._ensureJobExists(jobId);
         return jobId;

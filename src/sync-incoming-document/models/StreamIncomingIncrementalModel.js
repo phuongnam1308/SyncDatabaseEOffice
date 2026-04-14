@@ -608,7 +608,7 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
    * @param {number} [lastSyncId=0]
    * @returns {Promise<object>}
    */
-  async getList(lastSyncTime, syncJobId, lastSyncId = 0) {
+  async getList(lastSyncTime, syncJobId, lastSyncId = 0, options = {}) {
     try {
       if (!syncJobId) {
         throw new Error('syncJobId is required');
@@ -628,8 +628,8 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
       const stagingTableRef = this.getStagingTableRef();
       const lookbackHours = Number(process.env.STAGING_LOOKBACK_HOURS || 1);
       const nowUtc = new Date();
-      // toTime = now + 7h (bù múi giờ VN cho DB lưu giờ VN)
-      const toTime = new Date(nowUtc.getTime() + 7 * 60 * 60 * 1000).toISOString();
+      // Ưu tiên dùng toTime từ options (Job range)
+      const toTime = options.toTime || new Date(nowUtc.getTime() + 7 * 60 * 60 * 1000).toISOString();
 
       if (currentSyncTime === DEFAULT_SYNC_TIME) {
         // Lấy mốc lớn nhất từ bảng trung gian bằng TRY_CONVERT để xử lý đúng

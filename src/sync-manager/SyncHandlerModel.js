@@ -15,12 +15,12 @@ class SyncHandlerModel {
    * @returns {(lastTime: string, lastSyncId?: number) => Promise<number>}
    */
   createCountFnIncremental() {
-    return async (lastTime, lastSyncId = 0) => {
+    return async (lastTime, lastSyncId = 0, { toTime } = {}) => {
       // Nếu model có hàm getCount riêng thì ưu tiên dùng (tối ưu hơn)
       if (typeof this.syncModel.getCount === 'function') {
-        return this.syncModel.getCount(lastTime, lastSyncId);
+        return this.syncModel.getCount(lastTime, lastSyncId, toTime);
       }
-      const records = await this.syncModel.fetchListFromOldDb(lastTime, lastSyncId);
+      const records = await this.syncModel.fetchListFromOldDb(lastTime, lastSyncId, toTime);
       return Array.isArray(records) ? records.length : 0;
     };
   }
@@ -40,20 +40,20 @@ class SyncHandlerModel {
       }
 
       if (!preparedJobs.has(jobId)) {
-        const listResult = await this.syncModel.getList(lastTime, jobId, lastSyncId);
-        // Khi Resume sau server restart, `nextIndex` phải bắt đầu từ số records đã xử lý trước đó
-        // (context.totalProcessed) chứ không phải 0, để SyncManagerService không emit lại từ đầu.
-        const resumeIndex = Number(cursor.totalProcessed || 0);
+        const toTime = cursor.toTime || null;
+        const listResult = await this.syncModel.getList(lastTime, jobId, lastSyncId, { toTime });
+        // Chú ý: Vì getList() (hút từ DB cũ) đã tự động dựa vào lastSyncTime hiện tại của Job
+        // để chỉ kéo những bản ghi còn lại, nên totalCount trả về chính là SỐ BẢN GHI CÒN LẠI cần lặp.
         preparedJobs.set(jobId, {
           totalCount: Number(listResult?.totalCount || 0),
           syncTime: listResult?.lastSyncTime || lastTime,
           syncId: Number(listResult?.lastSyncId || lastSyncId || 0),
           sourceTime: listResult?.sourceLastSyncTime || lastTime,
           sourceId: Number(listResult?.sourceLastSyncId || lastSyncId || 0),
-          nextIndex: resumeIndex
+          nextIndex: 0
         });
-        if (resumeIndex > 0) {
-          logger.info(`[SyncHandlerModel] Resuming jobId=${jobId}: nextIndex restored to ${resumeIndex} (totalProcessed from context).`);
+        if (Number(cursor.totalProcessed || 0) > 0) {
+          logger.info(`[SyncHandlerModel] Resuming jobId=${jobId}: Đã bỏ qua số liệu thống kê quá khứ, chạy nốt ${listResult?.totalCount || 0} bản ghi còn lại.`);
         }
       }
 

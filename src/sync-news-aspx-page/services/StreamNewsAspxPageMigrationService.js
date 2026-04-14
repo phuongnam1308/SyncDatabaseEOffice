@@ -19,7 +19,7 @@ class StreamNewsAspxPageMigrationService {
     if (syncJobId) return syncJobId;
 
     await SyncManagerService.ensureStateLoaded();
-    const created = SyncManagerService.createJob(UNIT_TEST_MODEL_NAME, {
+    const created = await SyncManagerService.createJob(UNIT_TEST_MODEL_NAME, {
       reset: false,
       batchSize: 1
     });

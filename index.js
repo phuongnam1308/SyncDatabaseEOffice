@@ -71,7 +71,7 @@ const ensureDesktopShortcut = () => {
     require('fs').writeFileSync(tempPs, '\ufeff' + psScriptContent, { encoding: 'utf8' });
     const psPath = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
     exec(`"${psPath}" -ExecutionPolicy Bypass -File "${tempPs}"`, (err) => {
-      try { if (require('fs').existsSync(tempPs)) require('fs').unlinkSync(tempPs); } catch(e) {}
+      try { if (require('fs').existsSync(tempPs)) require('fs').unlinkSync(tempPs); } catch (e) { }
       if (err) console.error('⚠️ Không thể tạo shortcut tự động:', err.message);
       else console.log('🚀 Đã tự động kiểm tra và tạo shortcut ngoài Desktop.');
     });
@@ -267,7 +267,7 @@ app.listen(PORT, () => {
 
           // Bẫy tín hiệu để đóng browser khi Terminal bị tắt
           process.on('SIGINT', async () => {
-            await browser.close().catch(() => {});
+            await browser.close().catch(() => { });
             process.exit(0);
           });
 
@@ -291,6 +291,21 @@ app.listen(PORT, () => {
 
   // Khởi động trình làm mới Session (mỗi 10 phút kiểm tra token SharePoint)
   startSessionRefresher();
+});
+
+/**
+ * [GLOBAL ERROR HANDLER]
+ */
+app.use((err, req, res, next) => {
+  logger.error(`[GlobalError] \${err.message}`);
+  if (err.stack) logger.debug(err.stack);
+  
+  const statusCode = err.status || err.statusCode || 500;
+  res.status(statusCode).json({
+    success: false,
+    message: err.message || 'Internal Server Error',
+    error: err.message
+  });
 });
 
 /**
@@ -329,5 +344,5 @@ async function gracefulShutdown(signal) {
   process.exit(0);
 }
 
-process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));

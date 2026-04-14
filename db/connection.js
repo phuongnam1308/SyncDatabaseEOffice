@@ -170,15 +170,29 @@ class DatabaseConnection {
       batch_size int DEFAULT 10 NULL,
       last_sync_time datetime2 NULL,
       last_sync_id bigint DEFAULT 0 NULL,
+      from_time datetime2 NULL, -- Mốc bắt đầu của Job dải thời gian
+      to_time datetime2 NULL, -- Mốc kết thúc (Rào chắn) của Job dải thời gian
       total_to_sync bigint NULL,
       total_processed bigint DEFAULT 0 NULL,
       total_success bigint DEFAULT 0 NULL,
       total_errors bigint DEFAULT 0 NULL,
       error_message nvarchar(MAX) COLLATE SQL_Latin1_General_CP1_CI_AS NULL,
       created_at datetime2 DEFAULT sysdatetime() NULL,
+      server_port nvarchar(50) NULL, -- Lưu vết PORT chạy 
       CONSTRAINT PK__sync_job__6E32B6A5630E324C PRIMARY KEY (job_id),
       CONSTRAINT fk_sync_jobs_model FOREIGN KEY (model_name) REFERENCES dbo.sync_models(model_name)
     );
+  END
+  ELSE
+  BEGIN
+    -- [MIGRATION] Thêm các cột còn thiếu cho bản cũ
+    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.sync_jobs') AND name = 'from_time')
+      ALTER TABLE dbo.sync_jobs ADD from_time datetime2 NULL;
+    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.sync_jobs') AND name = 'to_time')
+      ALTER TABLE dbo.sync_jobs ADD to_time datetime2 NULL;
+    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.sync_jobs') AND name = 'server_port')
+      ALTER TABLE dbo.sync_jobs ADD server_port nvarchar(50) NULL;
+  END
 
     CREATE NONCLUSTERED INDEX idx_sync_jobs_model_name ON dbo.sync_jobs (model_name ASC)
       WITH (PAD_INDEX = OFF, FILLFACTOR = 100, SORT_IN_TEMPDB = OFF,

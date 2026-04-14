@@ -361,8 +361,9 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
           AND ISNULL(__sync_id_num, 9223372036854775807) < @lastSyncId
         )
       )
-      -- Chỉ lấy bản ghi từ năm 2026 trở đi
-      AND __sync_time >= '${SYNC_MIN_DATE}'
+      )
+      -- Tôn trọng mốc tối thiểu toàn cục nếu không có mốc bắt đầu cụ thể
+      AND (@lastSyncTime < '9999-12-31T23:59:59.999Z' OR __sync_time >= '${SYNC_MIN_DATE}')
     `;
 
     const rows = await this.queryOldDb(query, {
@@ -674,8 +675,9 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
           AND ISNULL(__sync_id_num, 9223372036854775807) < @lastSyncId
         )
       )
-      -- Chỉ lấy bản ghi từ năm 2026 trở đi
-      AND __sync_time >= '${SYNC_MIN_DATE}'
+      )
+      -- Tôn trọng mốc tối thiểu toàn cục nếu không có mốc bắt đầu cụ thể
+      AND (@lastSyncTime < '9999-12-31T23:59:59.999Z' OR __sync_time >= '${SYNC_MIN_DATE}')
       ORDER BY
         __sync_time DESC,
         ISNULL(__sync_id_num, 9223372036854775807) DESC,
@@ -765,7 +767,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
   /**
    * Lấy danh sách bản ghi và đẩy vào Staging dùng cơ chế Iterative Batching.
    */
-  async getList(lastSyncTime, syncJobId, lastSyncId = 0) {
+  async getList(lastSyncTime, syncJobId, lastSyncId = 0, options = {}) {
     if (!syncJobId) {
       throw new Error('syncJobId is required');
     }

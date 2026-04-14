@@ -560,6 +560,7 @@ class SyncAuditModel extends BaseModel {
 
     let inserted = 0;
     let updated = 0;
+    let bestStatusCode = null;
     const results = [];
 
     try {
@@ -610,22 +611,24 @@ class SyncAuditModel extends BaseModel {
             // Lưu kết quả để subclass sử dụng
           }
           results.push({ audit, id: auditId });
-
-          // 5c. Cập nhật status_code cho bảng văn bản tương ứng
-          if (audit.status_code && audit.document_id) {
-            await this._updateDocumentStatusCode(
-              audit.document_id, 
-              audit.type_document, 
-              audit.status_code, 
-              transaction
-            );
-          }
+          bestStatusCode = this._pickHigherNumericStatusCode(bestStatusCode, audit.status_code);
         } catch (auditErr) {
           logger.warn(
             `[AuditSyncModel.processSingleRecord] single audit failed table=${this.oldDbTable} ID=${rawRecord?.ID}: ${auditErr.message}`
           );
           // Không throw lỗi ở đây để các bản ghi audit khác trong cùng văn bản vẫn được xử lý
         }
+      }
+
+      // 4. Chỉ cập nhật status_code 1 lần/record (thay vì mỗi audit con)
+      if (bestStatusCode && documentId) {
+        const typeDocument = results?.[0]?.audit?.type_document || null;
+        await this._updateDocumentStatusCode(
+          documentId,
+          typeDocument,
+          bestStatusCode,
+          transaction
+        );
       }
 
       return { inserted, updated, results };
@@ -800,7 +803,7 @@ class SyncAuditModel extends BaseModel {
 
     const auditId = result?.[0]?.id || null;
     if (auditId) {
-      logger.info(`[SyncAuditModel] Inserted audit row successfully: doc=${data.document_id} originId=${data.origin_id} table=${this.oldDbTable}`);
+      logger.debug(`[SyncAuditModel] Inserted audit row: doc=${data.document_id} originId=${data.origin_id} table=${this.oldDbTable}`);
     }
 
     return auditId;
@@ -879,7 +882,7 @@ class SyncAuditModel extends BaseModel {
       transaction
     );
 
-    logger.info(`[SyncAuditModel] Updated audit row successfully: doc=${data.document_id} originId=${data.origin_id} table=${this.oldDbTable}`);
+    logger.debug(`[SyncAuditModel] Updated audit row: doc=${data.document_id} originId=${data.origin_id} table=${this.oldDbTable}`);
 
     return existingId;
   }
@@ -1159,6 +1162,27 @@ class SyncAuditModel extends BaseModel {
     } catch (err) {
       logger.warn(`[SyncAuditModel] Không thể cập nhật status_code cho ${tableName} ID=${documentId}: ${err.message}`);
     }
+  }
+
+  /**
+   * Chọn status_code lớn hơn theo số học để cập nhật 1 lần.
+   * @private
+   */
+  _pickHigherNumericStatusCode(currentStatusCode, candidateStatusCode) {
+    const cand = this._normalizeTextField(candidateStatusCode);
+    if (!cand) return currentStatusCode;
+
+    const candNum = Number(cand);
+    if (!Number.isFinite(candNum)) {
+      return currentStatusCode;
+    }
+
+    if (!currentStatusCode) return cand;
+
+    const curNum = Number(currentStatusCode);
+    if (!Number.isFinite(curNum)) return cand;
+
+    return candNum >= curNum ? cand : currentStatusCode;
   }
 
   /**

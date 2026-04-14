@@ -145,7 +145,10 @@ class SyncManagerService {
       totalSuccess: Number(row?.total_success || 0),
       totalErrors: Number(row?.total_errors || 0),
       error: row?.error_message || null,
-      errorLog: []
+      errorLog: [],
+      fromTime: this.toIsoOrNull(row?.from_time),
+      toTime: this.toIsoOrNull(row?.to_time),
+      serverPort: row?.server_port || null
     };
   }
 
@@ -172,7 +175,7 @@ class SyncManagerService {
             pause_requested, is_reset, batch_size,
             last_sync_time, last_sync_id,
             total_to_sync, total_processed, total_success, total_errors,
-            error_message
+            error_message, from_time, to_time, server_port
           FROM ${SyncStateRepository.tblJobs}
           `
         )
@@ -281,7 +284,9 @@ class SyncManagerService {
    * @returns {string}
    */
   generateJobId(modelName) {
-    return `${modelName}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const port = process.env.PORT || '3025';
+    const timestamp = new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14);
+    return `JOB_${modelName}_${port}_${timestamp}`;
   }
 
   /**
@@ -290,6 +295,10 @@ class SyncManagerService {
    * @returns {boolean}
    */
   isModelBusy(modelState) {
+    // Không còn chặn cứng Model busy nếu chúng ta muốn chạy nhiều Job song song.
+    // Tuy nhiên, để Dashboard cũ hoạt động, ta vẫn giữ logic này cho "Main Job".
+    // Nếu Job hiện tại là 'RUNNING' nhưng người dùng muốn tạo thêm Job dải thời gian khác, 
+    // ta sẽ cho phép ở lớp startModel.
     return modelState && RUNNING_STATUSES.has(modelState.status);
   }
 
@@ -323,7 +332,7 @@ class SyncManagerService {
     };
     // Chỉ dăng ký 1 lần — index.js sẽ gọi pauseAllRunningJobs() qua gracefulShutdown()
     // Handler này là fallback đồng bộ (synchronous) nếu graceless kill xảy ra
-    process.once('SIGINT',  () => { markPaused(); process.exit(0); });
+    process.once('SIGINT', () => { markPaused(); process.exit(0); });
     process.once('SIGTERM', () => { markPaused(); process.exit(0); });
   }
 
@@ -502,66 +511,71 @@ class SyncManagerService {
    * @param {{reset?:boolean,batchSize?:number}} [options]
    * @returns {object}
    */
-  createJob(modelName, options = {}) {
+  async createJob(modelName, options = {}) {
     const modelState = this.getModelState(modelName);
     const now = this.now();
-    const reset = Boolean(options.reset);
+    const isReset = Boolean(options.reset);
 
-    if (reset) {
+    // 1. Kiểm tra chồng lấn dải thời gian (Overlap Validation)
+    const fromTime = options.fromTime || null;
+    const toTime = options.toTime || null;
+
+    // Chỉ check overlap nếu là job có dải thời gian hoặc nếu module đang IDLE
+    const overlaps = await SyncStateRepository.findOverlappingJobs(modelName, fromTime, toTime);
+    if (overlaps && overlaps.length > 0) {
+      const overlappingIds = overlaps.map(j => j.job_id).join(', ');
+      throw new Error(`Dải thời gian bị chồng lấn với các Job hiện có: ${overlappingIds}. Vui lòng kiểm tra lại.`);
+    }
+
+    if (isReset && !options.fromTime) {
+      // Trường hợp reset toàn bộ module (không truyền range cụ thể)
       modelState.lastSyncTime = null;
       modelState.lastSyncId = 0;
       modelState.totalSynced = 0;
     }
 
+    const isRangeJob = Boolean(options.fromTime || options.toTime);
+    const initialStatus = isRangeJob ? 'PAUSED' : 'RUNNING';
+
     const jobId = this.generateJobId(modelName);
     const job = {
       jobId,
       modelName,
-      status: 'RUNNING',
+      status: initialStatus,
       startedAt: now,
       updatedAt: now,
       endedAt: null,
       heartbeatAt: now,
       pauseRequested: false,
-      reset,
+      reset: isReset,
       batchSize: parseInt(options.batchSize || this.batchSize, 10),
-      lastSyncTime: modelState.lastSyncTime || DEFAULT_SYNC_TIME,
-      lastSyncId: modelState.lastSyncId || 0,
+      lastSyncTime: options.fromTime || modelState.lastSyncTime || DEFAULT_SYNC_TIME,
+      lastSyncId: (isReset || options.fromTime) ? 0 : (modelState.lastSyncId || 0),
       totalToSync: null,
       totalProcessed: 0,
       totalSuccess: 0,
       totalErrors: 0,
       error: null,
-      errorLog: []
+      errorLog: [],
+      fromTime: options.fromTime || null,
+      toTime: options.toTime || null,
+      serverPort: process.env.PORT || '3025'
     };
 
     this.state.jobs[jobId] = job;
-    this.state.syncLogs[jobId] = {
-      jobId,
-      modelName,
-      status: job.status,
-      startedAt: job.startedAt,
-      updatedAt: job.updatedAt,
-      endedAt: job.endedAt,
-      lastSyncTime: job.lastSyncTime,
-      lastSyncId: job.lastSyncId,
-      totalToSync: job.totalToSync,
-      totalProcessed: 0,
-      totalSuccess: 0,
-      totalErrors: 0,
-      error: null
-    };
+    this.updateSyncLogFromJob(job);
 
-    modelState.status = 'RUNNING';
+    // Cập nhật trạng thái module: Nếu có bất kỳ job nào RUNNING -> Module RUNNING
+    // Tạm thời gán job mới là activeJobId để dễ theo dõi
+    modelState.status = initialStatus;
     modelState.error = null;
     modelState.lastRun = now;
     modelState.activeJobId = jobId;
 
-    this.saveState(); // ghi JSON (giữ nguyên)
-    // make sure model exists in sync_models (FK constraint) before inserting job
+    this.saveState();
     this._dbEnsureModel(modelName);
-    this._dbInsertJob(job); // ghi DB (thêm mới, fire-and-forget)
-    this._dbUpdateModel(modelName, modelState); // ghi DB model state
+    this._dbInsertJob(job);
+    this._dbUpdateModel(modelName, modelState);
 
     return job;
   }
@@ -571,6 +585,7 @@ class SyncManagerService {
    * @param {object} job
    */
   updateSyncLogFromJob(job) {
+    if (!job) return;
     this.state.syncLogs[job.jobId] = {
       jobId: job.jobId,
       modelName: job.modelName,
@@ -654,7 +669,7 @@ class SyncManagerService {
    */
   async start(reset = false) {
     for (const modelName of this.registry.keys()) {
-      const started = this.startModel(modelName, { reset });
+      const started = await this.startModel(modelName, { reset });
       await this.waitForJobCompletion(started.jobId);
     }
   }
@@ -665,29 +680,42 @@ class SyncManagerService {
    * @param {{reset?:boolean,batchSize?:number,resumeIfPaused?:boolean}} [options]
    * @returns {{jobId:string,modelName:string,status:string}}
    */
-  startModel(modelName, options = {}) {
+  async startModel(modelName, options = {}) {
     if (!this.registry.has(modelName)) throw new Error(`Model ${modelName} is not registered`);
 
     const modelState = this.getModelState(modelName);
+    const isRangeJob = Boolean(options.fromTime || options.toTime);
     const resumeIfPaused = options.resumeIfPaused === true && !Boolean(options.reset);
-    if (this.isModelBusy(modelState)) throw new Error(`Model ${modelName} is already running`);
-    if (modelState.status === 'PAUSED' && modelState.activeJobId) {
+
+    // Nếu không phải là Job dải thời gian mà Model đang bận -> Chặn (giữ logic cũ cho Main Job)
+    if (!isRangeJob && this.isModelBusy(modelState)) {
+      throw new Error(`Model ${modelName} đang chạy tiến trình chính. Vui lòng đợi.`);
+    }
+
+    // Xử lý Job đang tạm dừng
+    if (modelState.status === 'PAUSED' && modelState.activeJobId && !options.reset) {
       if (resumeIfPaused) {
         const pausedJob = this.state.jobs[modelState.activeJobId];
         if (!pausedJob) {
-          throw new Error(`Model ${modelName} has paused active job ${modelState.activeJobId}, but job state is missing`);
+          throw new Error(
+            `Model ${modelName} có job ${modelState.activeJobId} tạm dừng nhưng không tìm thấy dữ liệu.`
+          );
         }
         if (pausedJob.status !== 'PAUSED') {
           throw new Error(
-            `Model ${modelName} has active job ${pausedJob.jobId} with status ${pausedJob.status}, cannot auto-resume`
+            `Model ${modelName} có job ${pausedJob.jobId} ở trạng thái ${pausedJob.status}, không thể Resume.`
           );
         }
         return this.resumeJob(pausedJob.jobId);
       }
-      throw new Error(`Model ${modelName} is paused. Resume the paused job first.`);
+      // Nếu là Range Job thì có thể bỏ qua để tạo Job mới, 
+      // nhưng nếu là Main Job (no range) thì bắt buộc phải Resume hoặc Reset.
+      if (!isRangeJob) {
+        throw new Error(`Model ${modelName} đang tạm dừng. Hãy bấm Resume hoặc chạy Reset (dùng nút Lại).`);
+      }
     }
 
-    const job = this.createJob(modelName, options);
+    const job = await this.createJob(modelName, options);
     const runPromise = this.runJob(job.jobId).finally(() => this.activeJobPromises.delete(job.jobId));
     this.activeJobPromises.set(job.jobId, runPromise);
 
@@ -730,17 +758,32 @@ class SyncManagerService {
   }
 
   /**
-   * Resumes one paused job from its current cursor.
+   * Resumes or Restarts one job from memory.
    * @param {string} jobId
+   * @param {{reset?:boolean}} [options]
    * @returns {{jobId:string,modelName:string,status:string}}
    */
-  resumeJob(jobId) {
+  resumeJob(jobId, options = {}) {
     const job = this.state.jobs[jobId];
-    if (!job) throw new Error(`Job ${jobId} not found`);
-    if (job.status !== 'PAUSED') throw new Error(`Job ${jobId} is not paused`);
+    if (!job) throw new Error(`Job \${jobId} not found`);
+
+    // Chặn nếu Job đang chạy rồi
+    if (RUNNING_STATUSES.has(job.status)) {
+      throw new Error(`Job \${jobId} đang ở trạng thái \${job.status}, không thể chạy tiếp.`);
+    }
 
     const modelState = this.getModelState(job.modelName);
-    if (this.isModelBusy(modelState)) throw new Error(`Model ${job.modelName} is already running`);
+    if (this.isModelBusy(modelState)) throw new Error(`Model \${job.modelName} đang chạy một tiến trình khác.`);
+
+    // Nếu yêu cầu Reset (chạy lại từ đầu dải của Job này)
+    if (options.reset === true) {
+      job.lastSyncId = 0;
+      job.totalProcessed = 0;
+      job.totalSuccess = 0;
+      job.totalErrors = 0;
+      job.error = null;
+      job.errorLog = [];
+    }
 
     job.pauseRequested = false;
     job.status = 'RESUMING';
@@ -866,7 +909,7 @@ class SyncManagerService {
       // Đếm tổng bản ghi cần sync (để tính %)
       if (job.totalToSync == null && typeof handlers.countFn === 'function') {
         try {
-          job.totalToSync = await handlers.countFn(cursorTime, cursorId);
+          job.totalToSync = await handlers.countFn(cursorTime, cursorId, { toTime: job.toTime });
           logger.info(`[SyncManagerService][${job.modelName}] Total to sync: ${job.totalToSync}`);
         } catch (countError) {
           logger.error(`[SyncManagerService][${job.modelName}] Count remaining failed:`, countError);
@@ -894,6 +937,7 @@ class SyncManagerService {
           jobId: job.jobId,
           lastSyncTime: cursorTime,
           lastSyncId: cursorId,
+          toTime: job.toTime,
           // Cần thiết để SyncHandlerModel phục hồi nextIndex đúng sau server restart (Resume)
           totalProcessed: job.totalProcessed || 0
         });

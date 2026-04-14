@@ -25,7 +25,7 @@ class SyncIncomingDocumentService {
 
     /**
    * Kiểm tra trong bảng `sync_jobs` xem job với `syncJobId` đã tồn tại chưa.
-   * Dùng để đảm bảo job được tạo bởi `SyncManagerService.createJob` đã được persist.
+   * Dùng để đảm bảo job được tạo bởi `await SyncManagerService.createJob` đã được persist.
    * Trả về true nếu tồn tại, false nếu sau nhiều lần retry vẫn không thấy.
    * @param {string} syncJobId
    * @returns {Promise<boolean>}
@@ -53,7 +53,7 @@ class SyncIncomingDocumentService {
         if (syncJobId) return syncJobId;
 
         await SyncManagerService.ensureStateLoaded();
-        const created = SyncManagerService.createJob(UNIT_TEST_MODEL_NAME, {
+        const created = await SyncManagerService.createJob(UNIT_TEST_MODEL_NAME, {
             reset: false,
             batchSize: 1
         });

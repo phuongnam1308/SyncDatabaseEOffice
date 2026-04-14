@@ -47,9 +47,9 @@ class SyncStateRepository extends BaseModel {
       const modelsQuery = `SELECT * FROM ${this.tblModels}`;
       const models = await this.queryNewDb(modelsQuery);
 
-      // 2. Lấy danh sách 10 Job gần nhất
+      // 2. Lấy danh sách 100 Job gần nhất
       const jobsQuery = `
-        SELECT TOP 10 *
+        SELECT TOP 100 *
         FROM ${this.tblJobs}
         ORDER BY updated_at DESC
       `;
@@ -89,7 +89,10 @@ class SyncStateRepository extends BaseModel {
             totalProcessed: j.total_processed || 0,
             totalSuccess: j.total_success || 0,
             totalErrors: j.total_errors || 0,
-            error: j.error_message
+            error: j.error_message,
+            fromTime: j.from_time,
+            toTime: j.to_time,
+            serverPort: j.server_port
           };
 
           jobsMap[j.job_id] = jobData;
@@ -173,14 +176,14 @@ class SyncStateRepository extends BaseModel {
         pause_requested, is_reset, batch_size,
         last_sync_time, last_sync_id,
         total_to_sync, total_processed, total_success, total_errors,
-        error_message
+        error_message, from_time, to_time, server_port
       ) VALUES (
         @jobId, @modelName, @status,
         @startedAt, @updatedAt, @endedAt, @heartbeatAt,
         @pauseRequested, @isReset, @batchSize,
         @lastSyncTime, @lastSyncId,
         @totalToSync, @totalProcessed, @totalSuccess, @totalErrors,
-        @errorMessage
+        @errorMessage, @fromTime, @toTime, @serverPort
       )
     `;
     const params = this._mapJobToParams(job);
@@ -204,7 +207,10 @@ class SyncStateRepository extends BaseModel {
         total_processed = @totalProcessed,
         total_success   = @totalSuccess,
         total_errors    = @totalErrors,
-        error_message   = @errorMessage
+        error_message   = @errorMessage,
+        from_time       = @fromTime,
+        to_time         = @toTime,
+        server_port     = @serverPort
       WHERE job_id = @jobId
     `;
     const params = this._mapJobToParams(job);
@@ -293,7 +299,10 @@ class SyncStateRepository extends BaseModel {
       totalProcessed: Number(job.totalProcessed || 0),
       totalSuccess: Number(job.totalSuccess || 0),
       totalErrors: Number(job.totalErrors || 0),
-      errorMessage: job.error || null
+      errorMessage: job.error || null,
+      fromTime: job.fromTime || null,
+      toTime: job.toTime || null,
+      serverPort: job.serverPort || null
     };
   }
 
@@ -305,6 +314,28 @@ class SyncStateRepository extends BaseModel {
       SELECT * FROM ${this.tblJobs} WHERE job_id = @jobId
     `;
     const params = { jobId };
+    return this.queryNewDb(query, params);
+  }
+
+  /**
+   * Kiểm tra xem dải thời gian mới có chồng lấn với bất kỳ Job nào hiện có không
+   */
+  async findOverlappingJobs(modelName, fromTime, toTime) {
+    const query = `
+      SELECT job_id, from_time, to_time, status
+      FROM ${this.tblJobs}
+      WHERE model_name = @modelName
+        AND status IN ('RUNNING', 'RESUMING', 'PAUSE_REQUESTED')
+        AND (
+          (CAST(@fromTime AS DATETIME2) < ISNULL(to_time, '2099-12-31'))
+          AND (ISNULL(CAST(@toTime AS DATETIME2), '2099-12-31') > ISNULL(from_time, '1900-01-01'))
+        )
+    `;
+    const params = { 
+      modelName, 
+      fromTime: fromTime || '1900-01-01', 
+      toTime: toTime || '2099-12-31' 
+    };
     return this.queryNewDb(query, params);
   }
 }

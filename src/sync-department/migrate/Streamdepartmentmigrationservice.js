@@ -2,7 +2,7 @@ const StreamDepartmentMigrationModel = require('./StreamDepartmentMigrationModel
 const SyncManagerService = require('../../sync-manager/SyncManagerService');
 
 const UNIT_TEST_MODEL_NAME = 'UNIT_TEST_STREAM_DEPARTMENT_MIGRATION';
-const DEFAULT_SYNC_TIME    = '1970-01-01T00:00:00.000Z';
+const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 
 class StreamDepartmentMigrationService {
   constructor() {
@@ -46,8 +46,8 @@ class StreamDepartmentMigrationService {
     if (syncJobId) return syncJobId;
 
     await SyncManagerService.ensureStateLoaded();
-    const created = SyncManagerService.createJob(UNIT_TEST_MODEL_NAME, {
-      reset:     false,
+    const created = await SyncManagerService.createJob(UNIT_TEST_MODEL_NAME, {
+      reset: false,
       batchSize: 1
     });
     const jobId = created.jobId;
@@ -62,19 +62,19 @@ class StreamDepartmentMigrationService {
   async testGetList({ lastSyncTime = DEFAULT_SYNC_TIME, syncJobId = null } = {}) {
     if (!this.model) throw new Error('Service chưa được khởi tạo');
 
-    const jobId      = await this._buildOrReuseJob(syncJobId);
+    const jobId = await this._buildOrReuseJob(syncJobId);
     const listResult = await this.model.getList(lastSyncTime, jobId);
-    const jobState   = await this.model.getSyncJobState(jobId);
-    const newCount   = await this.model.countNewDepts();
+    const jobState = await this.model.getSyncJobState(jobId);
+    const newCount = await this.model.countNewDepts();
 
     return {
-      syncJobId:       jobId,
-      lastSyncTime:    listResult.lastSyncTime,
-      oldCount:        listResult.totalCount,
-      stagedCount:     Number(listResult.stagedCount || listResult.totalCount || 0),
+      syncJobId: jobId,
+      lastSyncTime: listResult.lastSyncTime,
+      oldCount: listResult.totalCount,
+      stagedCount: Number(listResult.stagedCount || listResult.totalCount || 0),
       newCount,
-      totalCount:      Number(jobState?.total_to_sync || listResult.totalCount || 0),
-      processingItem:  Number(jobState?.total_processed || 0),
+      totalCount: Number(jobState?.total_to_sync || listResult.totalCount || 0),
+      processingItem: Number(jobState?.total_processed || 0),
       isCountMatch:
         Number(jobState?.total_to_sync || listResult.totalCount || 0) ===
         Number(listResult.totalCount || 0)
@@ -86,8 +86,8 @@ class StreamDepartmentMigrationService {
    * @param {string} syncJobId
    */
   async testProcessOne(syncJobId) {
-    if (!this.model)  throw new Error('Service chưa được khởi tạo');
-    if (!syncJobId)   throw new Error('syncJobId is required');
+    if (!this.model) throw new Error('Service chưa được khởi tạo');
+    if (!syncJobId) throw new Error('syncJobId is required');
     return this.model.processOne(syncJobId);
   }
 }
