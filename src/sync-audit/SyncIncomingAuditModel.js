@@ -31,11 +31,11 @@ class SyncIncomingAuditModel extends SyncAuditModel {
   // OVERRIDE: processSingleRecord
   // Sau khi parent đã upsert vào bảng audit, tiếp tục cập nhật 2 bảng phụ.
   // ---------------------------------------------------------------------------
-  async processSingleRecord(rawRecord, documentId, transaction = null) {
+  async processSingleRecord(rawRecord, documentId, transaction = null, drafter = null) {
     if (!rawRecord || !documentId) return null;
 
     // 1. Gọi parent thực hiện upsert vào bảng audit (trả về { inserted, updated, results })
-    const result = await super.processSingleRecord(rawRecord, documentId, transaction);
+    const result = await super.processSingleRecord(rawRecord, documentId, transaction, drafter);
 
     // 2. Nếu có kết quả audit, tiếp tục cập nhật các bảng phụ
     if (result && Array.isArray(result.results) && result.results.length > 0) {
@@ -85,46 +85,83 @@ class SyncIncomingAuditModel extends SyncAuditModel {
     if (!document_id) return;
 
     try {
-      // 1. Xoá toàn bộ assignment của document
-      await this.queryNewDbTx(
-        `DELETE FROM ${process.env.NEW_DB_NAME}.dbo.incomming_assignment
-        WHERE document_id = @document_id`,
-        { document_id },
-        transaction
-      );
-
-      // 2. Validate input chính
+      // Validate input chính
       if (!stage_status || !roleProcess) return;
 
       const allReceivers = [receiver || created_by, receiver_unit].filter(Boolean);
       if (allReceivers.length === 0) return;
 
-      // 3. Loại duplicate receiver + role
+      // Loại duplicate receiver + role
       const uniqueKeys = new Set();
+      const rows = [];
 
       for (const rec of allReceivers) {
         const key = `${rec}_${roleProcess}`;
         if (uniqueKeys.has(key)) continue;
         uniqueKeys.add(key);
-
-        await this.queryNewDbTx(
-          `INSERT INTO ${process.env.NEW_DB_NAME}.dbo.incomming_assignment
-          (document_id, receiver, role_process, stage_status,
-            created_at, last_audit_id, table_backups)
-          VALUES (@document_id, @receiver, @role_process, @stage_status,
-                  @created_at, @last_audit_id, @table_backups)`,
-          {
-            document_id,
-            receiver:      String(rec).substring(0, 100),
-            role_process:  String(roleProcess).substring(0, 50),
-            stage_status:  String(stage_status).substring(0, 50),
-            created_at:    created_at || new Date(),
-            last_audit_id: auditId || null,
-            table_backups: 'incomming_assignment',
-          },
-          transaction
-        );
+        rows.push({
+          receiver: String(rec).substring(0, 100),
+          role_process: String(roleProcess).substring(0, 50),
+          stage_status: String(stage_status).substring(0, 50),
+          created_at: created_at || new Date(),
+          last_audit_id: auditId || null,
+        });
       }
+
+      if (rows.length === 0) return;
+
+      const params = {
+        document_id,
+        table_backups: 'incomming_assignment',
+      };
+
+      const valuesSql = rows.map((row, idx) => {
+        params[`receiver${idx}`] = row.receiver;
+        params[`role_process${idx}`] = row.role_process;
+        params[`stage_status${idx}`] = row.stage_status;
+        params[`created_at${idx}`] = row.created_at;
+        params[`last_audit_id${idx}`] = row.last_audit_id;
+        return `(@receiver${idx}, @role_process${idx}, @stage_status${idx}, @created_at${idx}, @last_audit_id${idx})`;
+      }).join(',\n              ');
+
+      // Đồng bộ assignment bằng 1 MERGE:
+      // - update row hiện có
+      // - insert row mới
+      // - delete row cũ không còn trong trạng thái hiện tại
+      await this.queryNewDbTx(
+        `
+        ;WITH src AS (
+          SELECT
+            @document_id AS document_id,
+            v.receiver,
+            v.role_process,
+            v.stage_status,
+            v.created_at,
+            v.last_audit_id
+          FROM (VALUES
+              ${valuesSql}
+          ) v(receiver, role_process, stage_status, created_at, last_audit_id)
+        )
+        MERGE ${process.env.NEW_DB_NAME}.dbo.incomming_assignment AS tgt
+        USING src
+        ON  tgt.document_id = src.document_id
+        AND tgt.receiver = src.receiver
+        AND tgt.role_process = src.role_process
+        WHEN MATCHED THEN
+          UPDATE SET
+            stage_status  = src.stage_status,
+            created_at    = src.created_at,
+            last_audit_id = src.last_audit_id,
+            table_backups = @table_backups
+        WHEN NOT MATCHED BY TARGET THEN
+          INSERT (document_id, receiver, role_process, stage_status, created_at, last_audit_id, table_backups)
+          VALUES (src.document_id, src.receiver, src.role_process, src.stage_status, src.created_at, src.last_audit_id, @table_backups)
+        WHEN NOT MATCHED BY SOURCE AND tgt.document_id = @document_id THEN
+          DELETE;
+      `,
+        params,
+        transaction
+      );
 
     } catch (err) {
       logger.error(`[SyncIncomingAuditModel] Sync assignment failed: doc=${document_id}`, err);
@@ -192,7 +229,7 @@ class SyncIncomingAuditModel extends SyncAuditModel {
       },
       transaction
     );
-    logger.info(`[SyncIncomingAuditModel] Sync current_state success: doc=${document_id} status=${stage_status}`);
+    logger.debug(`[SyncIncomingAuditModel] Sync current_state success: doc=${document_id} status=${stage_status}`);
   }
 
   // ---------------------------------------------------------------------------

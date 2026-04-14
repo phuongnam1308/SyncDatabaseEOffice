@@ -28,11 +28,11 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
   // OVERRIDE: processSingleRecord
   // Sau khi parent đã upsert vào bảng audit, tiếp tục cập nhật 2 bảng phụ.
   // ---------------------------------------------------------------------------
-  async processSingleRecord(rawRecord, documentId, transaction = null) {
+  async processSingleRecord(rawRecord, documentId, transaction = null, drafter = null) {
     if (!rawRecord || !documentId) return null;
 
     // 1. Gọi parent thực hiện upsert vào bảng audit (trả về { inserted, updated, results })
-    const result = await super.processSingleRecord(rawRecord, documentId, transaction);
+    const result = await super.processSingleRecord(rawRecord, documentId, transaction, drafter);
 
     // 2. Nếu có kết quả audit, tiếp tục cập nhật các bảng phụ
     if (result && Array.isArray(result.results) && result.results.length > 0) {
@@ -82,15 +82,7 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
     if (!document_id) return;
 
     try {
-      // 1. Xoá toàn bộ assignment của document
-      await this.queryNewDbTx(
-        `DELETE FROM ${process.env.NEW_DB_NAME}.dbo.outgoing_assignment
-        WHERE document_id = @document_id`,
-        { document_id },
-        transaction
-      );
-
-      // 2. Validate dữ liệu chính
+      // Validate dữ liệu chính
       if (!stage_status || !roleProcess) return;
 
       const isCreator = CREATOR_ACTION_CODES?.has(action_code) ? 1 : 0;
@@ -104,8 +96,9 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
 
       if (allReceivers.length === 0) return;
 
-      // 3. Loại duplicate (receiver + role)
+      // Loại duplicate (receiver + role)
       const uniqueKeys = new Set();
+      const rows = [];
 
       for (const { rec, unit } of allReceivers) {
         if (!rec) continue;
@@ -113,27 +106,73 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
         const key = `${rec}_${roleProcess}`;
         if (uniqueKeys.has(key)) continue;
         uniqueKeys.add(key);
-
-        await this.queryNewDbTx(
-          `INSERT INTO ${process.env.NEW_DB_NAME}.dbo.outgoing_assignment
-          (document_id, receiver, role_process, stage_status,
-            created_at, last_audit_id, receiver_unit, is_creator, table_backups)
-          VALUES (@document_id, @receiver, @role_process, @stage_status,
-                  @created_at, @last_audit_id, @receiver_unit, @is_creator, @table_backups)`,
-          {
-            document_id,
-            receiver:      String(rec).substring(0, 100),
-            role_process:  String(roleProcess).substring(0, 50),
-            stage_status:  String(stage_status).substring(0, 50),
-            created_at:    time || new Date(),
-            last_audit_id: auditId || null,
-            receiver_unit: unit ? String(unit).substring(0, 100) : null,
-            is_creator:    isCreator,
-            table_backups: 'outgoing_assignment',
-          },
-          transaction
-        );
+        rows.push({
+          receiver: String(rec).substring(0, 100),
+          role_process: String(roleProcess).substring(0, 50),
+          stage_status: String(stage_status).substring(0, 50),
+          created_at: time || new Date(),
+          last_audit_id: auditId || null,
+          receiver_unit: unit ? String(unit).substring(0, 100) : null,
+          is_creator: isCreator,
+        });
       }
+
+      if (rows.length === 0) return;
+
+      const params = {
+        document_id,
+        table_backups: 'outgoing_assignment',
+      };
+
+      const valuesSql = rows.map((row, idx) => {
+        params[`receiver${idx}`] = row.receiver;
+        params[`role_process${idx}`] = row.role_process;
+        params[`stage_status${idx}`] = row.stage_status;
+        params[`created_at${idx}`] = row.created_at;
+        params[`last_audit_id${idx}`] = row.last_audit_id;
+        params[`receiver_unit${idx}`] = row.receiver_unit;
+        params[`is_creator${idx}`] = row.is_creator;
+        return `(@receiver${idx}, @role_process${idx}, @stage_status${idx}, @created_at${idx}, @last_audit_id${idx}, @receiver_unit${idx}, @is_creator${idx})`;
+      }).join(',\n              ');
+
+      await this.queryNewDbTx(
+        `
+        ;WITH src AS (
+          SELECT
+            @document_id AS document_id,
+            v.receiver,
+            v.role_process,
+            v.stage_status,
+            v.created_at,
+            v.last_audit_id,
+            v.receiver_unit,
+            v.is_creator
+          FROM (VALUES
+              ${valuesSql}
+          ) v(receiver, role_process, stage_status, created_at, last_audit_id, receiver_unit, is_creator)
+        )
+        MERGE ${process.env.NEW_DB_NAME}.dbo.outgoing_assignment AS tgt
+        USING src
+        ON  tgt.document_id = src.document_id
+        AND tgt.receiver = src.receiver
+        AND tgt.role_process = src.role_process
+        WHEN MATCHED THEN
+          UPDATE SET
+            stage_status  = src.stage_status,
+            created_at    = src.created_at,
+            last_audit_id = src.last_audit_id,
+            receiver_unit = src.receiver_unit,
+            is_creator    = src.is_creator,
+            table_backups = @table_backups
+        WHEN NOT MATCHED BY TARGET THEN
+          INSERT (document_id, receiver, role_process, stage_status, created_at, last_audit_id, receiver_unit, is_creator, table_backups)
+          VALUES (src.document_id, src.receiver, src.role_process, src.stage_status, src.created_at, src.last_audit_id, src.receiver_unit, src.is_creator, @table_backups)
+        WHEN NOT MATCHED BY SOURCE AND tgt.document_id = @document_id THEN
+          DELETE;
+      `,
+        params,
+        transaction
+      );
 
     } catch (err) {
       logger.error(`[SyncOutgoingAuditModel] Sync assignment failed: doc=${document_id}`, err);
@@ -219,7 +258,7 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
       },
       transaction
     );
-    logger.info(`[SyncOutgoingAuditModel] Sync current_state success: doc=${document_id} status=${stage_status}`);
+    logger.debug(`[SyncOutgoingAuditModel] Sync current_state success: doc=${document_id} status=${stage_status}`);
   }
 
   // ---------------------------------------------------------------------------
