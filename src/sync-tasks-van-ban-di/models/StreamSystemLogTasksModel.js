@@ -7,7 +7,7 @@ const logger = require('../../../utils/logger');
 function safeDateParse(dateValue, fieldName = '') {
   if (!dateValue) return null;
   if (typeof dateValue === 'string' && dateValue.toUpperCase() === 'NULL') return null;
-  
+
   try {
     if (typeof dateValue.getTime === 'function' && !isNaN(dateValue.getTime())) {
       return dateValue.toISOString();
@@ -176,7 +176,7 @@ class StreamSystemLogTasksModel extends BaseIncrementalSyncInterface {
         const safeTimestamps = safeDateParse(now, 'timestamps') || now;
         const safeCreatedAt = safeDateParse(now, 'createdAt') || now;
         const safeUpdatedAt = safeDateParse(new Date(), 'updatedAt') || new Date().toISOString();
-        
+
         insertResult = await this.queryNewDbTx(
           insertQuery,
           {
@@ -231,7 +231,7 @@ class StreamSystemLogTasksModel extends BaseIncrementalSyncInterface {
     } catch (e) {
       // Fallback
     }
-    
+
     // Fallback to Math.random() based UUID (less ideal but works)
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
       const r = Math.random() * 16 | 0;

@@ -33,9 +33,9 @@ class BaseModel {
         request.input(key, params[key]);
       });
 
-      const timer = logger.startTimer(`queryOldDb | ${query.substring(0, 50).replace(/\n/g, ' ')}...`);
+      // const timer = logger.startTimer(`queryOldDb | ${query.substring(0, 50).replace(/\n/g, ' ')}...`);
       const result = await request.query(query);
-      timer.stop(result.recordset ? result.recordset.length : 0);
+      // timer.stop(result.recordset ? result.recordset.length : 0);
       return result.recordset;
     } catch (error) {
       logger.error(`Lỗi query database cũ: ${error.message}. Query: ${query.substring(0, 500)}. Params: ${JSON.stringify(params)}`);
@@ -56,9 +56,9 @@ class BaseModel {
         request.input(key, params[key]);
       });
 
-      const timer = logger.startTimer(`queryNewDb | ${query.substring(0, 50).replace(/\n/g, ' ')}...`);
+      // const timer = logger.startTimer(`queryNewDb | ${query.substring(0, 50).replace(/\n/g, ' ')}...`);
       const result = await request.query(query);
-      timer.stop(result.recordset ? result.recordset.length : 0);
+      // timer.stop(result.recordset ? result.recordset.length : 0);
       return result.recordset;
     } catch (error) {
       logger.error(`Lỗi query database mới: ${error.message}. Query: ${query.substring(0, 500)}. Params: ${JSON.stringify(params)}`);
@@ -76,9 +76,9 @@ class BaseModel {
         request.input(key, params[key]);
       });
 
-      const timer = logger.startTimer(`queryNewDbTx | ${query.substring(0, 50).replace(/\n/g, ' ')}...`);
+      // const timer = logger.startTimer(`queryNewDbTx | ${query.substring(0, 50).replace(/\n/g, ' ')}...`);
       const result = await request.query(query);
-      timer.stop(result.recordset ? result.recordset.length : 0);
+      // timer.stop(result.recordset ? result.recordset.length : 0);
       return result.recordset;
     } catch (error) {
       logger.error(`Lỗi query database mới (TX): ${error.message}. Query: ${query.substring(0, 500)}. Params: ${JSON.stringify(params)}`);

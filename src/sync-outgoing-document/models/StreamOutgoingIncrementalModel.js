@@ -770,10 +770,23 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       throw new Error('syncJobId is required');
     }
 
+    const STAGING_PARALLEL_BATCHES = Number(process.env.STAGING_PARALLEL_BATCHES || 3);
     const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
     const normalizedLastSyncId = Number(lastSyncId || 0);
 
     const batchSize = Number(process.env.STAGING_FETCH_BATCH_SIZE || 2000);
+    const stagingTableRef = this.getStagingTableRef();
+
+    // Cleanup stale records
+    try {
+      await this.queryNewDb(`
+        UPDATE ${stagingTableRef}
+        SET MigrateFlg = 0, MigrateErrMess = 'Reset from stale processing'
+        WHERE MigrateFlg = 2
+      `);
+    } catch (cleanupErr) {
+      logger.warn(`[OutGoingDoc] Cleanup stale records failed: ${cleanupErr.message}`);
+    }
 
     // 1. Đếm tổng và cập nhật Dashboard
     const totalCount = await this.countListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId);
@@ -789,62 +802,59 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     let nextSyncTime = normalizedLastSyncTime;
     let nextSyncId = normalizedLastSyncId;
 
-    // 2. Chạy vòng lặp theo các gói batchSize
-    for (let i = 0; i < numIterations; i++) {
-      const begin = i * batchSize;
+    // Helper for parallel fetching
+    const fetchAndStage = async (iteration) => {
+      const begin = iteration * batchSize;
       const rows = await this.fetchListFromOldDb(
         normalizedLastSyncTime,
         normalizedLastSyncId,
         batchSize,
         begin
       );
-      if (!rows || rows.length === 0) break;
+      if (!rows || rows.length === 0) return { rowsCount: 0, stagedCount: 0 };
 
       const stageResult = await this.syncOldToStaging(rows);
-      totalStaged += Number(stageResult?.stagedCount || 0);
+      return { rowsCount: rows.length, stagedCount: Number(stageResult?.stagedCount || 0), lastRow: rows[rows.length - 1] };
+    };
 
-      // Cập nhật cursor và LOG chi tiết từng bản ghi
-      for (const row of rows) {
-        const rowTime = this.extractRowSyncTime(row);
-        const rowId = this.extractRowSyncId(row);
-        if (!rowTime) {
-            logger.warn(`  └─ [Compare] rowID: ${row.ID} | T: NULL - Skipping`);
-            continue;
-        }
+    // 2. Chạy vòng lặp song song
+    const executing = new Set();
+    const results = [];
 
-        const isAhead = this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId);
-        logger.info(`  └─ [Compare] rowID: ${row.ID} | T: ${rowTime} ID: ${rowId} vs Cursor(T: ${nextSyncTime} ID: ${nextSyncId}) -> Ahead: ${isAhead}`);
-
-        if (isAhead) {
-          nextSyncTime = rowTime;
-          nextSyncId = rowId;
-        }
+    for (let i = 0; i < numIterations; i++) {
+      const task = fetchAndStage(i);
+      results.push(task);
+      executing.add(task);
+      task.finally(() => executing.delete(task));
+      
+      if (executing.size >= STAGING_PARALLEL_BATCHES) {
+        await Promise.race(executing);
       }
-
-      logger.info(`🔥 [OutGoingDoc] Batch ${i + 1}/${numIterations} staged: ${totalStaged}/${totalCount}. LastSyncTime: ${nextSyncTime}, LastSyncId: ${nextSyncId}`);
     }
 
-    // Fix Bug #3: Đếm số bản ghi THỰC TẾ trong staging có thể xử lý theo cursor hiện tại
-    // Không dùng totalStaged (số vừa staged lần này) vì khi Resume getList() không stage gì mới → totalStaged=0
-    // → SyncHandlerModel tính remaining = 0 - totalProcessed ≤ 0 → COMPLETED sai ngay lập tức
-    const stagingTableRef = this.getStagingTableRef();
-    const syncTimeExprStaging = this.getSyncTimeExpression();
+    const batchResults = await Promise.all(results);
+    for (const res of batchResults) {
+      if (!res || res.rowsCount === 0) continue;
+      totalStaged += res.stagedCount;
+      
+      const rowTime = this.extractRowSyncTime(res.lastRow);
+      const rowId = this.extractRowSyncId(res.lastRow);
+      if (rowTime && this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId)) {
+        nextSyncTime = rowTime;
+        nextSyncId = rowId;
+      }
+    }
+
+    logger.info(`🔥 [OutGoingDoc] Hoàn tất hút dữ liệu về Staging. Staged=${totalStaged}/${totalCount}. LastSyncTime: ${nextSyncTime}, LastSyncId: ${nextSyncId}`);
+
+    // Fix Bug #3: Đếm số bản ghi THỰC TẾ trong staging chưa xử lý
     let pendingCount = 0;
     try {
       const pendingRes = await this.queryNewDb(`
-        ;WITH src AS (
-          SELECT
-            ${syncTimeExprStaging} AS _t,
-            TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')) AS _id
-          FROM ${stagingTableRef}
-        )
-        SELECT COUNT(1) AS cnt FROM src
-        WHERE (
-          _t < @lastSyncTime
-          OR (_t = @lastSyncTime AND ISNULL(_id, 9223372036854775807) < @lastSyncId)
-        )
-        AND _t >= '${SYNC_MIN_DATE}'
-      `, { lastSyncTime: nextSyncTime, lastSyncId: Number(nextSyncId || 0) });
+        SELECT COUNT(1) AS cnt FROM ${stagingTableRef}
+        WHERE ISNULL(MigrateFlg, 0) = 0
+          AND ISNULL(MigrateErrFlg, 0) = 0
+      `);
       pendingCount = Number(pendingRes?.[0]?.cnt || 0);
     } catch (e) {
       logger.warn(`[OutGoingDoc] Không đếm được pending staging: ${e.message}`);
@@ -904,132 +914,142 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       throw new Error('syncJobId is required');
     }
 
-    const jobState = await this.getSyncJobState(syncJobId);
-    const itemIndex = Number(
-      options.itemIndex != null
-        ? options.itemIndex
-        : (jobState?.total_processed || 0)
-    );
-
-    const sourceLastSyncTime = this.normalizeSyncTime(
-      options.sourceLastSyncTime || options.lastSyncTime || jobState?.last_sync_time || DEFAULT_SYNC_TIME
-    );
-    const sourceLastSyncId = Number(
-      options.sourceLastSyncId != null
-        ? options.sourceLastSyncId
-        : (jobState?.last_sync_id || 0)
-    );
-
-    logger.info(`[OutGoingDoc.processOne] Starting: job=${syncJobId}, index=${itemIndex}, Cursor(T: ${sourceLastSyncTime}, ID: ${sourceLastSyncId})`);
-
-    // Safety check: ensure pool is initialized
-    if (!this.newPool) {
-      throw new Error('Database pool not initialized');
+    let jobState;
+    try {
+      jobState = await this.getSyncJobState(syncJobId);
+    } catch (error) {
+      throw error;
     }
 
-    const transaction = new sql.Transaction(this.newPool);
-    await transaction.begin();
+    let rowData = null;
+    let transaction = null;
 
     try {
-      const rowData = await this.fetchOneFromStaging({
-        lastSyncTime: sourceLastSyncTime,
-        lastSyncId: sourceLastSyncId,
-        itemIndex,
-        transaction
-      });
+      const stagingTableRef = this.getStagingTableRef();
+
+      rowData = await this.fetchOneFromStaging();
 
       if (!rowData) {
-        await transaction.commit();
+        logger.info(`[OutGoingDoc] Không còn dữ liệu trong staging cho job ${syncJobId}.`);
+        await this.finalizeProcessingCursor(syncJobId);
         return {
           syncJobId,
-          itemIndex,
           processed: false,
           done: true
         };
       }
 
+      const rowId = rowData.ID || null;
+      const current = Number(jobState?.total_processed || 0) + 1;
+      logger.info(`[OutGoingDoc] Process ${current}: record ID=${rowId}`);
+
+      transaction = new sql.Transaction(this.newPool);
+      await transaction.begin();
+
       const result = await this.processRowData(rowData, { transaction });
+
+      // Update counters in sync_jobs
+      await this.queryNewDbTx(
+        `UPDATE sync_jobs
+         SET total_processed = ISNULL(total_processed, 0) + 1,
+             total_success   = ISNULL(total_success, 0) + 1
+         WHERE job_id = @syncJobId`,
+        { syncJobId },
+        transaction
+      );
+
+      // Mark staging row as processed successfully
+      await this.queryNewDbTx(
+        `UPDATE ${stagingTableRef} SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE ID = @ID`,
+        { ID: rowId },
+        transaction
+      );
+
       await transaction.commit();
 
       return {
         syncJobId,
-        itemIndex,
         processed: true,
         done: false,
-        rowId: rowData.ID || null,
+        rowId,
         result
       };
     } catch (error) {
-      try {
-        await transaction.rollback();
-      } catch (rollbackError) {
-        logger.error('[OutGoingDocumentModel.processOne] rollback failed:', rollbackError);
+      if (transaction) {
+        try {
+          await transaction.rollback().catch(() => {});
+        } catch (rollbackError) {}
       }
+
+      if (rowData && rowData.ID) {
+        try {
+           const stagingTableRef = this.getStagingTableRef();
+           await this.queryNewDb(`UPDATE ${stagingTableRef} SET MigrateErrFlg = 1, MigrateErrMess = @Err WHERE ID = @ID`, { ID: rowData.ID, Err: String(error.message).slice(0, 1000) });
+        } catch (updateErr) {}
+      }
+
+      logger.error(`[OutGoingDoc.processOne] Failed row ID=${rowData?.ID}: ${error.message}`);
       throw error;
     }
   }
 
   /**
-   * Reads one deterministic row from staging based on source cursor and item index.
-   * @param {{lastSyncTime:string,lastSyncId?:number,itemIndex:number,transaction?:object}} context
-   * @returns {Promise<object|null>}
+   * Cập nhật cursor (last_sync_time, last_sync_id) lên MAX(Modified)
    */
-  async fetchOneFromStaging({ lastSyncTime, lastSyncId = 0, itemIndex, transaction } = {}) {
-    const rowNumber = Number(itemIndex || 0) + 1;
-    const stagingTableRef = this.getStagingTableRef();
-    const syncTimeExpr = this.getSyncTimeExpression();
-    const query = `
-      ;WITH source_rows AS (
+  async finalizeProcessingCursor(syncJobId) {
+    try {
+      const stagingTableRef = this.getStagingTableRef();
+      const res = await this.queryNewDb(`
         SELECT
-          *,
-          ${syncTimeExpr} AS _sync_time_val,
-          TRY_CONVERT(
-            BIGINT,
-            NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
-          ) AS _sync_id_val
+          MAX(Modified) AS maxTime,
+          MAX(TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), ''))) AS maxId
         FROM ${stagingTableRef}
-      ),
-      staged AS (
-        SELECT
-          *,
-          ROW_NUMBER() OVER (
-            ORDER BY
-              _sync_time_val DESC,
-              ISNULL(_sync_id_val, 9223372036854775807) DESC,
-              ID DESC
-          ) AS rn
-        FROM source_rows
-        WHERE (
-          _sync_time_val < @lastSyncTime
-          OR (
-            _sync_time_val = @lastSyncTime
-            AND ISNULL(_sync_id_val, 9223372036854775807) < @lastSyncId
-          )
-        )
-        AND _sync_time_val >= '${SYNC_MIN_DATE}'
-      )
-      SELECT TOP 1 *
-      FROM staged
-      WHERE rn = @rowNumber
-    `;
-
-    const rows = await this.queryNewDbTx(
-      query,
-      {
-        lastSyncTime,
-        lastSyncId: Number(lastSyncId || 0),
-        rowNumber
-      },
-      transaction
-    );
-
-    if (!rows?.length) {
-      return null;
+        WHERE ISNULL(MigrateFlg, 0) = 1
+      `);
+      if (res?.[0]?.maxTime) {
+        const finalTime = new Date(res[0].maxTime).toISOString();
+        const finalId   = Number(res[0].maxId || 0);
+        await this.queryNewDb(
+          `UPDATE sync_jobs
+           SET last_sync_time = @t,
+               last_sync_id   = @id
+           WHERE job_id = @jobId`,
+          { t: finalTime, id: finalId, jobId: syncJobId }
+        );
+        logger.info(`[OutGoingDoc] Cursor finalized: last_sync_time=${finalTime}, last_sync_id=${finalId}`);
+      }
+    } catch (err) {
+      logger.warn(`[OutGoingDoc.finalizeProcessingCursor] Lỗi khi finalize cursor: ${err.message}`);
     }
+  }
 
-    const row = { ...rows[0] };
-    delete row.rn;
-    return row;
+  /**
+   * Reads one deterministic row from staging using atomic claim.
+   */
+  async fetchOneFromStaging() {
+    try {
+      const stagingTableRef = this.getStagingTableRef();
+      const query = `
+      WITH CTE AS (
+        SELECT TOP (1) *
+        FROM ${stagingTableRef}
+        WHERE ISNULL(MigrateFlg, 0) = 0
+          AND ISNULL(MigrateErrFlg, 0) = 0
+        ORDER BY TRY_CONVERT(datetime2, Modified) DESC,
+                 TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')) DESC
+      )
+      UPDATE CTE
+      SET MigrateFlg = 2,
+          MigrateErrMess = 'Processing...'
+      OUTPUT inserted.*
+      `;
+
+      const rows = await this.queryNewDb(query);
+      return rows?.length ? rows[0] : null;
+    } catch (error) {
+      logger.error(`[OutGoingDoc.fetchOneFromStaging] Failed to fetch: ${error.message}`);
+      throw error;
+    }
   }
 
   /**

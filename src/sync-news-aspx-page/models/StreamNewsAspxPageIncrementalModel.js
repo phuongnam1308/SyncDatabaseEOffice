@@ -890,6 +890,12 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
         `(offset=${beginLimit}, limit=${completedLimit}).`,
     );
 
+    // Cập nhật Dashboard lần cuối với tổng số thực tế (bao gồm cả các bản ghi tồn đọng cũ trong staging)
+    await this.queryNewDb(`UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`, {
+      total: pendingCount,
+      jobId: syncJobId
+    });
+
     return {
       syncJobId,
       rows: [],

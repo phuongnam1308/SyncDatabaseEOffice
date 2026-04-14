@@ -58,6 +58,9 @@ const SyncStateRepository = require('./SyncStateRepository');
 // STATE_FILE removed: no JSON file persistence
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 const RUNNING_STATUSES = new Set(['RUNNING', 'PAUSE_REQUESTED', 'RESUMING']);
+
+// Parallel processing config
+const SYNC_CONCURRENCY = Number(process.env.SYNC_CONCURRENCY || 3);
 const INTERRUPTED_STATUSES = new Set(['RUNNING', 'PAUSE_REQUESTED', 'RESUMING']);
 
 class SyncManagerService {
@@ -904,25 +907,53 @@ class SyncManagerService {
         let batchSuccess = 0;
         let batchProcessed = 0;
 
-        const processTimer = logger.startTimer(`BATCH_PROCESS | ${job.modelName}`);
-        for (const record of records) {
-          if (job.pauseRequested) break;
+        const processTimer = logger.startTimer(`BATCH_PROCESS | ${job.modelName} | Concurrency: ${SYNC_CONCURRENCY}`);
+
+        // Helper function for parallel processing with concurrency control
+        const processTasks = async () => {
+          const results = [];
+          const executing = new Set();
+          
+          for (const record of records) {
+            if (job.pauseRequested) break;
+
+            const task = (async (r) => {
+              try {
+                await handlers.processFn(r, { modelName: job.modelName, jobId: job.jobId });
+                return { success: true, record: r };
+              } catch (err) {
+                return { success: false, record: r, error: err };
+              }
+            })(record);
+
+            results.push(task);
+            executing.add(task);
+            task.finally(() => executing.delete(task));
+
+            if (executing.size >= SYNC_CONCURRENCY) {
+              await Promise.race(executing);
+            }
+          }
+          return Promise.all(results);
+        };
+
+        const processedResults = await processTasks();
+
+        for (const res of processedResults) {
           batchProcessed += 1;
-
-          try {
-            await handlers.processFn(record, { modelName: job.modelName, jobId: job.jobId });
-
-            const recordTime = this.extractRecordTime(record);
-            const recordId = this.extractRecordId(record);
+          if (res.success) {
+            batchSuccess += 1;
+            const recordTime = this.extractRecordTime(res.record);
+            const recordId = this.extractRecordId(res.record);
             if (recordTime && this.compareCursor(recordTime, recordId, cursorTime, cursorId) > 0) {
               cursorTime = recordTime;
               cursorId = recordId;
             }
-            batchSuccess += 1;
-          } catch (recordError) {
-            this.pushJobError(job, record, recordError);
+          } else {
+            this.pushJobError(job, res.record, res.error);
           }
         }
+
         processTimer.stop(batchProcessed);
 
         job.totalProcessed += batchProcessed;

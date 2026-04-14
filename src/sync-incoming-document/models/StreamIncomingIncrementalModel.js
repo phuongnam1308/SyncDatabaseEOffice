@@ -660,50 +660,75 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
       });
 
       const fetchBatchSize = Number(process.env.STAGING_FETCH_BATCH_SIZE || 2000);
-
+      const STAGING_PARALLEL_BATCHES = Number(process.env.STAGING_PARALLEL_BATCHES || 3);
       const numIterations = Math.ceil(totalCountToFetch / fetchBatchSize);
 
-      // 2 vòng for: Outer loop theo batch size, Inner loop xử lý batch đó
-      for (let i = 0; i < numIterations; i++) {
-        const offset = i * fetchBatchSize;
-        // Fetch một batch dùng mốc thời gian cố định và offset tăng dần
-        const rows = await this.fetchListFromOldDb(currentSyncTime, currentSyncId, toTime, offset, fetchBatchSize);
-        if (!rows || rows.length === 0) break;
+      // Cleanup stale records (MigrateFlg = 2 but too old)
+      try {
+        const cleanupRes = await this.queryNewDb(`
+          UPDATE ${stagingTableRef}
+          SET MigrateFlg = 0, MigrateErrMess = 'Reset from stale processing'
+          WHERE MigrateFlg = 2
+        `);
+        if (cleanupRes?.rowsAffected?.[0] > 0) {
+           logger.info(`[IncomingDocumentModel] Đã reset ${cleanupRes.rowsAffected[0]} bản ghi bị kẹt (MigrateFlg=2).`);
+        }
+      } catch (cleanupErr) {
+        logger.warn(`[IncomingDocumentModel] Cleanup stale records failed: ${cleanupErr.message}`);
+      }
 
-        // Inner loop (xử lý batch) - Ở đây syncOldToStaging đã xử lý batch MERGE
+      // Helper for parallel fetching
+      const fetchAndStage = async (iteration) => {
+        const offset = iteration * fetchBatchSize;
+        const rows = await this.fetchListFromOldDb(currentSyncTime, currentSyncId, toTime, offset, fetchBatchSize);
+        if (!rows || rows.length === 0) return { rowsCount: 0, stagedCount: 0 };
+
+        let stagedInBatch = 0;
         let transaction = null;
-        let stageResult = null;
         try {
           transaction = new sql.Transaction(this.newPool);
           await transaction.begin();
-          stageResult = await this.syncOldToStaging(rows, { transaction });
+          const stageResult = await this.syncOldToStaging(rows, { transaction });
           await transaction.commit();
-        } catch (err) {
+          stagedInBatch = stageResult?.stagedCount || 0;
+        } catch (stageErr) {
           if (transaction) await transaction.rollback().catch(() => {});
-          logger.error(`[IncomingDocumentModel] Failed to sync batch to staging at offset ${offset}: ${err.message}`);
-          throw err;
+          logger.error(`[IncomingDocumentModel.getList] Staging error at batch ${iteration}: ${stageErr.message}`);
         }
 
-        totalStagedCount += Number(stageResult?.stagedCount || 0);
-        allRowsCount += rows.length;
+        return { rowsCount: rows.length, stagedCount: stagedInBatch, lastRow: rows[rows.length - 1] };
+      };
 
-        // Tiến cursor (dùng cho log hoặc nếu cần fallback)
-        for (const row of rows) {
-          const rowTime = this.extractRowSyncTime(row);
-          const rowId = this.extractRowSyncId(row);
-          if (!rowTime) continue;
+      const executing = new Set();
+      const results = [];
 
-          const isAhead = this.isCursorAhead(rowTime, rowId, currentSyncTime, currentSyncId);
-          logger.info(`  └─ [Compare] rowID: ${row.ID} | T: ${rowTime} ID: ${rowId} vs Cursor(T: ${currentSyncTime} ID: ${currentSyncId}) -> Ahead: ${isAhead}`);
+      for (let i = 0; i < numIterations; i++) {
+        const task = fetchAndStage(i);
+        results.push(task);
+        executing.add(task);
+        task.finally(() => executing.delete(task));
 
-          if (isAhead) {
-            currentSyncTime = rowTime;
-            currentSyncId = rowId;
-          }
+        if (executing.size >= STAGING_PARALLEL_BATCHES) {
+          await Promise.race(executing);
         }
-
-        logger.info(`[IncomingDocumentModel] >> Tiến độ: ${allRowsCount}/${totalCountToFetch} bản ghi (Staged=${totalStagedCount})`);
       }
+
+      const batchResults = await Promise.all(results);
+      for (const res of batchResults) {
+        if (!res || res.rowsCount === 0) continue;
+        allRowsCount += res.rowsCount;
+        totalStagedCount += res.stagedCount;
+
+        // Cập nhật cursor (DESC order: record cuối là "cũ nhất" trong batch)
+        const rowTime = this.extractRowSyncTime(res.lastRow);
+        const rowId = this.extractRowSyncId(res.lastRow);
+        if (rowTime && this.isCursorAhead(rowTime, rowId, currentSyncTime, currentSyncId)) {
+          currentSyncTime = rowTime;
+          currentSyncId = rowId;
+        }
+      }
+
+      logger.info(`[IncomingDocumentModel] >> Tiến độ: ${allRowsCount}/${totalCountToFetch} bản ghi (Staged=${totalStagedCount})`);
 
       logger.info(`[IncomingDocumentModel] Hoàn tất hút ${allRowsCount} bản ghi về Staging. Staged=${totalStagedCount}`);
 
@@ -718,6 +743,12 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
       `);
       const pendingCount = Number(pendingCountRes?.[0]?.cnt || 0);
       logger.info(`[IncomingDocumentModel] Pending records trong Staging chưa xử lý: ${pendingCount}`);
+
+      // Cập nhật Dashboard lần cuối với tổng số thực tế (bao gồm cả các bản ghi tồn đọng cũ trong staging)
+      await this.queryNewDb(`UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`, {
+        total: pendingCount,
+        jobId: syncJobId
+      });
 
       return {
         syncJobId,
@@ -909,17 +940,24 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
   async fetchOneFromStaging() {
     try {
       const stagingTableRef = this.getStagingTableRef();
-      // Newest-first (DESC): xử lý bản ghi MỚI NHẤT trước.
-      // An toàn vì dùng "Deferred Cursor" pattern:
-      //   → Cursor KHÔNG update theo từng record (tránh nhảy lên tương lai)
-      //   → Cursor chỉ được finalize 1 lần sau khi staging rống (finalizeProcessingCursor)
+      // Atomic UPDATE TOP (1) ... OUTPUT:
+      // 1. Tìm bản ghi pending (MigrateFlg=0)
+      // 2. Đánh dấu ngay lập tức là 'đang xử lý' (MigrateFlg=2)
+      // 3. Trả về bản ghi đó (OUTPUT inserted.*)
+      // Giúp ngăn chặn race condition khi nhiều worker cùng lấy 1 record.
       const query = `
-      SELECT TOP 1 *
-      FROM ${stagingTableRef}
-      WHERE ISNULL(MigrateFlg, 0) = 0
-        AND ISNULL(MigrateErrFlg, 0) = 0
-      ORDER BY TRY_CONVERT(datetime2, Modified) DESC,
-               TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(ID)), '')) DESC
+      WITH CTE AS (
+        SELECT TOP (1) *
+        FROM ${stagingTableRef}
+        WHERE ISNULL(MigrateFlg, 0) = 0
+          AND ISNULL(MigrateErrFlg, 0) = 0
+        ORDER BY TRY_CONVERT(datetime2, Modified) DESC,
+                 TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(ID)), '')) DESC
+      )
+      UPDATE CTE
+      SET MigrateFlg = 2,
+          MigrateErrMess = 'Processing...'
+      OUTPUT inserted.*
       `;
 
       const rows = await this.queryNewDb(query);
