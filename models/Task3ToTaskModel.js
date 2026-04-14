@@ -31,6 +31,7 @@ class Task3ToTaskModel extends BaseModel {
       SELECT id
       FROM ${this.schema}.${this.targetTable}
       WHERE id_taskBackups = @backupId
+        AND tb_bak = 'task3'
     `;
     const rs = await this.queryNewDb(sql, { backupId });
     return rs.length ? rs[0] : null;
