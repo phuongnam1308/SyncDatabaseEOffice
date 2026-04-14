@@ -1,0 +1,862 @@
+[
+  {
+    "processKey": "VAN_BAN_DI",
+    "name": "VAN_BAN_DI",
+    "roles": [
+      {
+        "roleCode": "CAN_BO",
+        "name": "CAN_BO"
+      }
+    ]
+  },
+  {
+    "processKey": "QUY_TRINH_CV_PHONG_BAN",
+    "name": "QUY_TRINH_CV_PHONG_BAN",
+    "roles": [
+      {
+        "roleCode": "NGUOI_PHOI_HOP",
+        "name": "NGƯỜI PHỐI HỢP"
+      }
+    ]
+  },
+  {
+    "processKey": "PHUC_DAP_DV_CON",
+    "name": "PHUC_DAP_DV_CON",
+    "roles": [
+      {
+        "roleCode": "CAN_BO",
+        "name": "CAN_BO"
+      },
+      {
+        "roleCode": "NHAN_VIEN_TCT",
+        "name": "NHAN_VIEN_TCT"
+      }
+    ]
+  },
+  {
+    "processKey": "quan_ly_tin_tuc",
+    "name": "quan_ly_tin_tuc",
+    "roles": [
+      {
+        "roleCode": "NGUOI_TAO_TIN",
+        "name": "NGUOI_TAO_TIN"
+      }
+    ]
+  },
+  {
+    "processKey": "SOANTHAO_PHATHANH_VBD",
+    "name": "SOANTHAO_PHATHANH_VBD",
+    "roles": [
+      {
+        "roleCode": "NGUOI_SOAN_THAO",
+        "name": "NGUOI_SOAN_THAO"
+      }
+    ]
+  },
+  {
+    "processKey": "QUY_TRINH_LICH_HOP",
+    "name": "QUY_TRINH_LICH_HOP",
+    "roles": [
+      {
+        "roleCode": "NGUOI_SOAN_LICH",
+        "name": "NGUOI_SOAN_LICH"
+      },
+      {
+        "roleCode": "NGUOI_THAM_GIA",
+        "name": "NGUOI_THAM_GIA"
+      },
+      {
+        "roleCode": "ADMIN",
+        "name": "ADMIN"
+      }
+    ]
+  },
+  {
+    "processKey": "quytrinhthuthaphoso1",
+    "name": "quytrinhthuthaphoso1",
+    "roles": [
+      {
+        "roleCode": "canbo",
+        "name": "Cán bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qllsct",
+    "name": "qllsct",
+    "roles": [
+      {
+        "roleCode": "canbo",
+        "name": "Cán bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qtdvlfgttthcid",
+    "name": "qtdvlfgttthcid",
+    "roles": [
+      {
+        "roleCode": "CANBO",
+        "name": "Cán Bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "dev_01",
+    "name": "dev_01",
+    "roles": [
+      {
+        "roleCode": "CB",
+        "name": "Cán bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qlgttssddn",
+    "name": "qlgttssddn",
+    "roles": [
+      {
+        "roleCode": "CANBO",
+        "name": "Cán Bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "quytrinhthuthaphoso",
+    "name": "quytrinhthuthaphoso",
+    "roles": [
+      {
+        "roleCode": "CANBO",
+        "name": "Cán Bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qtqlapi",
+    "name": "qtqlapi",
+    "roles": [
+      {
+        "roleCode": "CANBO",
+        "name": "Cán Bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qtdvdstphstsbnhs",
+    "name": "qtdvdstphstsbnhs",
+    "roles": [
+      {
+        "roleCode": "CANBO",
+        "name": "Cán Bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qtqllstthscd",
+    "name": "qtqllstthscd",
+    "roles": [
+      {
+        "roleCode": "canbo",
+        "name": "Cán bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "listDetailImport",
+    "name": "listDetailImport",
+    "roles": [
+      {
+        "roleCode": "CANBO",
+        "name": "Cán bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "kthsclone",
+    "name": "kthsclone",
+    "roles": [
+      {
+        "roleCode": "CANBO",
+        "name": "Cán bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "tthsdn",
+    "name": "tthsdn",
+    "roles": [
+      {
+        "roleCode": "CANBO",
+        "name": "Cán bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qtqllssytl",
+    "name": "qtqllssytl",
+    "roles": [
+      {
+        "roleCode": "CANBO",
+        "name": "Cán Bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qlgttssdcd",
+    "name": "qlgttssdcd",
+    "roles": [
+      {
+        "roleCode": "CANBO",
+        "name": "Cán bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qtqlkqgqtthccd",
+    "name": "qtqlkqgqtthccd",
+    "roles": [
+      {
+        "roleCode": "CANBO",
+        "name": "Cán Bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "exceldoanhnghiep",
+    "name": "exceldoanhnghiep",
+    "roles": [
+      {
+        "roleCode": "canbo",
+        "name": "Cán bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qtdvldldtkqgqtthctsbncss",
+    "name": "qtdvldldtkqgqtthctsbncss",
+    "roles": [
+      {
+        "roleCode": "CANBO",
+        "name": "Cán Bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qtdvldstsdcdiddn",
+    "name": "qtdvldstsdcdiddn",
+    "roles": [
+      {
+        "roleCode": "CANBO",
+        "name": "Cán Bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qtdvttdtcn",
+    "name": "qtdvttdtcn",
+    "roles": [
+      {
+        "roleCode": "CANBO",
+        "name": "Cán Bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qtqltl",
+    "name": "qtqltl",
+    "roles": [
+      {
+        "roleCode": "canbo",
+        "name": "Cán bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qtdvldsidkqgqtthccd",
+    "name": "qtdvldsidkqgqtthccd",
+    "roles": [
+      {
+        "roleCode": "CANBO",
+        "name": "Cán Bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "so2",
+    "name": "so2",
+    "roles": [
+      {
+        "roleCode": "CB",
+        "name": "Cán bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "TVHSLT",
+    "name": "TVHSLT",
+    "roles": [
+      {
+        "roleCode": "CB",
+        "name": "CB",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qtiedldtcd",
+    "name": "qtiedldtcd",
+    "roles": [
+      {
+        "roleCode": "canbo",
+        "name": "Cán bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qldvcc",
+    "name": "qldvcc",
+    "roles": [
+      {
+        "roleCode": "canbo",
+        "name": "Cán bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "ldsiqkqgqtthccd",
+    "name": "ldsiqkqgqtthccd",
+    "roles": [
+      {
+        "roleCode": "CANBO",
+        "name": "Cán Bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qtqllstths",
+    "name": "qtqllstths",
+    "roles": [
+      {
+        "roleCode": "canbo",
+        "name": "Cán bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qlkqqgtthccd",
+    "name": "qlkqqgtthccd",
+    "roles": [
+      {
+        "roleCode": "canbo",
+        "name": "Cán bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qtth",
+    "name": "qtth",
+    "roles": [
+      {
+        "roleCode": "CANBOCQDV1",
+        "name": "Cán bộ CQDV1",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qtdvttgikqtgqhstthc",
+    "name": "qtdvttgikqtgqhstthc",
+    "roles": [
+      {
+        "roleCode": "CANBO",
+        "name": "Cán Bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qlhsdn",
+    "name": "qlhsdn",
+    "roles": [
+      {
+        "roleCode": "canbo",
+        "name": "Cán bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qtqllstthsdn",
+    "name": "qtqllstthsdn",
+    "roles": [
+      {
+        "roleCode": "canbo",
+        "name": "Cán bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qtdvlfkqgqtthcid",
+    "name": "qtdvlfkqgqtthcid",
+    "roles": [
+      {
+        "roleCode": "CANBO",
+        "name": "Cán Bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "dongbo",
+    "name": "dongbo",
+    "roles": [
+      {
+        "roleCode": "CANBO",
+        "name": "Cán bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qtdldtkqgqtthcid",
+    "name": "qtdldtkqgqtthcid",
+    "roles": [
+      {
+        "roleCode": "CANBO",
+        "name": "Cán Bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qtiedldtdn",
+    "name": "qtiedldtdn",
+    "roles": [
+      {
+        "roleCode": "canbo",
+        "name": "Cán bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qllsctcd",
+    "name": "qllsctcd",
+    "roles": [
+      {
+        "roleCode": "canbo",
+        "name": "Cán bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qtqlhth",
+    "name": "qtqlhth",
+    "roles": [
+      {
+        "roleCode": "canbo",
+        "name": "Cán bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qtqlgttsdcd",
+    "name": "qtqlgttsdcd",
+    "roles": [
+      {
+        "roleCode": "CANBO",
+        "name": "Cán Bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qtdvldsgttsdcdid",
+    "name": "qtdvldsgttsdcdid",
+    "roles": [
+      {
+        "roleCode": "CANBO",
+        "name": "Cán Bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qlkqqgtthcdn",
+    "name": "qlkqqgtthcdn",
+    "roles": [
+      {
+        "roleCode": "canbo",
+        "name": "Cán bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qtdvlfkqgqtthcbnhs",
+    "name": "qtdvlfkqgqtthcbnhs",
+    "roles": [
+      {
+        "roleCode": "CANBO",
+        "name": "Cán Bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "kths",
+    "name": "kths",
+    "roles": [
+      {
+        "roleCode": "canbokhaithac",
+        "name": "Cán bộ khai thác",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qtdvlddkqgqtthcdn",
+    "name": "qtdvlddkqgqtthcdn",
+    "roles": [
+      {
+        "roleCode": "CANBO",
+        "name": "Cán Bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "Mã quy trình",
+    "name": "Mã quy trình",
+    "roles": [
+      {
+        "roleCode": "CANBO",
+        "name": "Cán bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "importexcel",
+    "name": "importexcel",
+    "roles": [
+      {
+        "roleCode": "canbo",
+        "name": "Cán bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qtdvttkqgqtthc",
+    "name": "qtdvttkqgqtthc",
+    "roles": [
+      {
+        "roleCode": "CANBO",
+        "name": "Cán Bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qtdvldldtkqgqtthcid",
+    "name": "qtdvldldtkqgqtthcid",
+    "roles": [
+      {
+        "roleCode": "CANBO",
+        "name": "Cán Bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qtttgttsdddkscddn",
+    "name": "qtttgttsdddkscddn",
+    "roles": [
+      {
+        "roleCode": "CANBO",
+        "name": "Cán Bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "LUONG_PHONG",
+    "name": "LUONG_PHONG",
+    "roles": [
+      {
+        "roleCode": "CAN_BO",
+        "name": "CAN_BO",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qtdvlttdtdn",
+    "name": "qtdvlttdtdn",
+    "roles": [
+      {
+        "roleCode": "CANBO",
+        "name": "Cán Bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qtdvlddkqgq1dn",
+    "name": "qtdvlddkqgq1dn",
+    "roles": [
+      {
+        "roleCode": "CANBO",
+        "name": "Cán Bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qllsctdn",
+    "name": "qllsctdn",
+    "roles": [
+      {
+        "roleCode": "canbo",
+        "name": "Cán bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "qtqltldn",
+    "name": "qtqltldn",
+    "roles": [
+      {
+        "roleCode": "canbo",
+        "name": "Cán bộ",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "Administrator",
+    "name": "Administrator",
+    "roles": [
+      {
+        "roleCode": "CAN_BO",
+        "name": "CAN_BO",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "QUY_TRINH_PHONG_HOP",
+    "name": "QUY_TRINH_PHONG_HOP",
+    "roles": [
+      {
+        "roleCode": "XEM_PHONG_HOP",
+        "name": "XEM_PHONG_HOP",
+        "__groupId": "b59238b0-6de2-4bda-87ac-f62ccab182bf"
+      }
+    ]
+  },
+  {
+    "processKey": "KY_SO_HS_VBD",
+    "name": "KY_SO_HS_VBD",
+    "roles": [
+      {
+        "roleCode": "NGUOI_SOAN_THAO",
+        "name": "NGUOI_SOAN_THAO"
+      }
+    ]
+  },
+  {
+    "processKey": "CVDAN",
+    "name": "CVDAN",
+    "roles": [
+      {
+        "roleCode": "NGUOI_GIAO",
+        "name": "NGƯỜI GIAO"
+      },
+      {
+        "roleCode": "NGUOI_CHU_TRI",
+        "name": "NGƯỜI CHỦ TRÌ"
+      },
+      {
+        "roleCode": "NGUOI_PHOI_HOP",
+        "name": "NGƯỜI PHỐI HỢP"
+      }
+    ]
+  },
+  {
+    "processKey": "QUY_TRINH_KHAI_THAC_HO_SO",
+    "name": "QUY_TRINH_KHAI_THAC_HO_SO",
+    "roles": [
+      {
+        "roleCode": "NGUOI_KHAI_THAC",
+        "name": "NGUOI_KHAI_THAC"
+      }
+    ]
+  },
+  {
+    "processKey": "hosoluutru",
+    "name": "hosoluutru",
+    "roles": [
+      {
+        "roleCode": "HHLT_CANBO",
+        "name": "HHLT_CANBO"
+      }
+    ]
+  },
+  {
+    "processKey": "thhs",
+    "name": "thhs",
+    "roles": [
+      {
+        "roleCode": "bld",
+        "name": "bld"
+      }
+    ]
+  },
+  {
+    "processKey": "PHUC_DAP_DV",
+    "name": "PHUC_DAP_DV",
+    "roles": [
+      {
+        "roleCode": "PHONG_NHAN_VIEN_TCT",
+        "name": "PHONG_NHAN_VIEN_TCT"
+      },
+      {
+        "roleCode": "CAN_BO",
+        "name": "CAN_BO"
+      }
+    ]
+  },
+  {
+    "processKey": "QUY_TRINH_DANG_KY_XE",
+    "name": "QUY_TRINH_DANG_KY_XE",
+    "roles": [
+      {
+        "roleCode": "NGUOI_DANG_KY_XE",
+        "name": "NGUOI_DANG_KY_XE"
+      }
+    ]
+  },
+  {
+    "processKey": "QTVBNB",
+    "name": "QTVBNB",
+    "roles": [
+      {
+        "roleCode": "CAN_BO",
+        "name": "CAN_BO"
+      }
+    ]
+  },
+  {
+    "processKey": "QUY_TRINH_PHAN_ANH_KIEN_NGHI",
+    "name": "QUY_TRINH_PHAN_ANH_KIEN_NGHI",
+    "roles": [
+      {
+        "roleCode": "NGUOI_PHAN_ANH",
+        "name": "NGUOI_PHAN_ANH"
+      }
+    ]
+  },
+  {
+    "processKey": "QT_MTHC",
+    "name": "QT_MTHC",
+    "roles": [
+      {
+        "roleCode": "NGUOI_TAO",
+        "name": "NGUOI_TAO"
+      }
+    ]
+  },
+  {
+    "processKey": "SOANTHAO_PHATHANH_CQD",
+    "name": "SOANTHAO_PHATHANH_CQD",
+    "roles": [
+      {
+        "roleCode": "NGUOI_SOAN_THAO",
+        "name": "NGUOI_SOAN_THAO"
+      }
+    ]
+  },
+  {
+    "processKey": "dashboardPage",
+    "name": "dashboardPage",
+    "roles": [
+      {
+        "roleCode": "VT",
+        "name": "VT"
+      }
+    ]
+  },
+  {
+    "processKey": "KY_SO_HS_K_DD",
+    "name": "KY_SO_HS_K_DD",
+    "roles": [
+      {
+        "roleCode": "NGUOI_SOAN_THAO",
+        "name": "NGUOI_SOAN_THAO"
+      }
+    ]
+  },
+  {
+    "processKey": "reportsOutGoingDocument",
+    "name": "reportsOutGoingDocument",
+    "roles": [
+      {
+        "roleCode": "VT",
+        "name": "VT"
+      }
+    ]
+  },
+  {
+    "processKey": "PHOIHOP_NHANDEBIET",
+    "name": "PHOIHOP_NHANDEBIET",
+    "roles": [
+      {
+        "roleCode": "CAN_BO",
+        "name": "CAN_BO"
+      }
+    ]
+  },
+  {
+    "processKey": "statisticsAndReports",
+    "name": "statisticsAndReports",
+    "roles": [
+      {
+        "roleCode": "VT",
+        "name": "VT"
+      }
+    ]
+  }
+]

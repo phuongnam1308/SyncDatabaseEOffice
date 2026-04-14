@@ -3,11 +3,11 @@ const tableMappings = {
   useringroup: {
     oldTable: 'UserInGroup',
     oldSchema: 'dbo',
-    oldDatabase: 'DataEOfficeSNP',
+    oldDatabase: process.env.OLD_DB_NAME,
 
     newTable: 'user_group_users_bak',
     newSchema: 'dbo',
-    newDatabase: 'camunda',
+    newDatabase: process.env.NEW_DB_NAME,
 
     fieldMapping: {
       'UserId': 'id_user_bak',    // UserId cũ → id_user_bak

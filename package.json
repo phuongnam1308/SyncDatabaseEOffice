@@ -4,11 +4,24 @@
   "description": "Hệ thống migration dữ liệu từ SQL Server cũ sang mới",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
+    "start": "nodemon index.js",
     "dev": "nodemon index.js",
+    "login": "node auth/login_playwright.js",
+    "sync:html": "node src/sync-news-aspx-page/migrate/runHtmlMigration.js",
+    "sync:images": "node src/sync-news-aspx-page/migrate/runDownloadImagesFromJson.js",
     "swagger:gen": "node generate-swagger.js",
     "build": "npm run swagger:gen && webpack",
-    "start:dist": "node dist/app.js"
+    "build:exe": "taskkill /F /IM \"SNP - DONG BO DU LIEU.exe\" /T 2>nul || set errorlevel=0 && npm run build && node --experimental-sea-config sea-config.json && node scripts/post-build.js",
+    "start:dist": "node dist/app.js",
+    "login:new-system": "node auth/newSortAccess.js",
+    "start:session-refresher": "node auth/session-refresher.js",
+    "all": "npm run login && npm start"
+  },
+  "bin": "dist/app.js",
+  "pkg": {
+    "assets": [
+      "dist/**/*"
+    ]
   },
   "keywords": [
     "migration",
@@ -18,23 +31,36 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "bcrypt": "^6.0.0",
+    "@fontsource/inter": "^5.2.8",
+    "@playwright/test": "^1.45.3",
+    "axios": "^1.13.6",
+    "axios-ntlm": "^1.4.6",
+    "bcryptjs": "^3.0.3",
+    "bootstrap-icons": "^1.13.1",
+    "cheerio": "^1.2.0",
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",
     "express": "^4.18.2",
+    "file-type": "^16.5.4",
+    "form-data": "^4.0.5",
     "mime-types": "^3.0.2",
+    "minio": "^8.0.7",
     "mssql": "^10.0.1",
+    "playwright": "^1.58.2",
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-dist": "^5.31.0",
     "swagger-ui-express": "^5.0.1",
-    "uuid": "^13.0.0",
+    "uuid": "^8.3.2",
     "winston": "^3.11.0"
   },
   "devDependencies": {
     "archiver": "^7.0.1",
     "copy-webpack-plugin": "^13.0.1",
-    "nodemon": "^3.0.2",
+    "javascript-obfuscator": "^5.4.1",
+    "nodemon": "^3.1.14",
+    "postject": "^1.0.0-alpha.6",
     "webpack": "^5.104.1",
-    "webpack-cli": "^6.0.1"
+    "webpack-cli": "^6.0.1",
+    "webpack-obfuscator": "^3.6.0"
   }
 }

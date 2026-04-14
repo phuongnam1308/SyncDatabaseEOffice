@@ -69,7 +69,7 @@ class FileRelationTypeResolverModel {
   async getCandidates() {
     const rs = await this.pool.request().query(`
       SELECT id, type_doc, object_type
-      FROM camunda.dbo.file_relations2
+      FROM ${process.env.NEW_DB_NAME}.dbo.file_relations2
       WHERE type_doc IS NOT NULL
     `);
     return rs.recordset;
@@ -80,7 +80,7 @@ class FileRelationTypeResolverModel {
       .input('id', sql.BigInt, id)
       .input('object_type', sql.NVarChar, objectType)
       .query(`
-        UPDATE camunda.dbo.file_relations2
+        UPDATE ${process.env.NEW_DB_NAME}.dbo.file_relations2
         SET object_type = @object_type
         WHERE id = @id
       `);

@@ -5,11 +5,11 @@ const tableMappings = {
   sharepointgroup: {
     oldTable: '[Group]',
     oldSchema: 'dbo',
-    oldDatabase: 'DataEOfficeSNP',
+    oldDatabase: process.env.OLD_DB_NAME,
     
     newTable: 'group_users',
     newSchema: 'dbo',
-    newDatabase: 'camunda',
+    newDatabase: process.env.NEW_DB_NAME,
     
     // CHỈ map các trường có trong cả 2 bảng
     fieldMapping: {

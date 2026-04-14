@@ -51,7 +51,8 @@ class StreamOutgoingMigrationModel extends BaseModel {
         return {
           action: "updated",
           affected: 1,
-          documentId: existing[0].document_id
+          documentId: existing[0].document_id,
+          drafter: mapped.drafter ?? null
         };
       }
 
@@ -60,7 +61,8 @@ class StreamOutgoingMigrationModel extends BaseModel {
       return {
         action: "inserted",
         affected: 1,
-        documentId: mapped.document_id
+        documentId: mapped.document_id,
+        drafter: mapped.drafter ?? null
       };
 
     } catch (error) {
@@ -71,51 +73,253 @@ class StreamOutgoingMigrationModel extends BaseModel {
     }
   }
 
+  async _mapSingleRecord(oldRecord, transaction) {
+    if (!oldRecord?.ID) {
+      throw new Error("Old record ID is required");
+    }
+
+    const promulgationDate = this.helper.parseDate(oldRecord.NgayBanHanh);
+    const createdAt = this.helper.parseDate(oldRecord.Created || oldRecord.NgayTao) || new Date();
+    const updatedAt = this.helper.parseDate(oldRecord.Modified || oldRecord.NgayTao) || createdAt;
+
+    const documentField = (await this.helper.processDocumentField(
+      this.helper.safeString(oldRecord.LinhVuc)
+    )) || process.env.DEFAULT_DOCUMENT_FIELD || 'vn-bn-hnh-chnh';
+    const documentType = await this.helper.processDocumentType(
+      this.helper.safeString(oldRecord.LoaiVanBan || oldRecord.LoaiBanHanh)
+    );
+
+    const urgencyLevel = await this.helper.processUrgencyLevel(this.helper.safeString(oldRecord.DoKhan));
+    const privateLevel = await this.helper.processPrivateLevel(this.helper.safeString(oldRecord.DoMat));
+
+    const senderUnit = (await this.helper.mapSenderUnitId(
+      this.helper.safeString(oldRecord.DonVi),
+      transaction)) || process.env.DEFAULT_RECEIVER_UNIT_ID;
+
+    // Đảm bảo drafter không bao giờ là chuỗi 'NULL'
+    let drafterRaw = this.helper.safeString(oldRecord.NguoiSoanThaoText || oldRecord.CreatedBy);
+    const drafter = (await this.helper.mapUserDrafter(
+      drafterRaw,
+      transaction
+    )) || process.env.VANTHU_USER_ID || null;
+
+    const reportSigner = await this.helper.mapUserDrafter(
+      this.helper.safeString(oldRecord.NguoiKyVanBanText),
+      transaction
+    );
+
+    const bookDocumentObj = await this.helper.mapBookDocument(
+      this.helper.safeString(oldRecord.SoVanBan || oldRecord.SoVanBanText),
+      { drafter, senderUnit, privateLevel }
+    );
+    // Map đơn vị nhận internalReceivingDeptIds
+    const units = this.helper.splitStringSplitBySemicolon(this.helper.safeString(oldRecord.NoiNhan));
+    const internalReceivingDeptIds = [];
+    const externalReceivingUnits = [];
+    const allReceiverUserIds = new Set(); // Tổng hợp user IDs cho know_receivers & vieweds
+
+    for (const unit of units) {
+      if (!unit) continue;
+      // Thử tìm đơn vị
+      const unitId = await this.helper.mapSenderUnitId(unit, transaction);
+      if (unitId) {
+        internalReceivingDeptIds.push(unitId);
+        // Tìm tất cả user thuộc đơn vị đó qua Department
+        try {
+          const deptUsers = await this.helper.queryNewDbTx(
+            `SELECT [id] FROM ${process.env.NEW_DB_NAME}.dbo.users WHERE [Department] LIKE @dept OR [organization_name] LIKE @dept`,
+            { dept: `%${unit.trim()}%` },
+            transaction
+          );
+          if (Array.isArray(deptUsers)) {
+            deptUsers.forEach(u => { if (u.id) allReceiverUserIds.add(String(u.id)); });
+          }
+        } catch (deptErr) {
+          // Bỏ qua lỗi tìm user theo đơn vị
+        }
+      } else {
+        // Thử tìm như một người dùng (name/username)
+        const cleanName = unit.trim();
+        if (cleanName.length >= 2) {
+          try {
+            const userId = await this.helper.mapUserName(cleanName, transaction);
+            if (userId) {
+              allReceiverUserIds.add(String(userId));
+            } else {
+              externalReceivingUnits.push(unit);
+            }
+          } catch (userErr) {
+            externalReceivingUnits.push(unit);
+          }
+        } else {
+          externalReceivingUnits.push(unit);
+        }
+      }
+    }
+    const internalReceivingDeptIdsStr = JSON.stringify(internalReceivingDeptIds);
+    const externalReceivingUnitsStr = externalReceivingUnits.length > 0 ? externalReceivingUnits.join("; ") : null;
+
+    // Tổng hợp mảng IDs cho know_receivers & vieweds (user + unit IDs)
+    const allReceiverArr = Array.from(allReceiverUserIds);
+    const knowReceiversStr = allReceiverArr.length > 0 ? JSON.stringify(allReceiverArr) : null;
+    const viewedsStr = knowReceiversStr; // vieweds = know_receivers (cùng danh sách người nhận)
+
+    // text_symbols = "dữ liệu văn bản đi đồng bộ" + timestamp
+    const syncTimestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    const textSymbols = `dữ liệu văn bản đi đồng bộ ${syncTimestamp}`;
+
+    return {
+      document_id: `${Date.now()}${Math.floor(Math.random() * 10000)}`,
+      id_outgoing_bak: String(oldRecord.ID),
+      status_code: this.helper.mapStatus(oldRecord.TrangThai).statusCode,
+      stage_status: this.helper.mapStatus(oldRecord.TrangThai).stageStatus,
+      sender_unit: senderUnit,
+      internal_receiving_dept: internalReceivingDeptIdsStr,
+      external_receiving_unit: externalReceivingUnitsStr,
+      internal_receiving_unit: internalReceivingDeptIds.length > 0 ? JSON.stringify(internalReceivingDeptIds) : null,
+      drafter,
+      document_type: documentType,
+      urgency_level: urgencyLevel,
+      private_level: privateLevel,
+      report_signer: reportSigner,
+      book_document_id: bookDocumentObj?.id ?? null,
+      release_no: this.helper.cleanText(oldRecord.Title),
+      release_date: promulgationDate ?? null,
+      abstract_note: this.helper.cleanText(oldRecord.TrichYeu),
+      document_field: documentField,
+      to_book: bookDocumentObj?.count ?? null,
+      reply_incoming_doc: this.helper.cleanText(this.helper.safeString(oldRecord.TraLoiVBDen)),
+      type_doc: 1,
+      bpmn_version: this.helper.mapStatus(oldRecord.TrangThai).bpmnVersion || "SOANTHAO_PHATHANH_VBD",
+      type_of_process: this.helper.mapStatus(oldRecord.TrangThai).bpmnVersion || "SOANTHAO_PHATHANH_VBD",
+      // Mapping bổ sung cho các biến SQL
+      internal_receiving_dept_old: internalReceivingDeptIdsStr,
+      sign_type: this.helper.mapBit(oldRecord.DocSignType),
+      from_create_draf: this.helper.mapBit(0),
+      know_receivers: knowReceiversStr,
+      vieweds: viewedsStr,
+      created_at: createdAt,
+      updated_at: updatedAt,
+      text_symbols: textSymbols,
+      replaced: this.helper.mapBit(0),
+      tb_bak: this.helper.mapBit(1),
+      table_backups: 'outgoing_documents_sync'
+    };
+  }
+
   async _insertRecord(record, transaction) {
     const query = `
       INSERT INTO ${this.dbName}.${this.mainSchema}.${this.mainTable} (
-        document_id, status_code, sender_unit, drafter, document_type,
-        urgency_level, private_level, document_field, report_signer,
-        report_document_symbol, to_book_text_symbols, viewers, deadline_reply,
-        abstract_note, recipient_ids, internal_receiving_unit, reply_incomming_doc,
-        created_at, updated_at, draft_signer, book_document_id, status,
-        code_commanders, commanders, current_note, to_book, release_no,
-        release_date, text_symbols, doc_work_files, doc_proposal, doc_draft,
-        doc_attachments, doc_recall, doc_replacement, doc_answer,
-        external_receiving_unit, internal_receiving_dept, processor, files,
-        type_doc, bpmn_version, vieweds, know_receivers, type_of_process,
-        replaced_documents, id_outgoing_bak, IsLibrary, DocNum,
-        NguoiSoanThaoText, FolderLocation, DonVi, HoSoXuLyLink, InfoVBDi,
-        ItemVBPH, NguoiKyVanBan, NguoiKyVanBanText, PhanCong, TraLoiVBDen,
-        SoBan, SoTrang, NoiLuuTru, BanLanhDaoTCT, YKien, YKienChiHuy,
-        ModuleId, SiteName, ListName, ItemId, YearMonth, Modified, Created,
-        ModifiedBy, CreatedBy, MigrateFlg, MigrateErrFlg, MigrateErrMess,
-        LoaiMoc, KySoFiles, DGPId, Workflow, IsKyQuyChe, DocSignType,
-        IsConverting, CodeItemId, internal_receiving_dept_old, sign_type,
-        from_create_draf, replaced, tb_bak
+        document_id,
+        status_code,
+        sender_unit,
+        drafter,
+        document_type,
+        urgency_level,
+        private_level,
+        document_field,
+        report_signer,
+        report_document_symbol,
+        to_book_text_symbols,
+        viewers,
+        deadline_reply,
+        abstract_note,
+        recipient_ids,
+        internal_receiving_unit,
+        reply_incoming_doc,
+        created_at,
+        updated_at,
+        draft_signer,
+        book_document_id,
+        status,
+        code_commanders,
+        commanders,
+        current_note,
+        to_book,
+        release_no,
+        release_date,
+        text_symbols,
+        doc_work_files,
+        doc_proposal,
+        doc_draft,
+        doc_attachments,
+        doc_recall,
+        doc_replacement,
+        doc_answer,
+        external_receiving_unit,
+        internal_receiving_dept,
+        processor,
+        files,
+        type_doc,
+        bpmn_version,
+        vieweds,
+        know_receivers,
+        type_of_process,
+        replaced_documents,
+        id_outgoing_bak,
+        stage_status,
+        internal_receiving_dept_old,
+        sign_type,
+        from_create_draf,
+        replaced,
+        tb_bak,
+        table_backups
       )
       VALUES (
-        @document_id, @status_code, @sender_unit, @drafter, @document_type,
-        @urgency_level, @private_level, @document_field, @report_signer,
-        @report_document_symbol, @to_book_text_symbols, @viewers, @deadline_reply,
-        @abstract_note, @recipient_ids, @internal_receiving_unit, @reply_incomming_doc,
-        @created_at, @updated_at, @draft_signer, @book_document_id, 1,
-        @code_commanders, @commanders, @current_note, @to_book, @release_no,
-        @release_date, @text_symbols, @doc_work_files, @doc_proposal, @doc_draft,
-        @doc_attachments, @doc_recall, @doc_replacement, @doc_answer,
-        @external_receiving_unit, @internal_receiving_dept, @processor, @files,
-        @type_doc, @bpmn_version, @vieweds, @know_receivers, @type_of_process,
-        @replaced_documents, @id_outgoing_bak, @is_library, @doc_num,
-        @nguoi_soan_thao_text, @folder_location, @don_vi, @ho_so_xu_ly_link,
-        @info_vb_di, @item_vbph, @nguoi_ky_van_ban, @nguoi_ky_van_ban_text,
-        @phan_cong, @tra_loi_vb_den, @so_ban, @so_trang, @noi_luu_tru,
-        @ban_lanh_dao_tct, @y_kien, @y_kien_chi_huy, @module_id, @site_name,
-        @list_name, @item_id, @year_month, @modified, @created, @modified_by,
-        @created_by, @migrate_flg, @migrate_err_flg, @migrate_err_mess,
-        @loai_moc, @ky_so_files, @dgp_id, @workflow, @is_ky_quy_che,
-        @doc_sign_type, @is_converting, @code_item_id,
-        @internal_receiving_dept_old, @sign_type, @from_create_draf,
-        @replaced, @tbBak
+        @document_id,
+        @status_code,
+        @sender_unit,
+        @drafter,
+        @document_type,
+        @urgency_level,
+        @private_level,
+        @document_field,
+        @report_signer,
+        @report_document_symbol,
+        @to_book_text_symbols,
+        @viewers,
+        @deadline_reply,
+        @abstract_note,
+        @recipient_ids,
+        @internal_receiving_unit,
+        @reply_incoming_doc,
+        @created_at,
+        @updated_at,
+        @draft_signer,
+        @book_document_id,
+        1,
+        @code_commanders,
+        @commanders,
+        @current_note,
+        @to_book,
+        @release_no,
+        @release_date,
+        @text_symbols,
+        @doc_work_files,
+        @doc_proposal,
+        @doc_draft,
+        @doc_attachments,
+        @doc_recall,
+        @doc_replacement,
+        @doc_answer,
+        @external_receiving_unit,
+        @internal_receiving_dept,
+        @processor,
+        @files,
+        @type_doc,
+        @bpmn_version,
+        @vieweds,
+        @know_receivers,
+        @type_of_process,
+        @replaced_documents,
+        @id_outgoing_bak,
+        @stage_status,
+        @internal_receiving_dept_old,
+        @sign_type,
+        @from_create_draf,
+        @replaced,
+        @tb_bak,
+        @table_backups
       )
     `;
 
@@ -142,7 +346,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
         abstract_note = @abstract_note,
         recipient_ids = @recipient_ids,
         internal_receiving_unit = @internal_receiving_unit,
-        reply_incomming_doc = @reply_incomming_doc,
+        reply_incoming_doc = @reply_incoming_doc,
         updated_at = GETDATE(),
         draft_signer = @draft_signer,
         book_document_id = @book_document_id,
@@ -171,49 +375,13 @@ class StreamOutgoingMigrationModel extends BaseModel {
         know_receivers = @know_receivers,
         type_of_process = @type_of_process,
         replaced_documents = @replaced_documents,
-        IsLibrary = @is_library,
-        DocNum = @doc_num,
-        NguoiSoanThaoText = @nguoi_soan_thao_text,
-        FolderLocation = @folder_location,
-        DonVi = @don_vi,
-        HoSoXuLyLink = @ho_so_xu_ly_link,
-        InfoVBDi = @info_vb_di,
-        ItemVBPH = @item_vbph,
-        NguoiKyVanBan = @nguoi_ky_van_ban,
-        NguoiKyVanBanText = @nguoi_ky_van_ban_text,
-        PhanCong = @phan_cong,
-        TraLoiVBDen = @tra_loi_vb_den,
-        SoBan = @so_ban,
-        SoTrang = @so_trang,
-        NoiLuuTru = @noi_luu_tru,
-        BanLanhDaoTCT = @ban_lanh_dao_tct,
-        YKien = @y_kien,
-        YKienChiHuy = @y_kien_chi_huy,
-        ModuleId = @module_id,
-        SiteName = @site_name,
-        ListName = @list_name,
-        ItemId = @item_id,
-        YearMonth = @year_month,
-        Modified = @modified,
-        Created = @created,
-        ModifiedBy = @modified_by,
-        CreatedBy = @created_by,
-        MigrateFlg = @migrate_flg,
-        MigrateErrFlg = @migrate_err_flg,
-        MigrateErrMess = @migrate_err_mess,
-        LoaiMoc = @loai_moc,
-        KySoFiles = @ky_so_files,
-        DGPId = @dgp_id,
-        Workflow = @workflow,
-        IsKyQuyChe = @is_ky_quy_che,
-        DocSignType = @doc_sign_type,
-        IsConverting = @is_converting,
-        CodeItemId = @code_item_id,
+        stage_status = @stage_status,
         internal_receiving_dept_old = @internal_receiving_dept_old,
         sign_type = @sign_type,
         from_create_draf = @from_create_draf,
         replaced = @replaced,
-        tb_bak = @tbBak
+        tb_bak = @tb_bak,
+        table_backups = @table_backups
       WHERE id_outgoing_bak = @id_outgoing_bak
     `;
 
@@ -221,75 +389,11 @@ class StreamOutgoingMigrationModel extends BaseModel {
     await this.queryNewDbTx(query, params, transaction);
   }
 
-  async _mapSingleRecord(oldRecord, transaction) {
-    if (!oldRecord?.ID) {
-      throw new Error("Old record ID is required");
-    }
-
-    const promulgationDate = this.helper.parseDate(oldRecord.NgayBanHanh);
-
-    const documentType = await this.helper.processDocumentType(
-      oldRecord.LoaiVanBan || oldRecord.LoaiBanHanh
-    );
-
-    const urgencyLevel = await this.helper.processUrgencyLevel(oldRecord.DoKhan);
-    const privateLevel = await this.helper.processPrivateLevel(oldRecord.DoMat);
-
-    const senderUnit = await this.helper.mapSenderUnitId(
-      oldRecord.DonVi,
-      transaction);
-    const drafter = await this.helper.mapUserName(
-      oldRecord.CreatedBy || oldRecord.NguoiSoanThaoText,
-      transaction
-    );
-
-    const reportSigner = await this.helper.mapUserName(
-      oldRecord.NguoiKyVanBanText,
-      transaction
-    );
-
-    const bookDocumentObj = await this.helper.mapBookDocument(
-      oldRecord.SoVanBan || oldRecord.SoVanBanText,
-      { drafter, senderUnit, privateLevel }
-    );
-    // Map đơn vị nhận internalReceivingDeptIds
-    const units = this.helper.splitStringSplitBySemicolon(oldRecord.NoiNhan);
-    const internalReceivingDeptIds = [];
-    for (const unit of units) {
-      const id = await this.helper.mapSenderUnitId(unit, transaction);
-      if (id) {
-        internalReceivingDeptIds.push(id);
-      }
-    }
-    const internalReceivingDeptIdsStr = JSON.stringify(internalReceivingDeptIds);
-
-    return {
-      document_id: `${Date.now()}${Math.floor(Math.random() * 10000)}`,
-      id_outgoing_bak: String(oldRecord.ID),
-      status_code: this.helper.mapStatus(oldRecord.TrangThai),
-      sender_unit: senderUnit,
-      internal_receiving_dept: internalReceivingDeptIdsStr,
-      drafter,
-      document_type: documentType,
-      urgency_level: urgencyLevel,
-      private_level: privateLevel,
-      report_signer: reportSigner,
-      book_document_id: bookDocumentObj?.id ?? null,
-      release_no: this.helper.cleanText(oldRecord.Title),
-      release_date: promulgationDate ?? null,
-      abstract_note: this.helper.cleanText(oldRecord.TrichYeu),
-      to_book: bookDocumentObj?.count ?? null,
-      type_doc: 1,
-      bpmn_version: "SOANTHAO_PHATHANH_VBD",
-      type_of_process: "SOANTHAO_PHATHANH_VBD",
-      created_at: this.helper.parseDate(oldRecord.Created),
-      updated_at: this.helper.parseDate(oldRecord.Modified),
-      replaced: 0,
-      tb_bak: 1
-    };
-  }
-
   _mapRecordParams(record) {
+    if (!record || typeof record !== 'object') {
+      return {};
+    }
+
     return {
       document_id: record.document_id ?? null,
       status_code: record.status_code ?? null,
@@ -307,9 +411,9 @@ class StreamOutgoingMigrationModel extends BaseModel {
       abstract_note: record.abstract_note ?? null,
       recipient_ids: record.recipient_ids ?? null,
       internal_receiving_unit: record.internal_receiving_unit ?? null,
-      reply_incomming_doc: record.reply_incomming_doc ?? null,
-      created_at: record.created_at ?? null,
-      updated_at: record.updated_at ?? null,
+      reply_incoming_doc: record.reply_incoming_doc ?? null,
+      created_at: record.created_at ?? new Date(),
+      updated_at: record.updated_at ?? new Date(),
       draft_signer: record.draft_signer ?? null,
       book_document_id: record.book_document_id ?? null,
       status: 1,
@@ -331,56 +435,20 @@ class StreamOutgoingMigrationModel extends BaseModel {
       internal_receiving_dept: record.internal_receiving_dept ?? null,
       processor: record.processor ?? null,
       files: record.files ?? null,
-      type_doc: record.type_doc ?? null,
+      type_doc: record.type_doc ?? 1,
       bpmn_version: record.bpmn_version ?? null,
       vieweds: record.vieweds ?? null,
       know_receivers: record.know_receivers ?? null,
       type_of_process: record.type_of_process ?? null,
       replaced_documents: record.replaced_documents ?? null,
-      id_outgoing_bak: record.id_outgoing_bak ?? null,
-      is_library: record.is_library ?? null,
-      doc_num: record.doc_num ?? null,
-      nguoi_soan_thao_text: record.nguoi_soan_thao_text ?? null,
-      folder_location: record.folder_location ?? null,
-      don_vi: record.don_vi ?? null,
-      ho_so_xu_ly_link: record.ho_so_xu_ly_link ?? null,
-      info_vb_di: record.info_vb_di ?? null,
-      item_vbph: record.item_vbph ?? null,
-      nguoi_ky_van_ban: record.nguoi_ky_van_ban ?? null,
-      nguoi_ky_van_ban_text: record.nguoi_ky_van_ban_text ?? null,
-      phan_cong: record.phan_cong ?? null,
-      tra_loi_vb_den: record.tra_loi_vb_den ?? null,
-      so_ban: record.so_ban ?? null,
-      so_trang: record.so_trang ?? null,
-      noi_luu_tru: record.noi_luu_tru ?? null,
-      ban_lanh_dao_tct: record.ban_lanh_dao_tct ?? null,
-      y_kien: record.y_kien ?? null,
-      y_kien_chi_huy: record.y_kien_chi_huy ?? null,
-      module_id: record.module_id ?? null,
-      site_name: record.site_name ?? null,
-      list_name: record.list_name ?? null,
-      item_id: record.item_id ?? null,
-      year_month: record.year_month ?? null,
-      modified: record.modified ?? null,
-      created: record.created ?? null,
-      modified_by: record.modified_by ?? null,
-      created_by: record.created_by ?? null,
-      migrate_flg: record.migrate_flg ?? null,
-      migrate_err_flg: record.migrate_err_flg ?? null,
-      migrate_err_mess: record.migrate_err_mess ?? null,
-      loai_moc: record.loai_moc ?? null,
-      ky_so_files: record.ky_so_files ?? null,
-      dgp_id: record.dgp_id ?? null,
-      workflow: record.workflow ?? null,
-      is_ky_quy_che: record.is_ky_quy_che ?? null,
-      doc_sign_type: record.doc_sign_type ?? null,
-      is_converting: record.is_converting ?? null,
-      code_item_id: record.code_item_id ?? null,
+      stage_status: record.stage_status ?? null,
       internal_receiving_dept_old: record.internal_receiving_dept_old ?? null,
       sign_type: record.sign_type ?? null,
-      from_create_draf: record.from_create_draf ?? null,
-      replaced: record.replaced ?? null,
-      tbBak: record.tbBak ?? record.tb_bak ?? null,
+      from_create_draf: record.from_create_draf ?? 0,
+      replaced: record.replaced ?? 0,
+      id_outgoing_bak: record.id_outgoing_bak ?? null,
+      tb_bak: record.tb_bak ?? 1,
+      table_backups: record.table_backups ?? 'outgoing_documents_sync'
     };
   }
 }

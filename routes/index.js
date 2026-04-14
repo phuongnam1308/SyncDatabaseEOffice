@@ -79,7 +79,7 @@ router.get('/migrate/donvi', MigrationDonViController.migrateDonVi);
 // Thống kê số văn bản
 router.get('/statistics/bookdocuments', MigrationBookDocumentController.getStatistics);
 
-// Migration số văn bản 
+// Migration số văn bản
 router.get('/migrate/bookdocuments', MigrationBookDocumentController.migrateBookDocuments);
 
 // Thống kê Văn bản đến Delete
@@ -321,12 +321,6 @@ router.post(
 );
 
 
-const OutgoingRoutes = require('../src/older-sync-outgoing-document/route');
-router.use('/outgoing', OutgoingRoutes);
-
-const AuditRoutes = require('../src/older-sync-audit/route');
-router.use('/audit', AuditRoutes);
-
 const UserRoutes = require('../src/sync-user/route');
 router.use('/user', UserRoutes);
 
@@ -360,10 +354,13 @@ router.get('/sync-manager-src/events', SrcSyncManagerController.sseEvents); // �
 const SyncOutgoingRoutes = require('../src/sync-outgoing-document/route');
 router.use('/sync-outgoing', SyncOutgoingRoutes);
 
-const CommentRoutes = require('../src/older-sync-document-comment/route');
-router.use('/document-comments', CommentRoutes);
+const SyncTintucRawRoutes = require('../src/sync-news-aspx-page/route');
+router.use('/sync-tintucraw', SyncTintucRawRoutes);
 
-const TaskCopyRoutes = require('../src/sync-tasks/route');
-router.use('/sync-tasks', TaskCopyRoutes);
+const SyncMeetingCopyRoutes = require('../src/sync-meeting copy/route');
+router.use('/sync-meeting-copy', SyncMeetingCopyRoutes);
+
+const SyncPassportRoutes = require('../src/sync-passport/route');
+router.use('/sync-passport', SyncPassportRoutes);
 
 module.exports = router;

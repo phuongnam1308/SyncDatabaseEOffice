@@ -500,7 +500,7 @@ class MigrationUserService {
 
       return {
         source: { 
-          database: 'DataEOfficeSNP', 
+          database: process.env.OLD_DB_NAME, 
           schema: 'dbo', 
           table: 'PersonalProfile', 
           count: oldCount 

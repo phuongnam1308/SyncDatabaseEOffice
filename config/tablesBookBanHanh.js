@@ -43,11 +43,11 @@ const tableMappings = {
   bookbanhanh: {
     oldTable: 'VanBanBanHanh',
     oldSchema: 'dbo',
-    oldDatabase: 'DataEOfficeSNP',
+    oldDatabase: process.env.OLD_DB_NAME,
 
     newTable: 'book_documents',
     newSchema: 'dbo',
-    newDatabase: 'camunda',
+    newDatabase: process.env.NEW_DB_NAME,
 
     fieldMapping: {
       'SoVanBan': 'to_book_code',         // SoVanBan → to_book_code (unique key cho sổ)

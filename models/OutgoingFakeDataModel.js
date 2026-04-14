@@ -12,7 +12,7 @@ class OutgoingFakeDataModel extends BaseModel {
     const query = `
       DECLARE @start DATETIME = GETDATE();
 
-      UPDATE camunda.dbo.outgoing_documents
+      UPDATE ${process.env.NEW_DB_NAME}.dbo.outgoing_documents
       SET
         sender_unit = @senderUnit,
         drafter = @drafter,

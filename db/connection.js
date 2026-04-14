@@ -15,9 +15,9 @@ class DatabaseConnection {
         return this.oldPool;
       }
 
-      logger.info('Đang kết nối đến database cũ...');
+      logger.info(`Đang kết nối đến database cũ [${oldDbConfig.server}]...`);
       this.oldPool = await sql.connect(oldDbConfig);
-      logger.info('Kết nối database cũ thành công!');
+      logger.info(`✅ Kết nối database cũ thành công! Pool size: ${this.oldPool.size}`);
       return this.oldPool;
     } catch (error) {
       logger.error('Lỗi kết nối database cũ:', error);
@@ -32,9 +32,9 @@ class DatabaseConnection {
         return this.newPool;
       }
 
-      logger.info('Đang kết nối đến database mới...');
+      logger.info(`Đang kết nối đến database mới [${newDbConfig.server}]...`);
       this.newPool = await new sql.ConnectionPool(newDbConfig).connect();
-      logger.info('Kết nối database mới thành công!');
+      logger.info(`✅ Kết nối database mới thành công! Pool size: ${this.newPool.size}`);
       // ensure required sync tables exist after connection is made
       await this.ensureSyncTables();
       return this.newPool;
@@ -44,15 +44,21 @@ class DatabaseConnection {
     }
   }
 
-  // Kết nối cả 2 database
+  // Kết nối cả 2 database - SỬA LẠI: Không để lỗi 1 bên làm sập cả hệ thống
   async connectAll() {
     try {
-      await this.connectOldDb();
-      await this.connectNewDb();
-      // logger.info('Kết nối tất cả database thành công!');
+      // Thử kết nối từng bên một cách độc lập
+      await this.connectOldDb().catch(err => {
+        logger.error('⚠️ [DatabaseConnection] Không thể kết nối DB CŨ (Nguồn). Các task lấy dữ liệu từ đây sẽ bị lỗi.', err.message);
+      });
+      
+      await this.connectNewDb().catch(err => {
+        logger.error('❌ [DatabaseConnection] Không thể kết nối DB MỚI (Đích). Đây là lỗi nghiêm trọng!', err.message);
+      });
+
     } catch (error) {
-      logger.error('Lỗi kết nối database:', error);
-      throw error;
+      logger.error('Lỗi nghiêm trọng trong connectAll:', error);
+      // Không throw tiếp để app vẫn có thể khởi động (vào được dashboard)
     }
   }
 
@@ -82,8 +88,12 @@ class DatabaseConnection {
     }
   }
 
-  // Đóng tất cả kết nối
-  async closeAll() {
+  // Đóng tất cả kết nối (Chỉ đóng thật sự nếu force = true)
+  async closeAll(force = false) {
+    if (!force) {
+      logger.info('⚠️ [DatabaseConnection] closeAll() được gọi nhưng pool sẽ KHÔNG bị đóng (để bảo vệ job đang chạy). Dùng closeAll(true) nếu muốn đóng thật sự.');
+      return;
+    }
     await this.closeOldDb();
     await this.closeNewDb();
     logger.info('Đã đóng tất cả kết nối database');
@@ -201,6 +211,25 @@ class DatabaseConnection {
       WITH (PAD_INDEX = OFF, FILLFACTOR = 100, SORT_IN_TEMPDB = OFF,
           IGNORE_DUP_KEY = OFF, STATISTICS_NORECOMPUTE = OFF,
           ONLINE = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON);
+  END
+
+  -- sync_job_buffers table
+  IF NOT EXISTS (
+    SELECT 1 FROM sys.tables
+    WHERE name = 'sync_job_buffers' AND schema_id = SCHEMA_ID('dbo')
+  )
+  BEGIN
+    CREATE TABLE dbo.sync_job_buffers (
+      sync_job_id nvarchar(200) COLLATE SQL_Latin1_General_CP1_CI_AS NOT NULL,
+      model_name nvarchar(255) COLLATE SQL_Latin1_General_CP1_CI_AS NOT NULL,
+      last_sync_time datetime2 NULL,
+      total_count int DEFAULT 0 NOT NULL,
+      processing_item int DEFAULT 0 NOT NULL,
+      status nvarchar(30) COLLATE SQL_Latin1_General_CP1_CI_AS DEFAULT 'READY' NOT NULL,
+      created_at datetime2 DEFAULT sysdatetime() NOT NULL,
+      updated_at datetime2 DEFAULT sysdatetime() NOT NULL,
+      CONSTRAINT PK__sync_job__46A76B0394CFDEBA PRIMARY KEY (sync_job_id)
+    );
   END
 
   -- cron_sync_config table

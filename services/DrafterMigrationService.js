@@ -12,8 +12,8 @@ class DrafterMigrationService {
       SELECT
         COUNT(*) AS total,
         SUM(CASE WHEN drafter IS NULL THEN 1 ELSE 0 END) AS drafter_null,
-        SUM(CASE WHEN draft_signer IS NULL THEN 1 ELSE 0 END) AS draft_signer_null
-      FROM ${process.env.NEW_DB_NAME}.dbo.outgoing_documents2
+        SUM(CASE WHEN report_signer IS NULL THEN 1 ELSE 0 END) AS report_signer_null
+      FROM ${process.env.NEW_DB_NAME}.dbo.outgoing_documents
     `;
     const { recordset } = await this.model.newPool.request().query(query);
     return recordset[0];
@@ -32,29 +32,22 @@ class DrafterMigrationService {
       const query = `
         UPDATE o
         SET
-          -- 1. drafter = TEXT (người soạn)
-          o.drafter = CASE
-            WHEN o.drafter IS NULL THEN
-              COALESCE(
-                NULLIF(LTRIM(RTRIM(o.NguoiSoanThaoText)), ''),
-                NULLIF(LTRIM(RTRIM(o.NguoiKyVanBanText)), '')
-              )
-            ELSE o.drafter
-          END,
+          -- 1. drafter = USER ID from NguoiSoanThaoText (always prefer resolved ID)
+          o.drafter = COALESCE(u1.id, u2.id, o.drafter),
 
-          -- 2. draft_signer = USER ID (người ký)
-          o.draft_signer = CASE
-            WHEN o.draft_signer IS NULL AND u.id IS NOT NULL
-              THEN u.id
-            ELSE o.draft_signer
-          END
-        FROM ${process.env.NEW_DB_NAME}.dbo.outgoing_documents2 o
-        LEFT JOIN ${process.env.NEW_DB_NAME}.dbo.users u
-          ON LTRIM(RTRIM(o.NguoiKyVanBanText)) = LTRIM(RTRIM(u.name))
+          -- 2. report_signer = USER ID from NguoiKyVanBanText (always prefer resolved ID)
+          o.report_signer = COALESCE(u2.id, u1.id, o.report_signer)
+        FROM ${process.env.NEW_DB_NAME}.dbo.outgoing_documents o
+        LEFT JOIN ${process.env.NEW_DB_NAME}.dbo.users u1
+          ON LTRIM(RTRIM(o.NguoiSoanThaoText)) = LTRIM(RTRIM(u1.name))
+        LEFT JOIN ${process.env.NEW_DB_NAME}.dbo.users u2
+          ON LTRIM(RTRIM(o.NguoiKyVanBanText)) = LTRIM(RTRIM(u2.name))
         WHERE o.id IN (
           SELECT TOP (${batchSize}) id
-          FROM ${process.env.NEW_DB_NAME}.dbo.outgoing_documents2
-          WHERE drafter IS NULL OR draft_signer IS NULL
+          FROM ${process.env.NEW_DB_NAME}.dbo.outgoing_documents
+          WHERE (drafter IS NULL OR report_signer IS NULL
+                 OR (drafter NOT IN (SELECT id FROM ${process.env.NEW_DB_NAME}.dbo.users))
+                 OR (report_signer NOT IN (SELECT id FROM ${process.env.NEW_DB_NAME}.dbo.users)))
           ORDER BY id
         );
 

@@ -3,11 +3,11 @@ const tableMappings = {
   task_users_mapping: {
     sourceTable: 'task2',
     sourceSchema: 'dbo',
-    sourceDatabase: 'camunda',
+    sourceDatabase: process.env.NEW_DB_NAME,
 
     targetTable: 'task_users2',
     targetSchema: 'dbo',
-    targetDatabase: 'camunda',
+    targetDatabase: process.env.NEW_DB_NAME,
 
     // Cột dùng để join/map
     backupIdFieldSource: 'id_taskBackups',   // trong task2

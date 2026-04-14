@@ -1,0 +1,10 @@
+{
+  "ignore": [
+    "tintucraw/*",
+    "auth/*",
+    "logs/*"
+  ],
+  "ext": "js,mjs,cjs,json",
+  "signal": "SIGTERM",
+  "delay": 2000
+}

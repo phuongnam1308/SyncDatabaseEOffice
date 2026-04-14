@@ -1,13 +1,13 @@
 module.exports = {
   documentCommentsMigration: {
     source: {
-      database: 'DataEOfficeSNP',
+      database: process.env.OLD_DB_NAME,
       schema: 'dbo',
       table: 'Comments_NPL'
     },
 
     target: {
-      database: 'camunda',
+      database: process.env.NEW_DB_NAME,
       schema: 'dbo',
       table: 'document_comments2'
     },

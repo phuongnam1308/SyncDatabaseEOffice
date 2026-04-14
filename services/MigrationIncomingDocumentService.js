@@ -142,7 +142,7 @@ class MigrationIncomingDocumentService {
       const newCount = await this.model.countNewDb();
 
       return {
-        source: { database: 'DataEOfficeSNP', schema: 'dbo', table: 'VanBanDen', count: oldCount },
+        source: { database: process.env.OLD_DB_NAME, schema: 'dbo', table: 'VanBanDen', count: oldCount },
         destination: { database: process.env.NEW_DB_NAME, table: 'incomming_documents', count: newCount },
         migrated: newCount,
         remaining: oldCount - newCount,

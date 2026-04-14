@@ -3,54 +3,99 @@ const SyncHandlerModel = require('./SyncHandlerModel');
 
 const OutGoingDocumentModel = require('../sync-outgoing-document/models/StreamOutgoingIncrementalModel');
 const StreamUserMigrationModel = require('../sync-user-copy/migrate/StreamUserMigrationModel');
-const StreamTaskMigrationModel = require('../sync-tasks/migrate/StreamTaskMigrationModel');
-const StreamSocialMigrationModel = require('../sync-social-resource/migrate/StreamSocialMigrationModel');
-const SyncIncomingDocumentModel = require('../sync-incoming-document/migrate/SyncIncomingDocumentModel');
+const StreamTaskInIncrementalModel = require('../sync-tasks-van-ban-den/models/StreamTaskInIncrementalModel');
+const StreamTaskOutIncrementalModel = require('../sync-tasks-van-ban-di/models/StreamTaskOutIncrementalModel');
 const StreamMeetingMigrationModel = require('../sync-meeting/migrate/StreamMeetingMigrationModel');
+const IncomingDocumentModel = require('../sync-incoming-document/models/StreamIncomingIncrementalModel');
+const StreamDepartmentMigrationModel = require('../sync-department/migrate/StreamDepartmentMigrationModel');
+const StreamNewsAspxPageIncrementalModel = require('../sync-news-aspx-page/models/StreamNewsAspxPageIncrementalModel');
+
+// 5 Specialized Sync Modules
+const StreamMeetingCopyMigrationModel = require('../sync-meeting copy/migrate/StreamMeetingMigrationModel');
+const StreamEventMigrationModel = require('../sync-event/migrate/StreamEventMigrationModel');
+const StreamTgdScheduleMigrationModel = require('../sync-tgd-schedule/migrate/StreamTgdScheduleMigrationModel');
+const StreamMissionMigrationModel = require('../sync-mission-schedule/migrate/StreamMissionMigrationModel');
+const StreamCarBookingMigrationModel = require('../sync-car-booking/migrate/StreamCarBookingMigrationModel');
+const StreamPassportMigrationModel = require('../sync-passport/migrate/StreamPassportMigrationModel');
 
 const MODEL_DEFINITIONS = [
   {
-    key: 'UNIT_TEST_STREAM_OUTGOING_INCREMENTAL',
+    key: 'STREAM_OUTGOING_INCREMENTAL',
     label: 'Đồng bộ văn bản đi',
     section: 'realtime',
     ModelClass: OutGoingDocumentModel
   },
-  // {
-  //   key: '2_file',
-  //   label: 'Đồng bộ file tài liệu',
-  //   section: 'realtime',
-  //   ModelClass: SyncFileModel,
-  // },
-  // {
-  //   key: 'UNIT_TEST_STREAM_USER_COPY_MIGRATION111',
-  //   label: 'Đồng bộ cơ sở dữ liệu cũ: người dùng (user copy)',
-  //   section: 'realtime',
-  //   ModelClass: StreamUserMigrationModel
-  // },
   {
-    key: 'UNIT_TEST_STREAM_TASK_MIGRATION',
-    label: 'Đồng bộ công việc từ văn bản đến',
+    key: 'STREAM_DEPARTMENT_MIGRATION',
+    label: 'Đồng bộ phòng ban',
     section: 'realtime',
-    ModelClass: StreamTaskMigrationModel,
+    ModelClass: StreamDepartmentMigrationModel,
   },
   {
-    key: 'UNIT_TEST_STREAM_SOCIAL_RESOURCE_MIGRATION1',
-    label: 'Đồng bộ tin tức ',
+    key: 'STREAM_USER_COPY_MIGRATION',
+    label: 'Đồng bộ người dùng',
     section: 'realtime',
-    ModelClass: StreamSocialMigrationModel,
-    // ModelClass: StreamUserMigrationModel
+    ModelClass: StreamUserMigrationModel
   },
   {
-    key: '3_incoming',
+    key: 'STREAM_TASK_INCOMING_INCREMENTAL',
+    label: 'Đồng bộ công việc đến',
+    section: 'realtime',
+    ModelClass: StreamTaskInIncrementalModel,
+  },
+  {
+    key: 'STREAM_TASK_OUTGOING_INCREMENTAL',
+    label: 'Đồng bộ công việc đi',
+    section: 'realtime',
+    ModelClass: StreamTaskOutIncrementalModel,
+  },
+  {
+    key: 'STREAM_NEWS_ASPX_PAGE_INCREMENTAL',
+    label: 'Đồng bộ tin tức',
+    section: 'realtime',
+    ModelClass: StreamNewsAspxPageIncrementalModel
+  },
+  {
+    key: 'STREAM_INCOMING_INCREMENTAL',
     label: 'Đồng bộ văn bản đến',
     section: 'realtime',
-    ModelClass: SyncIncomingDocumentModel,
+    ModelClass: IncomingDocumentModel,
   },
   {
-    key: 'UNIT_TEST_STREAM_MEETING_MIGRATION',
-    label: 'Đồng bộ Lịch họp ',
+    key: 'STREAM_MEETING_COPY_MIGRATION',
+    label: 'Đồng bộ lịch họp',
     section: 'realtime',
-    ModelClass: StreamMeetingMigrationModel,
+    ModelClass: StreamMeetingCopyMigrationModel,
+  },
+  {
+    key: 'STREAM_EVENT_MIGRATION',
+    label: 'Đồng bộ lịch sự kiện',
+    section: 'realtime',
+    ModelClass: StreamEventMigrationModel,
+  },
+  {
+    key: 'STREAM_TGD_SCHEDULE_MIGRATION',
+    label: 'Đồng bộ lịch trực ban TGĐ',
+    section: 'realtime',
+    ModelClass: StreamTgdScheduleMigrationModel,
+  },
+  {
+    key: 'STREAM_MISSION_MIGRATION',
+    label: 'Đồng bộ lịch công tác',
+    section: 'realtime',
+    ModelClass: StreamMissionMigrationModel,
+  },
+  {
+    key: 'STREAM_CAR_BOOKING_MIGRATION',
+    label: 'Đồng bộ lịch đặt xe',
+    section: 'realtime',
+    ModelClass: StreamCarBookingMigrationModel,
+  },
+  {
+    key: 'STREAM_PASSPORT_MIGRATION',
+    label: 'Đồng bộ phiếu mượn hộ chiếu',
+    section: 'realtime',
+    ModelClass: StreamPassportMigrationModel,
   },
 ];
 
@@ -159,6 +204,14 @@ class SyncModelRegistry {
   }
 
   /**
+   * Returns a list of all labels currently in the registry.
+   * @returns {string[]}
+   */
+  getRegisteredLabels() {
+    return [...this._registry.values()].map((entry) => entry.definition.label);
+  }
+
+  /**
    * Initializes one model definition and stores it in registry.
    * @param {{key:string,label:string,ModelClass:any}} def
    * @param {import('./SyncManagerService')} syncManagerService
@@ -175,11 +228,21 @@ class SyncModelRegistry {
       await instance.initialize();
 
       const handler = new SyncHandlerModel(instance);
-      await handler.registerHandlers(syncManagerService, label);
-
+      
+      // [QUY TRÌNH SỬA LỖI] Đổi tên key kỹ thuật thành Label Tiếng Việt trong DB nếu tồn tại
+      // Thử đổi tên từ cả key hiện tại và key UNIT_TEST cũ để đảm bảo không mất dữ liệu trên Dashboard
       if (syncStateRepository) {
+        await syncStateRepository.renameModel(key, label);
+        if (key.startsWith('STREAM_')) {
+          const legacyKey = 'UNIT_TEST_' + key.replace('STREAM_', '');
+          // Special case for typo fix
+          const typoKey = legacyKey.includes('INCOMING') ? legacyKey.replace('INCOMING', 'INCOMMING') : legacyKey;
+          await syncStateRepository.renameModel(typoKey, label);
+        }
         await syncStateRepository.ensureModel(label);
       }
+
+      await handler.registerHandlers(syncManagerService, label);
 
       this._registry.set(key, {
         definition: def,

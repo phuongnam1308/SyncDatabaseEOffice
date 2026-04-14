@@ -9,3 +9,8 @@ dist/
 build/
 .vscode/
 .idea/
+.upload/
+tintucraw/*
+logs/*
+build_version/
+upload/

@@ -2,11 +2,11 @@ const tableMappings = {
   taskdelete: {
     oldTable: 'TaskVBDenDelete',
     oldSchema: 'dbo',
-    oldDatabase: 'DataEOfficeSNP',
+    oldDatabase: process.env.OLD_DB_NAME,
 
     newTable: 'task2',
     newSchema: 'dbo',
-    newDatabase: 'camunda',
+    newDatabase: process.env.NEW_DB_NAME,
 
     fieldMapping: {
       'ID': 'id_taskBackups',

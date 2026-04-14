@@ -3,11 +3,11 @@ const tableMappings = {
   fileRelations: {
     oldTable: 'files2',
     oldSchema: 'dbo',
-    oldDatabase: 'camunda',
+    oldDatabase: process.env.NEW_DB_NAME,
 
     newTable: 'file_relations2',
     newSchema: 'dbo',
-    newDatabase: 'camunda',
+    newDatabase: process.env.NEW_DB_NAME,
 
     fieldMapping: {
       // Các trường lấy trực tiếp từ files2

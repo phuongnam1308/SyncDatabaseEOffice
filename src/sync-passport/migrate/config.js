@@ -1,0 +1,51 @@
+require('dotenv').config();
+const mapping = require('./mapping.json');
+const statusMapping = require('./status_mapping.json');
+
+/* ===================== UTIL ===================== */
+
+const parseDate = (v) => {
+  if (!v) return null;
+  const d = new Date(v);
+  return isNaN(d.getTime()) ? null : d;
+};
+
+const mapStatus = (oldStatus) => {
+  if (!oldStatus) return statusMapping.DEFAULT || 'Chờ phê duyệt';
+  const s = String(oldStatus).trim();
+  if (statusMapping.MAPPING?.[s]) return statusMapping.MAPPING[s];
+  for (const [key, val] of Object.entries(statusMapping.MAPPING || {})) {
+    if (s.includes(key) || key.includes(s)) return val;
+  }
+  return statusMapping.DEFAULT || 'Chờ phê duyệt';
+};
+
+/* ===================== TABLE MAPPING ===================== */
+// Đọc DB từ env - đồng nhất với các module khác trong project:
+//   - OLD DB: SHAREPOINT_DB_NAME (WSS_Content_eoffice_khkd)
+//   - NEW DB: NEW_DB_NAME (app_tancang)
+const tableMappings = {
+  passport: {
+    // ============ SOURCE (SharePoint AllUserData) ============
+    oldTable:       mapping.oldTable       || 'AllUserData',
+    oldSchema:      mapping.oldSchema      || 'dbo',
+    oldDatabase:    process.env.SHAREPOINT_DB_NAME || mapping.oldDatabase,  // env: WSS_Content_eoffice_khkd
+    oldUserDatabase: mapping.oldUserDatabase || process.env.SHAREPOINT_DB_NAME || 'WSS_Content_eoffice_khkd',
+
+    listIds: mapping.listIds || [],
+
+    // ============ TARGET (camunda / app_tancang) ============
+    newTable:  mapping.newTable  || 'passport_borrow_requests',
+    newSchema: mapping.newSchema || 'dbo',
+    newDatabase: process.env.NEW_DB_NAME || 'app_tancang',                  // env: app_tancang
+
+    // ============ EXTERNAL KEY ============
+    externalKey:   mapping.externalKey || 'sharepoint_item_id',
+    backupIdField: 'sharepoint_item_id',
+
+    // ============ DEFAULTS ============
+    defaults: mapping.defaults || {},
+  },
+};
+
+module.exports = { tableMappings, mapStatus, parseDate };

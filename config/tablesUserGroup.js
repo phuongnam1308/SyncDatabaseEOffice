@@ -2,11 +2,11 @@ const tableMappings = {
   usergroup: {
     oldTable: 'UserGroup',
     oldSchema: 'SNP',              // Chú ý: schema là SNP, không phải dbo
-    oldDatabase: 'DataEOfficeSNP',
+    oldDatabase: process.env.OLD_DB_NAME,
     
     newTable: 'group_users',
     newSchema: 'dbo',
-    newDatabase: 'camunda',
+    newDatabase: process.env.NEW_DB_NAME,
     
     fieldMapping: {
       'ID': 'id_group_bk',       // ID cũ lưu vào backup

@@ -22,7 +22,7 @@ class IncomingFileMigrationModel extends BaseModel {
         ChenSo,
         SoTrang,
         LoaiVanBan
-      FROM DataEOfficeSNP.dbo.VanBanDen
+      FROM ${process.env.OLD_DB_NAME}.dbo.VanBanDen
       WHERE Files IS NOT NULL
     `;
     return this.queryOldDb(sql);
@@ -33,7 +33,7 @@ class IncomingFileMigrationModel extends BaseModel {
     const values = fields.map((_, i) => `@p${i}`).join(',');
 
     const sql = `
-      INSERT INTO camunda.dbo.files2 (${fields.join(',')})
+      INSERT INTO ${process.env.NEW_DB_NAME}.dbo.files2 (${fields.join(',')})
       VALUES (${values})
     `;
 

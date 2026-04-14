@@ -3,11 +3,11 @@ const tableMappings = {
   incomingdocumentdelete: {
     oldTable: 'VanBanDenDelete',
     oldSchema: 'dbo',
-    oldDatabase: 'DataEOfficeSNP',
+    oldDatabase: process.env.OLD_DB_NAME,
 
     newTable: 'incomming_documents2',
     newSchema: 'dbo',
-    newDatabase: 'camunda',
+    newDatabase: process.env.NEW_DB_NAME,
 
     fieldMapping: {
       'ID': 'id_incoming_bak',

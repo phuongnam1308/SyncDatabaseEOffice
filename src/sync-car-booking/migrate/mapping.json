@@ -1,0 +1,41 @@
+{
+  "oldTable": "AllUserData",
+  "oldSchema": "dbo",
+  "oldDatabase": "WSS_Content_eoffice_khkd",
+  "oldUserDatabase": "WSS_Content_eoffice",
+  "listIds": [
+    "090933CE-FF2D-4962-AC64-87B73626F973"
+  ],
+  "newTable": "vehicle_registrations",
+  "newSchema": "dbo",
+  "newDatabase": "app_tancang",
+  "fieldMapping": {
+    "ItemID": "id_sp_bak",
+    "Title": "name",
+    "StartDate": "departure_time",
+    "EndDate": "return_time",
+    "Location": "destination",
+    "Description": "purpose",
+    "Organizer": "contact_person",
+    "AuthorAccount": "created_by"
+  },
+  "defaults": {
+    "STATUS": 1,
+    "VEHICLE_STATE": "CHO_DIEU_PHOI",
+    "REQUEST_TYPE": "Tp",
+    "PRIORITY": "bt",
+    "PASSENGER_COUNT": 1,
+    "IS_IMPORTANT_GUEST": "co",
+    "TIMEZONE": "Asia/Ho_Chi_Minh",
+    "CONTENT": "Yêu cầu đặt xe (Đồng bộ)",
+    "LEADER": "Văn thư Tổng công ty",
+    "USER_ID": "SYSTEM_MIGRATION",
+    "TABLE_BAK": 1
+  },
+  "duplicateCheck": {
+    "fields": [
+      "id_sp_bak"
+    ],
+    "strategy": "update"
+  }
+}

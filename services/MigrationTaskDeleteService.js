@@ -129,7 +129,7 @@ class MigrationTaskDeleteService {
       const newCount = await this.model.countNewDb();  // Note: countNewDb là tổng task2, có thể không chính xác cho delete, nhưng tạm dùng
 
       return {
-        source: { database: 'DataEOfficeSNP', schema: 'dbo', table: 'TaskVBDenDelete', count: oldCount },
+        source: { database: process.env.OLD_DB_NAME, schema: 'dbo', table: 'TaskVBDenDelete', count: oldCount },
         destination: { database: process.env.NEW_DB_NAME, schema: 'dbo', table: 'task2', count: newCount },
         migrated: newCount,  // Không chính xác, nhưng để giống
         remaining: oldCount - newCount,

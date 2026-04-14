@@ -93,7 +93,7 @@ class MigrationTaskUsers2Service {
     const newCount = await this.model.countNewDb();
 
     return {
-      source: { database: 'DataEOfficeSNP', table: 'TaskVBDenPermission + UserField', count: oldCount },
+      source: { database: process.env.OLD_DB_NAME, table: 'TaskVBDenPermission + UserField', count: oldCount },
       destination: { database: process.env.NEW_DB_NAME, table: 'task_users2', count: newCount },
       migrated: newCount,
       remaining: oldCount - newCount,

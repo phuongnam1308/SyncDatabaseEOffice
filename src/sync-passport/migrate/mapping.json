@@ -1,0 +1,17 @@
+{
+  "oldTable": "AllUserData",
+  "oldSchema": "dbo",
+  "oldDatabase": "WSS_Content_eoffice_khkd",
+  "oldUserDatabase": "WSS_Content_eoffice_khkd",
+  "listIds": [
+    "AA17D759-0C33-4538-8347-EE5515AD06AC"
+  ],
+  "externalKey": "sharepoint_item_id",
+  "newTable": "passport_borrow_requests",
+  "newSchema": "dbo",
+  "defaults": {
+    "DEFAULT_STATUS": "Chờ phê duyệt",
+    "DEFAULT_TYPE": "user",
+    "DEFAULT_NAME": "Chưa xác định (Sync)"
+  }
+}

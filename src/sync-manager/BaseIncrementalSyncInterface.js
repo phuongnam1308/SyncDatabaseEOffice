@@ -6,6 +6,13 @@ class BaseIncrementalSyncInterface extends BaseModel {
     this.modelName = options.modelName || this.constructor.name;
   }
 
+    /**
+   * Hook: subclass override nếu cần chạy logic sau khi DB pool sẵn sàng.
+   * Ví dụ: tạo bảng trung gian, kiểm tra cấu hình...
+   * Mặc định không làm gì.
+   */
+  async onAfterInitialize() {}
+
   async fetchListFromOldDb(_lastSyncTime) {
     throw new Error(`[${this.modelName}] fetchListFromOldDb(lastSyncTime) must be implemented`);
   }

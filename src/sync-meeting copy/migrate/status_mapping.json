@@ -1,0 +1,23 @@
+{
+  "APPROVED": [
+    "Đã phát hành",
+    "Phê duyệt",
+    "Chờ phát hành"
+  ],
+  "DELETED": [
+    "Bị xóa"
+  ],
+  "PROCESSING_KEYWORDS": [
+    "Chờ",
+    "Đơn vị",
+    "Soạn thảo",
+    "dự thảo",
+    "Phó TGĐ",
+    "Lãnh đạo",
+    "Phòng",
+    "Ban",
+    "Bộ phận",
+    "CBNV"
+  ],
+  "DEFAULT_STATUS_CODE": 2
+}

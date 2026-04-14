@@ -92,7 +92,7 @@ class MigrationAgencyService {
       const newCount = await this.agencyModel.countNewDb();
 
       return {
-        source: { database: 'DataEOfficeSNP', schema: 'dbo', table: 'Department', count: oldCount },
+        source: { database: process.env.OLD_DB_NAME, schema: 'dbo', table: 'Department', count: oldCount },
         destination: { database: process.env.NEW_DB_NAME, table: 'agencies', count: newCount },
         migrated: newCount,
         remaining: oldCount - newCount,

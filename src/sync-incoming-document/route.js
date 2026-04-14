@@ -1,5 +1,5 @@
 const express = require('express');
-const SyncIncomingDocumentController = require('./migrate/SyncIncomingDocumentController');
+const SyncIncomingDocumentController = require('./controllers/SyncIncomingDocumentController');
 const router = express.Router();
 
 

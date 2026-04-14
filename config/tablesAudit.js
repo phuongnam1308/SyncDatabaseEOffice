@@ -3,11 +3,11 @@ const tableMappings = {
   audit: {
     oldTable: 'LuanChuyenVanBan',
     oldSchema: 'dbo',
-    oldDatabase: 'DataEOfficeSNP',
+    oldDatabase: process.env.OLD_DB_NAME,
 
     newTable: 'audit2',
     newSchema: 'dbo',
-    newDatabase: 'camunda',
+    newDatabase: process.env.NEW_DB_NAME,
 
     fieldMapping: {
       'ID': 'origin_id',  // Lưu ID cũ vào origin_id
