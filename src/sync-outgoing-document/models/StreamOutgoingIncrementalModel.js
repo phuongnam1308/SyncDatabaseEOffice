@@ -1,4 +1,5 @@
 const logger = require('../../../utils/logger');
+const dbUtils = require('../../../utils/dbUtils');
 const sql = require('mssql');
 const { v4: uuidv4 } = require("uuid");
 const SyncCommentModel = require('../../sync-document-comment/SyncCommentModel');
@@ -830,7 +831,10 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       );
       if (!rows || rows.length === 0) return { rowsCount: 0, stagedCount: 0 };
 
-      const stageResult = await this.syncOldToStaging(rows);
+      const stageResult = await dbUtils.withTransactionRetry(this.newPool, async (transaction) => {
+        return await this.syncOldToStaging(rows, { transaction });
+      }, { maxRetries: 5 });
+
       return { rowsCount: rows.length, stagedCount: Number(stageResult?.stagedCount || 0), lastRow: rows[rows.length - 1] };
     };
 

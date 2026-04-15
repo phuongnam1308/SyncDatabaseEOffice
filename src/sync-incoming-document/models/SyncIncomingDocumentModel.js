@@ -1,5 +1,6 @@
 // sync-incoming.model.js
 const BaseModel = require('../../../models/BaseModel');
+const dbUtils = require('../../../utils/dbUtils');
 const logger = require('../../../utils/logger');
 const sql = require('mssql');
 const crypto = require('crypto');
@@ -801,32 +802,31 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
       const current = Number(jobState?.total_processed || 0) + 1;
       logger.info(`[SyncIncomingDocumentModel] Process ${current}: record ID=${rowId}`);
 
-      transaction = new sql.Transaction(this.newPool);
-      await transaction.begin();
+      const result = await dbUtils.withTransactionRetry(this.newPool, async (transaction) => {
+        const rowResult = await this.processRowData(rowData, { transaction });
 
-      const result = await this.processRowData(rowData, { transaction });
+        const nextSyncTime = this.extractRowSyncTime(rowData) || lastSyncTime;
+        const nextSyncId = this.extractRowSyncId(rowData) || lastSyncId;
 
-      const nextSyncTime = this.extractRowSyncTime(rowData) || lastSyncTime;
-      const nextSyncId = this.extractRowSyncId(rowData) || lastSyncId;
+        await this.queryNewDbTx(
+          `UPDATE sync_jobs
+                   SET total_processed = ISNULL(total_processed, 0) + 1,
+                       total_success   = ISNULL(total_success, 0) + 1,
+                       last_sync_time  = @lastSyncTime,
+                       last_sync_id    = @lastSyncId
+                   WHERE job_id = @syncJobId`,
+          { syncJobId, lastSyncTime: nextSyncTime, lastSyncId: nextSyncId },
+          transaction,
+        );
 
-      await this.queryNewDbTx(
-        `UPDATE sync_jobs
-                 SET total_processed = ISNULL(total_processed, 0) + 1,
-                     total_success   = ISNULL(total_success, 0) + 1,
-                     last_sync_time  = @lastSyncTime,
-                     last_sync_id    = @lastSyncId
-                 WHERE job_id = @syncJobId`,
-        { syncJobId, lastSyncTime: nextSyncTime, lastSyncId: nextSyncId },
-        transaction,
-      );
-
-      await this.queryNewDbTx(
-        `UPDATE ${stagingTableRef} SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE ID = @ID`,
-        { ID: rowId },
-        transaction,
-      );
-
-      await transaction.commit();
+        await this.queryNewDbTx(
+          `UPDATE ${stagingTableRef} SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE ID = @ID`,
+          { ID: rowId },
+          transaction,
+        );
+        
+        return rowResult;
+      }, { maxRetries: 5 });
 
       return {
         syncJobId,
