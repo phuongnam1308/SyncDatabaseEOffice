@@ -958,7 +958,10 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       rowData = await this.fetchOneFromStaging();
 
       if (!rowData) {
-        logger.info(`[OutGoingDoc] Không còn dữ liệu trong staging cho job ${syncJobId}.`);
+        if (!this._finishedLogged) {
+          logger.info(`[OutGoingDoc] Không còn dữ liệu trong staging cho job ${syncJobId}`);
+          this._finishedLogged = true;
+        }
         await this.finalizeProcessingCursor(syncJobId);
         return {
           syncJobId,
@@ -1033,7 +1036,12 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
           MAX(TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), ''))) AS maxId
         FROM ${stagingTableRef}
         WHERE ISNULL(MigrateFlg, 0) = 1
-      `);
+          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
+          AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
+      `, {
+        startDate: process.env.SYNC_START_DATE || null,
+        endDate: process.env.SYNC_END_DATE || null
+      });
       if (res?.[0]?.maxTime) {
         const finalTime = new Date(res[0].maxTime).toISOString();
         const finalId   = Number(res[0].maxId || 0);
@@ -1044,7 +1052,9 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
            WHERE job_id = @jobId`,
           { t: finalTime, id: finalId, jobId: syncJobId }
         );
-        logger.info(`[OutGoingDoc] Cursor finalized: last_sync_time=${finalTime}, last_sync_id=${finalId}`);
+        logger.info(`[OutGoingDoc] Cursor finalized for partition: last_sync_time=${finalTime}, last_sync_id=${finalId}`);
+      } else {
+        logger.info(`[OutGoingDoc] finalizeProcessingCursor: không có bản ghi đã xử lý trong phân đoạn, cursor giữ nguyên.`);
       }
     } catch (err) {
       logger.warn(`[OutGoingDoc.finalizeProcessingCursor] Lỗi khi finalize cursor: ${err.message}`);

@@ -676,30 +676,41 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
 
       // ---------------------------------------------------------------
       // Tính toán window thời gian:
-      //   fromTime = MAX(Modified) ở bảng trung gian - LOOKBACK_HOURS (default 1h)
-      //   toTime   = thời gian hiện tại UTC + 7h (giờ VN hiện tại)
+      //   fromTime: Ưu tiên SYNC_START_DATE, nếu không thì lấy MAX(Staging) trong partition.
+      //   toTime:   Ưu tiên SYNC_END_DATE, nếu không thì lấy Now + 7h.
       // ---------------------------------------------------------------
       const stagingTableRef = this.getStagingTableRef();
       const lookbackHours = Number(process.env.STAGING_LOOKBACK_HOURS || 1);
       const nowUtc = new Date();
-      // toTime = now + 7h (bù múi giờ VN cho DB lưu giờ VN)
-      const toTime = new Date(nowUtc.getTime() + 7 * 60 * 60 * 1000).toISOString();
+      
+      const envStartDate = process.env.SYNC_START_DATE ? new Date(process.env.SYNC_START_DATE).toISOString() : null;
+      const envEndDate = process.env.SYNC_END_DATE ? new Date(process.env.SYNC_END_DATE).toISOString() : null;
+
+      // Mặc định toTime là bây giờ, trừ khi có SYNC_END_DATE
+      let toTime = envEndDate || new Date(nowUtc.getTime() + 7 * 60 * 60 * 1000).toISOString();
 
       if (currentSyncTime === DEFAULT_SYNC_TIME) {
-        // Lấy mốc lớn nhất từ bảng trung gian bằng TRY_CONVERT để xử lý đúng
+        // 1. Kiểm tra xem Staging đã có dữ liệu cho phân đoạn này chưa
         const maxRes = await this.queryNewDb(
-          `SELECT MAX(TRY_CONVERT(datetime2, Modified)) AS maxTime FROM ${stagingTableRef}`
+          `SELECT MAX(TRY_CONVERT(datetime2, Modified)) AS maxTime 
+           FROM ${stagingTableRef}
+           WHERE (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
+             AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)`,
+          { startDate: envStartDate, endDate: envEndDate }
         );
+
         if (maxRes?.[0]?.maxTime) {
           const rawMax = new Date(maxRes[0].maxTime);
-          // Trừ lookback để re-sync các bản ghi gần nhất tránh bỏ sót
-          const fromDate = new Date(rawMax.getTime() - lookbackHours * 60 * 60 * 1000);
-          currentSyncTime = fromDate.toISOString();
-          logger.info(`[IncomingDocumentModel] Mốc cursor tự động: MAX(staging)=${rawMax.toISOString()} - ${lookbackHours}h => fromTime=${currentSyncTime}`);
+          currentSyncTime = new Date(rawMax.getTime() - lookbackHours * 60 * 60 * 1000).toISOString();
+          logger.info(`[IncomingDocumentModel] Mốc cursor tự động từ Staging: ${currentSyncTime} (MAX trong phân đoạn - ${lookbackHours}h)`);
+        } else {
+          // 2. Nếu staging rỗng cho phân đoạn này, dùng SYNC_START_DATE làm mốc khởi đầu
+          currentSyncTime = envStartDate || DEFAULT_SYNC_TIME;
+          logger.info(`[IncomingDocumentModel] Staging trống cho phân đoạn, khởi đầu từ: ${currentSyncTime}`);
         }
       }
 
-      logger.info(`[IncomingDocumentModel] Window đồng bộ: [${currentSyncTime}] → [${toTime}]`);
+      logger.info(`[IncomingDocumentModel] Window đồng bộ (Phase 1: Old DB -> Staging): [${currentSyncTime}] → [${toTime}]`);
 
       let totalStagedCount = 0;
       let allRowsCount = 0;
@@ -886,7 +897,10 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
       rowData = await this.fetchOneFromStaging();
 
       if (!rowData) {
-        logger.info(`[IncomingDocumentModel] Không còn dữ liệu trong staging (cần xử lý) cho job ${syncJobId}.`);
+        if (!this._finishedLogged) {
+          logger.info(`[IncomingDocumentModel] Không còn dữ liệu trong staging (cần xử lý) cho job ${syncJobId}`);
+          this._finishedLogged = true;
+        }
         // Deferred cursor: cập nhật cursor lên MAX(Modified) sau khi toàn bộ staging xong
         await this.finalizeProcessingCursor(syncJobId);
         return {
@@ -971,7 +985,12 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
           MAX(TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(ID)), ''))) AS maxId
         FROM ${stagingTableRef}
         WHERE ISNULL(MigrateFlg, 0) = 1
-      `);
+          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
+          AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
+      `, {
+        startDate: process.env.SYNC_START_DATE || null,
+        endDate: process.env.SYNC_END_DATE || null
+      });
       if (res?.[0]?.maxTime) {
         const finalTime = new Date(res[0].maxTime).toISOString();
         const finalId = Number(res[0].maxId || 0);
@@ -982,9 +1001,9 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
            WHERE job_id = @jobId`,
           { t: finalTime, id: finalId, jobId: syncJobId }
         );
-        logger.info(`[IncomingDocumentModel] Cursor finalized: last_sync_time=${finalTime}, last_sync_id=${finalId}`);
+        logger.info(`[IncomingDocumentModel] Cursor finalized for partition: last_sync_time=${finalTime}, last_sync_id=${finalId}`);
       } else {
-        logger.info(`[IncomingDocumentModel] finalizeProcessingCursor: không có bản ghi đã xử lý, cursor giữ nguyên.`);
+        logger.info(`[IncomingDocumentModel] finalizeProcessingCursor: không có bản ghi đã xử lý trong phân đoạn, cursor giữ nguyên.`);
       }
     } catch (err) {
       logger.warn(`[IncomingDocumentModel.finalizeProcessingCursor] Lỗi khi finalize cursor: ${err.message}`);

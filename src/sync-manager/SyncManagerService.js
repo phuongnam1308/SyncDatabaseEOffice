@@ -917,17 +917,19 @@ class SyncManagerService {
         const processTimer = logger.startTimer(`BATCH_PROCESS | ${job.modelName} | Concurrency: ${SYNC_CONCURRENCY}`);
 
         // Helper function for parallel processing with concurrency control
+        let jobFinishedEarly = false;
         const processTasks = async () => {
           const results = [];
           const executing = new Set();
           
           for (const record of records) {
-            if (job.pauseRequested) break;
+            if (job.pauseRequested || jobFinishedEarly) break;
 
             const task = (async (r) => {
               try {
-                await handlers.processFn(r, { modelName: job.modelName, jobId: job.jobId });
-                return { success: true, record: r };
+                const resProc = await handlers.processFn(r, { modelName: job.modelName, jobId: job.jobId });
+                if (resProc && resProc.done) jobFinishedEarly = true;
+                return { success: true, record: r, result: resProc };
               } catch (err) {
                 return { success: false, record: r, error: err };
               }
@@ -981,8 +983,8 @@ class SyncManagerService {
         this._dbUpdateJob(job);      // ghi DB (thêm mới)
         this._dbUpdateModel(job.modelName, modelState); // ghi DB model state
 
-        if (job.pauseRequested) { this.markJobPaused(job); return; }
-        if (records.length < job.batchSize) break;
+        if (job.pauseRequested || jobFinishedEarly) { this.markJobPaused(job); return; }
+        if (records.length < job.batchSize || jobFinishedEarly) break;
       }
       this.completeJob(job);
     } catch (error) {

@@ -84,7 +84,7 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
     try {
       // 1. Xoá toàn bộ assignment của document
       await this.queryNewDbTx(
-        `DELETE FROM ${process.env.NEW_DB_NAME}.dbo.outgoing_assignment
+        `DELETE FROM ${process.env.NEW_DB_NAME}.dbo.outgoing_assignment WITH (ROWLOCK)
         WHERE document_id = @document_id`,
         { document_id },
         transaction
@@ -115,7 +115,7 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
         uniqueKeys.add(key);
 
         await this.queryNewDbTx(
-          `INSERT INTO ${process.env.NEW_DB_NAME}.dbo.outgoing_assignment
+          `INSERT INTO ${process.env.NEW_DB_NAME}.dbo.outgoing_assignment WITH (ROWLOCK)
           (document_id, receiver, role_process, stage_status,
             created_at, last_audit_id, receiver_unit, is_creator, table_backups)
           VALUES (@document_id, @receiver, @role_process, @stage_status,
@@ -164,7 +164,7 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
     const currentReceiver = receiver || receiver_unit || created_by;
 
     await this.queryNewDbTx(
-      `MERGE ${process.env.NEW_DB_NAME}.dbo.outgoing_current_state AS tgt
+      `MERGE ${process.env.NEW_DB_NAME}.dbo.outgoing_current_state WITH (ROWLOCK) AS tgt
        USING (SELECT @document_id AS document_id) AS src
        ON tgt.document_id = src.document_id
        WHEN MATCHED AND (@audit_time > tgt.last_audit_time OR (@audit_time = tgt.last_audit_time AND @last_audit_id >= tgt.last_audit_id) OR tgt.last_audit_time IS NULL) THEN

@@ -692,9 +692,10 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
   async getList(lastSyncTime, syncJobId, lastSyncId = 0) {
     if (!syncJobId) throw new Error('syncJobId is required');
 
-    const stageBatchSize = Number(
+    let stageBatchSize = Number(
       process.env.TINTUC_STAGE_BATCH_SIZE || process.env.COMPLETED_LIMIT || 500,
     );
+    if (!stageBatchSize || stageBatchSize <= 0) stageBatchSize = 500;
     // Số giờ quét lùi đọc từ biến môi trường (mặc định 24 giờ)
     const lookbackHours = Number(process.env.TINTUC_LOOKBACK_HOURS || 24);
 
