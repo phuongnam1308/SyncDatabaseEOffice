@@ -10,21 +10,21 @@ const { downloadFile: spDownload } = require('../../sync-file-copy/SharePointAut
 function detectFileType(buffer) {
   if (!buffer || buffer.length < 4) return { mime: 'application/octet-stream', ext: 'bin' };
   const b = buffer;
-  if (b[0]===0x25&&b[1]===0x50&&b[2]===0x44&&b[3]===0x46) return { mime:'application/pdf', ext:'pdf' };
-  if (b[0]===0x89&&b[1]===0x50&&b[2]===0x4E&&b[3]===0x47) return { mime:'image/png', ext:'png' };
-  if (b[0]===0xFF&&b[1]===0xD8&&b[2]===0xFF)               return { mime:'image/jpeg', ext:'jpg' };
-  if (b[0]===0x47&&b[1]===0x49&&b[2]===0x46)               return { mime:'image/gif', ext:'gif' };
-  if (b[0]===0x42&&b[1]===0x4D)                             return { mime:'image/bmp', ext:'bmp' };
-  if (b[0]===0x50&&b[1]===0x4B&&b[2]===0x03&&b[3]===0x04) {
-    const s = buffer.slice(0,200).toString('latin1');
-    if (s.includes('word/')) return { mime:'application/vnd.openxmlformats-officedocument.wordprocessingml.document', ext:'docx' };
-    if (s.includes('xl/'))   return { mime:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', ext:'xlsx' };
-    if (s.includes('ppt/'))  return { mime:'application/vnd.openxmlformats-officedocument.presentationml.presentation', ext:'pptx' };
-    return { mime:'application/zip', ext:'zip' };
+  if (b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46) return { mime: 'application/pdf', ext: 'pdf' };
+  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47) return { mime: 'image/png', ext: 'png' };
+  if (b[0] === 0xFF && b[1] === 0xD8 && b[2] === 0xFF) return { mime: 'image/jpeg', ext: 'jpg' };
+  if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) return { mime: 'image/gif', ext: 'gif' };
+  if (b[0] === 0x42 && b[1] === 0x4D) return { mime: 'image/bmp', ext: 'bmp' };
+  if (b[0] === 0x50 && b[1] === 0x4B && b[2] === 0x03 && b[3] === 0x04) {
+    const s = buffer.slice(0, 200).toString('latin1');
+    if (s.includes('word/')) return { mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', ext: 'docx' };
+    if (s.includes('xl/')) return { mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', ext: 'xlsx' };
+    if (s.includes('ppt/')) return { mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', ext: 'pptx' };
+    return { mime: 'application/zip', ext: 'zip' };
   }
-  if (b[0]===0xD0&&b[1]===0xCF&&b[2]===0x11&&b[3]===0xE0) return { mime:'application/msword', ext:'doc' };
-  if (b[0]===0x52&&b[1]===0x61&&b[2]===0x72&&b[3]===0x21) return { mime:'application/x-rar-compressed', ext:'rar' };
-  return { mime:'application/octet-stream', ext:'bin' };
+  if (b[0] === 0xD0 && b[1] === 0xCF && b[2] === 0x11 && b[3] === 0xE0) return { mime: 'application/msword', ext: 'doc' };
+  if (b[0] === 0x52 && b[1] === 0x61 && b[2] === 0x72 && b[3] === 0x21) return { mime: 'application/x-rar-compressed', ext: 'rar' };
+  return { mime: 'application/octet-stream', ext: 'bin' };
 }
 
 const SyncCommentModel = require('../../sync-document-comment/SyncCommentModel');
@@ -204,7 +204,7 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
             IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'incomming_documents' AND COLUMN_NAME = 'table_backups')
                 ALTER TABLE dbo.incomming_documents ADD table_backups NVARCHAR(MAX) NULL;
         `);
-      } catch(e) {
+      } catch (e) {
         logger.warn(`[IncomingDocumentModel] Failed to auto alter table incomming_documents: ${e.message}`);
       }
 
@@ -246,11 +246,11 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
    * Tự động tạo bảng trung gian `incomming_documents_sync` trong DB mới nếu chưa tồn tại.
    * Cấu trúc bảng được clone từ `VanBanDen` (DB cũ) qua IF NOT EXISTS + SELECT TOP 0 * INTO.
    */
-    async ensureStagingTableExists() {
-      try {
-        const stagingTableRef = this.getStagingTableRef();
+  async ensureStagingTableExists() {
+    try {
+      const stagingTableRef = this.getStagingTableRef();
 
-        const createQuery = `
+      const createQuery = `
         IF OBJECT_ID('${stagingTableRef}', 'U') IS NULL
         BEGIN
             CREATE TABLE ${stagingTableRef} (
@@ -307,14 +307,14 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
         END
         `;
 
-        await this.queryNewDb(createQuery);
+      await this.queryNewDb(createQuery);
 
-        logger.info(`[IncomingDocumentModel] Staging table ready`);
-      } catch (err) {
-        logger.error(`[IncomingDocumentModel.ensureStagingTableExists] Failed to create or verify staging table: ${err.message}`, { stack: err.stack });
-        throw err;
-      }
+      logger.info(`[IncomingDocumentModel] Staging table ready`);
+    } catch (err) {
+      logger.error(`[IncomingDocumentModel.ensureStagingTableExists] Failed to create or verify staging table: ${err.message}`, { stack: err.stack });
+      throw err;
     }
+  }
 
   /**
    * Resolves fully-qualified staging table reference in NEW DB.
@@ -585,7 +585,7 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
     // maxParams = 2000 (để dư một khoảng an toàn), numCols = số cột thực tế
     const numCols = columns.length || 1;
     const safeBatchByParams = Math.max(1, Math.floor(2000 / numCols));
-    const configuredBatch  = Number(process.env.STAGING_BATCH_SIZE || 50);
+    const configuredBatch = Number(process.env.STAGING_BATCH_SIZE || 50);
     const BATCH_SIZE = Math.min(configuredBatch, safeBatchByParams);
 
     // Chia rows thành các mini-batch
@@ -724,7 +724,7 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
           WHERE MigrateFlg = 2
         `);
         if (cleanupRes?.rowsAffected?.[0] > 0) {
-           logger.info(`[IncomingDocumentModel] Đã reset ${cleanupRes.rowsAffected[0]} bản ghi bị kẹt (MigrateFlg=2).`);
+          logger.info(`[IncomingDocumentModel] Đã reset ${cleanupRes.rowsAffected[0]} bản ghi bị kẹt (MigrateFlg=2).`);
         }
       } catch (cleanupErr) {
         logger.warn(`[IncomingDocumentModel] Cleanup stale records failed: ${cleanupErr.message}`);
@@ -745,7 +745,7 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
           await transaction.commit();
           stagedInBatch = stageResult?.stagedCount || 0;
         } catch (stageErr) {
-          if (transaction) await transaction.rollback().catch(() => {});
+          if (transaction) await transaction.rollback().catch(() => { });
           logger.error(`[IncomingDocumentModel.getList] Staging error at batch ${iteration}: ${stageErr.message}`);
         }
 
@@ -799,7 +799,7 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
           AND (${this.partitionColumn} <= @endDate   OR @endDate IS NULL)
       `, {
         startDate: SYNC_START_DATE || null,
-        endDate:   SYNC_END_DATE   || null
+        endDate: SYNC_END_DATE || null
       });
       const pendingCount = Number(pendingCountRes?.[0]?.cnt || 0);
       logger.info(`[IncomingDocumentModel] Pending records trong Staging chưa xử lý: ${pendingCount} (range: ${SYNC_START_DATE || 'ALL'} → ${SYNC_END_DATE || 'ALL'})`);
@@ -939,15 +939,15 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
       if (transaction) {
         try {
           await transaction.rollback();
-        } catch (rollbackError) {}
+        } catch (rollbackError) { }
       }
 
       // If failed, mark as error in staging so we skip it next time!
       if (rowData && rowData.ID) {
         try {
-           const stagingTableRef = this.getStagingTableRef();
-           await this.queryNewDb(`UPDATE ${stagingTableRef} SET MigrateErrFlg = 1, MigrateErrMess = @Err WHERE ID = @ID`, { ID: rowData.ID, Err: String(error.message).slice(0, 1000) });
-        } catch (updateErr) {}
+          const stagingTableRef = this.getStagingTableRef();
+          await this.queryNewDb(`UPDATE ${stagingTableRef} SET MigrateErrFlg = 1, MigrateErrMess = @Err WHERE ID = @ID`, { ID: rowData.ID, Err: String(error.message).slice(0, 1000) });
+        } catch (updateErr) { }
       }
 
       logger.error(`[IncomingDocumentModel.processOne] Failed row ID=${rowData?.ID}: ${error.message}`);
@@ -975,7 +975,7 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
       `);
       if (res?.[0]?.maxTime) {
         const finalTime = new Date(res[0].maxTime).toISOString();
-        const finalId   = Number(res[0].maxId || 0);
+        const finalId = Number(res[0].maxId || 0);
         await this.queryNewDb(
           `UPDATE sync_jobs
            SET last_sync_time = @t,
@@ -1114,8 +1114,8 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
 
       const uploadPromises = filesToProcess.map(async (relativePath) => {
         if (!relativePath.includes('/')) {
-            logger.warn(`[ThemFileDinhKem] Skipping invalid path part: "${relativePath}" for record ${oldRecord.ID}`);
-            return;
+          logger.warn(`[ThemFileDinhKem] Skipping invalid path part: "${relativePath}" for record ${oldRecord.ID}`);
+          return;
         }
 
         const fullUrl = `${baseUrl}${relativePath}`;
@@ -1147,17 +1147,17 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
           version: 1,
           id_bak: fileIdBak,
           table_bak: 'VanBanDen',
-          type_doc: 'IncomingDocument',
+          type_doc: 'incommingdocument',
           isBak: 1
         };
 
         const relationRecord = {
-          object_type: 'IncomingDocument',
+          object_type: 'incommingdocument',
           object_id: String(documentId),
           object_id_bak: oldRecord?.ID,
           file_id_bak: fileIdBak,
           table_bak: 'VanBanDen',
-          type_doc: 'IncomingDocument',
+          type_doc: 'incommingdocument',
         };
 
         logger.info(`[DEBUG][ThemFileDinhKem] [BUOC 4] Chuan bi metadata de upload. fileName=${fileName}, relativePath=${relativePath}, mimeType=${mimeType}`);
@@ -1183,12 +1183,12 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
     }
   }
 
-/**
-   * Tìm một bản ghi đầy đủ trong bảng staging theo ID.
-   * @param {string|number} id
-   * @param {object} [transaction]
-   * @returns {Promise<object|null>}
-   */
+  /**
+     * Tìm một bản ghi đầy đủ trong bảng staging theo ID.
+     * @param {string|number} id
+     * @param {object} [transaction]
+     * @returns {Promise<object|null>}
+     */
   async getByIdFromStaging(id, transaction = null) {
     if (!id) {
       throw new Error('[getByIdFromStaging] id là bắt buộc.');
@@ -1242,36 +1242,36 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
    * @param {{transaction?: object}} [context]
    * @returns {Promise<{action:string,affected:number}>}
    */
-    async upsertDocumentAggregateById(oldRecord, { transaction } = {}) {
-        const id = String(oldRecord?.ID || '').trim();
-        try {
-            if (!oldRecord) {
-                return { action: 'none', affected: 0 };
-            }
+  async upsertDocumentAggregateById(oldRecord, { transaction } = {}) {
+    const id = String(oldRecord?.ID || '').trim();
+    try {
+      if (!oldRecord) {
+        return { action: 'none', affected: 0 };
+      }
 
-            logger.info(`[AggregateSync][START] Bắt đầu xử lý bản ghi ID=${id} từ Staging.`);
+      logger.info(`[AggregateSync][START] Bắt đầu xử lý bản ghi ID=${id} từ Staging.`);
 
-            if (!this._IncomingMigrationModels) {
-                throw new Error(`[upsertDocumentAggregateById] Model not initialized for ID=${id}`);
-            }
+      if (!this._IncomingMigrationModels) {
+        throw new Error(`[upsertDocumentAggregateById] Model not initialized for ID=${id}`);
+      }
 
-            let totalAffected = 0;
+      let totalAffected = 0;
 
-            logger.info(`[AggregateSync][STEP 1] Xử lý mapping và chèn vào bảng chính incomming_documents cho ID=${id}...`);
-            const _timeStep1 = Date.now();
-            const documentResult = await this._IncomingMigrationModels.processSingleRecord(
-                oldRecord,
-                transaction
-            );
-            logger.info(`[PERF] STEP 1 (Document) took ${Date.now() - _timeStep1}ms for ID=${id}`);
+      logger.info(`[AggregateSync][STEP 1] Xử lý mapping và chèn vào bảng chính incomming_documents cho ID=${id}...`);
+      const _timeStep1 = Date.now();
+      const documentResult = await this._IncomingMigrationModels.processSingleRecord(
+        oldRecord,
+        transaction
+      );
+      logger.info(`[PERF] STEP 1 (Document) took ${Date.now() - _timeStep1}ms for ID=${id}`);
 
-            if (!documentResult || documentResult.affected === 0) {
-                logger.warn(`[AggregateSync][STEP 1] Bản ghi ID=${id} KHÔNG được chèn/cập nhật vào bảng chính.`);
-                return { action: 'none', affected: 0 };
-            }
-            logger.info(
-                `[AggregateSync][STEP 1] Thành công cho ID=${id} -> documentId=${documentResult.documentId} action=${documentResult?.action} affected=${documentResult?.affected}`
-            );
+      if (!documentResult || documentResult.affected === 0) {
+        logger.warn(`[AggregateSync][STEP 1] Bản ghi ID=${id} KHÔNG được chèn/cập nhật vào bảng chính.`);
+        return { action: 'none', affected: 0 };
+      }
+      logger.info(
+        `[AggregateSync][STEP 1] Thành công cho ID=${id} -> documentId=${documentResult.documentId} action=${documentResult?.action} affected=${documentResult?.affected}`
+      );
 
       totalAffected += Number(documentResult.affected || 0);
       const documentId = documentResult.documentId;
@@ -1295,97 +1295,97 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
       try {
         let totalParsedComments = 0;
         if (oldRecord?.YKienLanhDao) {
-           totalParsedComments += await this._IncomingMigrationModels.helper.parseAndInsertHtmlComments(
-              oldRecord.YKienLanhDao, documentId, id, 'VanBanDen', 'YKienLanhDao', transaction
-           );
+          totalParsedComments += await this._IncomingMigrationModels.helper.parseAndInsertHtmlComments(
+            oldRecord.YKienLanhDao, documentId, id, 'VanBanDen', 'YKienLanhDao', transaction
+          );
         }
         if (oldRecord?.YKienLanhDaoTCT) {
-           totalParsedComments += await this._IncomingMigrationModels.helper.parseAndInsertHtmlComments(
-              oldRecord.YKienLanhDaoTCT, documentId, id, 'VanBanDen', 'YKienLanhDaoTCT', transaction
-           );
+          totalParsedComments += await this._IncomingMigrationModels.helper.parseAndInsertHtmlComments(
+            oldRecord.YKienLanhDaoTCT, documentId, id, 'VanBanDen', 'YKienLanhDaoTCT', transaction
+          );
         }
         if (oldRecord?.YKienLanhDaoVPDN) {
-           totalParsedComments += await this._IncomingMigrationModels.helper.parseAndInsertHtmlComments(
-              oldRecord.YKienLanhDaoVPDN, documentId, id, 'VanBanDen', 'YKienLanhDaoVPDN', transaction
-           );
+          totalParsedComments += await this._IncomingMigrationModels.helper.parseAndInsertHtmlComments(
+            oldRecord.YKienLanhDaoVPDN, documentId, id, 'VanBanDen', 'YKienLanhDaoVPDN', transaction
+          );
         }
-                if (oldRecord?.YKienCuaLDVPChoVanThu) {
-                    totalParsedComments += await this._IncomingMigrationModels.helper.parseAndInsertHtmlComments(
-                        oldRecord.YKienCuaLDVPChoVanThu, documentId, id, 'VanBanDen', 'YKienCuaLDVPChoVanThu', transaction
-                    );
-                }
-                if (totalParsedComments > 0) {
-                    logger.info(`[AggregateSync][STEP 3] ID=${id} -> parse thành công = ${totalParsedComments} comments từ phân vùng Ý kiến Lãnh đạo.`);
-                } else {
-                    logger.info(`[AggregateSync][STEP 3] ID=${id} -> KHÔNG có ý kiến lãnh đạo HTML nào cần bóc.`);
-                }
-            } catch (htmlCommentErr) {
-                logger.warn(`[upsertDocumentAggregateById] Lỗi parse HTML YKien ID=${id}: ${htmlCommentErr.message}`);
-            }
-            logger.info(`[PERF] STEP 3 (HTML Comments) took ${Date.now() - _timeStep3}ms for ID=${id}`);
+        if (oldRecord?.YKienCuaLDVPChoVanThu) {
+          totalParsedComments += await this._IncomingMigrationModels.helper.parseAndInsertHtmlComments(
+            oldRecord.YKienCuaLDVPChoVanThu, documentId, id, 'VanBanDen', 'YKienCuaLDVPChoVanThu', transaction
+          );
+        }
+        if (totalParsedComments > 0) {
+          logger.info(`[AggregateSync][STEP 3] ID=${id} -> parse thành công = ${totalParsedComments} comments từ phân vùng Ý kiến Lãnh đạo.`);
+        } else {
+          logger.info(`[AggregateSync][STEP 3] ID=${id} -> KHÔNG có ý kiến lãnh đạo HTML nào cần bóc.`);
+        }
+      } catch (htmlCommentErr) {
+        logger.warn(`[upsertDocumentAggregateById] Lỗi parse HTML YKien ID=${id}: ${htmlCommentErr.message}`);
+      }
+      logger.info(`[PERF] STEP 3 (HTML Comments) took ${Date.now() - _timeStep3}ms for ID=${id}`);
 
-            // ══════════════════════════════════════════════════════════════
-            // AGGREGATED AUDIT SYNC: Gộp tất cả audit từ các bảng và xử lý theo thứ tự thời gian
-            // ══════════════════════════════════════════════════════════════
-            logger.info(`[AggregateSync][STEP 4] Bắt đầu tổng hợp Audit Trails từ ${AUDIT_TABLES.length} bảng liên quan cho ID=${id}...`);
-            const _timeStep4 = Date.now();
-            const auditModels = this._syncAuditModel || [];
-            if (auditModels.length > 0) {
+      // ══════════════════════════════════════════════════════════════
+      // AGGREGATED AUDIT SYNC: Gộp tất cả audit từ các bảng và xử lý theo thứ tự thời gian
+      // ══════════════════════════════════════════════════════════════
+      logger.info(`[AggregateSync][STEP 4] Bắt đầu tổng hợp Audit Trails từ ${AUDIT_TABLES.length} bảng liên quan cho ID=${id}...`);
+      const _timeStep4 = Date.now();
+      const auditModels = this._syncAuditModel || [];
+      if (auditModels.length > 0) {
+        try {
+          const auditTableNames = auditModels.map(m => m.oldDbTable);
+          const firstModel = auditModels[0];
+          const auditFetchOptions = AUDIT_MIN_DATE ? { minDate: AUDIT_MIN_DATE } : {};
+
+          // fetchAllAuditsAcrossTables ưu tiên chạy UNION ALL (1 query),
+          // fallback về cơ chế cũ nếu schema không tương thích.
+          const allRawAudits = await firstModel.fetchAllAuditsAcrossTables(
+            id,
+            auditTableNames,
+            [
+              CATEGORY_INCOMING_TCT,
+              CATEGORY_INCOMING,
+              CATEGORY_INCOMING_INTERNAL,
+              CATEGORY_INCOMING_SUBMIT
+            ],
+            auditFetchOptions
+          );
+
+          if (allRawAudits.length > 0) {
+            let auditInserted = 0;
+            let auditUpdated = 0;
+            let auditProcessed = 0;
+
+            for (const rawAudit of allRawAudits) {
+              const tableName = rawAudit.__source_table;
+              const model = this._syncAuditModelMap.get(tableName) || firstModel;
+
               try {
-                const auditTableNames = auditModels.map(m => m.oldDbTable);
-                const firstModel = auditModels[0];
-                const auditFetchOptions = AUDIT_MIN_DATE ? { minDate: AUDIT_MIN_DATE } : {};
+                const result = await model.processSingleRecord(rawAudit, documentId, transaction, drafter);
+                if (!result) continue;
 
-                // fetchAllAuditsAcrossTables ưu tiên chạy UNION ALL (1 query),
-                // fallback về cơ chế cũ nếu schema không tương thích.
-                const allRawAudits = await firstModel.fetchAllAuditsAcrossTables(
-                  id,
-                  auditTableNames,
-                  [
-                    CATEGORY_INCOMING_TCT,
-                    CATEGORY_INCOMING,
-                    CATEGORY_INCOMING_INTERNAL,
-                    CATEGORY_INCOMING_SUBMIT
-                  ],
-                  auditFetchOptions
-                );
-
-                if (allRawAudits.length > 0) {
-                  let auditInserted = 0;
-                  let auditUpdated = 0;
-                  let auditProcessed = 0;
-
-                  for (const rawAudit of allRawAudits) {
-                    const tableName = rawAudit.__source_table;
-                    const model = this._syncAuditModelMap.get(tableName) || firstModel;
-
-                    try {
-                      const result = await model.processSingleRecord(rawAudit, documentId, transaction, drafter);
-                      if (!result) continue;
-
-                      auditProcessed += 1;
-                      auditInserted += Number(result.inserted || 0);
-                      auditUpdated += Number(result.updated || 0);
-                    } catch (auditErr) {
-                      logger.warn(
-                        `[upsertDocumentAggregateById] Audit migrate failed for table=${tableName}, source ID=${id}, target documentId=${documentId}: ${auditErr.message}`, { stack: auditErr.stack }
-                      );
-                    }
-                  }
-
-                  totalAffected += auditInserted;
-                  totalAffected += auditUpdated;
-
-                  logger.info(
-                    `[AggregateSync][STEP 4] ID=${id} processed=${auditProcessed}/${allRawAudits.length} inserted=${auditInserted} updated=${auditUpdated}`
-                  );
-                }
-              } catch (error) {
+                auditProcessed += 1;
+                auditInserted += Number(result.inserted || 0);
+                auditUpdated += Number(result.updated || 0);
+              } catch (auditErr) {
                 logger.warn(
-                  `[upsertDocumentAggregateById] Aggregated fetch audit failed for ID=${id}: ${error.message}`, { stack: error.stack }
+                  `[upsertDocumentAggregateById] Audit migrate failed for table=${tableName}, source ID=${id}, target documentId=${documentId}: ${auditErr.message}`, { stack: auditErr.stack }
                 );
               }
             }
+
+            totalAffected += auditInserted;
+            totalAffected += auditUpdated;
+
+            logger.info(
+              `[AggregateSync][STEP 4] ID=${id} processed=${auditProcessed}/${allRawAudits.length} inserted=${auditInserted} updated=${auditUpdated}`
+            );
+          }
+        } catch (error) {
+          logger.warn(
+            `[upsertDocumentAggregateById] Aggregated fetch audit failed for ID=${id}: ${error.message}`, { stack: error.stack }
+          );
+        }
+      }
       logger.info(`[PERF] STEP 4 (Audits) took ${Date.now() - _timeStep4}ms for ID=${id}`);
 
       // ══════════════════════════════════════════════════════════════
