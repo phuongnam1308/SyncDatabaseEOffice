@@ -32,51 +32,13 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
   }
 
   async ensureOldTableHasNgayDen() {
-    try {
-      // Check if column exists
-      const checkQuery = `
-        SELECT COUNT(1) AS cnt
-        FROM INFORMATION_SCHEMA.COLUMNS
-        WHERE TABLE_NAME = '${this.oldDbTable}'
-          AND TABLE_SCHEMA = '${this.oldDbSchema}'
-          AND COLUMN_NAME = 'NgayDen'
-      `;
-      const result = await this.queryOldDb(checkQuery);
-      const exists = Number(result?.[0]?.cnt || 0) > 0;
-
-      if (exists) {
-        logger.info(
-          `[SyncIncomingDocumentModel] Column NgayDen already exists in ${this.oldDbSchema}.${this.oldDbTable}`,
-        );
-        return;
-      }
-
-      // Try to add the column
-      logger.info(
-        `[SyncIncomingDocumentModel] Attempting to add column NgayDen to ${this.oldDbSchema}.${this.oldDbTable}`,
-      );
-      const alterQuery = `ALTER TABLE ${this.oldDbSchema}.${this.oldDbTable} ADD NgayDen NVARCHAR(MAX) NULL;`;
-      await this.queryOldDb(alterQuery);
-
-      // Verify it was created
-      const verifyResult = await this.queryOldDb(checkQuery);
-      const verifyExists = Number(verifyResult?.[0]?.cnt || 0) > 0;
-
-      if (verifyExists) {
-        logger.info(
-          `[SyncIncomingDocumentModel] Column NgayDen successfully added to ${this.oldDbSchema}.${this.oldDbTable}`,
-        );
-      } else {
-        logger.warn(
-          `[SyncIncomingDocumentModel] Failed to verify column NgayDen was added - may not have ALTER TABLE permissions`,
-        );
-      }
-    } catch (error) {
-      logger.warn(
-        `[SyncIncomingDocumentModel] Error ensuring NgayDen column: ${error.message}. This may indicate permission issues or the column already exists.`,
-      );
-      // Don't throw - continue as column might already exist or we don't have permissions
-    }
+    const query = `
+      IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.oldDbTable}' AND TABLE_SCHEMA = '${this.oldDbSchema}' AND COLUMN_NAME = 'NgayDen')
+      BEGIN
+        ALTER TABLE ${this.oldDbSchema}.${this.oldDbTable} ADD NgayDen NVARCHAR(MAX) NULL;
+      END
+    `;
+    await this.queryOldDb(query);
   }
 
   async ensureStagingTableExists() {
@@ -499,76 +461,50 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
    * @param {string} lastSyncTime - ISO datetime hoặc giá trị mặc định để lấy từ thời điểm đó về sau
    * @returns {Promise<Array>} danh sách bản ghi từ CSDL cũ
    */
-  async fetchListFromOldDb(lastSyncTime, lastSyncId = 0, offset = 0, limit = 100, options = {}) {
-    // Build query with dynamic column selection for NgayDen
-    let ngayDenColumn = 'NULL AS [NgayDen]'; // Default to NULL if column doesn't exist
-    let ngayDenExists = false;
-
-    try {
-      const checkResult = await this.queryOldDb(`
-        SELECT COUNT(1) AS cnt
-        FROM INFORMATION_SCHEMA.COLUMNS
-        WHERE TABLE_NAME = '${this.oldDbTable}'
-          AND TABLE_SCHEMA = '${this.oldDbSchema}'
-          AND COLUMN_NAME = 'NgayDen'
-      `);
-      if (Number(checkResult?.[0]?.cnt || 0) > 0) {
-        ngayDenColumn = '[NgayDen]';
-        ngayDenExists = true;
-      }
-    } catch (err) {
-      logger.warn(`[SyncIncomingDocumentModel] Could not check for NgayDen column: ${err.message}`);
-    }
-
+  async fetchListFromOldDb(lastSyncTime, lastSyncId = 0, offset = 0, limit = 100) {
     const query = `
-      ;WITH source_rows AS (
+    ;WITH source_rows AS (
         SELECT
-          [ID], [Title], [SoDen], [CoQuanGui2], [CoQuanGuiText], [DonVi], [IsLibrary], [DoKhan], [DoMat],
-          CAST([Files] AS NVARCHAR(MAX)) AS [Files],
-          [ThoiHanGQ], [ItemVBDTCT], [ItemVBPH], [BanLanhDao], [LanhDaoTCT], [LanhDaoTCTDaXuLy],
-          [LanhDaoTCTDeBiet], [LanhDaoVPDN], [LinhVuc], [LoaiVanBan], [NgayTrenVB],
-          ${ngayDenColumn},
-          [SoBan], [SoTrang], [SoVanBan], [TrangThai], [TrichYeu], [VanBanTraLoi], [ChenSo],
-          [YKienLanhDao], [YKienLanhDaoTCT], [YKienLanhDaoVPDN], [YKienCuaLDVPChoVanThu],
-          [ForwardType], [Modified], [Created], [ModifiedBy], [CreatedBy], [ModuleId],
-          [SiteName], [ListName], [ItemId], [MigrateFlg], [YearMonth], [MigrateErrFlg],
-          [MigrateErrMess], [ItemVBPHOld], [DGPId],
-          ${this.getSyncTimeExpression()} AS __sync_time,
-          TRY_CONVERT(
-            BIGINT,
-            NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
-          ) AS __sync_id_num
+            [ID], [Title], [SoDen], [CoQuanGui2], [CoQuanGuiText], [DonVi], [IsLibrary], [DoKhan], [DoMat],
+            CAST([Files] AS NVARCHAR(MAX)) AS [Files],
+            [ThoiHanGQ], [ItemVBDTCT], [ItemVBPH], [BanLanhDao], [LanhDaoTCT], [LanhDaoTCTDaXuLy],
+            [LanhDaoTCTDeBiet], [LanhDaoVPDN], [LinhVuc], [LoaiVanBan], [NgayTrenVB],
+            [SoBan], [SoTrang], [SoVanBan], [TrangThai], [TrichYeu], [VanBanTraLoi], [ChenSo],
+            [YKienLanhDao], [YKienLanhDaoTCT], [YKienLanhDaoVPDN], [YKienCuaLDVPChoVanThu],
+            [ForwardType], [Modified], [Created], [ModifiedBy], [CreatedBy], [ModuleId],
+            [SiteName], [ListName], [ItemId], [MigrateFlg], [YearMonth], [MigrateErrFlg],
+            [MigrateErrMess], [ItemVBPHOld], [DGPId],
+            ${this.getSyncTimeExpression()} AS __sync_time,
+            TRY_CONVERT(
+                BIGINT,
+                NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
+            ) AS __sync_id_num
         FROM ${this.oldDbSchema}.${this.oldDbTable}
-        WHERE 1=1
-        ${ngayDenExists ? `
-          AND (@startDate IS NULL OR NgayDen >= @startDate)
-          AND (@endDate IS NULL OR NgayDen <= @endDate)
-        ` : ''}
-      )
-      SELECT * FROM (
+    )
+    SELECT * FROM (
         SELECT
-          *,
-          ISNULL(__sync_id_num, 0) AS __sync_id,
-          ROW_NUMBER() OVER (
-            ORDER BY
-              __sync_time ASC,
-              ISNULL(__sync_id_num, 0) ASC,
-              ID ASC
-          ) AS __page_rn
+            *,
+            ISNULL(__sync_id_num, 0) AS __sync_id,
+            ROW_NUMBER() OVER (
+                ORDER BY
+                    __sync_time ASC,
+                    ISNULL(__sync_id_num, 0) ASC,
+                    ID ASC
+            ) AS __page_rn
         FROM source_rows
         WHERE
-          __sync_time IS NOT NULL
-          AND (
-            @lastSyncTime = '1753-01-01T00:00:00.000Z'
-            OR __sync_time > @lastSyncTime
-            OR (
-              __sync_time = @lastSyncTime
-              AND ISNULL(__sync_id_num, 0) > @lastSyncId
+            __sync_time IS NOT NULL
+            AND (
+                @lastSyncTime = '1753-01-01T00:00:00.000Z'
+                OR __sync_time > @lastSyncTime
+                OR (
+                    __sync_time = @lastSyncTime
+                    AND ISNULL(__sync_id_num, 0) > @lastSyncId
+                )
             )
-          )
-      ) AS t
-      WHERE __page_rn > @offset AND __page_rn <= (@offset + @limit)
-      ORDER BY __page_rn
+    ) AS t
+    WHERE __page_rn > @offset AND __page_rn <= (@offset + @limit)
+    ORDER BY __page_rn
     `;
 
     const params = {
@@ -576,8 +512,6 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
       lastSyncId: Number(lastSyncId || 0),
       offset: Number(offset || 0),
       limit: Number(limit || 100),
-      startDate: options.startDate || process.env.SYNC_START_DATE || null,
-      endDate: options.endDate || process.env.SYNC_END_DATE || null,
     };
 
     return this.queryOldDb(query, params);
@@ -593,52 +527,33 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
   /**
    * Đếm tổng số bản ghi từ CSDL cũ.
    */
-  async countListFromOldDb(lastSyncTime, lastSyncId = 0, options = {}) {
-    let ngayDenExists = false;
-    try {
-      const checkResult = await this.queryOldDb(`
-        SELECT COUNT(1) AS cnt
-        FROM INFORMATION_SCHEMA.COLUMNS
-        WHERE TABLE_NAME = '${this.oldDbTable}'
-          AND TABLE_SCHEMA = '${this.oldDbSchema}'
-          AND COLUMN_NAME = 'NgayDen'
-      `);
-      ngayDenExists = Number(checkResult?.[0]?.cnt || 0) > 0;
-    } catch (err) {}
-
+  async countListFromOldDb(lastSyncTime, lastSyncId = 0) {
     const query = `
-      ;WITH source_rows AS (
+    ;WITH source_rows AS (
         SELECT
-          ${this.getSyncTimeExpression()} AS __sync_time,
-          TRY_CONVERT(
-            BIGINT,
-            NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
-          ) AS __sync_id_num
+            ${this.getSyncTimeExpression()} AS __sync_time,
+            TRY_CONVERT(
+                BIGINT,
+                NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
+            ) AS __sync_id_num
         FROM ${this.oldDbSchema}.${this.oldDbTable}
-        WHERE 1=1
-        ${ngayDenExists ? `
-          AND (@startDate IS NULL OR NgayDen >= @startDate)
-          AND (@endDate IS NULL OR NgayDen <= @endDate)
-        ` : ''}
-      )
-      SELECT COUNT(1) AS total
-      FROM source_rows
-      WHERE
+    )
+    SELECT COUNT(1) AS total
+    FROM source_rows
+    WHERE
         __sync_time IS NOT NULL
         AND (
-          @lastSyncTime = '1753-01-01T00:00:00.000Z'
-          OR __sync_time > @lastSyncTime
-          OR (
-            __sync_time = @lastSyncTime
-            AND ISNULL(__sync_id_num, 0) > @lastSyncId
-          )
+            @lastSyncTime = '1753-01-01T00:00:00.000Z'
+            OR __sync_time > @lastSyncTime
+            OR (
+                __sync_time = @lastSyncTime
+                AND ISNULL(__sync_id_num, 0) > @lastSyncId
+            )
         )
     `;
     const params = {
       lastSyncTime,
       lastSyncId: Number(lastSyncId || 0),
-      startDate: options.startDate || process.env.SYNC_START_DATE || null,
-      endDate: options.endDate || process.env.SYNC_END_DATE || null,
     };
     const res = await this.queryOldDb(query, params);
     return Number(res?.[0]?.total || 0);
@@ -726,13 +641,10 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         }
       }
 
-
       let totalStagedCount = 0;
       let allRowsCount = 0;
-      const totalCountToFetch = await this.countListFromOldDb(currentSyncTime, currentSyncId, {
-        startDate: process.env.SYNC_START_DATE,
-        endDate: process.env.SYNC_END_DATE
-      });
+
+      const totalCountToFetch = await this.countListFromOldDb(currentSyncTime, currentSyncId);
       logger.info(`[SyncIncomingDocumentModel] Tổng số bản ghi cần đồng bộ: ${totalCountToFetch}`);
 
       const fetchLimit = Number(process.env.COMPLETED_LIMIT || 100);
@@ -744,10 +656,6 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
           currentSyncId,
           offset,
           fetchLimit,
-          {
-            startDate: process.env.SYNC_START_DATE,
-            endDate: process.env.SYNC_END_DATE
-          }
         );
         if (!rows || rows.length === 0) break;
 
@@ -862,109 +770,84 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
     const lastSyncId = Number(jobState?.last_sync_id || 0);
 
     let rowData = null;
-    let lastError = null;
-    const MAX_RETRIES = 3;
+    let transaction = null;
 
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      let transaction = null;
-      try {
-        const stagingTableRef = this.getStagingTableRef();
+    try {
+      const stagingTableRef = this.getStagingTableRef();
 
-        rowData = await this.fetchOneFromStaging();
+      rowData = await this.fetchOneFromStaging();
 
-        if (!rowData) {
-          logger.info(
-            `[SyncIncomingDocumentModel] Không còn dữ liệu trong staging để xử lý cho job ${syncJobId}.`,
-          );
-          return {
-            syncJobId,
-            processed: false,
-            done: true,
-          };
-        }
-
-        const rowId = rowData.ID || null;
-        const current = Number(jobState?.total_processed || 0) + 1;
-        logger.info(`[SyncIncomingDocumentModel] Process ${current}: record ID=${rowId} (attempt ${attempt})`);
-
-        transaction = new sql.Transaction(this.newPool);
-        await transaction.begin();
-
-        const result = await this.processRowData(rowData, { transaction });
-
-        const nextSyncTime = this.extractRowSyncTime(rowData) || lastSyncTime;
-        const nextSyncId = this.extractRowSyncId(rowData) || lastSyncId;
-
-        await this.queryNewDbTx(
-          `UPDATE sync_jobs
-                   SET total_processed = ISNULL(total_processed, 0) + 1,
-                       total_success   = ISNULL(total_success, 0) + 1,
-                       last_sync_time  = @lastSyncTime,
-                       last_sync_id    = @lastSyncId
-                   WHERE job_id = @syncJobId`,
-          { syncJobId, lastSyncTime: nextSyncTime, lastSyncId: nextSyncId },
-          transaction,
+      if (!rowData) {
+        logger.info(
+          `[SyncIncomingDocumentModel] Không còn dữ liệu trong staging để xử lý cho job ${syncJobId}.`,
         );
-
-        await this.queryNewDbTx(
-          `UPDATE ${stagingTableRef} SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE ID = @ID`,
-          { ID: rowId },
-          transaction,
-        );
-
-        await transaction.commit();
-
         return {
           syncJobId,
-          processed: true,
-          done: false,
-          rowId,
-          result,
+          processed: false,
+          done: true,
         };
-      } catch (error) {
-        lastError = error;
-        // Kiểm tra deadlock (error code 1205 hoặc message liên quan)
-        const isDeadlock =
-          (error && error.number === 1205) ||
-          (typeof error.message === 'string' &&
-            error.message.toLowerCase().includes('deadlock'));
-
-        if (transaction) {
-          try {
-            await transaction.rollback();
-          } catch (rollbackError) {}
-        }
-
-        if (isDeadlock && attempt < MAX_RETRIES) {
-          logger.warn(
-            `[SyncIncomingDocumentModel] Deadlock detected (attempt ${attempt}). Retrying...`,
-          );
-          await new Promise((resolve) => setTimeout(resolve, 200 * attempt)); // backoff
-          continue;
-        }
-
-        // Ghi nhận lỗi vào staging nếu không phải deadlock hoặc hết retry
-        if (rowData && rowData.ID) {
-          try {
-            const stagingTableRef = this.getStagingTableRef();
-            await this.queryNewDb(
-              `UPDATE ${stagingTableRef} SET MigrateErrFlg = 1, MigrateErrMess = @Err WHERE ID = @ID`,
-              { ID: rowData.ID, Err: String(error.message).slice(0, 1000) },
-            );
-          } catch (updateErr) {}
-        }
-
-        logger.error(
-          `[SyncIncomingDocumentModel.processOne] Failed row ID=${rowData?.ID} (attempt ${attempt}): ${error.message}`,
-        );
-        // Nếu không phải deadlock hoặc đã hết retry thì throw
-        if (!isDeadlock || attempt === MAX_RETRIES) {
-          throw error;
-        }
       }
+
+      const rowId = rowData.ID || null;
+      const current = Number(jobState?.total_processed || 0) + 1;
+      logger.info(`[SyncIncomingDocumentModel] Process ${current}: record ID=${rowId}`);
+
+      transaction = new sql.Transaction(this.newPool);
+      await transaction.begin();
+
+      const result = await this.processRowData(rowData, { transaction });
+
+      const nextSyncTime = this.extractRowSyncTime(rowData) || lastSyncTime;
+      const nextSyncId = this.extractRowSyncId(rowData) || lastSyncId;
+
+      await this.queryNewDbTx(
+        `UPDATE sync_jobs
+                 SET total_processed = ISNULL(total_processed, 0) + 1,
+                     total_success   = ISNULL(total_success, 0) + 1,
+                     last_sync_time  = @lastSyncTime,
+                     last_sync_id    = @lastSyncId
+                 WHERE job_id = @syncJobId`,
+        { syncJobId, lastSyncTime: nextSyncTime, lastSyncId: nextSyncId },
+        transaction,
+      );
+
+      await this.queryNewDbTx(
+        `UPDATE ${stagingTableRef} SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE ID = @ID`,
+        { ID: rowId },
+        transaction,
+      );
+
+      await transaction.commit();
+
+      return {
+        syncJobId,
+        processed: true,
+        done: false,
+        rowId,
+        result,
+      };
+    } catch (error) {
+      if (transaction) {
+        try {
+          await transaction.rollback();
+        } catch (rollbackError) {}
+      }
+
+      if (rowData && rowData.ID) {
+        try {
+          const stagingTableRef = this.getStagingTableRef();
+          await this.queryNewDb(
+            `UPDATE ${stagingTableRef} SET MigrateErrFlg = 1, MigrateErrMess = @Err WHERE ID = @ID`,
+            { ID: rowData.ID, Err: String(error.message).slice(0, 1000) },
+          );
+        } catch (updateErr) {}
+      }
+
+      logger.error(
+        `[SyncIncomingDocumentModel.processOne] Failed row ID=${rowData?.ID}: ${error.message}`,
+      );
+      throw error;
     }
-    // Nếu hết retry mà vẫn lỗi, throw lỗi cuối cùng
-    throw lastError || new Error('Unknown error in processOne');
   }
 
   async processRowData(rowData, { transaction } = {}) {

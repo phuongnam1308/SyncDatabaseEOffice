@@ -519,8 +519,8 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
       ${toTimeFilter}
     `;
 
-      const params = { 
-        lastSyncTime, 
+      const params = {
+        lastSyncTime,
         lastSyncId: Number(lastSyncId || 0),
         startDate: process.env.SYNC_START_DATE || null,
         endDate: process.env.SYNC_END_DATE || null
