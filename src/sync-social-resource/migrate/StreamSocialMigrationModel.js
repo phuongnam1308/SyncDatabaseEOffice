@@ -261,7 +261,9 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
         }
 
         const internalColumns = new Set(['__sync_time', '__sync_id', '__sync_id_num']);
-        const columns = Object.keys(rows[0] || {}).filter((column) => !internalColumns.has(column));
+        const columns = Object.keys(rows[0] || {}).filter(
+            (column) => !String(column).startsWith('__') && !internalColumns.has(column)
+        );
         if (!columns.length) return { stagedCount: 0 };
 
         if (!columns.includes('ID')) {

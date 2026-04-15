@@ -416,7 +416,9 @@ class StreamMissionMigrationModel extends BaseIncrementalSyncInterface {
     if (!Array.isArray(rows) || rows.length === 0) return { stagedCount: 0 };
     console.log(`[StreamMissionMigrationModel] Staging ${rows.length} rows to ${this.newTableSync}...`);
     const internalColumns = new Set(['__sync_time', '__sync_id_num']);
-    const columns = Object.keys(rows[0]).filter(c => !internalColumns.has(c));
+    const columns = Object.keys(rows[0] || {}).filter(
+      (c) => !String(c).startsWith('__') && !internalColumns.has(c)
+    );
     const keyColumn = 'ItemID';
     const stagingTableRef = this.getStagingTableRef();
 

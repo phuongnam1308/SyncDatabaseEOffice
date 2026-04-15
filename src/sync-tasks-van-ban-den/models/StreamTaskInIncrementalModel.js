@@ -927,7 +927,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       const query = `
       WITH CTE AS (
         SELECT TOP (1) *
-        FROM ${stagingTableRef}
+        FROM ${stagingTableRef} WITH (UPDLOCK, READPAST, ROWLOCK)
         WHERE ISNULL(MigrateFlg, 0) = 0
           AND ISNULL(MigrateErrFlg, 0) = 0
           -- Lọc theo cột nghiệp vụ để chia tải giữa các Worker
@@ -1065,7 +1065,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
 
       // Mark staging row as processed successfully
       await this.queryNewDbTx(
-        `UPDATE ${stagingTableRef} SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE ID = @ID`,
+        `UPDATE ${stagingTableRef} WITH (ROWLOCK) SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE ID = @ID`,
         { ID: rowId },
         transaction
       );

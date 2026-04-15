@@ -42,12 +42,33 @@ const {
 
 const DEFAULT_SYNC_TIME = '1753-01-01T00:00:00.000Z';
 
-// Lọc bản ghi cũ hơn ngưỡng này. Đặt trong .env với key SYNC_MIN_DATE.
-// Ví dụ: SYNC_MIN_DATE=2026-01-01T00:00:00.000Z
-// Để tắt filter (lấy toàn bộ lịch sử), để trống hoặc đặt bằng '1753-01-01T00:00:00.000Z'
-const SYNC_MIN_DATE = process.env.SYNC_MIN_DATE || '2026-01-01T00:00:00.000Z';
-const SYNC_START_DATE = process.env.SYNC_START_DATE || SYNC_MIN_DATE;
-const SYNC_END_DATE = process.env.SYNC_END_DATE || '2100-01-01T00:00:00.000Z';
+function normalizeConfiguredDate(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const dateValue = new Date(raw);
+  return Number.isNaN(dateValue.getTime()) ? null : dateValue.toISOString();
+}
+
+function resolveEffectiveSyncMinDate() {
+  const configuredMinDate = normalizeConfiguredDate(process.env.SYNC_MIN_DATE);
+  const configuredStartDate = normalizeConfiguredDate(process.env.SYNC_START_DATE);
+
+  // Khi user chủ động cấu hình khoảng sync sớm hơn ngưỡng mặc định,
+  // ưu tiên mốc nhỏ hơn để không vô tình loại hết dữ liệu cũ.
+  if (configuredMinDate && configuredStartDate) {
+    return new Date(configuredStartDate) < new Date(configuredMinDate)
+      ? configuredStartDate
+      : configuredMinDate;
+  }
+
+  return configuredMinDate || configuredStartDate || DEFAULT_SYNC_TIME;
+}
+
+// SYNC_MIN_DATE là ngưỡng bảo vệ toàn cục theo __sync_time.
+// Nếu SYNC_START_DATE được cấu hình sớm hơn mốc này thì tự hạ theo SYNC_START_DATE.
+const SYNC_MIN_DATE = resolveEffectiveSyncMinDate();
+const SYNC_START_DATE = normalizeConfiguredDate(process.env.SYNC_START_DATE);
+const SYNC_END_DATE = normalizeConfiguredDate(process.env.SYNC_END_DATE) || '2100-01-01T00:00:00.000Z';
 const AUDIT_MIN_DATE = (process.env.AUDIT_MIN_DATE || '').trim();
 
 const AUDIT_TABLES = [
@@ -447,7 +468,7 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
             AND ISNULL(__sync_id_num, 0) > @lastSyncId
           )
         )
-        -- Chỉ lấy bản ghi từ năm 2026 trở đi (Nếu SYNC_MIN_DATE được bật)
+        -- Chặn dưới theo __sync_time bằng SYNC_MIN_DATE hiệu lực
         AND __sync_time >= '${SYNC_MIN_DATE}'
         ${partitionFilter}
         ${toTimeFilter}
@@ -461,8 +482,8 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
         lastSyncId: Number(lastSyncId || 0),
         offset: Number(offset || 0),
         limit: Number(limit || 2000),
-        startDate: process.env.SYNC_START_DATE || null,
-        endDate: process.env.SYNC_END_DATE || null
+        startDate: SYNC_START_DATE || null,
+        endDate: SYNC_END_DATE || null
       };
       if (toTime) params.toTime = toTime;
       return await this.queryOldDb(query, params);
@@ -513,7 +534,7 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
           AND ISNULL(__sync_id_num, 0) > @lastSyncId
         )
       )
-      -- Chỉ lấy bản ghi từ năm 2026 trở đi (Nếu SYNC_MIN_DATE được bật)
+      -- Chặn dưới theo __sync_time bằng SYNC_MIN_DATE hiệu lực
       AND __sync_time >= '${SYNC_MIN_DATE}'
       ${partitionFilter}
       ${toTimeFilter}
@@ -522,8 +543,8 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
       const params = {
         lastSyncTime,
         lastSyncId: Number(lastSyncId || 0),
-        startDate: process.env.SYNC_START_DATE || null,
-        endDate: process.env.SYNC_END_DATE || null
+        startDate: SYNC_START_DATE || null,
+        endDate: SYNC_END_DATE || null
       };
       if (toTime) params.toTime = toTime;
       const res = await this.queryOldDb(query, params);
@@ -547,8 +568,7 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
       return { stagedCount: 0 };
     }
 
-    const internalColumns = new Set(['__sync_time', '__sync_id', '__sync_id_num']);
-    const columns = Object.keys(rows[0] || {}).filter((column) => !internalColumns.has(column));
+    const columns = Object.keys(rows[0] || {}).filter((column) => !String(column).startsWith('__'));
     if (!columns.length) {
       return { stagedCount: 0 };
     }
@@ -778,11 +798,11 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
           AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
           AND (${this.partitionColumn} <= @endDate   OR @endDate IS NULL)
       `, {
-        startDate: process.env.SYNC_START_DATE || null,
-        endDate:   process.env.SYNC_END_DATE   || null
+        startDate: SYNC_START_DATE || null,
+        endDate:   SYNC_END_DATE   || null
       });
       const pendingCount = Number(pendingCountRes?.[0]?.cnt || 0);
-      logger.info(`[IncomingDocumentModel] Pending records trong Staging chưa xử lý: ${pendingCount} (range: ${process.env.SYNC_START_DATE || 'ALL'} → ${process.env.SYNC_END_DATE || 'ALL'})`);
+      logger.info(`[IncomingDocumentModel] Pending records trong Staging chưa xử lý: ${pendingCount} (range: ${SYNC_START_DATE || 'ALL'} → ${SYNC_END_DATE || 'ALL'})`);
 
       // Cập nhật Dashboard lần cuối với tổng số thực tế (bao gồm cả các bản ghi tồn đọng cũ trong staging)
       await this.queryNewDb(`UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`, {
@@ -901,7 +921,7 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
 
       // Mark staging row as processed successfully
       await this.queryNewDbTx(
-        `UPDATE ${stagingTableRef} SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE ID = @ID`,
+        `UPDATE ${stagingTableRef} WITH (ROWLOCK) SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE ID = @ID`,
         { ID: rowId },
         transaction
       );
@@ -988,7 +1008,7 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
       const query = `
       WITH CTE AS (
         SELECT TOP (1) *
-        FROM ${stagingTableRef}
+        FROM ${stagingTableRef} WITH (UPDLOCK, READPAST, ROWLOCK)
         WHERE ISNULL(MigrateFlg, 0) = 0
           AND ISNULL(MigrateErrFlg, 0) = 0
           -- Phân đoạn dữ liệu theo cột nghiệp vụ để Worker không nhặt nhầm dải của nhau
@@ -1004,8 +1024,8 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
       `;
 
       const rows = await this.queryNewDb(query, {
-        startDate: process.env.SYNC_START_DATE || null,
-        endDate: process.env.SYNC_END_DATE || null
+        startDate: SYNC_START_DATE || null,
+        endDate: SYNC_END_DATE || null
       });
       return rows?.length ? rows[0] : null;
     } catch (error) {

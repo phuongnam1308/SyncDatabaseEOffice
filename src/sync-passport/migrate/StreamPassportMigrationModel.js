@@ -439,7 +439,9 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
       // Inject tb_bak = 1 để đánh dấu record đến từ SharePoint
       row.tb_bak = 1;
 
-      const columns = Object.keys(row).filter(c => !internalColumns.has(c));
+      const columns = Object.keys(row || {}).filter(
+        (c) => !String(c).startsWith('__') && !internalColumns.has(c)
+      );
       const params = {};
       for (const column of columns) {
         params[column] = row[column] !== undefined ? row[column] : null;

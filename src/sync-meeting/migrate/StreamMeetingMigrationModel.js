@@ -200,8 +200,8 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     }
 
     const internalColumns = new Set(['__sync_time', '__sync_id_num']);
-    const columns = Object.keys(rows[0]).filter(
-      (c) => !internalColumns.has(c)
+    const columns = Object.keys(rows[0] || {}).filter(
+      (c) => !String(c).startsWith('__') && !internalColumns.has(c)
     );
 
     if (!columns.length) return { stagedCount: 0 };
