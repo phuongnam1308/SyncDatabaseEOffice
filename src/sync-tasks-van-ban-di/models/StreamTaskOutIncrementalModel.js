@@ -12,6 +12,8 @@ const DEFAULT_SYNC_TIME = '9999-12-31T23:59:59.999Z';
 // Ví dụ: SYNC_MIN_DATE=2026-01-01T00:00:00.000Z
 // Để tắt filter (lấy toàn bộ lịch sử), để trống hoặc đặt thành 1753-01-01T00:00:00.000Z
 const SYNC_MIN_DATE = process.env.SYNC_MIN_DATE || '2026-01-01T00:00:00.000Z';
+const SYNC_START_DATE = process.env.SYNC_START_DATE || SYNC_MIN_DATE;
+const SYNC_END_DATE = process.env.SYNC_END_DATE || '2100-01-01T00:00:00.000Z';
 
 // ─── Deadlock retry config ────────────────────────────────────────────────────
 const DEADLOCK_MAX_RETRIES = 3;
@@ -178,6 +180,7 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
 
     // Guard: prevent concurrent initialize() calls from racing on staging DDL
     this._initializingPromise = null;
+    this.partitionColumn = 'Created'; // Cột nghiệp vụ để chia dải dữ liệu
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -644,6 +647,9 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
             NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
           ) AS __sync_id_num
         FROM ${this.oldDbSchema}.${this.oldDbTable}
+        WHERE 1=1
+          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
+          AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
       )
       SELECT COUNT(1) AS total
       FROM source_rows
@@ -654,13 +660,15 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
           AND ISNULL(__sync_id_num, 9223372036854775807) < @lastSyncId
         )
       )
-      -- Chỉ lấy bản ghi từ năm 2026 trở đi
+      -- Chỉ lấy bản ghi từ năm 2026 trở đi (Nếu SYNC_MIN_DATE được bật)
       AND __sync_time >= '${SYNC_MIN_DATE}'
     `;
 
     const rows = await this.queryOldDb(query, {
       lastSyncTime: normalizedLastSyncTime,
       lastSyncId: normalizedLastSyncId,
+      startDate: process.env.SYNC_START_DATE || null,
+      endDate: process.env.SYNC_END_DATE || null
     });
 
     return Number(rows?.[0]?.total || 0);
@@ -690,27 +698,35 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
             NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
           ) AS _sync_id_val
         FROM ${this.oldDbSchema}.${this.oldDbTable}
+        WHERE 1=1
+          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
+          AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
       )
-      SELECT
-        *,
-        _sync_time_val AS __sync_time,
-        ISNULL(_sync_id_val, 0) AS __sync_id
-      FROM source_rows
-      WHERE (
-        _sync_time_val < @lastSyncTime
-        OR (
-          _sync_time_val = @lastSyncTime
-          AND ISNULL(_sync_id_val, 9223372036854775807) < @lastSyncId
+      SELECT * FROM (
+        SELECT
+          *,
+          _sync_time_val AS __sync_time,
+          ISNULL(_sync_id_val, 0) AS __sync_id,
+          ROW_NUMBER() OVER (
+            ORDER BY
+              _sync_time_val DESC,
+              ISNULL(_sync_id_val, 9223372036854775807) DESC,
+              ID DESC
+          ) AS __page_rn
+        FROM source_rows
+        WHERE (
+          __sync_time < @lastSyncTime
+          OR (
+            __sync_time = @lastSyncTime
+            AND ISNULL(__sync_id, 9223372036854775807) < @lastSyncId
+          )
         )
-      )
-      -- Chỉ lấy bản ghi từ năm 2026 trở đi
-      AND _sync_time_val >= '${SYNC_MIN_DATE}'
-      ORDER BY
-        _sync_time_val DESC,
-        ISNULL(_sync_id_val, 9223372036854775807) DESC,
-        ID DESC
-      OFFSET @offset ROWS
-      ${limit ? `FETCH NEXT @limit ROWS ONLY` : ''}
+        -- Chỉ lấy bản ghi từ năm 2026 trở đi
+        AND __sync_time >= '${SYNC_MIN_DATE}'
+      ) AS t
+      WHERE __page_rn > @offset
+      ${limit ? `AND __page_rn <= (@offset + @limit)` : ''}
+      ORDER BY __page_rn
     `;
 
     return this.queryOldDb(query, {
@@ -718,6 +734,8 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
       lastSyncId: Number(lastSyncId || 0),
       limit: limit ? Number(limit) : null,
       offset: Number(offset || 0),
+      startDate: process.env.SYNC_START_DATE || null,
+      endDate: process.env.SYNC_END_DATE || null
     });
   }
 
@@ -956,6 +974,9 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
         FROM ${stagingTableRef}
         WHERE ISNULL(MigrateFlg, 0) = 0
           AND ISNULL(MigrateErrFlg, 0) = 0
+          -- Lọc theo cột nghiệp vụ để chia tải giữa các Worker
+          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
+          AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
         ORDER BY TRY_CONVERT(datetime2, Modified) DESC,
                  TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')) DESC
       )
@@ -965,7 +986,10 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
       OUTPUT inserted.*
       `;
 
-      const rows = await this.queryNewDb(query);
+      const rows = await this.queryNewDb(query, {
+        startDate: process.env.SYNC_START_DATE || null,
+        endDate: process.env.SYNC_END_DATE || null
+      });
       return rows?.length ? rows[0] : null;
     } catch (error) {
       logger.error(`[StreamTaskOut.fetchOneFromStaging] Failed: ${error.message}`);

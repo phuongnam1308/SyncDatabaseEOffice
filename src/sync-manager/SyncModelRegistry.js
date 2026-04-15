@@ -219,7 +219,27 @@ class SyncModelRegistry {
    * @returns {Promise<void>}
    */
   async _initializeSingle(def, syncManagerService, syncStateRepository) {
-    const { key, label, ModelClass } = def;
+    let { key, label, ModelClass } = def;
+    const instanceId = process.env.SYNC_INSTANCE_ID;
+    const isPrimaryInstance = !instanceId || instanceId === '3021';
+
+    // Các module hỗ trợ chạy song song (đa instance)
+    const parallelModules = [
+      'STREAM_INCOMING_INCREMENTAL',
+      'STREAM_OUTGOING_INCREMENTAL',
+      'STREAM_TASK_INCOMING_INCREMENTAL',
+      'STREAM_TASK_OUTGOING_INCREMENTAL'
+    ];
+    const isParallelModule = parallelModules.includes(key);
+
+    if (instanceId && isParallelModule) {
+      key = `${key}_${instanceId}`;
+      label = `${label} (${instanceId})`;
+    } else if (!isPrimaryInstance && !isParallelModule) {
+      // Nếu là cổng phụ (3022, 3023...) và không phải module song song -> Bỏ qua để không chạy trùng
+      logger.info(`[SyncModelRegistry] Skip register "${key}" on secondary instance ${instanceId}`);
+      return;
+    }
 
     try {
       logger.debug(`[SyncModelRegistry] Init: ${key}`);
@@ -230,22 +250,25 @@ class SyncModelRegistry {
       const handler = new SyncHandlerModel(instance);
       
       // [QUY TRÌNH SỬA LỖI] Đổi tên key kỹ thuật thành Label Tiếng Việt trong DB nếu tồn tại
-      // Thử đổi tên từ cả key hiện tại và key UNIT_TEST cũ để đảm bảo không mất dữ liệu trên Dashboard
-      if (syncStateRepository) {
-        await syncStateRepository.renameModel(key, label);
+      // CHỈ thực hiện rename nếu không phải chạy đa instance (để tránh tranh chấp record)
+      if (syncStateRepository && !instanceId) {
+        await syncStateRepository.renameModel(key, label, 'default');
         if (key.startsWith('STREAM_')) {
           const legacyKey = 'UNIT_TEST_' + key.replace('STREAM_', '');
           // Special case for typo fix
           const typoKey = legacyKey.includes('INCOMING') ? legacyKey.replace('INCOMING', 'INCOMMING') : legacyKey;
-          await syncStateRepository.renameModel(typoKey, label);
+          await syncStateRepository.renameModel(typoKey, label, 'default');
         }
-        await syncStateRepository.ensureModel(label);
+        await syncStateRepository.ensureModel(label, 'default');
+      } else if (syncStateRepository && instanceId) {
+        // Nếu chạy đa instance, chỉ cần đảm bảo có dòng cho instance này
+        await syncStateRepository.ensureModel(label, instanceId);
       }
 
       await handler.registerHandlers(syncManagerService, label);
 
       this._registry.set(key, {
-        definition: def,
+        definition: { ...def, key, label },
         instance,
         handler
       });

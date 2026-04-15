@@ -71,6 +71,7 @@ class SyncManagerService {
 
     // State được khởi tạo rỗng, sau đó hydrate từ DB qua ensureStateLoaded().
     this.state = this.normalizeState(null);
+    this.instanceId = process.env.SYNC_INSTANCE_ID || 'default';
     this._stateLoaded = false;
     this._stateLoadingPromise = null;
 
@@ -148,7 +149,8 @@ class SyncManagerService {
       totalSuccess: Number(row?.total_success || 0),
       totalErrors: Number(row?.total_errors || 0),
       error: row?.error_message || null,
-      errorLog: []
+      errorLog: [],
+      instanceId: row?.instance_id || 'default'
     };
   }
 
@@ -163,9 +165,11 @@ class SyncManagerService {
           `
           SELECT
             model_name, last_sync_time, last_sync_id, total_synced,
-            status, last_run, active_job_id, last_error
+            status, last_run, active_job_id, last_error, instance_id
           FROM ${SyncStateRepository.tblModels}
-          `
+          WHERE instance_id = @instanceId
+          `,
+          { instanceId: this.instanceId }
         ),
         SyncStateRepository.queryNewDb(
           `
@@ -175,11 +179,12 @@ class SyncManagerService {
             pause_requested, is_reset, batch_size,
             last_sync_time, last_sync_id,
             total_to_sync, total_processed, total_success, total_errors,
-            error_message
+            error_message, instance_id
           FROM ${SyncStateRepository.tblJobs}
+          WHERE instance_id = @instanceId
           `
         )
-      ]);
+      ], { instanceId: this.instanceId });
 
       const state = { models: {}, jobs: {}, syncLogs: {} };
 
@@ -416,7 +421,6 @@ class SyncManagerService {
     }
     this.updateSyncLogFromJob(job);
 
-    // Thêm: cập nhật DB
     this._dbUpdateJob(job);
     if (modelState) this._dbUpdateModel(job.modelName, modelState);
   }
@@ -433,7 +437,8 @@ class SyncManagerService {
       status: 'IDLE',
       lastRun: null,
       activeJobId: null,
-      error: null
+      error: null,
+      instanceId: this.instanceId
     };
   }
 
@@ -535,7 +540,8 @@ class SyncManagerService {
       totalSuccess: 0,
       totalErrors: 0,
       error: null,
-      errorLog: []
+      errorLog: [],
+      instanceId: this.instanceId
     };
 
     this.state.jobs[jobId] = job;
@@ -1124,7 +1130,7 @@ class SyncManagerService {
 
       const modelPromises = modelEntries.map(async ([modelName, modelState]) => {
         try {
-          await SyncStateRepository.ensureModel(modelName);
+          await SyncStateRepository.ensureModel(modelName, this.instanceId);
           await SyncStateRepository.updateModel(modelName, modelState);
         } catch (err) {
           logger.warn(`[SyncManagerService] DB persist model(${modelName}) failed:`, err && err.message ? err.message : err);
@@ -1175,8 +1181,8 @@ class SyncManagerService {
    * @private
    */
   _dbEnsureModel(modelName) {
-    SyncStateRepository.ensureModel(modelName).catch((err) =>
-      logger.warn(`[SyncManagerService] DB ensureModel(${modelName}) failed:`, err.message)
+    SyncStateRepository.ensureModel(modelName, this.instanceId).catch((err) =>
+      logger.warn(`[SyncManagerService] _dbEnsureModel failed: ${err.message}`)
     );
   }
 

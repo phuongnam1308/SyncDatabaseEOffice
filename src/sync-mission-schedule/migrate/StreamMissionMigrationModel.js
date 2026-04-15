@@ -367,36 +367,39 @@ class StreamMissionMigrationModel extends BaseIncrementalSyncInterface {
     });
 
     const query = `
-        SELECT
-            ${udSelect.join(',\n            ')},
-            ${ciSelect.join(',\n            ')},
-            ud.[tp_Modified] AS __sync_time,
-            ud.[tp_ID] AS __sync_id_num
+        SELECT * FROM (
+            SELECT
+                ${udSelect.join(',\n                ')},
+                ${ciSelect.join(',\n                ')},
+                ud.[tp_Modified] AS __sync_time,
+                ud.[tp_ID] AS __sync_id_num,
+                ROW_NUMBER() OVER (ORDER BY ud.[tp_Modified] ASC, ud.[tp_ID] ASC) AS __page_rn
 
-        FROM [${this.oldDbName}].[dbo].[AllUserData] ud
-        LEFT JOIN [${this.oldDbName}].[dbo].[AllLists] l
-            ON ud.[tp_ListId] = l.[tp_ID]
-        ${cols.hasUserInfo ? `OUTER APPLY (SELECT TOP 1 * FROM [${this.oldUserDb}].[dbo].[UserInfo] uia WHERE ud.[tp_Author] = uia.[tp_ID]) ui_author` : ''}
-        ${cols.hasUserInfo ? `OUTER APPLY (SELECT TOP 1 * FROM [${this.oldUserDb}].[dbo].[UserInfo] uie WHERE ud.[tp_Editor] = uie.[tp_ID]) ui_editor` : ''}
-        OUTER APPLY (
-            SELECT TOP 1 * 
-            FROM [DataEOfficeSNP].[SNP].[CodeItem] ci2 
-            WHERE ci2.[SPItemId] = ud.[tp_ID] 
-            ORDER BY ci2.[ID] DESC
-        ) ci
+            FROM [${this.oldDbName}].[dbo].[AllUserData] ud
+            LEFT JOIN [${this.oldDbName}].[dbo].[AllLists] l
+                ON ud.[tp_ListId] = l.[tp_ID]
+            ${cols.hasUserInfo ? `OUTER APPLY (SELECT TOP 1 * FROM [${this.oldUserDb}].[dbo].[UserInfo] uia WHERE ud.[tp_Author] = uia.[tp_ID]) ui_author` : ''}
+            ${cols.hasUserInfo ? `OUTER APPLY (SELECT TOP 1 * FROM [${this.oldUserDb}].[dbo].[UserInfo] uie WHERE ud.[tp_Editor] = uie.[tp_ID]) ui_editor` : ''}
+            OUTER APPLY (
+                SELECT TOP 1 * 
+                FROM [DataEOfficeSNP].[SNP].[CodeItem] ci2 
+                WHERE ci2.[SPItemId] = ud.[tp_ID] 
+                ORDER BY ci2.[ID] DESC
+            ) ci
 
-        WHERE ud.[tp_ListId] IN (${listIdsStr})
-        AND ud.tp_RowOrdinal = 0
-        AND ud.[tp_IsCurrentVersion] = 1
-        AND (
-            ud.[tp_Modified] > @lastSyncTime
-            OR (
-                ud.[tp_Modified] = @lastSyncTime
-                AND ud.[tp_ID] > @lastSyncId
+            WHERE ud.[tp_ListId] IN (${listIdsStr})
+            AND ud.tp_RowOrdinal = 0
+            AND ud.[tp_IsCurrentVersion] = 1
+            AND (
+                ud.[tp_Modified] > @lastSyncTime
+                OR (
+                    ud.[tp_Modified] = @lastSyncTime
+                    AND ud.[tp_ID] > @lastSyncId
+                )
             )
-        )
-        ORDER BY ud.[tp_Modified] ASC, ud.[tp_ID] ASC
-        OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
+        ) AS t
+        WHERE __page_rn > @offset AND __page_rn <= (@offset + @limit)
+        ORDER BY __page_rn;
     `;
 
     const rows = await this.queryOldDb(query, { 

@@ -572,15 +572,23 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
           AND w.[FullUrl] LIKE '%tintuc%'
           AND d.[LeafName] LIKE '%.aspx'
           AND l.[tp_Title] LIKE '%Pages%'
+      ),
+      paged_src AS (
+        SELECT *,
+          ROW_NUMBER() OVER (
+            ORDER BY
+              __sync_time ${sortDir},
+              __sync_id ${sortDir},
+              DocId ${sortDir}
+          ) AS __page_rn
+        FROM src
+        WHERE ${filterClause}
       )
       SELECT *
-      FROM src
-      WHERE ${filterClause}
-      ORDER BY
-        __sync_time ${sortDir},
-        __sync_id ${sortDir},
-        DocId ${sortDir}
-      ${safeTake ? 'OFFSET @offset ROWS FETCH NEXT @take ROWS ONLY' : ''}
+      FROM paged_src
+      WHERE 1=1
+      ${safeTake ? 'AND __page_rn > @offset AND __page_rn <= (@offset + @take)' : ''}
+      ORDER BY __page_rn
     `;
 
     const resultRows = await this.queryOldDb(query, {

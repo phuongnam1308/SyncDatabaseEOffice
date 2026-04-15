@@ -29,7 +29,8 @@ function detectFileType(buffer) {
 
 const SyncCommentModel = require('../../sync-document-comment/SyncCommentModel');
 const SyncIncomingAuditModel = require('../../sync-audit/SyncIncomingAuditModel');
-const SyncIncomingDocumentModel = require('./SyncIncomingDocumentModel');
+// Lazy load SyncIncomingDocumentModel inside initialize to avoid circular dependency
+let SyncIncomingDocumentModel;
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 
 const {
@@ -45,6 +46,8 @@ const DEFAULT_SYNC_TIME = '1753-01-01T00:00:00.000Z';
 // Ví dụ: SYNC_MIN_DATE=2026-01-01T00:00:00.000Z
 // Để tắt filter (lấy toàn bộ lịch sử), để trống hoặc đặt bằng '1753-01-01T00:00:00.000Z'
 const SYNC_MIN_DATE = process.env.SYNC_MIN_DATE || '2026-01-01T00:00:00.000Z';
+const SYNC_START_DATE = process.env.SYNC_START_DATE || SYNC_MIN_DATE;
+const SYNC_END_DATE = process.env.SYNC_END_DATE || '2100-01-01T00:00:00.000Z';
 const AUDIT_MIN_DATE = (process.env.AUDIT_MIN_DATE || '').trim();
 
 const AUDIT_TABLES = [
@@ -145,7 +148,7 @@ const COMMENT_TABLES = [
   'Comments_YTE'
 ];
 
-class IncomingDocumentModel extends BaseIncrementalSyncInterface {
+class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
   /**
    * Configures source/staging tables and nested migration models for Incoming incremental sync.
    */
@@ -162,6 +165,7 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
     this._syncCommentModel = [];
     this._IncomingMigrationModels = null;
     this._fileService = null;
+    this.partitionColumn = 'NgayDen'; // Cột nghiệp vụ để chia dải dữ liệu
   }
 
   /**
@@ -187,6 +191,9 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
       this._syncAuditModelMap = new Map();
       this._syncCommentModel = [];
 
+      if (!SyncIncomingDocumentModel) {
+        SyncIncomingDocumentModel = require('./SyncIncomingDocumentModel');
+      }
       this._IncomingMigrationModels = new SyncIncomingDocumentModel();
       await this._IncomingMigrationModels.initialize();
 
@@ -404,6 +411,12 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
       const syncTimeExpr = this.getSyncTimeExpression();
       const toTimeFilter = toTime ? `AND (__sync_time IS NULL OR __sync_time <= @toTime)` : '';
 
+      // Phân đoạn dữ liệu theo cột nghiệp vụ (NgayDen)
+      const partitionFilter = `
+        AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
+        AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
+      `;
+
       const query = `
       ;WITH source_rows AS (
         SELECT
@@ -415,33 +428,41 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
           ) AS __sync_id_num
         FROM ${this.oldDbSchema}.${this.oldDbTable}
       )
-      SELECT
-        *,
-        ISNULL(__sync_id_num, 0) AS __sync_id
-      FROM source_rows
-      WHERE (
-        @lastSyncTime = '1753-01-01T00:00:00.000Z'
-        OR __sync_time > @lastSyncTime
-        OR (
-          __sync_time = @lastSyncTime
-          AND ISNULL(__sync_id_num, 0) > @lastSyncId
+      SELECT * FROM (
+        SELECT
+          *,
+          ISNULL(__sync_id_num, 0) AS __sync_id,
+          ROW_NUMBER() OVER (
+            ORDER BY
+              __sync_time ASC,
+              ISNULL(__sync_id_num, 0) ASC,
+              ID ASC
+          ) AS __page_rn
+        FROM source_rows
+        WHERE (
+          @lastSyncTime = '1753-01-01T00:00:00.000Z'
+          OR __sync_time > @lastSyncTime
+          OR (
+            __sync_time = @lastSyncTime
+            AND ISNULL(__sync_id_num, 0) > @lastSyncId
+          )
         )
-      )
-      -- Chỉ lấy bản ghi từ năm 2026 trở đi
-      AND __sync_time >= '${SYNC_MIN_DATE}'
-      ${toTimeFilter}
-      ORDER BY
-        __sync_time ASC,
-        ISNULL(__sync_id_num, 0) ASC,
-        ID ASC
-      OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY
+        -- Chỉ lấy bản ghi từ năm 2026 trở đi (Nếu SYNC_MIN_DATE được bật)
+        AND __sync_time >= '${SYNC_MIN_DATE}'
+        ${partitionFilter}
+        ${toTimeFilter}
+      ) AS t
+      WHERE __page_rn > @offset AND __page_rn <= (@offset + @limit)
+      ORDER BY __page_rn
     `;
 
       const params = {
         lastSyncTime,
         lastSyncId: Number(lastSyncId || 0),
         offset: Number(offset || 0),
-        limit: Number(limit || 2000)
+        limit: Number(limit || 2000),
+        startDate: process.env.SYNC_START_DATE || null,
+        endDate: process.env.SYNC_END_DATE || null
       };
       if (toTime) params.toTime = toTime;
       return await this.queryOldDb(query, params);
@@ -466,6 +487,11 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
       const syncTimeExpr = this.getSyncTimeExpression();
       const toTimeFilter = toTime ? `AND (__sync_time IS NULL OR __sync_time <= @toTime)` : '';
 
+      const partitionFilter = `
+        AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
+        AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
+      `;
+
       const query = `
       ;WITH source_rows AS (
         SELECT
@@ -473,7 +499,8 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
           TRY_CONVERT(
             BIGINT,
             NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
-          ) AS __sync_id_num
+          ) AS __sync_id_num,
+          [${this.partitionColumn}]
         FROM ${this.oldDbSchema}.${this.oldDbTable}
       )
       SELECT COUNT(1) AS total
@@ -486,12 +513,18 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
           AND ISNULL(__sync_id_num, 0) > @lastSyncId
         )
       )
-      -- Chỉ lấy bản ghi từ năm 2026 trở đi
+      -- Chỉ lấy bản ghi từ năm 2026 trở đi (Nếu SYNC_MIN_DATE được bật)
       AND __sync_time >= '${SYNC_MIN_DATE}'
+      ${partitionFilter}
       ${toTimeFilter}
     `;
 
-      const params = { lastSyncTime, lastSyncId: Number(lastSyncId || 0) };
+      const params = { 
+        lastSyncTime, 
+        lastSyncId: Number(lastSyncId || 0),
+        startDate: process.env.SYNC_START_DATE || null,
+        endDate: process.env.SYNC_END_DATE || null
+      };
       if (toTime) params.toTime = toTime;
       const res = await this.queryOldDb(query, params);
       return Number(res?.[0]?.total || 0);
@@ -951,6 +984,9 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
         FROM ${stagingTableRef}
         WHERE ISNULL(MigrateFlg, 0) = 0
           AND ISNULL(MigrateErrFlg, 0) = 0
+          -- Phân đoạn dữ liệu theo cột nghiệp vụ để Worker không nhặt nhầm dải của nhau
+          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
+          AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
         ORDER BY TRY_CONVERT(datetime2, Modified) DESC,
                  TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(ID)), '')) DESC
       )
@@ -960,7 +996,10 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
       OUTPUT inserted.*
       `;
 
-      const rows = await this.queryNewDb(query);
+      const rows = await this.queryNewDb(query, {
+        startDate: process.env.SYNC_START_DATE || null,
+        endDate: process.env.SYNC_END_DATE || null
+      });
       return rows?.length ? rows[0] : null;
     } catch (error) {
       logger.error(`[IncomingDocumentModel.fetchOneFromStaging] Failed to fetch: ${error.message}`);
@@ -1444,4 +1483,4 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
   }
 }
 
-module.exports = IncomingDocumentModel;
+module.exports = StreamIncomingIncrementalModel;

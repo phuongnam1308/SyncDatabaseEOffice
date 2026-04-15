@@ -155,6 +155,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     this._syncCommentModel = [];
     this._outGoingMigrationModels = null;
     this._fileService = null;
+    this.partitionColumn = 'NgayBanHanh'; // Cột nghiệp vụ để chia dải dữ liệu
   }
 
   /**
@@ -351,6 +352,10 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
             NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
           ) AS __sync_id_num
         FROM ${this.oldDbSchema}.${this.oldDbTable}
+        WHERE 1=1
+          -- Phân đoạn dữ liệu theo cột nghiệp vụ
+          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
+          AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
       )
       SELECT COUNT(1) AS total
       FROM source_rows
@@ -361,13 +366,15 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
           AND ISNULL(__sync_id_num, 9223372036854775807) < @lastSyncId
         )
       )
-      -- Chỉ lấy bản ghi từ năm 2026 trở đi
+      -- Chỉ lấy bản ghi từ năm 2026 trở đi (Nếu SYNC_MIN_DATE được bật)
       AND __sync_time >= '${SYNC_MIN_DATE}'
     `;
 
     const rows = await this.queryOldDb(query, {
       lastSyncTime: normalizedLastSyncTime,
-      lastSyncId: normalizedLastSyncId
+      lastSyncId: normalizedLastSyncId,
+      startDate: process.env.SYNC_START_DATE || null,
+      endDate: process.env.SYNC_END_DATE || null
     });
 
     return Number(rows?.[0]?.total || 0);
@@ -662,26 +669,34 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
             NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
           ) AS __sync_id_num
         FROM ${this.oldDbSchema}.${this.oldDbTable}
+        WHERE 1=1
+          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
+          AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
       )
-      SELECT
-        *,
-        ISNULL(__sync_id_num, 0) AS __sync_id
-      FROM source_rows
-      WHERE (
-        __sync_time < @lastSyncTime
-        OR (
-          __sync_time = @lastSyncTime
-          AND ISNULL(__sync_id_num, 9223372036854775807) < @lastSyncId
+      SELECT * FROM (
+        SELECT
+          *,
+          ISNULL(__sync_id_num, 0) AS __sync_id,
+          ROW_NUMBER() OVER (
+            ORDER BY
+              __sync_time DESC,
+              ISNULL(__sync_id_num, 9223372036854775807) DESC,
+              ID DESC
+          ) AS __page_rn
+        FROM source_rows
+        WHERE (
+          __sync_time < @lastSyncTime
+          OR (
+            __sync_time = @lastSyncTime
+            AND ISNULL(__sync_id_num, 9223372036854775807) < @lastSyncId
+          )
         )
-      )
-      -- Chỉ lấy bản ghi từ năm 2026 trở đi
-      AND __sync_time >= '${SYNC_MIN_DATE}'
-      ORDER BY
-        __sync_time DESC,
-        ISNULL(__sync_id_num, 9223372036854775807) DESC,
-        ID DESC
-      OFFSET @offset ROWS
-      ${limit ? `FETCH NEXT @limit ROWS ONLY` : ''}
+        -- Chỉ lấy bản ghi từ năm 2026 trở đi
+        AND __sync_time >= '${SYNC_MIN_DATE}'
+      ) AS t
+      WHERE __page_rn > @offset
+      ${limit ? `AND __page_rn <= (@offset + @limit)` : ''}
+      ORDER BY __page_rn
     `;
 
     logger.info(`[OutGoingDoc.fetchListFromOldDb] Fetching: lastSyncTime=${lastSyncTime}, lastSyncId=${lastSyncId}, limit=${limit}, offset=${offset}`);
@@ -689,7 +704,9 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       lastSyncTime,
       lastSyncId: Number(lastSyncId || 0),
       limit: limit ? Number(limit) : null,
-      offset: Number(offset || 0)
+      offset: Number(offset || 0),
+      startDate: process.env.SYNC_START_DATE || null,
+      endDate: process.env.SYNC_END_DATE || null
     });
     logger.info(`[OutGoingDoc.fetchListFromOldDb] Fetched ${results?.length || 0} rows.`);
     return results;
@@ -826,7 +843,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       results.push(task);
       executing.add(task);
       task.finally(() => executing.delete(task));
-      
+
       if (executing.size >= STAGING_PARALLEL_BATCHES) {
         await Promise.race(executing);
       }
@@ -836,7 +853,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     for (const res of batchResults) {
       if (!res || res.rowsCount === 0) continue;
       totalStaged += res.stagedCount;
-      
+
       const rowTime = this.extractRowSyncTime(res.lastRow);
       const rowId = this.extractRowSyncId(res.lastRow);
       if (rowTime && this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId)) {
@@ -1035,6 +1052,9 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         FROM ${stagingTableRef}
         WHERE ISNULL(MigrateFlg, 0) = 0
           AND ISNULL(MigrateErrFlg, 0) = 0
+          -- Lọc theo dải ngày của partitionColumn để chia tải giữa các Worker
+          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
+          AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
         ORDER BY TRY_CONVERT(datetime2, Modified) DESC,
                  TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')) DESC
       )
@@ -1044,7 +1064,10 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       OUTPUT inserted.*
       `;
 
-      const rows = await this.queryNewDb(query);
+      const rows = await this.queryNewDb(query, {
+        startDate: process.env.SYNC_START_DATE || null,
+        endDate: process.env.SYNC_END_DATE || null
+      });
       return rows?.length ? rows[0] : null;
     } catch (error) {
       logger.error(`[OutGoingDoc.fetchOneFromStaging] Failed to fetch: ${error.message}`);
