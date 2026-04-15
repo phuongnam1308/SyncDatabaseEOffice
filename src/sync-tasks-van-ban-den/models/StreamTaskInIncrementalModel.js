@@ -872,19 +872,27 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     logger.info(`🔥 [StreamTaskIn] Hoàn tất hút dữ liệu về Staging. Staged=${totalStaged}/${totalCount}. LastSyncTime: ${nextSyncTime}, LastSyncId: ${nextSyncId}`);
 
     // Fix Bug #3: Đếm số bản ghi THỰC TẾ trong staging chưa xử lý
+    // FIX: Phải lọc theo dải ngày của instance này (SYNC_START_DATE/SYNC_END_DATE)
+    // để tránh đếm nhầm records của các terminal khác đang chạy song song.
     let pendingCount = 0;
     try {
       const pendingRes = await this.queryNewDb(`
         SELECT COUNT(1) AS cnt FROM ${stagingTableRef}
         WHERE ISNULL(MigrateFlg, 0) = 0
           AND ISNULL(MigrateErrFlg, 0) = 0
-      `);
+          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
+          AND (${this.partitionColumn} <= @endDate   OR @endDate IS NULL)
+      `, {
+        startDate: process.env.SYNC_START_DATE || null,
+        endDate:   process.env.SYNC_END_DATE   || null
+      });
       pendingCount = Number(pendingRes?.[0]?.cnt || 0);
     } catch (e) {
       logger.warn(`[StreamTaskIn] Không đếm được pending staging: ${e.message}`);
       pendingCount = totalStaged;
     }
-    logger.info(`[StreamTaskIn] Pending records trong Staging có thể xử lý: ${pendingCount}`);
+    logger.info(`[StreamTaskIn] Pending records trong Staging có thể xử lý: ${pendingCount} (range: ${process.env.SYNC_START_DATE || 'ALL'} → ${process.env.SYNC_END_DATE || 'ALL'})`);
+
 
     // Cập nhật Dashboard lần cuối với tổng số thực tế (bao gồm cả các bản ghi tồn đọng cũ trong staging)
     await this.queryNewDb(`UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`, {
