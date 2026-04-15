@@ -1,5 +1,6 @@
 const logger = require('../../utils/logger');
 const SyncHandlerModel = require('./SyncHandlerModel');
+const partitionHelper = require('../helpers/partitionHelper');
 
 const OutGoingDocumentModel = require('../sync-outgoing-document/models/StreamOutgoingIncrementalModel');
 const StreamUserMigrationModel = require('../sync-user-copy/migrate/StreamUserMigrationModel');
@@ -156,7 +157,7 @@ class SyncModelRegistry {
     }
 
     for (const [, entry] of this._registry) {
-      if (entry.definition.label === keyOrLabel) {
+      if (entry.label === keyOrLabel || entry.definition.label === keyOrLabel) {
         return entry;
       }
     }
@@ -179,7 +180,7 @@ class SyncModelRegistry {
   entries() {
     return [...this._registry.entries()].map(([key, entry]) => ({
       key,
-      label: entry.definition.label,
+      label: entry.label,
       section: entry.definition.section,
       instance: entry.instance,
       handler: entry.handler
@@ -196,7 +197,7 @@ class SyncModelRegistry {
     for (const [key, entry] of this._registry) {
       sections.realtime.push({
         key,
-        label: entry.definition.label
+        label: entry.label
       });
     }
 
@@ -208,7 +209,7 @@ class SyncModelRegistry {
    * @returns {string[]}
    */
   getRegisteredLabels() {
-    return [...this._registry.values()].map((entry) => entry.definition.label);
+    return [...this._registry.values()].map((entry) => entry.label);
   }
 
   /**
@@ -219,10 +220,12 @@ class SyncModelRegistry {
    * @returns {Promise<void>}
    */
   async _initializeSingle(def, syncManagerService, syncStateRepository) {
-    const { key, label, ModelClass } = def;
+    const { key, ModelClass } = def;
+    const labelSuffix = partitionHelper.getLabelSuffix();
+    const label = (def.label || key) + labelSuffix;
 
     try {
-      logger.debug(`[SyncModelRegistry] Init: ${key}`);
+      logger.debug(`[SyncModelRegistry] Init: ${key} (${label})`);
 
       const instance = new ModelClass();
       await instance.initialize();
@@ -247,7 +250,8 @@ class SyncModelRegistry {
       this._registry.set(key, {
         definition: def,
         instance,
-        handler
+        handler,
+        label
       });
 
       logger.debug(`[SyncModelRegistry] ok ${key}`);

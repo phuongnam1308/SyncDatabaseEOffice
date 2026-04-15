@@ -1,4 +1,5 @@
 const logger = require('../../../utils/logger');
+const partitionHelper = require('../../helpers/partitionHelper');
 const sql = require('mssql');
 const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
@@ -403,6 +404,21 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
     try {
       const syncTimeExpr = this.getSyncTimeExpression();
       const toTimeFilter = toTime ? `AND (__sync_time IS NULL OR __sync_time <= @toTime)` : '';
+      
+      const params = {
+        lastSyncTime,
+        lastSyncId: Number(lastSyncId || 0),
+        offset: Number(offset || 0),
+        limit: Number(limit || 2000)
+      };
+
+      let timeFilter = `AND __sync_time >= '${SYNC_MIN_DATE}'`;
+      if (partitionHelper.isEnabled()) {
+        const { fromDate, toDate } = partitionHelper.getSqlFilter();
+        timeFilter = `AND __sync_time >= @partitionFrom AND __sync_time <= @partitionTo`;
+        params.partitionFrom = fromDate;
+        params.partitionTo = toDate;
+      }
 
       const query = `
       ;WITH source_rows AS (
@@ -427,8 +443,7 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
           AND ISNULL(__sync_id_num, 0) > @lastSyncId
         )
       )
-      -- Chỉ lấy bản ghi từ năm 2026 trở đi
-      AND __sync_time >= '${SYNC_MIN_DATE}'
+      ${timeFilter}
       ${toTimeFilter}
       ORDER BY
         __sync_time ASC,
@@ -437,12 +452,6 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
       OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY
     `;
 
-      const params = {
-        lastSyncTime,
-        lastSyncId: Number(lastSyncId || 0),
-        offset: Number(offset || 0),
-        limit: Number(limit || 2000)
-      };
       if (toTime) params.toTime = toTime;
       return await this.queryOldDb(query, params);
     } catch (error) {
@@ -465,6 +474,15 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
     try {
       const syncTimeExpr = this.getSyncTimeExpression();
       const toTimeFilter = toTime ? `AND (__sync_time IS NULL OR __sync_time <= @toTime)` : '';
+      const params = { lastSyncTime, lastSyncId: Number(lastSyncId || 0) };
+
+      let timeFilter = `AND __sync_time >= '${SYNC_MIN_DATE}'`;
+      if (partitionHelper.isEnabled()) {
+        const { fromDate, toDate } = partitionHelper.getSqlFilter();
+        timeFilter = `AND __sync_time >= @partitionFrom AND __sync_time <= @partitionTo`;
+        params.partitionFrom = fromDate;
+        params.partitionTo = toDate;
+      }
 
       const query = `
       ;WITH source_rows AS (
@@ -486,12 +504,10 @@ class IncomingDocumentModel extends BaseIncrementalSyncInterface {
           AND ISNULL(__sync_id_num, 0) > @lastSyncId
         )
       )
-      -- Chỉ lấy bản ghi từ năm 2026 trở đi
-      AND __sync_time >= '${SYNC_MIN_DATE}'
+      ${timeFilter}
       ${toTimeFilter}
     `;
 
-      const params = { lastSyncTime, lastSyncId: Number(lastSyncId || 0) };
       if (toTime) params.toTime = toTime;
       const res = await this.queryOldDb(query, params);
       return Number(res?.[0]?.total || 0);
