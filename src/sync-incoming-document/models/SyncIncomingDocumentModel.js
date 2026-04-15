@@ -572,7 +572,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
       return { stagedCount: 0 };
     }
 
-    const internalColumns = new Set(['__sync_time', '__sync_id', '__sync_id_num']);
+    const internalColumns = new Set(['__sync_time', '__sync_id', '__sync_id_num', '__page_rn', '_sync_time_val', '_sync_id_val']);
     const columns = Object.keys(rows[0] || {}).filter(
       (column) => !String(column).startsWith('__') && !internalColumns.has(column),
     );

@@ -533,108 +533,95 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
     }, 'rebuildStagingTable');
   }
 
-  async ThemFileDinhKemTask(stagingRow, newTaskId) {
-    if (!this._fileService) {
-      logger.warn('[ThemFileDinhKemTask] FileService chưa được khởi tạo');
-      return false;
-    }
+  /**
+   * Tải các file đính kèm của Task (Văn bản đi) từ SharePoint về bộ nhớ (NGOÀI giao dịch SQL).
+   */
+  async prepareTaskFilesFromSharePoint(stagingRow) {
+    const baseUrl = (process.env.BASE_URL || "").replace(/\/$/, "");
+    if (!baseUrl) return [];
 
-    const baseUrl = (process.env.BASE_URL || '').replace(/\/$/, '');
-    if (!baseUrl) {
-      logger.error('[ThemFileDinhKemTask] BASE_URL chưa được cấu hình trong .env');
-      return false;
-    }
-
-    const fileUrlFields = [
+    const fileFields = [
+      { field: 'HoSoDuThaoId', objectType: 'taskdocuments' }, // Map thêm ID nếu cần
       { field: 'HoSoDuThaoUrl', objectType: 'taskdocuments' },
-      { field: 'HoSoXuLyUrl', objectType: 'taskdocuments' },
+      { field: 'HoSoXuLyUrl', objectType: 'taskdocuments' }
     ];
 
-    let anySuccess = false;
-
-    for (const { field, objectType } of fileUrlFields) {
+    const preparedResults = [];
+    for (const { field, objectType } of fileFields) {
       const rawUrl = stagingRow?.[field];
       if (!rawUrl || String(rawUrl).trim() === '') continue;
+      // Tránh trùng lắp nếu metadata dùng chung link
+      if (preparedResults.some(p => p.relativePath === String(rawUrl).trim())) continue;
 
       const relativePath = String(rawUrl).trim();
       const fullUrl = relativePath.startsWith('http') ? relativePath : `${baseUrl}${relativePath}`;
-
       const fileName = relativePath.substring(relativePath.lastIndexOf('/') + 1) || field;
 
-      let buffer;
       try {
-        buffer = await spDownload(fullUrl);
-      } catch (downloadErr) {
-        logger.error(
-          `[ThemFileDinhKemTask] Download failed field=${field} url=${fullUrl} taskId=${stagingRow?.ID}: ${downloadErr.message}`,
-        );
-        continue;
-      }
+        logger.info(`[StreamTaskOut][prepareFiles] Đang tải file cho Task ID ${stagingRow.ID}: ${fileName}`);
+        const buffer = await spDownload(fullUrl, this.newPool); // Truyền Pool để lock đa tiến trình
 
-      try {
-        const fileType = detectFileType(buffer);
-        let mimeType = fileType.mime;
-
-        if (mimeType === 'application/octet-stream') {
-          const ext = fileName.split('.').pop().toLowerCase();
-          if (ext === 'pdf') mimeType = 'application/pdf';
-          else if (ext === 'doc') mimeType = 'application/msword';
-          else if (ext === 'docx') mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-          else if (ext === 'xls') mimeType = 'application/vnd.ms-excel';
-          else if (ext === 'xlsx') mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-          else if (ext === 'ppt') mimeType = 'application/vnd.ms-powerpoint';
-          else if (ext === 'pptx') mimeType = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
-          else if (ext === 'png') mimeType = 'image/png';
-          else if (ext === 'jpg' || ext === 'jpeg') mimeType = 'image/jpeg';
-          else if (ext === 'zip') mimeType = 'application/zip';
-          else if (ext === 'rar') mimeType = 'application/x-rar-compressed';
+        if (buffer && buffer.length > 0) {
+          preparedResults.push({ buffer, fileName, relativePath, objectType });
         }
-
-        const fileIdBak = uuidv4();
-
-        const fileRecord = {
-          file_name: fileName,
-          file_path: relativePath,
-          mime_type: mimeType,
-          created_by: stagingRow?.CreatedBy || null,
-          version: 1,
-          id_bak: fileIdBak,
-          table_bak: 'TaskVBDi', // ← VBĐi
-          type_doc: null,
-          isBak: 1,
-        };
-
-        const relationRecord = {
-          object_type: objectType,
-          object_id: String(newTaskId),
-          object_id_bak: stagingRow?.ID,
-          file_id_bak: fileIdBak,
-          table_bak: 'TaskVBDi', // ← VBĐi
-          type_doc: objectType,
-        };
-
-        await this._fileService.uploadAndInsert({
-          fileBuffer: buffer,
-          originalName: fileName,
-          mimeType,
-          fileRecord,
-          relationRecord,
-          folder: 'task',
-          localFolder: 'task',
-        });
-
-        logger.info(
-          `[ThemFileDinhKemTask] field=${field} taskId=${stagingRow?.ID} newTaskId=${newTaskId} ok`,
-        );
-        anySuccess = true;
-      } catch (insertErr) {
-        logger.error(
-          `[ThemFileDinhKemTask] Insert failed field=${field} taskId=${stagingRow?.ID}: ${insertErr.message}`,
-        );
+      } catch (err) {
+        logger.error(`[StreamTaskOut][prepareFiles] Lỗi tải file ${fileName}: ${err.message}`);
       }
     }
+    return preparedResults;
+  }
 
-    return anySuccess;
+  /**
+   * Ghi dữ liệu file đính kèm của Task vào DB (TRONG Transaction SQL).
+   */
+  async applyPreparedTaskFiles(preparedFiles, newTaskId, stagingRow, transaction) {
+    if (!Array.isArray(preparedFiles) || preparedFiles.length === 0) return true;
+
+    for (const fileItem of preparedFiles) {
+      const { buffer, fileName, relativePath, objectType } = fileItem;
+      const fileType = detectFileType(buffer);
+      const mimeType = fileType.mime;
+
+      const fileIdBak = uuidv4();
+      const fileRecord = {
+        file_name: fileName,
+        file_path: relativePath,
+        mime_type: mimeType,
+        created_by: stagingRow?.CreatedBy || null,
+        version: 1,
+        id_bak: fileIdBak,
+        table_bak: 'TaskVBDi',
+        type_doc: null,
+        isBak: 1
+      };
+
+      const relationRecord = {
+        object_type: objectType,
+        object_id: String(newTaskId),
+        object_id_bak: stagingRow?.ID,
+        file_id_bak: fileIdBak,
+        table_bak: 'TaskVBDi',
+        type_doc: objectType,
+      };
+
+      await this._fileService.uploadAndInsert({
+        fileBuffer: buffer,
+        originalName: fileName,
+        mimeType,
+        fileRecord,
+        relationRecord,
+        folder: 'task',
+        localFolder: 'task',
+        transaction    // Dùng chung TX
+      });
+    }
+    return true;
+  }
+
+  async ThemFileDinhKemTask(stagingRow, newTaskId) {
+    // Để giữ tương thích, khuyến khích gọi prepare/apply riêng lẻ
+    const prepared = await this.prepareTaskFilesFromSharePoint(stagingRow);
+    return await this.applyPreparedTaskFiles(prepared, newTaskId, stagingRow, null);
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -778,6 +765,7 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
       '__sync_id_num',
       '_sync_time_val',
       '_sync_id_val',
+      '__page_rn',
     ]);
     const columns = Object.keys(rows[0] || {}).filter(
       (column) => !String(column).startsWith('__') && !internalColumns.has(column),
@@ -813,11 +801,10 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
       const query = `
         IF EXISTS (SELECT 1 FROM ${stagingTableRef} WHERE ID = @ID)
         BEGIN
-          ${
-            nonIdColumns.length > 0
-              ? `UPDATE ${stagingTableRef} SET ${updateClause} WHERE ID = @ID;`
-              : `SELECT 1 AS noop;`
-          }
+          ${nonIdColumns.length > 0
+          ? `UPDATE ${stagingTableRef} SET ${updateClause} WHERE ID = @ID;`
+          : `SELECT 1 AS noop;`
+        }
         END
         ELSE
         BEGIN
@@ -874,7 +861,7 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
         SET MigrateFlg = 0, MigrateErrMess = 'Reset from stale processing'
         WHERE MigrateFlg = 2
       `);
-    } catch (cleanupErr) {}
+    } catch (cleanupErr) { }
 
     // 1. Đếm tổng và cập nhật Dashboard
     const totalCount = await this.countListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId);
@@ -919,7 +906,7 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
       results.push(task);
       executing.add(task);
       task.finally(() => executing.delete(task));
-      
+
       if (executing.size >= STAGING_PARALLEL_BATCHES) {
         await Promise.race(executing);
       }
@@ -929,7 +916,7 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
     for (const res of batchResults) {
       if (!res || res.rowsCount === 0) continue;
       totalStaged += res.stagedCount;
-      
+
       const rowTime = this.extractRowSyncTime(res.lastRow);
       const rowId = this.extractRowSyncId(res.lastRow);
       if (rowTime && this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId)) {
@@ -955,7 +942,7 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
            AND (${this.partitionColumn} <= @endDate   OR @endDate IS NULL)`,
         {
           startDate: process.env.SYNC_START_DATE || null,
-          endDate:   process.env.SYNC_END_DATE   || null
+          endDate: process.env.SYNC_END_DATE || null
         }
       );
       pendingCount = Number(pendingRes?.[0]?.cnt || 0);
@@ -1120,12 +1107,14 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
 
       const rowId = rowData.ID || null;
       const current = Number(jobState?.total_processed || 0) + 1;
-      logger.info(`[StreamTaskOut] Process ${current}: record ID=${rowId}`);
+
+      // --- BƯỚC MỚI: Tải file từ SharePoint (NGOÀI giao dịch SQL) ---
+      const preparedFiles = await this.prepareTaskFilesFromSharePoint(rowData);
 
       transaction = new sql.Transaction(this.newPool);
       await transaction.begin();
 
-      const result = await this.processRowData(rowData, { transaction });
+      const result = await this.processRowData(rowData, { transaction, preparedFiles });
 
       // Update counters in sync_jobs
       await this.queryNewDbTx(
@@ -1156,15 +1145,15 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
     } catch (error) {
       if (transaction) {
         try {
-          await transaction.rollback().catch(() => {});
-        } catch (rollbackError) {}
+          await transaction.rollback().catch(() => { });
+        } catch (rollbackError) { }
       }
 
       if (rowData && rowData.ID) {
         try {
-           const stagingTableRef = this.getStagingTableRef();
-           await this.queryNewDb(`UPDATE ${stagingTableRef} SET MigrateErrFlg = 1, MigrateErrMess = @Err WHERE ID = @ID`, { ID: rowData.ID, Err: String(error.message).slice(0, 1000) });
-        } catch (updateErr) {}
+          const stagingTableRef = this.getStagingTableRef();
+          await this.queryNewDb(`UPDATE ${stagingTableRef} SET MigrateErrFlg = 1, MigrateErrMess = @Err WHERE ID = @ID`, { ID: rowData.ID, Err: String(error.message).slice(0, 1000) });
+        } catch (updateErr) { }
       }
 
       logger.error(`[StreamTaskOut._processOneAttempt] Failed row ID=${rowData?.ID}: ${error.message}`);
@@ -1192,7 +1181,7 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
       });
       if (res?.[0]?.maxTime) {
         const finalTime = new Date(res[0].maxTime).toISOString();
-        const finalId   = Number(res[0].maxId || 0);
+        const finalId = Number(res[0].maxId || 0);
         await this.queryNewDb(
           `UPDATE sync_jobs
            SET last_sync_time = @t,
@@ -1219,7 +1208,7 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
    * @param {{transaction?: object}} [context]
    * @returns {Promise<{action:string,idTaskBak:string,affected:number}>}
    */
-  async processRowData(rowData, { transaction } = {}) {
+  async processRowData(rowData, { transaction, preparedFiles = [] } = {}) {
     if (!rowData) {
       throw new Error('rowData is required');
     }
@@ -1229,7 +1218,7 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
       throw new Error('Invalid task ID from staging');
     }
 
-    const res = await this.upsertTaskAggregateById(rowData, { transaction });
+    const res = await this.upsertTaskAggregateById(rowData, { transaction, preparedFiles });
     const affected = Number(res?.affected || 0);
 
     if (affected === 0) {
@@ -1253,7 +1242,7 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
    * @param {{transaction?: object}} [context]
    * @returns {Promise<{action:string,idTaskBak:string,newTaskId:string,affected:number}>}
    */
-  async upsertTaskAggregateById(stagingRow, { transaction } = {}) {
+  async upsertTaskAggregateById(stagingRow, { transaction, preparedFiles = [] } = {}) {
     if (!stagingRow) {
       return { action: 'none', affected: 0 };
     }
@@ -1342,20 +1331,11 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
     // ── 4. File + Comment sync via linked outgoing document ───────
     const vbId = stagingRow?.VBId ? String(stagingRow.VBId).trim() : null;
 
-    if (vbId) {
-      // ── 4a. File sync ──────────────────────────────────────────
-      try {
-        const hasFiles = stagingRow?.HoSoDuThaoUrl || stagingRow?.HoSoXuLyUrl;
-        if (hasFiles) {
-          await this.ThemFileDinhKemTask(stagingRow, newTaskId);
-        }
-      } catch (fileErr) {
-        logger.warn(
-          `[StreamTaskOutIncrementalModel] File sync failed (non-critical) taskId=${taskId} newTaskId=${newTaskId}: ${fileErr.message}`,
-        );
-      }
+    // ── 4a. Ghi dữ liệu file đính kèm vào Database ──────────────
+    await this.applyPreparedTaskFiles(preparedFiles, newTaskId, stagingRow, transaction);
 
-      // ── 4b. Comment sync ───────────────────────────────────────
+    // ── 4b. Comment sync ───────────────────────────────────────
+    if (vbId) {
       for (const commentModel of this._syncCommentModel) {
         try {
           const rawComments = await commentModel.fetchByDocumentId(vbId);

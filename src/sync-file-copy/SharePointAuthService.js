@@ -12,37 +12,56 @@ const httpsAgent = new https.Agent({
   keepAliveMsecs: 10000, // Bắn gói tin "ping" mỗi 10 giây để tránh bị thiết bị mạng cắt do treo rảnh
 });
 
-// Cache cookie và khóa trạng thái refresh
+// Cache cookie memory
 let _cachedCookie = null;
-let _isRefreshing = false;
-let _refreshPromise = null;
+let _isRefreshingInMemory = false;
 
 /**
- * Đọc cookie từ file auth/cookie.txt
- * @returns {string|null}
+ * Đảm bảo bảng lưu trạng thái Auth tồn tại trong Database
+ */
+async function ensureTableExists(pool) {
+  if (!pool) return;
+  const query = `
+    IF OBJECT_ID('dbo.sync_auth_state', 'U') IS NULL
+    BEGIN
+        CREATE TABLE dbo.sync_auth_state (
+            id INT PRIMARY KEY DEFAULT 1,
+            cookie_value NVARCHAR(MAX) NULL,
+            is_refreshing BIT DEFAULT 0,
+            last_refresh_at DATETIME NULL,
+            refreshed_by NVARCHAR(255) NULL,
+            CONSTRAINT UC_SyncAuth_Id CHECK (id = 1)
+        );
+        IF NOT EXISTS (SELECT 1 FROM dbo.sync_auth_state WHERE id = 1)
+            INSERT INTO dbo.sync_auth_state (id, is_refreshing) VALUES (1, 0);
+    END
+  `;
+  await pool.request().query(query);
+}
+
+/**
+ * Đọc cookie từ Database
+ */
+async function getCookieFromDb(pool) {
+  if (!pool) return null;
+  const res = await pool.request().query('SELECT TOP 1 cookie_value FROM dbo.sync_auth_state WHERE id = 1');
+  return res.recordset[0]?.cookie_value || null;
+}
+
+/**
+ * Đọc cookie từ file auth/cookie.txt (Fallback)
  */
 function getCookie() {
-  const cookieFilePath =
-    process.env.COOKIE_FILE_PATH || path.join(process.cwd(), 'auth', 'cookie.txt');
-
-  if (!fs.existsSync(cookieFilePath)) {
-    return null;
-  }
-
+  const cookieFilePath = process.env.COOKIE_FILE_PATH || path.join(process.cwd(), 'auth', 'cookie.txt');
+  if (!fs.existsSync(cookieFilePath)) return null;
   try {
     const content = fs.readFileSync(cookieFilePath, 'utf8').trim();
     if (_cachedCookie !== content) {
       _cachedCookie = content;
-      logger.info(`[SharePointAuth] Đã load Cookie mới từ file. Tổng ký tự: ${_cachedCookie.length}`);
-      // Lấy đoạn đầu và đoạn cuối để dễ đối chiếu lifetime/thay đổi mà không in rác log quá nhiều
-      const preview = _cachedCookie.length > 100 
-        ? `${_cachedCookie.substring(0, 50)} ... ${_cachedCookie.substring(_cachedCookie.length - 50)}` 
-        : _cachedCookie;
-      logger.info(`[SharePointAuth] Raw Token: ${preview}`);
+      logger.info(`[SharePointAuth] Đã load Cookie từ file. Độ dài: ${content.length}`);
     }
-    return _cachedCookie;
+    return content;
   } catch (err) {
-    logger.error('[SharePointAuth] Không đọc được file cookie:', err.message);
     return null;
   }
 }
@@ -50,74 +69,119 @@ function getCookie() {
 /**
  * Thực hiện làm mới token bằng cách chạy npm run login ngầm (headless)
  */
-async function refreshAuth() {
-  if (_isRefreshing) return _refreshPromise;
+/**
+ * Làm mới Token với cơ chế Database Lock hỗ trợ chạy đa tiến trình (Multi-terminal)
+ */
+async function refreshAuth(pool) {
+  const terminalName = `Terminal_${process.pid}`;
 
-  _isRefreshing = true;
-  _refreshPromise = new Promise((resolve, reject) => {
-    logger.info(
-      '[SharePointAuth] Phát hiện Token hết hạn. Đang tự động chạy `npm run login` ngầm...',
-    );
-
-    const isSeaApp = process.execPath.toLowerCase().endsWith('.exe');
-    let cmd, args;
-
-    if (isSeaApp) {
-      // Nếu là file EXE, chúng ta cần chạy chính nó với tham số login (giả sử có hỗ trợ)
-      // Hoặc tìm file login.js ở thư mục tài nguyên. Ở đây dùng node là an toàn nhất cho môi trường dev/server.
-      cmd = 'node';
-      args = [path.join(process.cwd(), 'auth', 'login_playwright.js')];
-    } else {
-      cmd = 'npm';
-      args = ['run', 'login'];
-      // Trên Windows npm là file .cmd
-      if (process.platform === 'win32') cmd = 'npm.cmd';
-    }
-
-    const child = spawn(cmd, args, {
-      cwd: process.cwd(),
-      env: { ...process.env, HEADED: 'false' }, // Luôn ép chạy ngầm
-      shell: true,
-    });
-
-    child.on('close', (code) => {
-      _isRefreshing = false;
-      if (code === 0) {
-        logger.info('[SharePointAuth] Tự động làm mới Token THÀNH CÔNG.');
-        logger.info('[SharePointAuth] ⏳ Đang đợi 5 phút (300s) để hệ thống SharePoint ổn định phiên mới...');
-        setTimeout(() => {
-          logger.info('[SharePointAuth] ✓ Đã hết thời gian chờ ổn định. Bắt đầu cho phép tải file.');
-          _cachedCookie = null; // Reset để getCookie() đọc lại file mới
-          resolve(true);
-        }, 300000); // 5 phút
-      } else {
-        logger.error(`[SharePointAuth] Tự động làm mới Token THẤT BẠI (Exit code ${code}).`);
-        reject(new Error('Background login failed'));
+  if (!pool) {
+    logger.warn(`[SharePointAuth] [${terminalName}] Cảnh báo: Không có dbPool, sử dụng lock memory cục bộ.`);
+    if (_isRefreshingInMemory) {
+      logger.info(`[SharePointAuth] [${terminalName}] Đang có tiến trình login (memory). Chờ...`);
+      for (let i = 0; i < 60; i++) {
+        await new Promise(r => setTimeout(r, 3000));
+        if (!_isRefreshingInMemory) return true;
       }
+      throw new Error('Refresh timeout (memory)');
+    }
+    _isRefreshingInMemory = true;
+  } else {
+    await ensureTableExists(pool);
+
+
+    // 1. Cố gắng giành quyền "khóa" (Atomic Update)
+    // Hỗ trợ "Stale Lock": Nếu trạng thái is_refreshing=1 đã quá 10 phút thì cho phép Terminal khác chiếm quyền.
+    const lockRes = await pool.request()
+      .input('terminal', terminalName)
+      .query(`
+        UPDATE dbo.sync_auth_state 
+        SET is_refreshing = 1, 
+            refreshed_by = @terminal,
+            last_refresh_at = GETDATE()
+        WHERE id = 1 
+          AND (is_refreshing = 0 OR DATEDIFF(MINUTE, last_refresh_at, GETDATE()) > 10)
+      `);
+
+    if (lockRes.rowsAffected[0] === 0) {
+      // 2. Đợi terminal khác làm xong
+      logger.info(`[SharePointAuth] [${terminalName}] Đang có terminal khác thực hiện login (DB). Chờ...`);
+      for (let i = 0; i < 60; i++) {
+        await new Promise(r => setTimeout(r, 3000));
+        const status = await pool.request().query('SELECT is_refreshing, cookie_value FROM dbo.sync_auth_state WHERE id = 1');
+        if (status.recordset[0]?.is_refreshing === false) {
+          _cachedCookie = status.recordset[0]?.cookie_value;
+          return true;
+        }
+      }
+      throw new Error('Refresh timeout (DB)');
+    }
+  }
+
+  // 3. Thực hiện Login
+  try {
+    logger.warn(`[SharePointAuth] [${terminalName}] Bắt đầu login...`);
+    const isSeaApp = process.execPath.toLowerCase().endsWith('.exe');
+    let cmd = isSeaApp ? 'node' : (process.platform === 'win32' ? 'npm.cmd' : 'npm');
+    let args = isSeaApp ? [path.join(process.cwd(), 'auth', 'login_playwright.js')] : ['run', 'login'];
+
+    const loginSuccess = await new Promise((resolve) => {
+      const child = spawn(cmd, args, { cwd: process.cwd(), env: { ...process.env, HEADED: 'false' }, shell: true });
+      child.on('close', (code) => resolve(code === 0));
+      child.on('error', () => resolve(false));
     });
 
-    child.on('error', (err) => {
-      _isRefreshing = false;
-      logger.error('[SharePointAuth] Lỗi khởi tạo trình login:', err.message);
-      reject(err);
-    });
-  });
+    if (loginSuccess) {
+      const cookieFilePath = process.env.COOKIE_FILE_PATH || path.join(process.cwd(), 'auth', 'cookie.txt');
+      if (!fs.existsSync(cookieFilePath)) {
+        throw new Error(`File cookie không được tạo ra sau login: ${cookieFilePath}`);
+      }
+      
+      const newCookie = fs.readFileSync(cookieFilePath, 'utf8').trim();
+      if (!newCookie || newCookie.length < 50) {
+        throw new Error('Nội dung cookie trống hoặc quá ngắn, có thể login thất bại.');
+      }
 
-  return _refreshPromise;
+      if (pool) {
+        await pool.request()
+          .input('val', newCookie)
+          .query('UPDATE dbo.sync_auth_state SET cookie_value = @val, last_refresh_at = GETDATE() WHERE id = 1');
+      }
+
+      logger.info(`[SharePointAuth] [${terminalName}] ✅ Login thành công. Đã cập nhật Cookie mới.`);
+      _cachedCookie = newCookie;
+      
+      // Đợi một chút để hệ thống SharePoint ổn định sau login (trường hợp load-balance)
+      await new Promise(r => setTimeout(r, 10000));
+      return true;
+    } else {
+      throw new Error('Login process exited with non-zero code or failed.');
+    }
+  } finally {
+    // 4. Giải phóng khóa
+    if (pool) {
+      await pool.request().query('UPDATE dbo.sync_auth_state SET is_refreshing = 0 WHERE id = 1');
+    }
+    _isRefreshingInMemory = false;
+  }
 }
 
-/**
- * Download file từ SharePoint với cookie xác thực.
- * Tự động login và retry nếu phát hiện hết hạn.
- */
-async function downloadFile(url, retryCount = 0, timeoutMs = 600000) {
-  let cookie = getCookie();
+async function downloadFile(url, pool = null, retryCount = 0, timeoutMs = 600000) {
+  // Ưu tiên lấy từ cache memory -> DB -> file
+  let cookie = _cachedCookie;
+  if (!cookie && pool) {
+    cookie = await getCookieFromDb(pool);
+  }
+  if (!cookie) {
+    cookie = getCookie();
+  }
 
   const doRequest = () =>
     axios.get(url, {
       responseType: 'arraybuffer',
       timeout: timeoutMs,
       httpsAgent,
+      maxRedirects: 0,
       headers: {
         'User-Agent':
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -130,15 +194,9 @@ async function downloadFile(url, retryCount = 0, timeoutMs = 600000) {
   let response = await doRequest();
   let needsRetry = false;
 
-  // 1. Kiểm tra nếu trả về trang đăng nhập HTML (Dấu hiệu cookie hết hạn trên SharePoint)
-  if (response.status === 200 && response.headers['content-type']?.includes('text/html')) {
-    const htmlSnippet = Buffer.from(response.data)
-      .toString('utf8')
-      .substring(0, 5000)
-      .toLowerCase();
-    
-    // Nếu URL rõ ràng đang trỏ tới một file nhị phân (pdf, doc, xls, png...)
-    // Nhưng SharePoint lại trả về text/html, chắc chắn đó là trang Login/Error chặn ở giữa
+  const contentType = response.headers['content-type'] || '';
+  if (contentType.includes('text/html')) {
+    const htmlSnippet = Buffer.from(response.data).toString('utf8').substring(0, 5000).toLowerCase();
     const isRequestingBinaryFile = url.toLowerCase().match(/\.(pdf|docx?|xlsx?|pptx?|jpe?g|png|gif|bmp|zip|rar)$/);
 
     if (
@@ -148,23 +206,26 @@ async function downloadFile(url, retryCount = 0, timeoutMs = 600000) {
       htmlSnippet.includes('adfs') ||
       htmlSnippet.includes('sign in') ||
       htmlSnippet.includes('đăng nhập') ||
+      htmlSnippet.includes('ms-servicedriven') ||
+      htmlSnippet.includes('fba') ||
       isRequestingBinaryFile
     ) {
+      if (retryCount === 0) logger.warn(`[SharePointAuth] Phát hiện trang Login (HTML) thay vì File. Cần refresh token.`);
       needsRetry = true;
     }
   }
 
-  // 2. Kiểm tra mã lỗi HTTP trực tiếp
   if (response.status === 401 || response.status === 403 || response.status === 302) {
+    if (retryCount === 0) logger.warn(`[SharePointAuth] HTTP ${response.status} (Auth Error). Cần refresh token.`);
     needsRetry = true;
   }
 
-  // Thực hiện Retry nếu cần và chưa quá giới hạn
   if (needsRetry && retryCount < 1) {
     logger.warn(`[SharePointAuth] Token hết hạn khi truy cập ${url}. Đang làm mới...`);
     try {
-      await refreshAuth();
-      return downloadFile(url, retryCount + 1, timeoutMs); // Đệ quy thử lại với cookie mới
+      _cachedCookie = null; // Clear cache để force load mới
+      await refreshAuth(pool);
+      return downloadFile(url, pool, retryCount + 1, timeoutMs); 
     } catch (err) {
       logger.error('[SharePointAuth] Không thể tự động làm mới token:', err.message);
       throw new Error('Authentication required and auto-refresh failed.');

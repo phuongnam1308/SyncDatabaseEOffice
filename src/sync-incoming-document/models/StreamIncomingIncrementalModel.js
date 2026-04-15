@@ -682,7 +682,7 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
       const stagingTableRef = this.getStagingTableRef();
       const lookbackHours = Number(process.env.STAGING_LOOKBACK_HOURS || 1);
       const nowUtc = new Date();
-      
+
       const envStartDate = process.env.SYNC_START_DATE ? new Date(process.env.SYNC_START_DATE).toISOString() : null;
       const envEndDate = process.env.SYNC_END_DATE ? new Date(process.env.SYNC_END_DATE).toISOString() : null;
 
@@ -914,15 +914,21 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
       const current = Number(jobState?.total_processed || 0) + 1;
       logger.info(`[IncomingDocumentModel] Process ${current}: record ID=${rowId}`);
 
+      // --- BƯỚC MỚI: Chuẩn bị dữ liệu file NGOÀI Transaction để tránh giữ lock lâu ---
+      let preparedFiles = [];
+      try {
+        preparedFiles = await this.prepareFilesFromSharePoint(rowData);
+      } catch (fileErr) {
+        logger.warn(`[IncomingDocumentModel] Lỗi tải file (tiếp tục đồng bộ văn bản): ${fileErr.message}`);
+      }
+
       transaction = new sql.Transaction(this.newPool);
       await transaction.begin();
 
-      const result = await this.processRowData(rowData, { transaction });
+      // Truyền thêm preparedFiles vào
+      const result = await this.processRowData(rowData, { transaction, preparedFiles });
 
       // Deferred Cursor strategy: KHÔNG update last_sync_time theo từng record.
-      // Với ORDER BY DESC (newest-first), record đầu tiên = mới nhất.
-      // Nếu update cursor ngay, nó sẽ nhảy lên tương lai sau 1 bước.
-      // Thay vào đó: chỉ tăng counter, cursor được finalize ở cuối (finalizeProcessingCursor).
       await this.queryNewDbTx(
         `UPDATE sync_jobs
          SET total_processed = ISNULL(total_processed, 0) + 1,
@@ -1055,10 +1061,10 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
   /**
    * Validates and applies one Incoming row into destination aggregates.
    * @param {object} rowData
-   * @param {{transaction?: object}} [context]
+   * @param {{transaction?: object, preparedFiles?: any[]}} [context]
    * @returns {Promise<{action:string,backupId:string,affected:number}>}
    */
-  async processRowData(rowData, { transaction } = {}) {
+  async processRowData(rowData, { transaction, preparedFiles = [] } = {}) {
     try {
       if (!rowData) {
         throw new Error('rowData is required');
@@ -1069,7 +1075,7 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
         throw new Error('Invalid document ID from staging');
       }
 
-      const res = await this.upsertDocumentAggregateById(rowData, { transaction });
+      const res = await this.upsertDocumentAggregateById(rowData, { transaction, preparedFiles });
       const affected = Number(res?.affected || 0);
 
       if (affected === 0) {
@@ -1088,132 +1094,126 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
     }
   }
 
-  async ThemFileDinhKem(oldRecord, newDocumentRecord, documentId) {
+  /**
+   * Tải các file đính kèm từ SharePoint về bộ nhớ (NGOÀI Transaction SQL).
+   */
+  async prepareFilesFromSharePoint(oldRecord) {
     const files = oldRecord?.Files || '';
-    logger.info(`[DEBUG][ThemFileDinhKem] Dang kiem tra file cho ban ghi ID: ${oldRecord?.ID}. Gia tri cot Files: "${files}"`);
+    if (!files) return [];
 
-    if (!files) {
-      logger.info(`[DEBUG][ThemFileDinhKem] Ban ghi ID ${oldRecord?.ID} KHONG co file đính kèm (cot Files trong DB cũ trống).`);
-      return false;
+    const baseUrl = (process.env.BASE_URL || "").replace(/\/$/, "");
+    if (!baseUrl) {
+      logger.error('[prepareFilesFromSharePoint] BASE_URL is not configured');
+      return [];
     }
 
-    try {
-      const fileSvc = this._fileService;
-      const baseUrl = (process.env.BASE_URL || "").replace(/\/$/, "");
-      if (!baseUrl) {
-        logger.error('[ThemFileDinhKem] BASE_URL is not configured in .env');
-        return false;
+    const parts = files.split('|').filter(Boolean);
+    if (parts.length === 0) return [];
+
+    let filesToPath = [];
+    const firstPartIsLikelyFile = /\.(pdf|docx?|xlsx?|jpe?g|png|gif|bmp)$/i.test(parts[0]);
+
+    if (firstPartIsLikelyFile) {
+      filesToPath.push(parts[0]);
+    } else {
+      const directory = parts[0];
+      const names = parts.slice(1);
+      for (const name of names) {
+        if (!name) continue;
+        filesToPath.push(directory.endsWith('/') ? `${directory}${name}` : `${directory}/${name}`);
       }
+    }
 
-      const parts = files.split('|').filter(Boolean);
-      if (parts.length === 0) return true;
-
-      let filesToProcess = [];
-
-      // Heuristic to decide parsing strategy based on the format of the first part.
-      const firstPartIsLikelyFile = /\.(pdf|docx?|xlsx?|jpe?g|png|gif|bmp)$/i.test(parts[0]);
-
-      if (firstPartIsLikelyFile) {
-        logger.info(`[DEBUG][ThemFileDinhKem] Phat hien FORMAT 1 (relativePath truc tiep): ${parts[0]}`);
-        const relativePath = parts[0];
-        filesToProcess.push(relativePath);
-      } else {
-        const directory = parts[0];
-        const names = parts.slice(1);
-        logger.info(`[DEBUG][ThemFileDinhKem] Phat hien FORMAT 2 (directory + multiple files). Directory: "${directory}", Files count: ${names.length}`);
-        for (const name of names) {
-          if (!name) continue;
-          const relativePath = directory.endsWith('/') ? `${directory}${name}` : `${directory}/${name}`;
-          filesToProcess.push(relativePath);
-        }
-      }
-
-      logger.info(`[DEBUG][ThemFileDinhKem] Record ${oldRecord.ID}: Found ${filesToProcess.length} files to process: ${filesToProcess.join(', ')}`);
-
-      const uploadPromises = filesToProcess.map(async (relativePath) => {
-        if (!relativePath.includes('/')) {
-          logger.warn(`[ThemFileDinhKem] Skipping invalid path part: "${relativePath}" for record ${oldRecord.ID}`);
-          return;
-        }
-
+    const preparedResults = [];
+    for (const relativePath of filesToPath) {
+      try {
+        if (!relativePath.includes('/')) continue;
         const fullUrl = `${baseUrl}${relativePath}`;
         const fileName = relativePath.substring(relativePath.lastIndexOf('/') + 1);
 
-        let buffer;
-        try {
-          logger.info(`[DEBUG][ThemFileDinhKem] Dang tai file tu SharePoint: ${fullUrl}`);
-          // spDownload uses authentication cookies managed by SharePointAuthService
-          buffer = await spDownload(fullUrl);
-          if (!buffer || buffer.length === 0) {
-            throw new Error(`Buffer tải về trống cho file ${fileName}`);
-          }
-          logger.info(`[DEBUG][ThemFileDinhKem] Tai file thanh cong: ${fileName} | Dung luong: ${buffer.length} bytes`);
-        } catch (downloadErr) {
-          logger.error(`[ThemFileDinhKem] Failed to download file from ${fullUrl}: ${downloadErr.message}`);
-          return; // Skip this file and return
+        logger.info(`[DEBUG][prepareFiles] Đang tải: ${fileName}`);
+        const buffer = await spDownload(fullUrl, this.newPool);
+
+        if (buffer && buffer.length > 0) {
+          preparedResults.push({
+            buffer,
+            fileName,
+            relativePath
+          });
+          logger.info(`[DEBUG][prepareFiles] Tải hoàn tất: ${fileName} (${buffer.length} bytes)`);
         }
-
-        const fileType = detectFileType(buffer);
-        let mimeType = fileType.mime;
-
-        if (mimeType === 'application/octet-stream') {
-          const ext = fileName.split('.').pop().toLowerCase();
-          if (ext === 'pdf') mimeType = 'application/pdf';
-          else if (ext === 'doc') mimeType = 'application/msword';
-          else if (ext === 'docx') mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-          else if (ext === 'xls') mimeType = 'application/vnd.ms-excel';
-          else if (ext === 'xlsx') mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-          else if (ext === 'ppt') mimeType = 'application/vnd.ms-powerpoint';
-          else if (ext === 'pptx') mimeType = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
-          else if (ext === 'png') mimeType = 'image/png';
-          else if (ext === 'jpg' || ext === 'jpeg') mimeType = 'image/jpeg';
-          else if (ext === 'zip') mimeType = 'application/zip';
-          else if (ext === 'rar') mimeType = 'application/x-rar-compressed';
-        }
-
-        const fileIdBak = uuidv4();
-        const fileRecord = {
-          file_name: fileName,
-          file_path: relativePath,
-          mime_type: mimeType,
-          created_by: newDocumentRecord?.drafter,
-          version: 1,
-          id_bak: fileIdBak,
-          table_bak: 'VanBanDen',
-          type_doc: 'incommingdocument',
-          isBak: 1
-        };
-
-        const relationRecord = {
-          object_type: 'incommingdocument',
-          object_id: String(documentId),
-          object_id_bak: oldRecord?.ID,
-          file_id_bak: fileIdBak,
-          table_bak: 'VanBanDen',
-          type_doc: 'incommingdocument',
-        };
-
-        logger.info(`[DEBUG][ThemFileDinhKem] [BUOC 4] Chuan bi metadata de upload. fileName=${fileName}, relativePath=${relativePath}, mimeType=${mimeType}`);
-        const result = await fileSvc.uploadAndInsert({
-          fileBuffer: buffer,
-          originalName: fileName,
-          mimeType,
-          fileRecord,
-          relationRecord,
-          folder: 'incoming',
-          localFolder: 'incoming'
-        });
-
-        logger.info(`[DEBUG][ThemFileDinhKem] [KET QUA] Da hoan tat upload cho file ${fileName}. result: ${JSON.stringify(result)}`);
-      });
-
-      await Promise.all(uploadPromises);
-
-      return true;
-    } catch (error) {
-      logger.error(`[ThemFileDinhKem] Unexpected error while migrating files for record ID ${oldRecord?.ID}: ${error.message}`, { stack: error.stack });
-      return false;
+      } catch (err) {
+        logger.error(`[prepareFiles] Lỗi tải file ${relativePath}: ${err.message}`);
+      }
     }
+    return preparedResults;
+  }
+
+  /**
+   * Ghi dữ liệu file đã chuẩn bị vào database (TRONG Transaction SQL).
+   */
+  async applyPreparedFiles(preparedFiles, oldRecord, newDocumentRecord, documentId, transaction) {
+    if (!Array.isArray(preparedFiles) || preparedFiles.length === 0) return true;
+
+    // Không dùng try-catch nuốt lỗi tại đây để transaction được rollback đúng cách ở cấp cao hơn (processOne)
+    const fileSvc = this._fileService;
+
+    for (const fileItem of preparedFiles) {
+      const { buffer, fileName, relativePath } = fileItem;
+
+      const fileType = detectFileType(buffer);
+      let mimeType = fileType.mime;
+
+      if (mimeType === 'application/octet-stream') {
+        const ext = fileName.split('.').pop().toLowerCase();
+        const mimeMap = {
+          'pdf': 'application/pdf', 'doc': 'application/msword', 'docx': 'application/vnd.word',
+          'xls': 'application/vnd.ms-excel', 'xlsx': 'application/vnd.spreadsheet',
+          'png': 'image/png', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg'
+        };
+        mimeType = mimeMap[ext] || mimeType;
+      }
+
+      const fileIdBak = uuidv4();
+      const fileRecord = {
+        file_name: fileName,
+        file_path: relativePath,
+        mime_type: mimeType,
+        created_by: newDocumentRecord?.drafter,
+        version: 1,
+        id_bak: fileIdBak,
+        table_bak: 'VanBanDen',
+        type_doc: 'incommingdocument',
+        isBak: 1
+      };
+
+      const relationRecord = {
+        object_type: 'incommingdocument',
+        object_id: String(documentId),
+        object_id_bak: oldRecord?.ID,
+        file_id_bak: fileIdBak,
+        table_bak: 'VanBanDen',
+        type_doc: 'incommingdocument',
+      };
+
+      await fileSvc.uploadAndInsert({
+        fileBuffer: buffer,
+        originalName: fileName,
+        mimeType,
+        fileRecord,
+        relationRecord,
+        folder: 'incoming',
+        localFolder: 'incoming',
+        transaction // Dùng chung TX
+      });
+    }
+    return true;
+  }
+
+  async ThemFileDinhKem(oldRecord, newDocumentRecord, documentId) {
+    // Để giữ tương thích nếu hàm này được gọi lẻ, nhưng khuyến khích dùng 2 bước trên.
+    const prepared = await this.prepareFilesFromSharePoint(oldRecord);
+    return await this.applyPreparedFiles(prepared, oldRecord, newDocumentRecord, documentId, null);
   }
 
   /**
@@ -1272,10 +1272,10 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
   /**
    * Upserts one Incoming document and its related audit/comment entities.
    * @param {object} oldRecord
-   * @param {{transaction?: object}} [context]
+   * @param {{transaction?: object, preparedFiles?: any[]}} [context]
    * @returns {Promise<{action:string,affected:number}>}
    */
-  async upsertDocumentAggregateById(oldRecord, { transaction } = {}) {
+  async upsertDocumentAggregateById(oldRecord, { transaction, preparedFiles = [] } = {}) {
     const id = String(oldRecord?.ID || '').trim();
     try {
       if (!oldRecord) {
@@ -1317,11 +1317,12 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
         };
       }
 
-      const newRrecord = await this.getByIdFromStaging(id, transaction);
-      logger.info(`[DEBUG][upsertDocumentAggregateById] Bat dau goi ThemFileDinhKem cho documentId: ${documentId}`);
+      const stagingRow = await this.getByIdFromStaging(id, transaction);
+      logger.info(`[DEBUG][upsertDocumentAggregateById] Ghi file vào DB cho documentId: ${documentId}`);
       const _timeStep2 = Date.now();
-      await this.ThemFileDinhKem(oldRecord, newRrecord, documentId);
-      logger.info(`[PERF] STEP 2 (Files) took ${Date.now() - _timeStep2}ms for ID=${id}`);
+      // Sử dụng hàm applyPreparedFiles thay vì ThemFileDinhKem để dùng chung Transaction
+      await this.applyPreparedFiles(preparedFiles, oldRecord, stagingRow, documentId, transaction);
+      logger.info(`[PERF] STEP 2 (Files DB) took ${Date.now() - _timeStep2}ms for ID=${id}`);
 
       /* ====== Phân tách bình luận từ HTML (Ý kiến lãnh đạo SP cũ) ====== */
       const _timeStep3 = Date.now();

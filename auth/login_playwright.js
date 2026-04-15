@@ -175,15 +175,25 @@ async function login(options = {}) {
       fs.mkdirSync(authDir, { recursive: true });
     }
 
+
     await context.storageState({ path: storageStatePath });
+    
+    // Kiểm tra xem đã thực sự có Cookie xác thực chưa
+    const state = JSON.parse(fs.readFileSync(storageStatePath, 'utf8'));
+    const hasAuthCookie = state.cookies.some(c => c.name === 'FedAuth' || c.name === 'rtFa' || c.name.includes('Wave'));
+    
+    if (!hasAuthCookie) {
+      throw new Error('Đăng nhập hoàn tất nhưng không tìm thấy FedAuth/rtFa cookie. Có thể sai mật khẩu hoặc bị chặn.');
+    }
+
     console.log(`✓ Auth state saved successfully to: ${storageStatePath}`);
 
     // Trích xuất cookie để lưu vào file cookie.txt (phục vụ SharePointAuthService)
-    const state = JSON.parse(fs.readFileSync(storageStatePath, 'utf8'));
     const cookieString = state.cookies.map(c => `${c.name}=${c.value}`).join('; ');
     const cookiePath = path.join(authDir, 'cookie.txt');
     fs.writeFileSync(cookiePath, cookieString);
     console.log(`✓ Cookie string saved to: ${cookiePath}`);
+    return true;
 
   } catch (error) {
     console.error('✘ ERROR:', error.message);
@@ -199,4 +209,13 @@ async function login(options = {}) {
   }
 }
 
+
 module.exports = login;
+
+// Nếu chạy trực tiếp file này (node login_playwright.js)
+if (require.main === module) {
+  login().catch(err => {
+    console.error('❌ CRITICAL LOGIN ERROR:', err);
+    process.exit(1);
+  });
+}
