@@ -1,4 +1,5 @@
 const logger = require('../../../utils/logger');
+const dbUtils = require('../../../utils/dbUtils');
 const sql = require('mssql');
 const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
@@ -737,15 +738,13 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
         if (!rows || rows.length === 0) return { rowsCount: 0, stagedCount: 0 };
 
         let stagedInBatch = 0;
-        let transaction = null;
         try {
-          transaction = new sql.Transaction(this.newPool);
-          await transaction.begin();
-          const stageResult = await this.syncOldToStaging(rows, { transaction });
-          await transaction.commit();
+          const stageResult = await dbUtils.withTransactionRetry(this.newPool, async (transaction) => {
+            return await this.syncOldToStaging(rows, { transaction });
+          }, { maxRetries: 5 });
+
           stagedInBatch = stageResult?.stagedCount || 0;
         } catch (stageErr) {
-          if (transaction) await transaction.rollback().catch(() => { });
           logger.error(`[IncomingDocumentModel.getList] Staging error at batch ${iteration}: ${stageErr.message}`);
         }
 
