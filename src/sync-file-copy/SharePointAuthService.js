@@ -31,7 +31,15 @@ function getCookie() {
 
   try {
     const content = fs.readFileSync(cookieFilePath, 'utf8').trim();
-    _cachedCookie = content;
+    if (_cachedCookie !== content) {
+      _cachedCookie = content;
+      logger.info(`[SharePointAuth] Đã load Cookie mới từ file. Tổng ký tự: ${_cachedCookie.length}`);
+      // Lấy đoạn đầu và đoạn cuối để dễ đối chiếu lifetime/thay đổi mà không in rác log quá nhiều
+      const preview = _cachedCookie.length > 100 
+        ? `${_cachedCookie.substring(0, 50)} ... ${_cachedCookie.substring(_cachedCookie.length - 50)}` 
+        : _cachedCookie;
+      logger.info(`[SharePointAuth] Raw Token: ${preview}`);
+    }
     return _cachedCookie;
   } catch (err) {
     logger.error('[SharePointAuth] Không đọc được file cookie:', err.message);
@@ -128,10 +136,19 @@ async function downloadFile(url, retryCount = 0, timeoutMs = 600000) {
       .toString('utf8')
       .substring(0, 5000)
       .toLowerCase();
+    
+    // Nếu URL rõ ràng đang trỏ tới một file nhị phân (pdf, doc, xls, png...)
+    // Nhưng SharePoint lại trả về text/html, chắc chắn đó là trang Login/Error chặn ở giữa
+    const isRequestingBinaryFile = url.toLowerCase().match(/\.(pdf|docx?|xlsx?|pptx?|jpe?g|png|gif|bmp|zip|rar)$/);
+
     if (
       htmlSnippet.includes('signincontrol_username') ||
       htmlSnippet.includes('login.aspx') ||
-      htmlSnippet.includes('id="login"')
+      htmlSnippet.includes('id="login"') ||
+      htmlSnippet.includes('adfs') ||
+      htmlSnippet.includes('sign in') ||
+      htmlSnippet.includes('đăng nhập') ||
+      isRequestingBinaryFile
     ) {
       needsRetry = true;
     }

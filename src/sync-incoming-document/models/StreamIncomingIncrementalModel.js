@@ -1135,7 +1135,22 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
         }
 
         const fileType = detectFileType(buffer);
-        const mimeType = fileType.mime;
+        let mimeType = fileType.mime;
+
+        if (mimeType === 'application/octet-stream') {
+          const ext = fileName.split('.').pop().toLowerCase();
+          if (ext === 'pdf') mimeType = 'application/pdf';
+          else if (ext === 'doc') mimeType = 'application/msword';
+          else if (ext === 'docx') mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+          else if (ext === 'xls') mimeType = 'application/vnd.ms-excel';
+          else if (ext === 'xlsx') mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+          else if (ext === 'ppt') mimeType = 'application/vnd.ms-powerpoint';
+          else if (ext === 'pptx') mimeType = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+          else if (ext === 'png') mimeType = 'image/png';
+          else if (ext === 'jpg' || ext === 'jpeg') mimeType = 'image/jpeg';
+          else if (ext === 'zip') mimeType = 'application/zip';
+          else if (ext === 'rar') mimeType = 'application/x-rar-compressed';
+        }
 
         const fileIdBak = uuidv4();
         const fileRecord = {
