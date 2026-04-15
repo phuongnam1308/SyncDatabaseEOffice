@@ -182,9 +182,10 @@ class SyncManagerService {
             error_message, instance_id
           FROM ${SyncStateRepository.tblJobs}
           WHERE instance_id = @instanceId
-          `
+          `,
+          { instanceId: this.instanceId }
         )
-      ], { instanceId: this.instanceId });
+      ]);
 
       const state = { models: {}, jobs: {}, syncLogs: {} };
 

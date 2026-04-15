@@ -255,12 +255,19 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
    */
   async queryNewDbTx(query, params = {}, transaction = null) {
     try {
-      // Ensure pool is initialized
-      if (!transaction && !this.newPool) {
+      const canUseTransaction = Boolean(
+        transaction &&
+        transaction._acquiredConnection &&
+        !transaction._aborted
+      );
+
+      if (!canUseTransaction && !this.newPool) {
         throw new Error('Database pool not initialized. Call initialize() first.');
       }
 
-      const request = transaction ? new sql.Request(transaction) : this.newPool.request();
+      const request = canUseTransaction
+        ? new sql.Request(transaction)
+        : this.newPool.request();
 
       // Danh sách UUID fields
       const uuidFields = [];
