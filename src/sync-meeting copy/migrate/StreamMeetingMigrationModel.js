@@ -775,6 +775,8 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     const recordId = String(rowData.ID);
     console.log(`[StreamMeetingMigrationModel] processRowData: recordId=${recordId}`);
     const { externalKey } = this.oldConfig;
+    const originalLocation = typeof rowData.Location === 'string' ? rowData.Location.trim() : rowData.Location;
+    const descriptionRoomName = typeof rowData.Description === 'string' ? rowData.Description.trim() : '';
 
     // 1. Resolve Creator (Người tạo) - Ưu tiên AuthorAccount, AuthorName
     let creatorId = await this.helper.robustUserResolver(rowData, transaction);
@@ -826,15 +828,38 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
         }
     }
 
-    // Explicitly map room_ids from Location if it contains comma-separated IDs
-    if (rowData.Location && rowData.Location.includes('-')) {
-        // SharePoint room items often look like "20260309094614-9QSLJL51"
-        rowData.room_ids = rowData.Location;
+    // Ưu tiên nvarchar3/Description làm tên phòng để auto create/find room trong meeting_rooms.
+    if (descriptionRoomName) {
+        rowData.room_ids = await this.helper.mapMeetingRoom(descriptionRoomName, transaction);
+    } else if (originalLocation && String(originalLocation).includes('-')) {
+        // Fallback cho dữ liệu cũ đã lưu trực tiếp room ID.
+        rowData.room_ids = originalLocation;
+    } else if (originalLocation) {
+        const normalizedLocation = String(originalLocation).toLowerCase();
+        const looksLikePhysicalRoom =
+            !normalizedLocation.includes('zoom') &&
+            !normalizedLocation.includes('online') &&
+            !normalizedLocation.includes('hybrid');
+
+        if (looksLikePhysicalRoom) {
+            rowData.room_ids = await this.helper.mapMeetingRoom(String(originalLocation), transaction);
+        }
+    }
+
+    if (!rowData.room_ids) {
+        rowData.room_ids = mapping.room_default.id;
+        console.log(
+            `[StreamMeetingMigrationModel] No room resolved for recordId=${recordId}. Fallback to default room ${mapping.room_default.id}`
+        );
+    }
+
+    if (rowData.room_ids) {
+        rowData.Location = rowData.room_ids;
     }
 
     // Meeting mode logic
-    if (rowData.Location) {
-        const loc = rowData.Location.toLowerCase();
+    if (originalLocation) {
+        const loc = String(originalLocation).toLowerCase();
         if (loc.includes('zoom') || loc.includes('online')) {
             rowData.meeting_mode = 'ONLINE';
         } else if (loc.includes('hybrid')) {
