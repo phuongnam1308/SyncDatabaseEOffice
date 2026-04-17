@@ -796,13 +796,21 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     const batchSize = Number(process.env.STAGING_FETCH_BATCH_SIZE || 2000);
     const stagingTableRef = this.getStagingTableRef();
 
+    const envStartDate = process.env.SYNC_START_DATE ? new Date(process.env.SYNC_START_DATE).toISOString() : null;
+    const envEndDate = process.env.SYNC_END_DATE ? new Date(process.env.SYNC_END_DATE).toISOString() : null;
+
     // Cleanup stale records
     try {
       await this.queryNewDb(`
         UPDATE ${stagingTableRef}
         SET MigrateFlg = 0, MigrateErrMess = 'Reset from stale processing'
         WHERE MigrateFlg = 2
-      `);
+          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
+          AND (${this.partitionColumn} <= @endDate   OR @endDate IS NULL)
+      `, {
+        startDate: envStartDate,
+        endDate: envEndDate
+      });
     } catch (cleanupErr) {
       logger.warn(`[StreamTaskIn] Cleanup stale records failed: ${cleanupErr.message}`);
     }
@@ -925,7 +933,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       const query = `
       WITH CTE AS (
         SELECT TOP (1) *
-        FROM ${stagingTableRef} WITH (UPDLOCK, READPAST, ROWLOCK)
+        FROM ${stagingTableRef} WITH (UPDLOCK, ROWLOCK)
         WHERE ISNULL(MigrateFlg, 0) = 0
           AND ISNULL(MigrateErrFlg, 0) = 0
           -- Lọc theo cột nghiệp vụ để chia tải giữa các Worker
@@ -1069,7 +1077,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
 
       // Mark staging row as processed successfully
       await this.queryNewDbTx(
-        `UPDATE ${stagingTableRef}  WITH (ROWLOCK, READPAST)  SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE ID = @ID`,
+        `UPDATE ${stagingTableRef}  WITH (ROWLOCK)  SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE ID = @ID`,
         { ID: rowId },
         transaction
       );

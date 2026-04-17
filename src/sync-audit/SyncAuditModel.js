@@ -707,7 +707,7 @@ class SyncAuditModel extends BaseModel {
     );
 
     const query = `
-      INSERT INTO ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable}  WITH (ROWLOCK, READPAST)  (
+      INSERT INTO ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable}  WITH (ROWLOCK)  (
         document_id,
         [time],
         user_id,
@@ -824,7 +824,7 @@ class SyncAuditModel extends BaseModel {
     );
 
     const query = `
-      UPDATE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable}  WITH (ROWLOCK, READPAST) 
+      UPDATE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable}  WITH (ROWLOCK) 
       SET
         document_id = @document_id,
         display_name = @display_name,
@@ -1141,7 +1141,7 @@ class SyncAuditModel extends BaseModel {
     const tableName = isIncoming ? 'incomming_documents' : 'outgoing_documents';
     const idColumn = 'document_id';
     const query = `
-      UPDATE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${tableName}  WITH (ROWLOCK, READPAST) 
+      UPDATE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${tableName}  WITH (ROWLOCK) 
       SET status_code = @status_code,
           updated_at = GETDATE()
       WHERE ${idColumn} = @id
@@ -1158,6 +1158,8 @@ class SyncAuditModel extends BaseModel {
       }, transaction);
     } catch (err) {
       logger.warn(`[SyncAuditModel] Không thể cập nhật status_code cho ${tableName} ID=${documentId}: ${err.message}`);
+      // Ném lại lỗi để withDeadlockRetry ở lớp ngoài có thể thực hiện retry toàn bộ transaction
+      throw err;
     }
   }
 

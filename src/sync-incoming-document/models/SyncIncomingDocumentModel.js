@@ -1023,7 +1023,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
   async _updateRecord(record, transaction) {
     const mainTableRef = this.getMainTableRef();
     const query = `
-      UPDATE ${mainTableRef}  WITH (ROWLOCK, READPAST) 
+      UPDATE ${mainTableRef}  WITH (ROWLOCK) 
       SET
         status_code = @status_code,
         updated_at = GETDATE(),

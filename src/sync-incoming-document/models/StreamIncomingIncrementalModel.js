@@ -569,7 +569,8 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
       return { stagedCount: 0 };
     }
 
-    const columns = Object.keys(rows[0] || {}).filter((column) => !String(column).startsWith('__'));
+    const internalColumns = new Set(['MigrateFlg', 'MigrateErrFlg', 'MigrateErrMess']);
+    const columns = Object.keys(rows[0] || {}).filter((column) => !String(column).startsWith('__') && !internalColumns.has(column));
     if (!columns.length) {
       return { stagedCount: 0 };
     }
@@ -734,9 +735,14 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
           UPDATE ${stagingTableRef}
           SET MigrateFlg = 0, MigrateErrMess = 'Reset from stale processing'
           WHERE MigrateFlg = 2
-        `);
+            AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
+            AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
+        `, {
+          startDate: envStartDate,
+          endDate: envEndDate
+        });
         if (cleanupRes?.rowsAffected?.[0] > 0) {
-          logger.info(`[IncomingDocumentModel] Đã reset ${cleanupRes.rowsAffected[0]} bản ghi bị kẹt (MigrateFlg=2).`);
+          logger.info(`[IncomingDocumentModel] Đã reset ${cleanupRes.rowsAffected[0]} bản ghi bị kẹt (MigrateFlg=2) trong phân đoạn.`);
         }
       } catch (cleanupErr) {
         logger.warn(`[IncomingDocumentModel] Cleanup stale records failed: ${cleanupErr.message}`);
@@ -938,7 +944,7 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
 
         // Mark staging row as processed successfully
         await this.queryNewDbTx(
-          `UPDATE ${stagingTableRef}  WITH (ROWLOCK, READPAST)  SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE ID = @ID`,
+          `UPDATE ${stagingTableRef}  WITH (ROWLOCK)  SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE ID = @ID`,
           { ID: rowId },
           transaction,
         );
@@ -1027,7 +1033,7 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
       const query = `
       WITH CTE AS (
         SELECT TOP (1) *
-        FROM ${stagingTableRef} WITH (UPDLOCK, READPAST, ROWLOCK)
+        FROM ${stagingTableRef} WITH (UPDLOCK, ROWLOCK)
         WHERE ISNULL(MigrateFlg, 0) = 0
           AND ISNULL(MigrateErrFlg, 0) = 0
           -- Phân đoạn dữ liệu theo cột nghiệp vụ để Worker không nhặt nhầm dải của nhau

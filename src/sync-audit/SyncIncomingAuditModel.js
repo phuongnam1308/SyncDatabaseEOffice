@@ -87,7 +87,7 @@ class SyncIncomingAuditModel extends SyncAuditModel {
     try {
       // 1. Xoá toàn bộ assignment của document
       await this.queryNewDbTx(
-        `DELETE FROM ${process.env.NEW_DB_NAME}.dbo.incomming_assignment WITH (ROWLOCK, READPAST)
+        `DELETE FROM ${process.env.NEW_DB_NAME}.dbo.incomming_assignment WITH (ROWLOCK)
         WHERE document_id = @document_id`,
         { document_id },
         transaction
@@ -108,7 +108,7 @@ class SyncIncomingAuditModel extends SyncAuditModel {
         uniqueKeys.add(key);
 
         await this.queryNewDbTx(
-          `INSERT INTO ${process.env.NEW_DB_NAME}.dbo.incomming_assignment  WITH (ROWLOCK, READPAST) 
+          `INSERT INTO ${process.env.NEW_DB_NAME}.dbo.incomming_assignment  WITH (ROWLOCK) 
           (document_id, receiver, role_process, stage_status,
             created_at, last_audit_id, table_backups)
           VALUES (@document_id, @receiver, @role_process, @stage_status,
@@ -154,7 +154,7 @@ class SyncIncomingAuditModel extends SyncAuditModel {
     // Sử dụng logic UPDATE trước, sau đó mới INSERT nếu không có bản ghi nào bị ảnh hưởng
     // Cách tiếp cận này ổn định hơn MERGE trong môi trường high-concurrency
     const updateQuery = `
-      UPDATE ${process.env.NEW_DB_NAME}.dbo.incomming_current_state WITH (ROWLOCK, READPAST)
+      UPDATE ${process.env.NEW_DB_NAME}.dbo.incomming_current_state WITH (ROWLOCK)
       SET 
         current_stage_status  = @stage_status,
         current_action_code   = @action_code,
@@ -185,14 +185,14 @@ class SyncIncomingAuditModel extends SyncAuditModel {
     if (updateRes?.rowsAffected?.[0] === 0) {
       // Kiểm tra lại lần nữa với READPAST để không bị treo
       const checkRes = await this.queryNewDbTx(
-        `SELECT 1 FROM ${process.env.NEW_DB_NAME}.dbo.incomming_current_state WITH (ROWLOCK, READPAST) WHERE document_id = @document_id`,
+        `SELECT 1 FROM ${process.env.NEW_DB_NAME}.dbo.incomming_current_state WITH (ROWLOCK) WHERE document_id = @document_id`,
         { document_id },
         transaction
       );
 
       if (!checkRes || checkRes.length === 0) {
         const insertQuery = `
-          INSERT INTO ${process.env.NEW_DB_NAME}.dbo.incomming_current_state  WITH (ROWLOCK, READPAST) 
+          INSERT INTO ${process.env.NEW_DB_NAME}.dbo.incomming_current_state  WITH (ROWLOCK) 
           (
             document_id, current_stage_status, current_action_code,
             current_receiver, current_role_process,
