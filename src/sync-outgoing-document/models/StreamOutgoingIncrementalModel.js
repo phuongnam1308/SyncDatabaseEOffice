@@ -978,29 +978,28 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       // --- BƯỚC MỚI: Tải file từ SharePoint (NGOÀI giao dịch SQL) ---
       const preparedFiles = await this.prepareFilesFromSharePoint(rowData);
 
-      transaction = new sql.Transaction(this.newPool);
-      await transaction.begin();
+      const result = await dbUtils.withTransactionRetry(this.newPool, async (transaction) => {
+        const res = await this.processRowData(rowData, { transaction, preparedFiles });
 
-      const result = await this.processRowData(rowData, { transaction, preparedFiles });
+        // Update counters in sync_jobs
+        await this.queryNewDbTx(
+          `UPDATE sync_jobs
+           SET total_processed = ISNULL(total_processed, 0) + 1,
+               total_success   = ISNULL(total_success, 0) + 1
+           WHERE job_id = @syncJobId`,
+          { syncJobId },
+          transaction,
+        );
 
-      // Update counters in sync_jobs
-      await this.queryNewDbTx(
-        `UPDATE sync_jobs
-         SET total_processed = ISNULL(total_processed, 0) + 1,
-             total_success   = ISNULL(total_success, 0) + 1
-         WHERE job_id = @syncJobId`,
-        { syncJobId },
-        transaction
-      );
+        // Mark staging row as processed successfully
+        await this.queryNewDbTx(
+          `UPDATE ${stagingTableRef}  WITH (ROWLOCK, READPAST)  SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE ID = @ID`,
+          { ID: rowId },
+          transaction,
+        );
 
-      // Mark staging row as processed successfully
-      await this.queryNewDbTx(
-        `UPDATE ${stagingTableRef} WITH (ROWLOCK) SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE ID = @ID`,
-        { ID: rowId },
-        transaction
-      );
-
-      await transaction.commit();
+        return res;
+      }, { maxRetries: 5 });
 
       return {
         syncJobId,
@@ -1010,16 +1009,10 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         result
       };
     } catch (error) {
-      if (transaction) {
-        try {
-          await transaction.rollback().catch(() => { });
-        } catch (rollbackError) { }
-      }
-
       if (rowData && rowData.ID) {
         try {
           const stagingTableRef = this.getStagingTableRef();
-          await this.queryNewDb(`UPDATE ${stagingTableRef} SET MigrateErrFlg = 1, MigrateErrMess = @Err WHERE ID = @ID`, { ID: rowData.ID, Err: String(error.message).slice(0, 1000) });
+          await this.queryNewDb(`UPDATE ${stagingTableRef} SET MigrateFlg = 0, MigrateErrFlg = 1, MigrateErrMess = @Err WHERE ID = @ID`, { ID: rowData.ID, Err: String(error.message).slice(0, 1000) });
         } catch (updateErr) { }
       }
 

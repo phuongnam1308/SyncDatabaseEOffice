@@ -1069,7 +1069,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
 
       // Mark staging row as processed successfully
       await this.queryNewDbTx(
-        `UPDATE ${stagingTableRef} WITH (ROWLOCK) SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE ID = @ID`,
+        `UPDATE ${stagingTableRef}  WITH (ROWLOCK, READPAST)  SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE ID = @ID`,
         { ID: rowId },
         transaction
       );

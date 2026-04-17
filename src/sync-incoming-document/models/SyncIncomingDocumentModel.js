@@ -602,16 +602,15 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
       const query = `
         IF EXISTS (SELECT 1 FROM ${stagingTableRef} WHERE ID = @ID)
         BEGIN
-          ${
-            nonIdColumns.length > 0
-              ? `
+          ${nonIdColumns.length > 0
+          ? `
           UPDATE ${stagingTableRef}
           SET ${updateClause}
           WHERE ID = @ID
             AND (Modified IS NULL OR TRY_CONVERT(datetime2, @Modified, 121) > TRY_CONVERT(datetime2, Modified, 121));`
-              : `
+          : `
           SELECT 1 AS noop;`
-          }
+        }
         END
         ELSE
         BEGIN
@@ -824,7 +823,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
           { ID: rowId },
           transaction,
         );
-        
+
         return rowResult;
       }, { maxRetries: 5 });
 
@@ -839,7 +838,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
       if (transaction) {
         try {
           await transaction.rollback();
-        } catch (rollbackError) {}
+        } catch (rollbackError) { }
       }
 
       if (rowData && rowData.ID) {
@@ -849,7 +848,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
             `UPDATE ${stagingTableRef} SET MigrateErrFlg = 1, MigrateErrMess = @Err WHERE ID = @ID`,
             { ID: rowData.ID, Err: String(error.message).slice(0, 1000) },
           );
-        } catch (updateErr) {}
+        } catch (updateErr) { }
       }
 
       logger.error(
@@ -1024,7 +1023,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
   async _updateRecord(record, transaction) {
     const mainTableRef = this.getMainTableRef();
     const query = `
-      UPDATE ${mainTableRef} WITH (ROWLOCK)
+      UPDATE ${mainTableRef}  WITH (ROWLOCK, READPAST) 
       SET
         status_code = @status_code,
         updated_at = GETDATE(),
