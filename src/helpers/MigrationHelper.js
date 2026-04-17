@@ -18,6 +18,35 @@ class MigrationHelper {
     this.deptCache = new Map(); // Local cache for department IDs
   }
 
+  async ensureUsersTbBakColumnExists(transaction = null) {
+    try {
+      const dbName = process.env.NEW_DB_NAME;
+      if (!dbName) return;
+
+      await this.queryNewDbTx(
+        `
+        IF NOT EXISTS (
+            SELECT 1
+            FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_NAME = 'users' AND COLUMN_NAME = 'tb_bak'
+        )
+        BEGIN
+            ALTER TABLE [${dbName}].[dbo].[users] ADD tb_bak INT DEFAULT 0;
+        END
+        `,
+        {},
+        transaction
+      );
+    } catch (err) {
+      logger.warn(`[MigrationHelper] ensureUsersTbBakColumnExists failed: ${err.message}`);
+    }
+  }
+
+  isCreatableUsername(username) {
+    if (username === null || username === undefined) return false;
+    return String(username).trim().length > 3;
+  }
+
   /**
    * Đảm bảo các cột kỹ thuật tồn tại trong bảng (Self-healing schema)
    * @param {string} dbName
@@ -796,12 +825,16 @@ class MigrationHelper {
       const id = uuidv4();
       // Đảm bảo username không bị trùng nếu đã có codeNd này
       const username = `${codeNd}`;
+      if (!this.isCreatableUsername(username)) {
+        logger.warn(`[mapUserName] Skip auto-create because username "${username}" has length <= 3`);
+        return null;
+      }
 
       const insertQuery = `
         INSERT INTO ${process.env.NEW_DB_NAME}.dbo.users (
-          id, name, code_nd, username, password, roles_by_process, created_at, updated_at, status
+          id, name, code_nd, username, password, roles_by_process, created_at, updated_at, status, tb_bak
         ) VALUES (
-          @id, @name, @codeNd, @username, @password, @roles, GETDATE(), GETDATE(), 1
+          @id, @name, @codeNd, @username, @password, @roles, GETDATE(), GETDATE(), 1, 1
         )
       `;
 
@@ -810,6 +843,7 @@ class MigrationHelper {
           rolesDefault = (ROLES_DEFAULT && ROLES_DEFAULT.length > 0) ? JSON.stringify(ROLES_DEFAULT) : '[]';
       }
 
+      await this.ensureUsersTbBakColumnExists(transaction);
       await this.queryNewDbTx(insertQuery, {
         id,
         name: displayName || userIdOrName,
@@ -2923,6 +2957,10 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
       // username mượn tạm từ FullName để tạo dummy login
       let tempUsername = pureFullName.toLowerCase().replace(/\s+/g, '_');
       tempUsername = tempUsername.replace(/[àáạảãâầấậẩẫăằắặẳẵ]/g, 'a').replace(/[èéẹẻẽêềếệểễ]/g, 'e').replace(/[ìíịỉĩ]/g, 'i').replace(/[òóọỏõôồốộổỗơờớợởỡ]/g, 'o').replace(/[ùúụủũưừứựửữ]/g, 'u').replace(/[ỳýỵỷỹ]/g, 'y').replace(/đ/g, 'd');
+      if (!this.isCreatableUsername(tempUsername)) {
+        logger.warn(`[resolveUserIdByFullName] Skip auto-create because username "${tempUsername}" has length <= 3`);
+        return null;
+      }
 
       let rolesDefault = customRoles || process.env.ROLES_DEFAULT;
       if (!rolesDefault || rolesDefault.trim() === '') {
@@ -2936,10 +2974,11 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
 
       const insertQuery = `
         INSERT INTO [${process.env.NEW_DB_NAME}].[dbo].[users]
-        (id, username, code_nd, name, password, avatar, roles_by_process, status, created_at, updated_at)
-        VALUES (@id, @username, @username, @fullName, @password, '[]', @roles, 1, GETDATE(), GETDATE())
+        (id, username, code_nd, name, password, avatar, roles_by_process, status, created_at, updated_at, tb_bak)
+        VALUES (@id, @username, @username, @fullName, @password, '[]', @roles, 1, GETDATE(), GETDATE(), 1)
       `;
       const password = process.env.DEFAULT_USER_PASSWORD || '$10$mH.NYj.Bapxk4auiGaPKhOfCqUnA8jr1JO5fvP3miKbhIfwU3CVRa';
+      await this.ensureUsersTbBakColumnExists(transaction);
       await this.queryNewDbTx(insertQuery, { id: newId, username: tempUsername, fullName: pureFullName, password, roles: rolesDefault }, transaction);
 
       logger.info(`[resolveUserIdByFullName] Đã tự tạo mới tài khoản (Leader mapping) "${pureFullName}" với id=${newId}`);
@@ -2988,13 +3027,19 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
         }
       }
 
+      if (!this.isCreatableUsername(username)) {
+        logger.warn(`[resolveUserIdByAccountName] Skip auto-create because username "${username}" has length <= 3`);
+        return null;
+      }
+
       const insertQuery = `
         INSERT INTO [${process.env.NEW_DB_NAME}].[dbo].[users]
-        (id, username, code_nd, name, password, avatar, roles_by_process, status, created_at, updated_at)
-        VALUES (@id, @username, @username, @username, @password, '[]', @roles, 1, GETDATE(), GETDATE())
+        (id, username, code_nd, name, password, avatar, roles_by_process, status, created_at, updated_at, tb_bak)
+        VALUES (@id, @username, @username, @username, @password, '[]', @roles, 1, GETDATE(), GETDATE(), 1)
       `;
       // Mật khẩu mặc định hoặc hash rác
       const password = process.env.DEFAULT_USER_PASSWORD || '$10$mH.NYj.Bapxk4auiGaPKhOfCqUnA8jr1JO5fvP3miKbhIfwU3CVRa';
+      await this.ensureUsersTbBakColumnExists(transaction);
       await this.queryNewDbTx(insertQuery, { id: newId, username, password, roles: rolesDefault }, transaction);
 
       logger.info(`[resolveUserIdByAccountName] Đã tự tạo mới tài khoản "${username}" với id=${newId}`);
