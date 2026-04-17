@@ -219,17 +219,20 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
         BEGIN
             CREATE TABLE ${stagingTableRef} (
                 [SY_SyncId] INT IDENTITY(1,1) PRIMARY KEY,
+                [sync_job_id] NVARCHAR(255) NULL,
+                [source_record_key] NVARCHAR(400) NULL,
                 [__sync_time] DATETIME2 NULL,
                 [__sync_id_num] BIGINT NULL,
                 [ID] BIGINT NOT NULL
             );
-            CREATE UNIQUE INDEX IX_${table}_ID ON ${stagingTableRef}([ID]);
         END
         `;
         await this.queryNewDb(createQuery);
 
         // 2. Danh sách các cột cần đảm bảo (Tự động thêm nếu thiếu)
         const columnsToAdd = [
+            { name: 'sync_job_id', type: 'NVARCHAR(255)' },
+            { name: 'source_record_key', type: 'NVARCHAR(400)' },
             { name: 'ListName', type: 'NVARCHAR(500)' },
             { name: 'CreatedDate', type: 'NVARCHAR(500)' },
             { name: 'ModifiedDate', type: 'NVARCHAR(500)' },
@@ -291,6 +294,32 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
             `;
             await this.queryNewDb(alterQuery);
         }
+
+        await this.queryNewDb(`
+        IF EXISTS (
+            SELECT 1
+            FROM sys.indexes
+            WHERE name = 'IX_${table}_ID'
+              AND object_id = OBJECT_ID('${stagingTableRef}')
+        )
+        BEGIN
+            DROP INDEX IX_${table}_ID ON ${stagingTableRef};
+        END
+        `);
+
+        await this.queryNewDb(`
+        IF NOT EXISTS (
+            SELECT 1
+            FROM sys.indexes
+            WHERE name = 'IX_${table}_job_source_record_key'
+              AND object_id = OBJECT_ID('${stagingTableRef}')
+        )
+        BEGIN
+            CREATE UNIQUE INDEX IX_${table}_job_source_record_key
+            ON ${stagingTableRef}([sync_job_id], [source_record_key])
+            WHERE [sync_job_id] IS NOT NULL AND [source_record_key] IS NOT NULL;
+        END
+        `);
 
         console.log(`[StreamMeetingMigrationModel] [ensureStagingTableExists] OK: ${stagingTableRef} is ready`);
 
@@ -370,6 +399,12 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     const dateValue = new Date(value);
     if (Number.isNaN(dateValue.getTime())) return DEFAULT_SYNC_TIME;
     return dateValue.toISOString();
+  }
+
+  buildSourceRecordKey(row = {}) {
+    const itemId = row?.ID != null ? String(row.ID) : '';
+    const listId = row?.tp_ListId ? String(row.tp_ListId).trim().toUpperCase() : '';
+    return listId ? `${listId}:${itemId}` : itemId;
   }
 
   extractRowSyncTime(row) {
@@ -515,14 +550,60 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     return rows;
   }
 
-  async syncOldToStaging(rows, { transaction } = {}) {
+  async clearStagingForJob(syncJobId, transaction = null) {
+    if (!syncJobId) return;
+    await this.queryNewDbTx(
+      `DELETE FROM ${this.getStagingTableRef()} WHERE [sync_job_id] = @syncJobId`,
+      { syncJobId },
+      transaction
+    );
+  }
+
+  async getStagingSnapshotMeta(syncJobId) {
+    if (!syncJobId) {
+      return { totalCount: 0, lastSyncTime: DEFAULT_SYNC_TIME, lastSyncId: 0 };
+    }
+
+    const tableRef = this.getStagingTableRef();
+    const rows = await this.queryNewDb(
+      `
+      WITH ordered AS (
+        SELECT
+          [__sync_time],
+          [__sync_id_num],
+          ROW_NUMBER() OVER (
+            ORDER BY [__sync_time] DESC, [__sync_id_num] DESC, [source_record_key] DESC
+          ) AS rn
+        FROM ${tableRef}
+        WHERE [sync_job_id] = @syncJobId
+      )
+      SELECT
+        (SELECT COUNT(1) FROM ${tableRef} WHERE [sync_job_id] = @syncJobId) AS totalCount,
+        [__sync_time] AS lastSyncTime,
+        [__sync_id_num] AS lastSyncId
+      FROM ordered
+      WHERE rn = 1
+      `,
+      { syncJobId }
+    );
+
+    const row = rows?.[0] || {};
+    return {
+      totalCount: Number(row.totalCount || 0),
+      lastSyncTime: this.normalizeSyncTime(row.lastSyncTime || DEFAULT_SYNC_TIME),
+      lastSyncId: Number(row.lastSyncId || 0)
+    };
+  }
+
+  async syncOldToStaging(rows, { transaction, syncJobId } = {}) {
     if (!Array.isArray(rows) || rows.length === 0) return { stagedCount: 0 };
+    if (!syncJobId) throw new Error('syncJobId is required for staging meeting snapshot');
     console.log(`[StreamMeetingMigrationModel] Staging ${rows.length} rows to ${this.newTableSync}...`);
     const internalColumns = new Set(['__sync_time', '__sync_id_num']);
     const columns = Object.keys(rows[0] || {}).filter(
       (c) => !String(c).startsWith('__') && !internalColumns.has(c)
     );
-    const keyColumn = 'ID';
+    const keyColumn = 'source_record_key';
     const stagingTableRef = this.getStagingTableRef();
 
     for (const row of rows) {
@@ -531,18 +612,44 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
         // Không ép kiểu String() bừa bãi để tránh lỗi convert Date/Time trong SQL
         params[column] = row[column] !== undefined ? row[column] : null;
       }
+      params.sync_job_id = syncJobId;
+      params.source_record_key = this.buildSourceRecordKey(row);
       params.__sync_time = row.__sync_time;
       params.__sync_id_num = row.__sync_id_num;
-      const updateSet = columns.filter(c => c !== keyColumn).map(c => `[${c}] = @${c}`).join(', ');
+      const updateSet = [
+        ...columns.map(c => `[${c}] = @${c}`),
+        `[__sync_time] = @__sync_time`,
+        `[__sync_id_num] = @__sync_id_num`
+      ].join(', ');
       const query = `
-      IF EXISTS (SELECT 1 FROM ${stagingTableRef} WHERE [${keyColumn}] = @${keyColumn})
+      IF EXISTS (
+          SELECT 1
+          FROM ${stagingTableRef}
+          WHERE [sync_job_id] = @sync_job_id
+            AND [${keyColumn}] = @${keyColumn}
+      )
       BEGIN
-          UPDATE ${stagingTableRef} SET ${updateSet}, __sync_time = @__sync_time, __sync_id_num = @__sync_id_num WHERE [${keyColumn}] = @${keyColumn}
+          UPDATE ${stagingTableRef}
+          SET ${updateSet}
+          WHERE [sync_job_id] = @sync_job_id
+            AND [${keyColumn}] = @${keyColumn}
       END
       ELSE
       BEGIN
-          INSERT INTO ${stagingTableRef} (${columns.map(c => `[${c}]`).join(',')}, __sync_time, __sync_id_num)
-          VALUES (${columns.map(c => `@${c}`).join(',')}, @__sync_time, @__sync_id_num)
+          INSERT INTO ${stagingTableRef} (
+            [sync_job_id],
+            [source_record_key],
+            ${columns.map(c => `[${c}]`).join(',')},
+            __sync_time,
+            __sync_id_num
+          )
+          VALUES (
+            @sync_job_id,
+            @source_record_key,
+            ${columns.map(c => `@${c}`).join(',')},
+            @__sync_time,
+            @__sync_id_num
+          )
       END
       `;
       await this.queryNewDbTx(query, params, transaction);
@@ -555,6 +662,26 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     if (!syncJobId) throw new Error('syncJobId is required');
     const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
     const normalizedLastSyncId = Number(lastSyncId || 0);
+
+    const stagedSnapshot = await this.getStagingSnapshotMeta(syncJobId);
+    if (stagedSnapshot.totalCount > 0) {
+      console.log(`[StreamMeetingMigrationModel] Reusing staged snapshot for job ${syncJobId}: ${stagedSnapshot.totalCount} rows`);
+      await this.queryNewDb(`UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`, {
+        total: stagedSnapshot.totalCount,
+        jobId: syncJobId
+      });
+
+      return {
+        syncJobId,
+        rows: [],
+        totalCount: stagedSnapshot.totalCount,
+        stagedCount: stagedSnapshot.totalCount,
+        sourceLastSyncTime: normalizedLastSyncTime,
+        sourceLastSyncId: normalizedLastSyncId,
+        lastSyncTime: stagedSnapshot.lastSyncTime,
+        lastSyncId: stagedSnapshot.lastSyncId
+      };
+    }
 
     const totalCount = await this.getCount(normalizedLastSyncTime, normalizedLastSyncId);
     console.log(`[StreamMeetingMigrationModel] Total records to sync: ${totalCount}`);
@@ -572,6 +699,8 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     let nextSyncTime = normalizedLastSyncTime;
     let nextSyncId = normalizedLastSyncId;
 
+    await this.clearStagingForJob(syncJobId);
+
     for (let i = 0; i < numIterations; i++) {
         const offset = i * fetchBatchSize;
         console.log(`[StreamMeetingMigrationModel] Fetching batch ${i + 1}/${numIterations} (Offset: ${offset}, Limit: ${fetchBatchSize})`);
@@ -579,7 +708,7 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
         const rows = await this.fetchListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId, offset, fetchBatchSize);
         if (!rows || rows.length === 0) break;
 
-        const stageResult = await this.syncOldToStaging(rows);
+        const stageResult = await this.syncOldToStaging(rows, { syncJobId });
         totalStagedCount += Number(stageResult?.stagedCount || rows.length || 0);
 
         for (const row of rows) {
@@ -598,6 +727,8 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
         rows: [], 
         totalCount: totalCount, 
         stagedCount: totalStagedCount,
+        sourceLastSyncTime: normalizedLastSyncTime,
+        sourceLastSyncId: normalizedLastSyncId,
         lastSyncTime: nextSyncTime, 
         lastSyncId: nextSyncId 
     };
@@ -608,93 +739,37 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     return rows?.[0] || null;
   }
 
-  async fetchOneFromSource({ lastSyncTime, lastSyncId }) {
-    const listIds = this.oldConfig.listIds || [];
-    const listIdsStr = listIds.map(id => `'${id}'`).join(',');
-    const query = `
-        SELECT TOP 1
-            ud.[tp_ID] AS ID,
-            ud.[tp_Created] AS tp_Created,
-            ud.[tp_Modified] AS tp_Modified,
-            ui_author.[tp_Title] AS AuthorName,
-            ui_author.[tp_Title] AS AuthorFullName,
-            ui_author.[tp_Login] AS AuthorAccount,
-            ui_author.[tp_Email] AS AuthorEmail,
-            ui_editor.[tp_Title] AS EditorName,
-            ui_editor.[tp_Login] AS EditorAccount,
-            ud.[nvarchar1] AS Title,
-            ud.[nvarchar1] AS TieuDe,
-            ud.[datetime1] AS StartDate,
-            ud.[datetime1] AS BatDau,
-            ud.[datetime2] AS EndDate,
-            ud.[datetime2] AS KetThuc,
-            ud.[nvarchar2] AS Location,
-            ud.[nvarchar2] AS DiaDiem,
-            ud.[nvarchar3] AS Description,
-            ud.[nvarchar3] AS NoiDung,
-            ud.[nvarchar6] AS LoaiHop,
-            ud.[nvarchar10] AS ChuTri,
-            ud.[nvarchar14] AS ThuKy,
-            ud.[tp_Created] AS CreatedDate,
-            ud.[tp_Modified] AS ModifiedDate,
-            ud.[nvarchar4] AS nvarchar4,
-            ud.[nvarchar5] AS priority,
-            ud.[nvarchar6] AS nvarchar6,
-            ud.[nvarchar7] AS nvarchar7,
-            ud.[nvarchar8] AS nvarchar8,
-            ud.[nvarchar9] AS nvarchar9,
-            ud.[nvarchar10] AS nvarchar10,
-            ud.[nvarchar11] AS nvarchar11,
-            ud.[nvarchar12] AS nvarchar12,
-            ud.[nvarchar13] AS nvarchar13,
-            ud.[nvarchar14] AS nvarchar14,
-            ud.[nvarchar15] AS nvarchar15,
-            ud.[datetime1] AS datetime1,
-            ud.[datetime2] AS datetime2,
-            ud.[datetime3] AS datetime3,
-            ud.[datetime4] AS datetime4,
-            ud.[datetime5] AS datetime5,
-            ud.[int1] AS int1,
-            ud.[int2] AS int2,
-            ud.[int3] AS int3,
-            ud.[int4] AS int4,
-            ud.[bit1] AS bit1,
-            ud.[bit2] AS bit2,
-            ud.[tp_Author] AS tp_Author,
-            ud.[tp_Editor] AS tp_Editor,
-            ud.[tp_Version] AS tp_Version,
-            ud.[tp_IsCurrent] AS tp_IsCurrent,
-            ud.[tp_ListId] AS tp_ListId,
-            ud.[float1] AS float1,
-            ud.[float2] AS float2,
-            ci.[Title] AS DocumentTitle,
-            ud.[tp_Modified] AS __sync_time,
-            ud.[tp_ID] AS __sync_id_num
-        FROM [${this.oldDbName}].[dbo].[AllUserData] ud
-        LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_author ON ud.[tp_Author] = ui_author.[tp_ID]
-        LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_editor ON ud.[tp_Editor] = ui_editor.[tp_ID]
-        LEFT JOIN [DataEOfficeSNP].[SNP].[CodeItem] ci ON ud.[tp_ID] = ci.[SPItemId]
-        WHERE ud.[tp_ListId] IN (${listIdsStr})
-        AND (
-            @lastSyncTime = '1970-01-01T00:00:00.000Z'
-            OR ud.[tp_Modified] > @lastSyncTime
-            OR (ud.[tp_Modified] = @lastSyncTime AND ud.[tp_ID] > @lastSyncId)
-        )
-        ORDER BY ud.[tp_Modified] ASC, ud.[tp_ID] ASC
-    `;
-    const rows = await this.queryOldDb(query, { lastSyncTime, lastSyncId });
+  async fetchOneFromStaging({ syncJobId, itemIndex = 0 }) {
+    if (!syncJobId) throw new Error('syncJobId is required');
+
+    const rowNumber = Number(itemIndex || 0) + 1;
+    const rows = await this.queryNewDb(
+      `
+      WITH ordered AS (
+        SELECT
+          *,
+          ROW_NUMBER() OVER (
+            ORDER BY [__sync_time] ASC, [__sync_id_num] ASC, [source_record_key] ASC
+          ) AS rn
+        FROM ${this.getStagingTableRef()}
+        WHERE [sync_job_id] = @syncJobId
+      )
+      SELECT *
+      FROM ordered
+      WHERE rn = @rowNumber
+      `,
+      { syncJobId, rowNumber }
+    );
     return rows?.[0] || null;
   }
 
-  async processOne(syncJobId) {
+  async processOne(syncJobId, options = {}) {
     console.log(`[StreamMeetingMigrationModel] processOne: Starting job ${syncJobId}`);
     const jobState = await this.getSyncJobState(syncJobId);
     if (!jobState) throw new Error(`Job state not found: ${syncJobId}`);
 
-    const rowData = await this.fetchOneFromSource({
-      lastSyncTime: this.normalizeSyncTime(jobState.last_sync_time || DEFAULT_SYNC_TIME),
-      lastSyncId: Number(jobState.last_sync_id || 0)
-    });
+    const itemIndex = Number(options?.itemIndex || 0);
+    const rowData = await this.fetchOneFromStaging({ syncJobId, itemIndex });
 
     if (!rowData) {
         console.log(`[StreamMeetingMigrationModel] processOne: No more data for job ${syncJobId}`);
@@ -772,7 +847,7 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
   async processRowData(rowData, { transaction } = {}) {
     if (!rowData?.ID) throw new Error('ID is required');
 
-    const recordId = String(rowData.ID);
+    const recordId = this.buildSourceRecordKey(rowData);
     console.log(`[StreamMeetingMigrationModel] processRowData: recordId=${recordId}`);
     const { externalKey } = this.oldConfig;
     const originalLocation = typeof rowData.Location === 'string' ? rowData.Location.trim() : rowData.Location;
@@ -916,7 +991,7 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
 
       const unitId = rowData.organizational_unit || mapping.defaults.ORG_UNIT;
       const roomId = rowData.room_ids || mapping.room_default.id;
-      const idBak = String(rowData.ID);
+      const idBak = this.buildSourceRecordKey(rowData);
 
       console.log(`[StreamMeetingMigrationModel] Ensuring meeting_units entry for meetingId=${meetingId}, roomId=${roomId}`);
 
@@ -1045,6 +1120,24 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     const insertCols = [];
     const insertVals = [];
     const updateSet = [];
+    const insertColSet = new Set();
+    const updateColSet = new Set();
+
+    const addInsertColumn = (colName) => {
+      const key = colName.toLowerCase();
+      if (insertColSet.has(key)) return;
+      insertColSet.add(key);
+      insertCols.push(`[${colName}]`);
+      insertVals.push(`@${colName}`);
+    };
+
+    const addUpdateColumn = (colName) => {
+      const key = colName.toLowerCase();
+      if (key === 'id' || key === 'created_at') return;
+      if (updateColSet.has(key)) return;
+      updateColSet.add(key);
+      updateSet.push(`[${colName}] = @${colName}`);
+    };
 
     // Helper function for safe trimming
     const applySafeCast = (colName, val) => {
@@ -1067,8 +1160,7 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
         if (!hasIdInMapping) {
             const newId = uuidv4().toUpperCase();
             params['id'] = applySafeCast('id', newId);
-            insertCols.push('[id]');
-            insertVals.push('@id');
+            addInsertColumn('id');
             // Thường không update ID
         }
     }
@@ -1080,13 +1172,10 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
       
       const safeValue = applySafeCast(newField, value);
       params[newField] = safeValue;
-      insertCols.push(`[${newField}]`);
-      insertVals.push(`@${newField}`);
+      addInsertColumn(newField);
 
       // 🔥 NEVER update ID or created_at
-      if (newField.toLowerCase() !== 'id' && newField.toLowerCase() !== 'created_at') {
-        updateSet.push(`[${newField}] = @${newField}`);
-      }
+      addUpdateColumn(newField);
     }
 
     for (const [newField, valueFn] of Object.entries(defaultValues || {})) {
@@ -1095,13 +1184,10 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
         const rawVal = typeof valueFn === 'function' ? valueFn(rawData) : valueFn;
         const safeValue = applySafeCast(newField, rawVal);
         params[newField] = safeValue;
-        insertCols.push(`[${newField}]`);
-        insertVals.push(`@${newField}`);
+        addInsertColumn(newField);
 
         // 🔥 NEVER update ID or created_at
-        if (newField.toLowerCase() !== 'id' && newField.toLowerCase() !== 'created_at') {
-          updateSet.push(`[${newField}] = @${newField}`);
-        }
+        addUpdateColumn(newField);
       }
     }
 
@@ -1125,13 +1211,16 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
         if (fallback !== null) {
           const safeValue = applySafeCast(colName, fallback);
           params[colName] = safeValue;
-          insertCols.push(`[${colName}]`);
-          insertVals.push(`@${colName}`);
-          if (colName.toLowerCase() !== 'id' && colName.toLowerCase() !== 'created_at') {
-            updateSet.push(`[${colName}] = @${colName}`);
-          }
+          addInsertColumn(colName);
+          addUpdateColumn(colName);
         }
       }
+    }
+
+    if (existingCols.has(externalKeyField.toLowerCase())) {
+      params[externalKeyField] = applySafeCast(externalKeyField, externalKeyValue);
+      addInsertColumn(externalKeyField);
+      addUpdateColumn(externalKeyField);
     }
 
     params._externalKeyValue = externalKeyValue;

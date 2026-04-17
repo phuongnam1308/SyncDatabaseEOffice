@@ -189,13 +189,13 @@ const tableMappings = {
 
     /* ================= DUPLICATE ================= */
     duplicateCheck: {
-      fields: ['sharepoint_item_id'],
+      fields: [mapping.externalKey || 'id_sp_bak'],
       strategy: 'skip'
     },
 
-    externalKey: 'sharepoint_item_id',
+    externalKey: mapping.externalKey || 'id_sp_bak',
 
-    backupIdField: 'sharepoint_item_id'
+    backupIdField: mapping.externalKey || 'id_sp_bak'
   }
 };
 

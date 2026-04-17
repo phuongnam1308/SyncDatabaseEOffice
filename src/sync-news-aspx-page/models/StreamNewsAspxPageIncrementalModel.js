@@ -9,6 +9,10 @@ const MigrationHelper = require('../../helpers/MigrationHelper');
 
 const DEFAULT_SYNC_TIME = '2100-01-01T00:00:00.000Z';
 
+const SYNC_START_DATE = process.env.SYNC_START_DATE || null;
+const SYNC_END_DATE = process.env.SYNC_END_DATE || null;
+const SYNC_MIN_DATE = process.env.SYNC_MIN_DATE || '1970-01-01T00:00:00.000Z';
+
 class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
   constructor() {
     super({ modelName: 'STREAM_NEWS_ASPX_PAGE_INCREMENTAL' });
@@ -282,6 +286,9 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
           AND w.[FullUrl] LIKE '%tintuc%'
           AND d.[LeafName] LIKE '%.aspx'
           AND l.[tp_Title] LIKE '%Pages%'
+          AND (d.[TimeCreated] >= @startDate OR @startDate IS NULL)
+          AND (d.[TimeCreated] <= @endDate OR @endDate IS NULL)
+          AND d.[TimeLastModified] >= '${SYNC_MIN_DATE}'
       )
       SELECT COUNT(1) AS total
       FROM src
@@ -291,6 +298,8 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
     const rows = await this.queryOldDb(query, {
       lastSyncTime: normalizedLastSyncTime,
       lastSyncId: normalizedLastSyncId,
+      startDate: SYNC_START_DATE,
+      endDate: SYNC_END_DATE
     });
 
     const total = rows?.[0]?.total || 0;
@@ -570,8 +579,10 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
           d.[DeleteTransactionId] = 0x0
           AND d.[IsCurrentVersion] = 1
           AND w.[FullUrl] LIKE '%tintuc%'
-          AND d.[LeafName] LIKE '%.aspx'
           AND l.[tp_Title] LIKE '%Pages%'
+          AND (d.[TimeCreated] >= @startDate OR @startDate IS NULL)
+          AND (d.[TimeCreated] <= @endDate OR @endDate IS NULL)
+          AND (d.[TimeLastModified] >= '${SYNC_MIN_DATE}')
       ),
       paged_src AS (
         SELECT *,
@@ -596,6 +607,8 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
       lastSyncId: lastSyncId,
       take: safeTake,
       offset: safeOffset,
+      startDate: SYNC_START_DATE,
+      endDate: SYNC_END_DATE
     });
     return resultRows;
   }
@@ -1045,8 +1058,8 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
         }, 60000);
 
         try {
-          // Truyền tham số timeout động vào hàm downloadFile
-          buffer = await downloadFile(fullUrl, 0, loadTimeoutMs);
+          // Truyền đúng thứ tự tham số để dùng cơ chế lấy/lưu cookie từ DB + auto refresh auth
+          buffer = await downloadFile(fullUrl, this.newPool, 0, loadTimeoutMs);
         } finally {
           clearInterval(waitingInterval); // Tải xong hoặc lỗi thì tắt bộ đếm ngay
         }
@@ -1201,7 +1214,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
                   const imgLocalPath = path.join(imgOutDir, imgFileName);
 
                   logger.info(`[Image Downloader] Đang tải ảnh từ SharePoint: ${img.fullUrl}`);
-                  const imgBuffer = await downloadFile(img.fullUrl, 0, 60000); // Timeout 1 phút/ảnh
+                  const imgBuffer = await downloadFile(img.fullUrl, this.newPool, 0, 60000); // Timeout 1 phút/ảnh
 
                   if (imgBuffer && imgBuffer.length > 0) {
                     // CHẠY SONG SONG: 1. Lưu ảnh cục bộ & 2. Upload API

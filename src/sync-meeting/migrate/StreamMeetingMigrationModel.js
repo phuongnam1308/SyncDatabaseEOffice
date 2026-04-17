@@ -1,8 +1,13 @@
 const MigrationHelper = require('../../helpers/MigrationHelper');
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 const { tableMappings } = require('./config');
+const logger = require('../../../utils/logger');
 
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
+
+const SYNC_START_DATE = process.env.SYNC_START_DATE || null;
+const SYNC_END_DATE = process.env.SYNC_END_DATE || null;
+const SYNC_MIN_DATE = process.env.SYNC_MIN_DATE || '1970-01-01T00:00:00.000Z';
 
 class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
   constructor() {
@@ -182,6 +187,11 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
                     AND U.tp_ID > @lastSyncId
                 )
             )
+            -- Lọc theo dải thời gian nghiệp vụ (BatDau)
+            AND (CAST(U.tp_ColumnSet AS XML).value('(datetime1)[1]', 'datetime') >= @startDate OR @startDate IS NULL)
+            AND (CAST(U.tp_ColumnSet AS XML).value('(datetime1)[1]', 'datetime') <= @endDate OR @endDate IS NULL)
+            -- Ngưỡng bảo vệ toàn cục
+            AND U.tp_Modified >= '${SYNC_MIN_DATE}'
 
         ORDER BY
             U.tp_Modified ASC,
@@ -190,7 +200,9 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
 
     return this.queryOldDb(query, {
       lastSyncTime,
-      lastSyncId: Number(lastSyncId || 0)
+      lastSyncId: Number(lastSyncId || 0),
+      startDate: SYNC_START_DATE,
+      endDate: SYNC_END_DATE
     });
   }
 
@@ -351,13 +363,20 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
                         AND U.tp_ID > @lastSyncId
                     )
                 )
+            -- Lọc theo dải thời gian nghiệp vụ (BatDau)
+            AND (CAST(U.tp_ColumnSet AS XML).value('(datetime1)[1]', 'datetime') >= @startDate OR @startDate IS NULL)
+            AND (CAST(U.tp_ColumnSet AS XML).value('(datetime1)[1]', 'datetime') <= @endDate OR @endDate IS NULL)
+            -- Ngưỡng bảo vệ toàn cục
+            AND U.tp_Modified >= '${SYNC_MIN_DATE}'
 
             ORDER BY U.tp_Modified ASC, U.tp_ID ASC
         `;
 
     const rows = await this.queryOldDb(query, {
       lastSyncTime,
-      lastSyncId
+      lastSyncId,
+      startDate: SYNC_START_DATE,
+      endDate: SYNC_END_DATE
     });
 
     return rows?.[0] || null;

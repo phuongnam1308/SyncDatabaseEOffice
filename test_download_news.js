@@ -29,7 +29,7 @@ async function testVerbose() {
         
         // Gọi hàm download với timeout 70s để bắt được sự kiện phía dưới 60s
         // Truyền retryCount = 0 để xem nó có tự refresh ko
-        const buffer = await downloadFile(targetUrl, 0, 70000);
+        const buffer = await downloadFile(targetUrl, null, 0, 70000);
         
         const end = Date.now();
         const duration = (end - start) / 1000;
