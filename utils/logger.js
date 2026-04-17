@@ -60,4 +60,34 @@ if (process.env.NODE_ENV !== 'production') {
   );
 }
 
+/**
+ * Bắt đầu đo thời gian cho một tác vụ.
+ * Trả về object có hàm .stop() để kết thúc và log kết quả.
+ * @param {string} label Nhãn của tác vụ
+ * @param {object} metadata Metadata bổ sung
+ */
+logger.startTimer = function(label, metadata = {}) {
+  const start = process.hrtime();
+  return {
+    stop: (recordCount = null) => {
+      const end = process.hrtime(start);
+      const durationMs = (end[0] * 1000 + end[1] / 1000000).toFixed(2);
+      
+      let msg = `[PERF] ${label} took ${durationMs}ms`;
+      if (recordCount !== null && recordCount > 0) {
+        const msPerRow = (durationMs / recordCount).toFixed(2);
+        msg += ` for ${recordCount} rows (${msPerRow}ms/row)`;
+      }
+
+      // Tự động đánh dấu nếu thấy chậm (> 500ms hoặc tùy ý)
+      if (parseFloat(durationMs) > 500) {
+        logger.warn(`${msg} [SLOW DETECTED]`);
+      } else {
+        logger.info(msg, { ...metadata, durationMs, recordCount });
+      }
+      return durationMs;
+    }
+  };
+};
+
 module.exports = logger;

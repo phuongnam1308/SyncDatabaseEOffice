@@ -14,8 +14,8 @@ const CATEGORY_OUTGOING = "Văn bản đi";
 // Định nghĩa các hằng số cho danh mục (Category) của văn bản đến
 const CATEGORY_INCOMING_SUBMIT = "Văn bản trình ký";
 const CATEGORY_INCOMING_TCT = "Văn bản đến TCT";
-const CATEGORY_INCOMING= "Văn bản đến";
-const CATEGORY_INCOMING_INTERNAL= "Văn bản nội bộ";
+const CATEGORY_INCOMING = "Văn bản đến";
+const CATEGORY_INCOMING_INTERNAL = "Văn bản nội bộ";
 
 // Tạo các tập hợp (Set) để kiểm tra category hiệu quả
 const INCOMING_CATEGORIES = new Set([
@@ -89,58 +89,58 @@ class SyncAuditModel extends BaseModel {
           {
             table: 'audit',
             cols: [
-              { name: 'table_backups',   type: 'NVARCHAR(255)' },
-              { name: 'type_document',   type: 'VARCHAR(100)'  },
-              { name: 'processed_by',    type: 'VARCHAR(100)'  },
-              { name: 'acting_as',       type: 'VARCHAR(100)'  },
-              { name: 'status_code',     type: 'VARCHAR(50)'   },
-              { name: 'bpmn_version',    type: 'VARCHAR(100)'  },
-              { name: 'type_of_process', type: 'VARCHAR(100)'  },
-              { name: 'curStatusCode',   type: 'INT'           },
-              { name: 'role',            type: 'VARCHAR(100)'  }
+              { name: 'table_backups', type: 'NVARCHAR(255)' },
+              { name: 'type_document', type: 'VARCHAR(100)' },
+              { name: 'processed_by', type: 'VARCHAR(100)' },
+              { name: 'acting_as', type: 'VARCHAR(100)' },
+              { name: 'status_code', type: 'VARCHAR(50)' },
+              { name: 'bpmn_version', type: 'VARCHAR(100)' },
+              { name: 'type_of_process', type: 'VARCHAR(100)' },
+              { name: 'curStatusCode', type: 'INT' },
+              { name: 'role', type: 'VARCHAR(100)' }
             ]
           },
           {
             table: 'incomming_assignment',
             cols: [
-              { name: 'table_backups',   type: 'NVARCHAR(255)' },
-              { name: 'last_audit_id',   type: 'INT'           }
+              { name: 'table_backups', type: 'NVARCHAR(255)' },
+              { name: 'last_audit_id', type: 'INT' }
             ]
           },
           {
             table: 'incomming_current_state',
             cols: [
-              { name: 'table_backups',     type: 'NVARCHAR(255)' },
-              { name: 'is_completed_doc',   type: 'BIT'           },
-              { name: 'has_open_workitem',  type: 'BIT'           },
-              { name: 'is_transfer_to_room', type: 'BIT'           },
-              { name: 'last_audit_id',     type: 'INT'           },
-              { name: 'last_audit_time',   type: 'DATETIME2'     }
+              { name: 'table_backups', type: 'NVARCHAR(255)' },
+              { name: 'is_completed_doc', type: 'BIT' },
+              { name: 'has_open_workitem', type: 'BIT' },
+              { name: 'is_transfer_to_room', type: 'BIT' },
+              { name: 'last_audit_id', type: 'INT' },
+              { name: 'last_audit_time', type: 'DATETIME2' }
             ]
           },
           {
             table: 'outgoing_assignment',
             cols: [
-              { name: 'table_backups',   type: 'NVARCHAR(255)' },
-              { name: 'receiver_unit',   type: 'NVARCHAR(100)' },
-              { name: 'is_creator',      type: 'BIT'           },
-              { name: 'last_audit_id',   type: 'INT'           }
+              { name: 'table_backups', type: 'NVARCHAR(255)' },
+              { name: 'receiver_unit', type: 'NVARCHAR(100)' },
+              { name: 'is_creator', type: 'BIT' },
+              { name: 'last_audit_id', type: 'INT' }
             ]
           },
           {
             table: 'outgoing_current_state',
             cols: [
-              { name: 'table_backups',              type: 'NVARCHAR(255)' },
-              { name: 'has_ban_hanh',               type: 'BIT'           },
-              { name: 'has_da_xu_ly',               type: 'BIT'           },
-              { name: 'has_ht_vbtt',                type: 'BIT'           },
-              { name: 'is_completed_doc',           type: 'BIT'           },
-              { name: 'last_da_xu_ly_audit_id',     type: 'INT'           },
-              { name: 'has_tra_lai_after_da_xu_ly', type: 'BIT'           },
-              { name: 'has_open_workitem',          type: 'BIT'           },
-              { name: 'is_transfer_to_room',        type: 'BIT'           },
-              { name: 'last_audit_id',              type: 'INT'           },
-              { name: 'last_audit_time',            type: 'DATETIME2'     }
+              { name: 'table_backups', type: 'NVARCHAR(255)' },
+              { name: 'has_ban_hanh', type: 'BIT' },
+              { name: 'has_da_xu_ly', type: 'BIT' },
+              { name: 'has_ht_vbtt', type: 'BIT' },
+              { name: 'is_completed_doc', type: 'BIT' },
+              { name: 'last_da_xu_ly_audit_id', type: 'INT' },
+              { name: 'has_tra_lai_after_da_xu_ly', type: 'BIT' },
+              { name: 'has_open_workitem', type: 'BIT' },
+              { name: 'is_transfer_to_room', type: 'BIT' },
+              { name: 'last_audit_id', type: 'INT' },
+              { name: 'last_audit_time', type: 'DATETIME2' }
             ]
           }
         ];
@@ -254,7 +254,7 @@ class SyncAuditModel extends BaseModel {
         .join(", ");
 
       categoryFilter = `
-        AND LTRIM(RTRIM(ISNULL(Category, ''))) IN (${placeholders})
+        AND Category IN (${placeholders})
       `;
 
       // Thêm giá trị của các category vào parameters cho câu truy vấn
@@ -265,17 +265,17 @@ class SyncAuditModel extends BaseModel {
       );
     }
 
-// Các cột có thể chứa ID văn bản trong bảng audit cũ
-// LTRIM(RTRIM(ISNULL(IDVanBan, ''))) = @oldDocumentId
-//           OR LTRIM(RTRIM(ISNULL(VBId, ''))) = @oldDocumentId
-//           OR LTRIM(RTRIM(ISNULL(IDVanBanGoc, ''))) = @oldDocumentId
-//           OR LTRIM(RTRIM(ISNULL(VBGocId, ''))) = @oldDocumentId
+    // Các cột có thể chứa ID văn bản trong bảng audit cũ
+    // LTRIM(RTRIM(ISNULL(IDVanBan, ''))) = @oldDocumentId
+    //           OR LTRIM(RTRIM(ISNULL(VBId, ''))) = @oldDocumentId
+    //           OR LTRIM(RTRIM(ISNULL(IDVanBanGoc, ''))) = @oldDocumentId
+    //           OR LTRIM(RTRIM(ISNULL(VBGocId, ''))) = @oldDocumentId
 
     const query = `
       SELECT *
       FROM ${this.oldDbSchema}.${this.oldDbTable}
       WHERE (
-          LTRIM(RTRIM(ISNULL(VBId, ''))) = @oldDocumentId -- Tìm kiếm theo cột VBId
+          VBId = @oldDocumentId -- Tìm kiếm theo cột VBId
       )
       ${categoryFilter} -- Áp dụng bộ lọc category nếu có
       ORDER BY
@@ -301,35 +301,123 @@ class SyncAuditModel extends BaseModel {
    * @param {string|number} oldDocumentId - ID của văn bản trong CSDL cũ.
    * @param {string[]} tableNames - Danh sách các bảng audit cần truy vấn.
    * @param {string[]} categories - Mảng các danh mục để lọc (nếu có).
+   * @param {{minDate?: string|Date}} options - Tuỳ chọn tối ưu truy vấn.
    */
   async fetchAllAuditsAcrossTables(
     oldDocumentId,
     tableNames = [],
-    categories = null
+    categories = null,
+    options = {}
   ) {
-    if (!oldDocumentId || !tableNames.length) return [];
+    if (!oldDocumentId || !Array.isArray(tableNames) || tableNames.length === 0) {
+      return [];
+    }
 
-    const allRecords = [];
     const normalizedDocumentId = String(oldDocumentId).trim();
+    const safeTableNames = this._sanitizeTableNames(tableNames);
+    const normalizedCategories = this._normalizeCategories(categories);
 
-    // Thực hiện truy vấn song song trên tất cả các bảng để tối ưu hiệu suất
-    const fetchPromises = tableNames.map(async (tableName) => {
+    if (!safeTableNames.length) {
+      return [];
+    }
+
+    try {
+      return await this._fetchAllAuditsAcrossTablesUnion(
+        normalizedDocumentId,
+        safeTableNames,
+        normalizedCategories,
+        options
+      );
+    } catch (unionErr) {
+      logger.warn(
+        `[SyncAuditModel.fetchAllAuditsAcrossTables] UNION optimization failed, fallback to parallel queries. reason=${unionErr.message}`
+      );
+      return this._fetchAllAuditsAcrossTablesLegacy(
+        normalizedDocumentId,
+        safeTableNames,
+        normalizedCategories,
+        options
+      );
+    }
+  }
+
+  /**
+   * Optimized path: single UNION ALL query for all audit tables.
+   * @private
+   */
+  async _fetchAllAuditsAcrossTablesUnion(
+    normalizedDocumentId,
+    safeTableNames,
+    normalizedCategories,
+    options = {}
+  ) {
+    const params = { oldDocumentId: normalizedDocumentId };
+    const categoryFilter = this._buildCategoryFilterClause(normalizedCategories, params, "src");
+    const minDateFilter = this._buildMinDateFilterClause(options, params, "src");
+    const sortTimeExpr = this._getAuditSortTimeExpr("src");
+
+    const unionParts = safeTableNames.map((tableName) => `
+      SELECT
+        src.*,
+        N'${tableName}' AS __source_table,
+        ${sortTimeExpr} AS __sync_sort_time,
+        TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), src.ID))), '')) AS __sync_sort_id
+      FROM ${this.oldDbSchema}.[${tableName}] src
+      WHERE LTRIM(RTRIM(CONVERT(nvarchar(255), src.VBId))) = @oldDocumentId
+      ${categoryFilter}
+      ${minDateFilter}
+    `);
+
+    const query = `
+      SELECT *
+      FROM (
+        ${unionParts.join("\nUNION ALL\n")}
+      ) AS audits
+      ORDER BY
+        audits.__sync_sort_time ASC,
+        ISNULL(audits.__sync_sort_id, 0) ASC,
+        TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), audits.ID))), '')) ASC
+    `;
+
+    const rows = await this.queryOldDb(query, params);
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return [];
+    }
+
+    // Xóa cột kỹ thuật dùng cho ORDER BY trước khi trả về.
+    for (const row of rows) {
+      if (row && typeof row === "object") {
+        delete row.__sync_sort_time;
+        delete row.__sync_sort_id;
+      }
+    }
+
+    return rows;
+  }
+
+  /**
+   * Backward-compatible path: parallel query per table.
+   * @private
+   */
+  async _fetchAllAuditsAcrossTablesLegacy(
+    normalizedDocumentId,
+    safeTableNames,
+    normalizedCategories,
+    options = {}
+  ) {
+    const allRecords = [];
+
+    const fetchPromises = safeTableNames.map(async (tableName) => {
       try {
         const params = { oldDocumentId: normalizedDocumentId };
-        let categoryFilter = "";
-        const normalizedCategories = this._normalizeCategories(categories);
-
-        if (normalizedCategories.length) {
-          const placeholders = normalizedCategories.map((_, idx) => `@category${idx}`).join(", ");
-          categoryFilter = `AND LTRIM(RTRIM(ISNULL(Category, ''))) IN (${placeholders})`;
-          normalizedCategories.forEach((cat, idx) => { params[`category${idx}`] = cat; });
-        }
-
+        const categoryFilter = this._buildCategoryFilterClause(normalizedCategories, params);
+        const minDateFilter = this._buildMinDateFilterClause(options, params);
         const query = `
-          SELECT *, '${tableName}' as __source_table
-          FROM ${this.oldDbSchema}.${tableName}
-          WHERE LTRIM(RTRIM(ISNULL(VBId, ''))) = @oldDocumentId
+          SELECT *, N'${tableName}' as __source_table
+          FROM ${this.oldDbSchema}.[${tableName}]
+          WHERE LTRIM(RTRIM(CONVERT(nvarchar(255), VBId))) = @oldDocumentId
           ${categoryFilter}
+          ${minDateFilter}
         `;
 
         return await this.queryOldDb(query, params);
@@ -340,28 +428,106 @@ class SyncAuditModel extends BaseModel {
     });
 
     const results = await Promise.all(fetchPromises);
-
-    // Gộp tất cả các bản ghi từ các bảng
     for (const batch of results) {
       if (Array.isArray(batch)) {
         allRecords.push(...batch);
       }
     }
 
-    // Sắp xếp chronologically dựa trên NgayTao
     allRecords.sort((a, b) => {
       const timeA = this.helper.parseDate(a.NgayTao) || new Date(0);
       const timeB = this.helper.parseDate(b.NgayTao) || new Date(0);
-
       if (timeA.getTime() !== timeB.getTime()) {
         return timeA.getTime() - timeB.getTime();
       }
-
-      // Nếu thời gian bằng nhau, dùng ID làm tie-breaker (giả định ID tăng dần theo thời gian)
       return (Number(a.ID) || 0) - (Number(b.ID) || 0);
     });
 
     return allRecords;
+  }
+
+  /**
+   * SQL expression chuẩn hoá thời gian audit để sort/filter.
+   * @private
+   */
+  _getAuditSortTimeExpr(alias = "") {
+    const p = alias ? `${alias}.` : "";
+    return `
+      COALESCE(
+        TRY_CONVERT(datetime2, ${p}NgayTao, 120),
+        TRY_CONVERT(datetime2, ${p}NgayTao, 121),
+        TRY_CONVERT(datetime2, ${p}NgayTao, 103),
+        TRY_CONVERT(datetime2, ${p}NgayTao, 105),
+        TRY_CONVERT(datetime2, ${p}NgayTao),
+        CONVERT(datetime2, '1900-01-01T00:00:00')
+      )
+    `;
+  }
+
+  /**
+   * Build clause lọc Category với params an toàn.
+   * @private
+   */
+  _buildCategoryFilterClause(normalizedCategories, params, alias = "") {
+    if (!Array.isArray(normalizedCategories) || normalizedCategories.length === 0) {
+      return "";
+    }
+
+    const placeholders = normalizedCategories
+      .map((_, idx) => `@category${idx}`)
+      .join(", ");
+    normalizedCategories.forEach((category, idx) => {
+      params[`category${idx}`] = category;
+    });
+
+    const p = alias ? `${alias}.` : "";
+    return `AND ${p}Category IN (${placeholders})`;
+  }
+
+  /**
+   * Build clause lọc tối thiểu theo thời gian audit (opt-in qua options.minDate).
+   * @private
+   */
+  _buildMinDateFilterClause(options, params, alias = "") {
+    const minDateRaw = options && options.minDate ? this._normalizeTextField(options.minDate) : null;
+    if (!minDateRaw) {
+      return "";
+    }
+
+    const minDate = new Date(minDateRaw);
+    if (Number.isNaN(minDate.getTime())) {
+      logger.warn(`[SyncAuditModel] Invalid minDate=${minDateRaw}. Ignore minDate filter.`);
+      return "";
+    }
+
+    params.auditMinDate = minDate;
+    const sortTimeExpr = this._getAuditSortTimeExpr(alias);
+    return `AND ${sortTimeExpr} >= @auditMinDate`;
+  }
+
+  /**
+   * Chỉ giữ tên bảng hợp lệ để tránh SQL injection trong dynamic UNION.
+   * @private
+   */
+  _sanitizeTableNames(tableNames = []) {
+    const safe = [];
+    const seen = new Set();
+
+    for (const tableNameRaw of tableNames) {
+      const tableName = String(tableNameRaw || "").trim();
+      if (!tableName) continue;
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(tableName)) {
+        logger.warn(`[SyncAuditModel] Skip invalid table name: ${tableName}`);
+        continue;
+      }
+
+      const key = tableName.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      safe.push(tableName);
+    }
+
+    return safe;
   }
 
   /**
@@ -448,9 +614,9 @@ class SyncAuditModel extends BaseModel {
           // 5c. Cập nhật status_code cho bảng văn bản tương ứng
           if (audit.status_code && audit.document_id) {
             await this._updateDocumentStatusCode(
-              audit.document_id, 
-              audit.type_document, 
-              audit.status_code, 
+              audit.document_id,
+              audit.type_document,
+              audit.status_code,
               transaction
             );
           }
@@ -541,7 +707,7 @@ class SyncAuditModel extends BaseModel {
     );
 
     const query = `
-      INSERT INTO ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} (
+      INSERT INTO ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} WITH (ROWLOCK) (
         document_id,
         [time],
         user_id,
@@ -658,7 +824,7 @@ class SyncAuditModel extends BaseModel {
     );
 
     const query = `
-      UPDATE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable}
+      UPDATE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} WITH (ROWLOCK)
       SET
         document_id = @document_id,
         display_name = @display_name,
@@ -975,13 +1141,13 @@ class SyncAuditModel extends BaseModel {
     const tableName = isIncoming ? 'incomming_documents' : 'outgoing_documents';
     const idColumn = 'document_id';
     const query = `
-      UPDATE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${tableName}
+      UPDATE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${tableName} WITH (ROWLOCK)
       SET status_code = @status_code,
           updated_at = GETDATE()
       WHERE ${idColumn} = @id
         AND (
           status_code IS NULL
-          OR TRY_CAST(status_code AS INT) < TRY_CAST(@status_code AS INT)
+          OR status_code < @status_code
         )
     `;
 
@@ -1167,12 +1333,12 @@ class SyncAuditModel extends BaseModel {
 }
 
 module.exports = SyncAuditModel;
-module.exports.CATEGORY_RELEASE_DV      = CATEGORY_RELEASE_DV;
-module.exports.CATEGORY_RELEASE_TCT     = CATEGORY_RELEASE_TCT;
-module.exports.CATEGORY_OUTGOING        = CATEGORY_OUTGOING;
+module.exports.CATEGORY_RELEASE_DV = CATEGORY_RELEASE_DV;
+module.exports.CATEGORY_RELEASE_TCT = CATEGORY_RELEASE_TCT;
+module.exports.CATEGORY_OUTGOING = CATEGORY_OUTGOING;
 module.exports.CATEGORY_INCOMING_SUBMIT = CATEGORY_INCOMING_SUBMIT;
-module.exports.CATEGORY_INCOMING_TCT    = CATEGORY_INCOMING_TCT;
-module.exports.CATEGORY_INCOMING        = CATEGORY_INCOMING;
+module.exports.CATEGORY_INCOMING_TCT = CATEGORY_INCOMING_TCT;
+module.exports.CATEGORY_INCOMING = CATEGORY_INCOMING;
 module.exports.CATEGORY_INCOMING_INTERNAL = CATEGORY_INCOMING_INTERNAL;
-module.exports.INCOMING_CATEGORIES      = INCOMING_CATEGORIES;
-module.exports.OUTGOING_CATEGORIES      = OUTGOING_CATEGORIES;
+module.exports.INCOMING_CATEGORIES = INCOMING_CATEGORIES;
+module.exports.OUTGOING_CATEGORIES = OUTGOING_CATEGORIES;

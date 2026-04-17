@@ -18,7 +18,7 @@ class MappingController extends BaseController {
 
       // 1. Mapping Users (PersonalProfile & PersonalProfileDelete)
       const usersResult = await pool.request().query(`
-        SELECT 
+        SELECT
           Id AS new_id,                  -- Sửa nếu PK là 'id' thì đổi thành id
           id_user_bak,
           id_user_del_bak,
@@ -35,7 +35,7 @@ class MappingController extends BaseController {
 
       // 2. Mapping Groups (UserGroup)
       const groupsResult = await pool.request().query(`
-        SELECT 
+        SELECT
           id AS new_id,
           id_group_bk AS old_group_id,
           name,
@@ -51,7 +51,7 @@ class MappingController extends BaseController {
 
       // 3. Mapping quan hệ User-Group (từ bảng backup)
       const relationsResult = await pool.request().query(`
-        SELECT 
+        SELECT
           ug.id_user_bak AS old_user_id,
           ug.id_group_bak AS old_group_id,
           ug.id_user_del_bak,
@@ -64,10 +64,10 @@ class MappingController extends BaseController {
           gu.name AS mapped_group_name,
           gu.code AS mapped_group_code
         FROM ${process.env.NEW_DB_NAME}.dbo.user_group_users_bak ug
-        LEFT JOIN ${process.env.NEW_DB_NAME}.dbo.users u 
-          ON ug.id_user_bak = u.id_user_bak 
+        LEFT JOIN ${process.env.NEW_DB_NAME}.dbo.users u
+          ON ug.id_user_bak = u.id_user_bak
           OR ug.id_user_bak = u.id_user_del_bak
-        LEFT JOIN ${process.env.NEW_DB_NAME}.dbo.group_users gu 
+        LEFT JOIN ${process.env.NEW_DB_NAME}.dbo.group_users gu
           ON ug.id_group_bak = gu.id_group_bk
         ORDER BY ug.table_bak, ug.id_user_bak
       `);
@@ -107,13 +107,13 @@ class MappingController extends BaseController {
           u.Id AS user_id,                  -- PK của users (sửa nếu tên cột khác)
           gu.id AS group_user_id
         FROM ${process.env.NEW_DB_NAME}.dbo.user_group_users_bak ug
-        INNER JOIN ${process.env.NEW_DB_NAME}.dbo.users u 
+        INNER JOIN ${process.env.NEW_DB_NAME}.dbo.users u
           ON ug.id_user_bak = u.id_user_bak OR ug.id_user_bak = u.id_user_del_bak
-        INNER JOIN ${process.env.NEW_DB_NAME}.dbo.group_users gu 
+        INNER JOIN ${process.env.NEW_DB_NAME}.dbo.group_users gu
           ON ug.id_group_bak = gu.id_group_bk
         WHERE NOT EXISTS (
-          SELECT 1 
-          FROM ${process.env.NEW_DB_NAME}.dbo.user_group_users tgt 
+          SELECT 1
+          FROM ${process.env.NEW_DB_NAME}.dbo.user_group_users tgt
           WHERE tgt.user_id = u.Id AND tgt.group_user_id = gu.id
         );
       `);
@@ -123,7 +123,7 @@ class MappingController extends BaseController {
         UPDATE ug
         SET ug.table_bak = u.table_backups
         FROM ${process.env.NEW_DB_NAME}.dbo.user_group_users_bak ug
-        INNER JOIN ${process.env.NEW_DB_NAME}.dbo.users u 
+        INNER JOIN ${process.env.NEW_DB_NAME}.dbo.users u
           ON ug.id_user_bak = u.id_user_bak OR ug.id_user_bak = u.id_user_del_bak
         WHERE ug.table_bak IS NULL OR ug.table_bak = '';
       `);

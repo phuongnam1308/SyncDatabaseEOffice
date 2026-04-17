@@ -11,12 +11,12 @@ const swaggerSpec = swaggerJSDoc({
       description: 'Hệ thống đồng bộ dữ liệu EOffice &mdash; SNP'
     },
     servers: [
-      { url: `http://localhost:${process.env.PORT || 3021}/api` },
-      { url: `http://SNP-DongBoDuLieu:${process.env.PORT || 3021}/api` }
+      { url: `http://localhost:${process.env.PORT || 3025}/api` },
+      { url: `http://SNP-DongBoDuLieu:${process.env.PORT || 3025}/api` }
     ]
   },
   apis: [
-    './controllers/**/*.js', 
+    './controllers/**/*.js',
     './routes/**/*.js',
     './src/**/*.js'
   ]

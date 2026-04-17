@@ -38,11 +38,11 @@ const oldDbConfig = {
     encrypt: false,
     trustServerCertificate: true,
     enableArithAbort: true,
-    connectionTimeout: 30000,
+    connectionTimeout: 60000,
     requestTimeout: 30000
   },
   pool: {
-    max: 10,
+    max: 50,
     min: 0,
     idleTimeoutMillis: 30000
   }
@@ -58,11 +58,11 @@ const newDbConfig = {
     encrypt: false,
     trustServerCertificate: true,
     enableArithAbort: true,
-    connectionTimeout: 30000,
+    connectionTimeout: 60000,
     requestTimeout: 30000
   },
   pool: {
-    max: 10,
+    max: 50,
     min: 0,
     idleTimeoutMillis: 30000
   }

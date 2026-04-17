@@ -1,18 +1,18 @@
 const FileMigrationModel = require('./FileMigrationModel');
 const BaseModel = require("../../../models/BaseModel");
+const sql = require('mssql');
+const path = require('path');
+const fs = require('fs');
 
 class StreamFileMigrationModel extends BaseModel {
     constructor() {
         super();
-        //WSS_Content_eoffice_khkd
         this.dbName = process.env.NEW_DB_NAME;
         this.oldDbSchema = "dbo";
         this.oldDbTable = "AllDocs";
         this.newDbSchema = "dbo";
         this.newDbTable = "all_docs_sync";
-        this.storageRoot = './physical_storage'; // Thư mục lưu file mới
-        this.helper = new MigrationHelper(this.queryNewDbTx.bind(this), this.queryOldDb.bind(this));
-        
+        this.storageRoot = './physical_storage';
     }
   /**
    * Override initialize: kết nối DB xong tự động tạo bảng trung gian nếu chưa có.
@@ -24,7 +24,6 @@ class StreamFileMigrationModel extends BaseModel {
 
   /**
    * Tự động tạo bảng `all_docs_sync` trong DB mới nếu chưa tồn tại.
-   * Clone cấu trúc từ `AllDocs` (DB cũ) qua IF NOT EXISTS + SELECT TOP 0 * INTO.
    */
   async ensureStagingTableExists() {
     try {
@@ -58,35 +57,40 @@ class StreamFileMigrationModel extends BaseModel {
 
   async migrateFiles() {
         try {
-            // 1. Kết nối tới SharePoint DB
-            const pool = await sql.connect( );
+            // 1. Đảm bảo đã khởi tạo các Pool từ dbConnection
+            if (!this.oldPool) {
+                await this.initialize();
+            }
 
             // 2. Lấy danh sách file (Metadata) - Chỉ lấy bản đã Publish (Level = 1)
-            const filesRequest = await pool.request().query(`
-        SELECT Id, LeafName, DirName, Size 
-        FROM [dbo].[AllDocs] 
-        WHERE Level = 1 AND HasStream = 1
-      `);
+            const metaTimer = logger.startTimer('[StreamFileMigrationModel] FETCH_METADATA');
+            const filesRequest = await this.oldPool.request().query(`
+                SELECT Id, LeafName, DirName, Size
+                FROM [dbo].[AllDocs]
+                WHERE Level = 1 AND HasStream = 1
+            `);
+            metaTimer.stop(filesRequest.recordset?.length);
 
             for (const file of filesRequest.recordset) {
                 const { Id, LeafName, DirName } = file;
+                const fileTimer = logger.startTimer(`[StreamFileMigrationModel] FILE_STREAMING | ${LeafName}`);
 
-                // Tạo đường dẫn vật lý mới (giữ nguyên cấu trúc thư mục nếu cần)
+                // Tạo đường dẫn vật lý mới
                 const targetFolder = path.join(this.storageRoot, DirName);
                 if (!fs.existsSync(targetFolder)) {
                     fs.mkdirSync(targetFolder, { recursive: true });
                 }
                 const targetPath = path.join(targetFolder, LeafName);
 
-                // 3. Truy vấn các mảnh Content (Shreds) theo thứ tự BSN
-                const contentRequest = new sql.Request(pool);
+                // 3. Truy vấn các mảnh Content (Shreds) từ database cũ
+                const contentRequest = new sql.Request(this.oldPool);
                 contentRequest.input('docId', sql.UniqueIdentifier, Id);
 
                 const shreds = await contentRequest.query(`
-          SELECT Content FROM [dbo].[DocStreams] 
-          WHERE DocId = @docId 
-          ORDER BY BSN ASC
-        `);
+                    SELECT Content FROM [dbo].[DocStreams]
+                    WHERE DocId = @docId
+                    ORDER BY BSN ASC
+                `);
 
                 // 4. Ghi file vật lý
                 const writeStream = fs.createWriteStream(targetPath);
@@ -95,13 +99,11 @@ class StreamFileMigrationModel extends BaseModel {
                 }
                 writeStream.end();
 
-                // 5. Lưu Metadata vào CSDL mới của bạn tại đây
-                // await this.newDb.save({ fileName: LeafName, path: targetPath, ... });
-
-                console.log(`Đã đồng bộ: ${LeafName}`);
+                fileTimer.stop();
+                console.log(`[StreamFileMigrationModel] Đã đồng bộ: ${LeafName}`);
             }
         } catch (err) {
-            console.error('Lỗi Migration:', err);
+            console.error('[StreamFileMigrationModel] Lỗi Migration:', err);
         }
     }
 }

@@ -128,9 +128,8 @@ const tableMappings = {
       },
 
       room_ids: (r) => {
-        if (!r?.Location || r.Location === 'NULL') return mapping.room_default.id;
-        // Nếu location có vẻ là ID (có dấu gạch ngang) thì lấy, không thì lấy default
-        if (String(r.Location).includes('-')) return r.Location;
+        if (r?.room_ids) return r.room_ids;
+        if (r?.Location && r.Location !== 'NULL' && String(r.Location).includes('-')) return r.Location;
         return mapping.room_default.id;
       },
 
@@ -138,7 +137,8 @@ const tableMappings = {
 
       bpmn_version: mapping.defaults.BPMN_VERSION || 'QUY_TRINH_LICH_HOP',
 
-      content: (r) => r?.Description || r?.Title || 'Không nội dung',
+      // nvarchar3/Description hiện được dùng làm tên phòng, không dùng làm content nữa.
+      content: (r) => r?.Title || 'Không nội dung',
 
       chairman_id: (r) => r?.chairman_id || mapping.defaults.CHAIRMAN_ID || 'SYSTEM_MIGRATION',
       secretary_id: (r) => r?.secretary_id || null,
@@ -189,13 +189,13 @@ const tableMappings = {
 
     /* ================= DUPLICATE ================= */
     duplicateCheck: {
-      fields: ['sharepoint_item_id'],
+      fields: [mapping.externalKey || 'id_sp_bak'],
       strategy: 'skip'
     },
 
-    externalKey: 'sharepoint_item_id',
+    externalKey: mapping.externalKey || 'id_sp_bak',
 
-    backupIdField: 'sharepoint_item_id'
+    backupIdField: mapping.externalKey || 'id_sp_bak'
   }
 };
 

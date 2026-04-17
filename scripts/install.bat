@@ -1,94 +1,67 @@
 @echo off
-setlocal enabledelayedexpansion
+setlocal
 
 :: ======================================================
-::   SNP - ĐỒNG BỘ DỮ LIỆU: BỘ CÀI ĐẶT NHANH
+::   SNP SYNC: INSTALLER (ULTRA STABLE 2.0 - NO PATH)
 :: ======================================================
+
+:: Tu dong xac dinh duong dan he thong
+set "SYS_DIR=%SystemRoot%\System32"
+set "PS_EXE=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+set "XCOPY_EXE=%SystemRoot%\System32\xcopy.exe"
+set "EXP_EXE=%SystemRoot%\explorer.exe"
+set "CMD_EXE=%SystemRoot%\System32\cmd.exe"
 
 set "TARGET_DIR=C:\SNP_DongBoDuLieu"
 set "EXE_NAME=SNP - DONG BO DU LIEU.exe"
 set "SHORTCUT_NAME=SNP - DONG BO DU LIEU.lnk"
 
-echo 🚢 Dang chuan bi cai dat he thong...
-echo(
-
-:: 1. Kiem tra quyen Admin
-echo [+] Dang kiem tra quyen quan tri...
-net session >nul 2>&1
-if %errorLevel% neq 0 (
-    echo [LOI] Vui long chay file nay bang quyen "Run as administrator"^^!
-    pause
+echo [+] Checking Administrator rights...
+"%SYS_DIR%\net.exe" session >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [!] Requesting Admin privileges...
+    if exist "%PS_EXE%" (
+        "%PS_EXE%" -Command "Start-Process '%~f0' -Verb RunAs"
+    )
     exit /b
 )
-echo [OK] Quyen Admin hop le.
+echo [OK] Admin rights confirmed.
 
-:: 2. Tao thu muc dich
-echo [+] Dang chuan bi thu muc: %TARGET_DIR%
-if not exist "%TARGET_DIR%" (
-    mkdir "%TARGET_DIR%"
+echo [+] Preparing directory: %TARGET_DIR%
+if not exist "%TARGET_DIR%" "%CMD_EXE%" /c mkdir "%TARGET_DIR%"
+
+echo [+] Copying files (Please wait)...
+if exist "%XCOPY_EXE%" (
+    "%XCOPY_EXE%" /E /I /Y "%~dp0*" "%TARGET_DIR%\" >nul
+) else (
+    echo [ERROR] XCOPY not found.
 )
+echo [OK] Files copied to %TARGET_DIR%.
 
-:: 3. Sao chep toan bo file vao o C
-echo [+] Dang sao chep du lieu (vui long doi)...
-xcopy /E /I /Y "%~dp0*" "%TARGET_DIR%\" >nul
-if %errorLevel% neq 0 (
-    echo [LOI] Sao chep du lieu that bai.
-    pause
-    exit /b
-)
-echo [OK] Da sao chep xong du lieu vao %TARGET_DIR%.
-
-:: 4. Tao file VBS de chay an (Background Process)
-echo [+] Dang setup che do chay an...
+:: Create VBS for hidden run
 (
 echo Set WshShell = CreateObject("WScript.Shell"^)
 echo WshShell.Run chr(34^) ^& "%TARGET_DIR%\%EXE_NAME%" ^& chr(34^), 0
 echo Set WshShell = Nothing
 ) > "%TARGET_DIR%\run_hidden.vbs"
 
-:: Tu dong chon icon: Uu tien .ico, sau do den .png
-if exist "%~dp0icon.ico" (
-    set "ICON_FILE=icon.ico"
-) else if exist "%~dp0icon.png" (
-    set "ICON_FILE=icon.png"
-) else (
-    set "ICON_FILE="
-)
+echo [+] Creating Shortcut with Golden Anchor...
 
-if defined ICON_FILE (
-    set "ICON_PATH=%TARGET_DIR%\%ICON_FILE%"
-) else (
-    set "ICON_PATH="
-)
-
-:: 5. Tao Shortcut ra Desktop bang PowerShell
-echo [+] Dang tao Shortcut ra Desktop...
-set "PS_EXE=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+:: DUNG POWERSHELL VOI DUONG DAN TUYET DOI
+set "PS_CMD=$s=[Environment]::GetFolderPath('Desktop'); $p=Join-Path $s '%SHORTCUT_NAME%'; if(Test-Path $p){Remove-Item $p -Force}; $w=New-Object -ComObject WScript.Shell; $sc=$w.CreateShortcut($p); $sc.TargetPath='%TARGET_DIR%\%EXE_NAME%'; $sc.WorkingDirectory='%TARGET_DIR%'; if(Test-Path '%TARGET_DIR%\icon.ico'){$sc.IconLocation='%TARGET_DIR%\icon.ico,0'}; $sc.Save(); Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('CAI DAT THANH CONG!', 'SNP Sync', 'OK', 'Information');"
 
 if exist "%PS_EXE%" (
-    :: Shortcut Mac dinh
-    "%PS_EXE%" -ExecutionPolicy Bypass -Command "$desktop = [Environment]::GetFolderPath('Desktop'); $ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut(\"$desktop\%SHORTCUT_NAME%\"); $s.TargetPath = \"%TARGET_DIR%\%EXE_NAME%\"; $s.WorkingDirectory = \"%TARGET_DIR%\"; $s.IconLocation = \"%ICON_PATH%\"; $s.Save(); Write-Host \"[OK] Phiem tat chinh da ghi vao: $desktop\""
-    echo [OK] Da tao shortcut chinh: %SHORTCUT_NAME%
-    
-    :: Shortcut Chay Ngam
-    "%PS_EXE%" -ExecutionPolicy Bypass -Command "$desktop = [Environment]::GetFolderPath('Desktop'); $ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut(\"$desktop\SNP - DONG BO (CHAY NGAM).lnk\"); $s.TargetPath = \"wscript.exe\"; $s.Arguments = \"'%TARGET_DIR%\run_hidden.vbs'\"; $s.WorkingDirectory = \"%TARGET_DIR%\"; $s.IconLocation = \"%ICON_PATH%\"; $s.Save()"
-    echo [OK] Da tao shortcut chay ngam.
+    "%PS_EXE%" -ExecutionPolicy Bypass -Command "%PS_CMD%"
+)
 
-    echo [OK] Da cap nhat Shortcut ngoai Desktop voi bieu tuong: %ICON_FILE%.
-    
-    :: Tu dong bat Desktop de kiem tra
-    explorer.exe shell:Desktop
-) else (
-    echo [LOI] Khong tim thay PowerShell tai %PS_EXE%
+echo [OK] Installation completed successfully!
+if exist "%EXP_EXE%" (
+    "%EXP_EXE%" shell:Desktop
 )
 
 echo(
 echo ======================================================
-echo   ⚓ CAI DAT THANH CONG!
-echo.
-echo   - Thu muc: %TARGET_DIR%
-echo   - Shortcut: Da nam ngoai Desktop
-echo   - Dia chi: http://localhost:3021
+echo   SNP SYNC - READY!
 echo ======================================================
-echo.
+echo(
 pause

@@ -15,9 +15,9 @@ class DatabaseConnection {
         return this.oldPool;
       }
 
-      logger.info('Đang kết nối đến database cũ...');
+      logger.info(`Đang kết nối đến database cũ [${oldDbConfig.server}]...`);
       this.oldPool = await sql.connect(oldDbConfig);
-      logger.info('Kết nối database cũ thành công!');
+      logger.info(`✅ Kết nối database cũ thành công! Pool size: ${this.oldPool.size}`);
       return this.oldPool;
     } catch (error) {
       logger.error('Lỗi kết nối database cũ:', error);
@@ -32,9 +32,9 @@ class DatabaseConnection {
         return this.newPool;
       }
 
-      logger.info('Đang kết nối đến database mới...');
+      logger.info(`Đang kết nối đến database mới [${newDbConfig.server}]...`);
       this.newPool = await new sql.ConnectionPool(newDbConfig).connect();
-      logger.info('Kết nối database mới thành công!');
+      logger.info(`✅ Kết nối database mới thành công! Pool size: ${this.newPool.size}`);
       // ensure required sync tables exist after connection is made
       await this.ensureSyncTables();
       return this.newPool;
@@ -44,15 +44,21 @@ class DatabaseConnection {
     }
   }
 
-  // Kết nối cả 2 database
+  // Kết nối cả 2 database - SỬA LẠI: Không để lỗi 1 bên làm sập cả hệ thống
   async connectAll() {
     try {
-      await this.connectOldDb();
-      await this.connectNewDb();
-      // logger.info('Kết nối tất cả database thành công!');
+      // Thử kết nối từng bên một cách độc lập
+      await this.connectOldDb().catch(err => {
+        logger.error('⚠️ [DatabaseConnection] Không thể kết nối DB CŨ (Nguồn). Các task lấy dữ liệu từ đây sẽ bị lỗi.', err.message);
+      });
+      
+      await this.connectNewDb().catch(err => {
+        logger.error('❌ [DatabaseConnection] Không thể kết nối DB MỚI (Đích). Đây là lỗi nghiêm trọng!', err.message);
+      });
+
     } catch (error) {
-      logger.error('Lỗi kết nối database:', error);
-      throw error;
+      logger.error('Lỗi nghiêm trọng trong connectAll:', error);
+      // Không throw tiếp để app vẫn có thể khởi động (vào được dashboard)
     }
   }
 
@@ -82,8 +88,12 @@ class DatabaseConnection {
     }
   }
 
-  // Đóng tất cả kết nối
-  async closeAll() {
+  // Đóng tất cả kết nối (Chỉ đóng thật sự nếu force = true)
+  async closeAll(force = false) {
+    if (!force) {
+      logger.info('⚠️ [DatabaseConnection] closeAll() được gọi nhưng pool sẽ KHÔNG bị đóng (để bảo vệ job đang chạy). Dùng closeAll(true) nếu muốn đóng thật sự.');
+      return;
+    }
     await this.closeOldDb();
     await this.closeNewDb();
     logger.info('Đã đóng tất cả kết nối database');

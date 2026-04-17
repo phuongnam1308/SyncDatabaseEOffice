@@ -343,11 +343,30 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
     return Number(aId || 0) > Number(bId || 0);
   }
 
-  async fetchListFromOldDb(lastSyncTime, lastSyncId = 0) {
+  async getCount(lastSyncTime, lastSyncId = 0) {
     const listIds = this.oldConfig.listIds || [];
     const listIdsStr = listIds.map(id => `'${id}'`).join(',');
-    const completedLimit = process.env.COMPLETED_LIMIT || 10000;
-    const beginLimit = process.env.BEGIN_LIMIT || 0;
+    const query = `
+        SELECT COUNT(*) AS total
+        FROM [${this.oldDbName}].[dbo].[AllUserData] ud
+        WHERE ud.[tp_ListId] IN (${listIdsStr})
+        AND ud.tp_RowOrdinal = 0
+        AND ud.[tp_IsCurrentVersion] = 1
+        AND (
+            ud.[tp_Modified] > @lastSyncTime
+            OR (
+                ud.[tp_Modified] = @lastSyncTime
+                AND ud.[tp_ID] > @lastSyncId
+            )
+        )
+    `;
+    const rows = await this.queryOldDb(query, { lastSyncTime, lastSyncId: Number(lastSyncId || 0) });
+    return Number(rows?.[0]?.total || 0);
+  }
+
+  async fetchListFromOldDb(lastSyncTime, lastSyncId = 0, offset = 0, limit = 2000) {
+    const listIds = this.oldConfig.listIds || [];
+    const listIdsStr = listIds.map(id => `'${id}'`).join(',');
 
     // 🔥 Build dynamic SELECT based on existing columns in Source DB
     const cols = this.sourceSchema;
@@ -408,35 +427,42 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
     });
 
     const query = `
-        SELECT
-            ${udSelect.join(',\n            ')},
-            ${ciSelect.join(',\n            ')},
-            ud.[tp_Modified] AS __sync_time,
-            ud.[tp_ID] AS __sync_id_num
+        SELECT * FROM (
+            SELECT
+                ${udSelect.join(',\n                ')},
+                ${ciSelect.join(',\n                ')},
+                ud.[tp_Modified] AS __sync_time,
+                ud.[tp_ID] AS __sync_id_num,
+                ROW_NUMBER() OVER (ORDER BY ud.[tp_Modified] ASC, ud.[tp_ID] ASC) AS __page_rn
 
-        FROM [${this.oldDbName}].[dbo].[AllUserData] ud
-        INNER JOIN [${this.oldDbName}].[dbo].[AllLists] l
-            ON ud.[tp_ListId] = l.[tp_ID]
-        ${cols.hasUserInfo ? `LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_author ON ud.[tp_Author] = ui_author.[tp_ID]` : ''}
-        ${cols.hasUserInfo ? `LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_editor ON ud.[tp_Editor] = ui_editor.[tp_ID]` : ''}
-        LEFT JOIN [DataEOfficeSNP].[SNP].[CodeItem] ci ON ud.[tp_ID] = ci.[SPItemId]
+            FROM [${this.oldDbName}].[dbo].[AllUserData] ud
+            INNER JOIN [${this.oldDbName}].[dbo].[AllLists] l
+                ON ud.[tp_ListId] = l.[tp_ID]
+            ${cols.hasUserInfo ? `LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_author ON ud.[tp_Author] = ui_author.[tp_ID]` : ''}
+            ${cols.hasUserInfo ? `LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_editor ON ud.[tp_Editor] = ui_editor.[tp_ID]` : ''}
+            LEFT JOIN [DataEOfficeSNP].[SNP].[CodeItem] ci ON ud.[tp_ID] = ci.[SPItemId]
 
-        WHERE ud.[tp_ListId] IN (${listIdsStr})
-        AND ud.[tp_IsCurrent] = 1
-        AND ud.[tp_DeleteTransactionId] = 0x0
-        AND (
-            @lastSyncTime = '1970-01-01T00:00:00.000Z' -- Lần chạy đầu tiên: Lấy từ bản ghi mới nhất
-            OR ud.[tp_Modified] < @lastSyncTime
-            OR (
-                ud.[tp_Modified] = @lastSyncTime
-                AND ud.[tp_ID] < @lastSyncId
+            WHERE ud.[tp_ListId] IN (${listIdsStr})
+            AND ud.tp_RowOrdinal = 0
+            AND ud.[tp_IsCurrentVersion] = 1
+            AND (
+                ud.[tp_Modified] > @lastSyncTime
+                OR (
+                    ud.[tp_Modified] = @lastSyncTime
+                    AND ud.[tp_ID] > @lastSyncId
+                )
             )
-        )
-        ORDER BY ud.[tp_Modified] DESC, ud.[tp_ID] DESC
-        OFFSET ${beginLimit} ROWS FETCH NEXT ${completedLimit} ROWS ONLY;
+        ) AS t
+        WHERE __page_rn > @offset AND __page_rn <= (@offset + @limit)
+        ORDER BY __page_rn;
     `;
 
-    const rows = await this.queryOldDb(query, { lastSyncTime, lastSyncId: Number(lastSyncId || 0) });
+    const rows = await this.queryOldDb(query, { 
+      lastSyncTime, 
+      lastSyncId: Number(lastSyncId || 0),
+      offset: Number(offset || 0),
+      limit: Number(limit || 2000)
+    });
     console.log(`[StreamCarBookingMigrationModel] Fetched ${rows.length} rows from old DB`);
     return rows;
   }
@@ -445,7 +471,9 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
     if (!Array.isArray(rows) || rows.length === 0) return { stagedCount: 0 };
     console.log(`[StreamCarBookingMigrationModel] Staging ${rows.length} rows to ${this.newTableSync}...`);
     const internalColumns = new Set(['__sync_time', '__sync_id_num']);
-    const columns = Object.keys(rows[0]).filter(c => !internalColumns.has(c));
+    const columns = Object.keys(rows[0] || {}).filter(
+      (c) => !String(c).startsWith('__') && !internalColumns.has(c)
+    );
     if (!columns.length) return { stagedCount: 0 };
 
     const keyColumn = 'ID';
@@ -517,18 +545,57 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
     const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
     const normalizedLastSyncId = Number(lastSyncId || 0);
 
-    const rows = await this.fetchListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId);
-    await this.syncOldToStaging(rows);
+    const totalCount = await this.getCount(normalizedLastSyncTime, normalizedLastSyncId);
+    console.log(`[StreamCarBookingMigrationModel] Total records to sync: ${totalCount}`);
 
+    // Cập nhật Dashboard ngay lập tức
+    await this.queryNewDb(`UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`, {
+      total: totalCount,
+      jobId: syncJobId
+    });
+
+    const fetchBatchSize = Number(process.env.STAGING_FETCH_BATCH_SIZE || 2000);
+    const numIterations = Math.ceil(totalCount / fetchBatchSize);
+
+    let totalStagedCount = 0;
     let nextSyncTime = normalizedLastSyncTime;
     let nextSyncId = normalizedLastSyncId;
 
-    // Với thứ tự DESC, bản ghi cuối cùng (index n-1) là bản ghi CŨ NHẤT trong batch đó
-    if (rows.length > 0) {
-      nextSyncTime = this.extractRowSyncTime(rows[rows.length - 1]);
-      nextSyncId = this.extractRowSyncId(rows[rows.length - 1]);
+    for (let i = 0; i < numIterations; i++) {
+        const offset = i * fetchBatchSize;
+        logger.info(`[StreamCarBookingMigrationModel] Fetching batch ${i + 1}/${numIterations} (Offset: ${offset}, Limit: ${fetchBatchSize})`);
+        
+        const rows = await this.fetchListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId, offset, fetchBatchSize);
+        if (!rows || rows.length === 0) break;
+
+        const stageResult = await this.syncOldToStaging(rows);
+        totalStagedCount += Number(stageResult?.stagedCount || rows.length || 0);
+
+        // Cập nhật cursor và LOG chi tiết từng bản ghi
+        for (const row of rows) {
+            const rowTime = this.extractRowSyncTime(row);
+            const rowId = this.extractRowSyncId(row);
+            if (!rowTime) continue;
+
+            const isAhead = this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId);
+            logger.info(`  └─ [Compare] rowID: ${row.ID} | T: ${rowTime} ID: ${rowId} vs Cursor(T: ${nextSyncTime} ID: ${nextSyncId}) -> Ahead: ${isAhead}`);
+
+            if (isAhead) {
+                nextSyncTime = rowTime;
+                nextSyncId = rowId;
+            }
+        }
+        logger.info(`🔥 [StreamCarBookingMigrationModel] Batch ${i + 1}/${numIterations} staged: ${totalStagedCount}/${totalCount}. LastSyncTime: ${nextSyncTime}, LastSyncId: ${nextSyncId}`);
     }
-    return { syncJobId, rows, totalCount: rows.length, lastSyncTime: nextSyncTime, lastSyncId: nextSyncId };
+
+    return { 
+        syncJobId, 
+        rows: [], 
+        totalCount: totalCount, 
+        stagedCount: totalStagedCount,
+        lastSyncTime: nextSyncTime, 
+        lastSyncId: nextSyncId 
+    };
   }
 
   async fetchOneFromSource({ lastSyncTime, lastSyncId }) {

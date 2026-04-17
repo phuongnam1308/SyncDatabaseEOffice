@@ -8,7 +8,7 @@ const logger = require('../../../utils/logger');
 function safeDateParse(dateValue, fieldName = '') {
   if (!dateValue) return null;
   if (typeof dateValue === 'string' && dateValue.toUpperCase() === 'NULL') return null;
-  
+
   try {
     if (typeof dateValue.getTime === 'function' && !isNaN(dateValue.getTime())) {
       return dateValue.toISOString();
@@ -28,10 +28,7 @@ class StreamTaskMigrationModel extends BaseModel {
     this.newTableSync = 'task_sync';
     this.newDbTable = 'task';
 
-    this.helper = new MigrationHelper(
-      this.queryNewDbTx.bind(this),
-      this.queryOldDb.bind(this)
-    );
+    this.helper = new MigrationHelper(this.queryNewDbTx.bind(this), this.queryOldDb.bind(this));
   }
 
   /** Initialize model */
@@ -52,39 +49,39 @@ class StreamTaskMigrationModel extends BaseModel {
 
       // Danh sách các cột quan trọng cần có trong bảng [task]
       const requiredColumns = [
-        { name: 'id_task_bak',            type: 'NVARCHAR(255)' },
-        { name: 'code',                   type: 'NVARCHAR(255)' },
-        { name: 'name',                   type: 'NVARCHAR(MAX)' },
-        { name: 'start_date',             type: 'DATETIME2'     },
-        { name: 'end_date',               type: 'DATETIME2'     },
-        { name: 'bpmn_id',                type: 'NVARCHAR(255)' },
-        { name: 'priority',               type: 'NVARCHAR(50)'  },
-        { name: 'reminder_time',          type: 'INT'           },
-        { name: 'topic',                  type: 'NVARCHAR(MAX)' },
-        { name: 'note',                   type: 'NVARCHAR(MAX)' },
-        { name: 'repetitive_task',        type: 'BIT'           },
-        { name: 'month',                  type: 'INT'           },
-        { name: 'repetitive_start',       type: 'DATETIME2'     },
-        { name: 'repetitive_end',         type: 'DATETIME2'     },
-        { name: 'parent',                 type: 'NVARCHAR(255)' },
-        { name: 'path',                   type: 'NVARCHAR(MAX)' },
-        { name: 'progress',               type: 'INT'           },
-        { name: 'process_status',         type: 'NVARCHAR(50)'  },
-        { name: 'status',                 type: 'INT'           },
-        { name: 'approval_status',        type: 'NVARCHAR(50)'  },
-        { name: 'created_by',             type: 'NVARCHAR(255)' },
-        { name: 'updated_by',             type: 'NVARCHAR(255)' },
-        { name: 'recurring_from_id',      type: 'INT'           },
-        { name: 'type_task',              type: 'NVARCHAR(50)'  },
-        { name: 'doc_id',                 type: 'INT'           },
-        { name: 'meeting_id',             type: 'INT'           },
-        { name: 'meeting_conclusion_id',  type: 'INT'           },
-        { name: 'week_days',              type: 'NVARCHAR(255)' },
-        { name: 'project_id',             type: 'INT'           },
-        { name: 'type_task_meeting',      type: 'NVARCHAR(50)'  },
-        { name: 'template_id',            type: 'INT'           },
-        { name: 'dependent_task_id',      type: 'INT'           },
-        { name: 'is_confidential',        type: 'BIT'           }
+        { name: 'id_task_bak', type: 'NVARCHAR(255)' },
+        { name: 'code', type: 'NVARCHAR(255)' },
+        { name: 'name', type: 'NVARCHAR(MAX)' },
+        { name: 'start_date', type: 'DATETIME2' },
+        { name: 'end_date', type: 'DATETIME2' },
+        { name: 'bpmn_id', type: 'NVARCHAR(255)' },
+        { name: 'priority', type: 'NVARCHAR(50)' },
+        { name: 'reminder_time', type: 'INT' },
+        { name: 'topic', type: 'NVARCHAR(MAX)' },
+        { name: 'note', type: 'NVARCHAR(MAX)' },
+        { name: 'repetitive_task', type: 'BIT' },
+        { name: 'month', type: 'INT' },
+        { name: 'repetitive_start', type: 'DATETIME2' },
+        { name: 'repetitive_end', type: 'DATETIME2' },
+        { name: 'parent', type: 'NVARCHAR(255)' },
+        { name: 'path', type: 'NVARCHAR(MAX)' },
+        { name: 'progress', type: 'INT' },
+        { name: 'process_status', type: 'NVARCHAR(50)' },
+        { name: 'status', type: 'INT' },
+        { name: 'approval_status', type: 'NVARCHAR(50)' },
+        { name: 'created_by', type: 'NVARCHAR(255)' },
+        { name: 'updated_by', type: 'NVARCHAR(255)' },
+        { name: 'recurring_from_id', type: 'INT' },
+        { name: 'type_task', type: 'NVARCHAR(50)' },
+        { name: 'doc_id', type: 'INT' },
+        { name: 'meeting_id', type: 'INT' },
+        { name: 'meeting_conclusion_id', type: 'INT' },
+        { name: 'week_days', type: 'NVARCHAR(255)' },
+        { name: 'project_id', type: 'INT' },
+        { name: 'type_task_meeting', type: 'NVARCHAR(50)' },
+        { name: 'template_id', type: 'INT' },
+        { name: 'dependent_task_id', type: 'INT' },
+        { name: 'is_confidential', type: 'BIT' },
       ];
 
       for (const col of requiredColumns) {
@@ -118,7 +115,7 @@ class StreamTaskMigrationModel extends BaseModel {
 
       const targetTable = `${this.newDbName}.${this.newDbSchema}.${this.newDbTable}`;
       const backupId = String(stagingRow.ID).trim();
-      
+
       const mapped = await this.mapSingleRecord(stagingRow, transaction);
 
       // Validate required field: name
@@ -130,11 +127,15 @@ class StreamTaskMigrationModel extends BaseModel {
         SELECT TOP 1 id FROM ${targetTable}
         WHERE id_task_bak = @idTaskBak
       `;
-      
-      const existing = await this.queryNewDbTx(existQuery, {
-        idTaskBak: backupId
-      }, transaction);
-      
+
+      const existing = await this.queryNewDbTx(
+        existQuery,
+        {
+          idTaskBak: backupId,
+        },
+        transaction,
+      );
+
       if (Array.isArray(existing) && existing.length > 0) {
         // 3a. Update existing - WITH ALL COLUMNS
         const updateQuery = `
@@ -174,68 +175,10 @@ class StreamTaskMigrationModel extends BaseModel {
               update_at = GETDATE()
           WHERE id_task_bak = @idTaskBak
         `;
-        
-        const result = await this.queryNewDbTx(updateQuery, {
-          code: mapped.code,
-          name: mapped.name,
-          startDate: mapped.start_date,
-          endDate: mapped.end_date,
-          bpmnId: mapped.bpmn_id,
-          priority: mapped.priority,
-          reminderTime: mapped.reminder_time,
-          topic: mapped.topic,
-          note: mapped.note,
-          repetitiveTask: mapped.repetitive_task,
-          month: mapped.month,
-          repetitiveStart: mapped.repetitive_start,
-          repetitiveEnd: mapped.repetitive_end,
-          parent: mapped.parent,
-          path: mapped.path,
-          progress: mapped.progress,
-          processStatus: mapped.process_status,
-          status: mapped.status,
-          approvalStatus: mapped.approval_status,
-          createdBy: mapped.created_by,
-          updatedBy: mapped.updated_by,
-          recurringFromId: mapped.recurring_from_id,
-          typeTask: mapped.type_task,
-          docId: mapped.doc_id,
-          meetingId: mapped.meeting_id,
-          meetingConclusionId: mapped.meeting_conclusion_id,
-          weekDays: mapped.week_days,
-          projectId: mapped.project_id,
-          typeTaskMeeting: mapped.type_task_meeting,
-          templateId: mapped.template_id,
-          dependentTaskId: mapped.dependent_task_id,
-          isConfidential: mapped.is_confidential,
-          idTaskBak: backupId
-        }, transaction);
-        
-        logger.info(`[StreamTaskMigrationModel.processSingleRecord] Updated task ${backupId}`);
-        return { action: 'updated', idTaskBak: backupId, newTaskId: existing[0].id };
-      } else {
-        // 3b. Insert new - WITH ALL COLUMNS + SCOPE_IDENTITY VERIFICATION
-        const insertQuery = `
-          INSERT INTO ${targetTable}
-          (code, name, start_date, end_date, bpmn_id, priority, reminder_time, topic, note,
-           repetitive_task, month, repetitive_start, repetitive_end, parent, path, progress,
-           process_status, status, approval_status, created_by, updated_by, recurring_from_id,
-           type_task, doc_id, meeting_id, meeting_conclusion_id, week_days, project_id,
-           type_task_meeting, template_id, dependent_task_id, is_confidential, id_task_bak,
-           created_at, update_at)
-          VALUES
-          (@code, @name, @startDate, @endDate, @bpmnId, @priority, @reminderTime, @topic, @note,
-           @repetitiveTask, @month, @repetitiveStart, @repetitiveEnd, @parent, @path, @progress,
-           @processStatus, @status, @approvalStatus, @createdBy, @updatedBy, @recurringFromId,
-           @typeTask, @docId, @meetingId, @meetingConclusionId, @weekDays, @projectId,
-           @typeTaskMeeting, @templateId, @dependentTaskId, @isConfidential, @idTaskBak,
-           GETDATE(), GETDATE());
-          SELECT SCOPE_IDENTITY() as id
-        `;
-        
-        let result;
-        try {
-          result = await this.queryNewDbTx(insertQuery, {
+
+        const result = await this.queryNewDbTx(
+          updateQuery,
+          {
             code: mapped.code,
             name: mapped.name,
             startDate: mapped.start_date,
@@ -268,13 +211,82 @@ class StreamTaskMigrationModel extends BaseModel {
             templateId: mapped.template_id,
             dependentTaskId: mapped.dependent_task_id,
             isConfidential: mapped.is_confidential,
-            idTaskBak: backupId
-          }, transaction);
+            idTaskBak: backupId,
+          },
+          transaction,
+        );
+
+        logger.info(`[StreamTaskMigrationModel.processSingleRecord] Updated task ${backupId}`);
+        return { action: 'updated', idTaskBak: backupId, newTaskId: existing[0].id };
+      } else {
+        // 3b. Insert new - WITH ALL COLUMNS + SCOPE_IDENTITY VERIFICATION
+        const insertQuery = `
+          INSERT INTO ${targetTable}
+          (code, name, start_date, end_date, bpmn_id, priority, reminder_time, topic, note,
+           repetitive_task, month, repetitive_start, repetitive_end, parent, path, progress,
+           process_status, status, approval_status, created_by, updated_by, recurring_from_id,
+           type_task, doc_id, meeting_id, meeting_conclusion_id, week_days, project_id,
+           type_task_meeting, template_id, dependent_task_id, is_confidential, id_task_bak,
+           created_at, update_at)
+          VALUES
+          (@code, @name, @startDate, @endDate, @bpmnId, @priority, @reminderTime, @topic, @note,
+           @repetitiveTask, @month, @repetitiveStart, @repetitiveEnd, @parent, @path, @progress,
+           @processStatus, @status, @approvalStatus, @createdBy, @updatedBy, @recurringFromId,
+           @typeTask, @docId, @meetingId, @meetingConclusionId, @weekDays, @projectId,
+           @typeTaskMeeting, @templateId, @dependentTaskId, @isConfidential, @idTaskBak,
+           GETDATE(), GETDATE());
+          SELECT SCOPE_IDENTITY() as id
+        `;
+
+        let result;
+        try {
+          result = await this.queryNewDbTx(
+            insertQuery,
+            {
+              code: mapped.code,
+              name: mapped.name,
+              startDate: mapped.start_date,
+              endDate: mapped.end_date,
+              bpmnId: mapped.bpmn_id,
+              priority: mapped.priority,
+              reminderTime: mapped.reminder_time,
+              topic: mapped.topic,
+              note: mapped.note,
+              repetitiveTask: mapped.repetitive_task,
+              month: mapped.month,
+              repetitiveStart: mapped.repetitive_start,
+              repetitiveEnd: mapped.repetitive_end,
+              parent: mapped.parent,
+              path: mapped.path,
+              progress: mapped.progress,
+              processStatus: mapped.process_status,
+              status: mapped.status,
+              approvalStatus: mapped.approval_status,
+              createdBy: mapped.created_by,
+              updatedBy: mapped.updated_by,
+              recurringFromId: mapped.recurring_from_id,
+              typeTask: mapped.type_task,
+              docId: mapped.doc_id,
+              meetingId: mapped.meeting_id,
+              meetingConclusionId: mapped.meeting_conclusion_id,
+              weekDays: mapped.week_days,
+              projectId: mapped.project_id,
+              typeTaskMeeting: mapped.type_task_meeting,
+              templateId: mapped.template_id,
+              dependentTaskId: mapped.dependent_task_id,
+              isConfidential: mapped.is_confidential,
+              idTaskBak: backupId,
+            },
+            transaction,
+          );
         } catch (insertErr) {
-          logger.error(`[StreamTaskMigrationModel] INSERT FAILED for ID=${backupId}: ${insertErr.message}`, insertErr);
+          logger.error(
+            `[StreamTaskMigrationModel] INSERT FAILED for ID=${backupId}: ${insertErr.message}`,
+            insertErr,
+          );
           throw insertErr;
         }
-        
+
         // CRITICAL: Verify SCOPE_IDENTITY was captured
         const newId = result && result.length > 0 ? result[0].id : null;
         if (!newId) {
@@ -282,12 +294,23 @@ class StreamTaskMigrationModel extends BaseModel {
           logger.error(`[StreamTaskMigrationModel] ${msg}`);
           throw new Error(msg);
         }
-        
-        logger.info(`[StreamTaskMigrationModel.processSingleRecord] Inserted task ${backupId} with new ID ${newId}`);
-        return { action: 'inserted', idTaskBak: backupId, newTaskId: newId, createdBy: mapped.created_by, createdAt: mapped.created_at };
+
+        logger.info(
+          `[StreamTaskMigrationModel.processSingleRecord] Inserted task ${backupId} with new ID ${newId}`,
+        );
+        return {
+          action: 'inserted',
+          idTaskBak: backupId,
+          newTaskId: newId,
+          createdBy: mapped.created_by,
+          createdAt: mapped.created_at,
+        };
       }
     } catch (error) {
-      logger.error(`[StreamTaskMigrationModel.processSingleRecord] FAILED ID=${stagingRow?.ID}: ${error.message}`, error);
+      logger.error(
+        `[StreamTaskMigrationModel.processSingleRecord] FAILED ID=${stagingRow?.ID}: ${error.message}`,
+        error,
+      );
       throw error;
     }
   }
@@ -298,8 +321,8 @@ class StreamTaskMigrationModel extends BaseModel {
       throw new Error('rawRecord is required');
     }
 
-    const createdBy = await this.helper.mapUserName(rawRecord.CreatedBy) || null;
-    const modifiedBy = await this.helper.mapUserName(rawRecord.ModifiedBy) || null;
+    const createdBy = (await this.helper.mapUserName(rawRecord.CreatedBy)) || null;
+    const modifiedBy = (await this.helper.mapUserName(rawRecord.ModifiedBy)) || null;
 
     // Parse dates from helper, then apply safeDateParse
     const startDateRaw = this.helper.parseDate(rawRecord.StartDate);
@@ -328,31 +351,39 @@ class StreamTaskMigrationModel extends BaseModel {
 
     const mapProcessStatus = (val) => {
       const key = String(val || '').trim();
-      return ({
-        'Chưa bắt đầu': '1',
-        'Đang thực hiện': '2',
-        'Chờ phê duyệt': '3',
-        'Hoàn tất': '4',
-        'Từ chối phê duyệt': '5',
-        'Điều chỉnh': '6',
-        'Từ chối điều chỉnh': '7',
-        'Huỷ': '8'
-      }[key] || '1');
+      return (
+        {
+          'Chưa bắt đầu': '1',
+          'Đang thực hiện': '2',
+          'Chờ phê duyệt': '3',
+          'Hoàn tất': '4',
+          'Từ chối phê duyệt': '5',
+          'Điều chỉnh': '6',
+          'Từ chối điều chỉnh': '7',
+          Huỷ: '8',
+        }[key] || '1'
+      );
     };
     const processStatus = mapProcessStatus(rawRecord.TrangThai);
 
     const mapPriority = (val) => {
       const key = String(val || '').trim();
-      return ({
-        '0': 'binhthuong',
-        '1': 'gap'
-      }[key] || 'binhthuong');
+      return (
+        {
+          0: 'binhthuong',
+          1: 'gap',
+        }[key] || 'binhthuong'
+      );
     };
     const priority = mapPriority(rawRecord.TrangThai);
 
     const parentRaw = rawRecord.ParentId ? String(rawRecord.ParentId).trim() : null;
 
-    const docLookup = await this.helper.findDocumentIdByOldId(rawRecord.VBId, 'IncommingDocument', transaction);
+    const docLookup = await this.helper.findDocumentIdByOldId(
+      rawRecord.VBId,
+      'IncommingDocument',
+      transaction,
+    );
     const docId = docLookup?.document_id || null;
 
     return {
@@ -395,7 +426,7 @@ class StreamTaskMigrationModel extends BaseModel {
       type_task_meeting: null,
       template_id: null,
       dependent_task_id: null,
-      is_confidential: 0
+      is_confidential: 0,
     };
   }
 
@@ -404,14 +435,14 @@ class StreamTaskMigrationModel extends BaseModel {
     try {
       const stagingRef = `${this.newDbName}.${this.newDbSchema}.${this.newTableSync}`;
       const truncateQuery = `TRUNCATE TABLE ${stagingRef}`;
-      
+
       await this.queryNewDb(truncateQuery, {});
-      
+
       logger.info(`[StreamTaskMigrationModel.cleanupStagingTable] Cleaned up ${this.newTableSync}`);
       return {
         success: true,
         message: `Truncated ${this.newTableSync}`,
-        table: this.newTableSync
+        table: this.newTableSync,
       };
     } catch (error) {
       logger.error('[StreamTaskMigrationModel.cleanupStagingTable]', error);
@@ -419,7 +450,7 @@ class StreamTaskMigrationModel extends BaseModel {
         success: false,
         message: `Failed: ${error.message}`,
         table: this.newTableSync,
-        error: error.message
+        error: error.message,
       };
     }
   }

@@ -373,7 +373,9 @@ class FileUploadService {
       // BƯỚC 2: Insert vào bảng files
       const enrichedFileRecord = {
         ...fileRecord,
-        file_name:    apiResponse?.file_name || fileRecord.file_name || originalName,
+        // Ưu tiên: tên file gốc (fileRecord.file_name) → originalName → cuối cùng mới dùng apiResponse.file_name
+        // Lý do: apiResponse.file_name thường trả về UUID/ID thay vì tên file thật
+        file_name:    fileRecord.file_name || originalName || apiResponse?.file_name,
         mime_type:    fileRecord.mime_type || mime || null,
         file_size:    fileRecord.file_size ?? fileSize,
         storage_path: storagePath, 

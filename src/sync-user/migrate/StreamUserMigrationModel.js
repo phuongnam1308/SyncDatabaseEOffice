@@ -1,7 +1,7 @@
-
+const sql = require('mssql');
 const BaseModel = require('../../../models/BaseModel');
 const logger = require('../../../utils/logger');
-const sql = require('mssql');
+const MigrationHelper = require('../../helpers/MigrationHelper');
 
 /**
  * Class StreamUserMigrationModel
@@ -35,6 +35,12 @@ class StreamUserMigrationModel extends BaseModel {
     this.oldDbSchema = this.oldSchema;
     this.newDbTable = this.newTable;
     this.newDbSchema = this.newSchema;
+
+    // Helper cho mapping department & stable ID
+    this.helper = new MigrationHelper(
+      this.queryNewDbTx.bind(this),
+      this.queryOldDb.bind(this)
+    );
   }
 
   // Helper: Map dữ liệu từ record cũ sang record mới
@@ -69,7 +75,7 @@ class StreamUserMigrationModel extends BaseModel {
       status: status,
       created_at: safeDate(oldRecord.NgayTao) || new Date(),
       updated_at: safeDate(oldRecord.Modified) || new Date(),
-      
+
       // Các trường backup/mapping
       id_user_bak: oldRecord.ID,
       AccountID: safeString(oldRecord.AccountID),
@@ -89,7 +95,7 @@ class StreamUserMigrationModel extends BaseModel {
       try {
         // 1. Kiểm tra tồn tại (dựa vào ID backup)
         const existing = await this.findByBackupId(oldRecord.ID);
-        if (existing) continue; 
+        if (existing) continue;
 
         // 2. Kiểm tra trùng username
         if (oldRecord.AccountName) {
@@ -293,7 +299,7 @@ class StreamUserMigrationModel extends BaseModel {
     // Chuẩn hóa giá trị Bit (true/false)
     const isTCTValue = processed.IsTCT; // Chuyển đổi giá trị sang kiểu boolean tường minh
     processed.IsTCT = isTCTValue === true || isTCTValue === 1 || isTCTValue === '1';
-    
+
     // Chuẩn hóa giá trị ngày tháng
     if (!processed.created_at || !(processed.created_at instanceof Date)) {
       processed.created_at = new Date();
@@ -301,7 +307,7 @@ class StreamUserMigrationModel extends BaseModel {
     if (!processed.updated_at || !(processed.updated_at instanceof Date)) {
       processed.updated_at = new Date();
     }
-    
+
     // Xử lý trường `birthday`
     if (processed.birthday && !(processed.birthday instanceof Date)) {
       try {
@@ -325,35 +331,48 @@ class StreamUserMigrationModel extends BaseModel {
    */
   async syncDepartmentsFromUsers() {
     try {
-      logger.info('Đang đồng bộ Phòng ban từ Users (render2302)...');
+      logger.info('Starting syncDepartmentsFromUsers (record-by-record with MigrationHelper)...');
 
-      // 1. INSERT organization_units từ Department của users
-      // Lưu ý: Thêm điều kiện NOT EXISTS để tránh lỗi trùng lặp nếu chạy nhiều lần
-      const insertQuery = `
-        INSERT INTO ${this.newSchema}.organization_units 
-        ( id, name, code, [type], phone_number, email, leader, [position], address, description, display_order, status, mpath, parentId, created_at, updated_at, Id_backups, table_backups ) 
-        SELECT NEWID() AS id, u.Department AS name, UPPER(REPLACE(u.Department, ' ', '')) AS code, 1 AS [type], NULL, NULL, NULL, NULL, NULL, NULL, 0, 1, NULL, NULL, GETDATE(), GETDATE(), NULL, 'render2302' 
-        FROM ${this.newSchema}.${this.newTable} u 
-        WHERE u.Department IS NOT NULL 
-        AND NOT EXISTS (SELECT 1 FROM ${this.newSchema}.organization_units o WHERE o.name = u.Department)
-        GROUP BY u.Department;
+      // 1. Lấy danh sách các Department duy nhất hiện có trong table users
+      const distinctDeptsQuery = `
+        SELECT DISTINCT Department 
+        FROM ${this.newSchema}.${this.newTable} 
+        WHERE Department IS NOT NULL AND LTRIM(RTRIM(Department)) <> ''
       `;
-      await this.queryNewDb(insertQuery);
+      const depts = await this.queryNewDb(distinctDeptsQuery);
 
-      // 2. UPDATE parent cho users
-      const updateQuery = `
-        UPDATE u 
-        SET u.parent = o.id 
-        FROM ${this.newSchema}.${this.newTable} u 
-        INNER JOIN ${this.newSchema}.organization_units o ON u.Department = o.name 
-        WHERE o.table_backups = 'render2302';
-      `;
-      await this.queryNewDb(updateQuery);
+      if (!depts || depts.length === 0) {
+        logger.info('No departments found in users table to sync.');
+        return;
+      }
 
-      logger.info('Đồng bộ Phòng ban và cập nhật Parent cho User hoàn tất.');
+      logger.info(`Found ${depts.length} distinct departments to map.`);
+
+      let successCount = 0;
+      for (const row of depts) {
+        const deptName = row.Department;
+        try {
+          // mapSenderUnitId đã có cache và normalize mạnh tay bên trong
+          const stableUnitId = await this.helper.mapSenderUnitId(deptName);
+          
+          if (stableUnitId) {
+            // 2. Cập nhật parent cho tất cả user thuộc phòng ban này
+            const updateQuery = `
+              UPDATE ${this.newSchema}.${this.newTable}
+              SET parent = @unitId
+              WHERE Department = @deptName
+            `;
+            await this.queryNewDbTx(updateQuery, { unitId: stableUnitId, deptName });
+            successCount++;
+          }
+        } catch (err) {
+          logger.error(`[syncDepartmentsFromUsers] Failed to map department "${deptName}": ${err.message}`);
+        }
+      }
+
+      logger.info(`syncDepartmentsFromUsers completed. Mapped ${successCount}/${depts.length} departments.`);
     } catch (error) {
-      logger.error('Lỗi khi đồng bộ Phòng ban từ Users:', error);
-      // Không throw error ở đây để tránh làm fail cả quá trình migration chính, chỉ ghi log lỗi.
+      logger.error('Lỗi nghiêm trọng trong syncDepartmentsFromUsers:', error);
     }
   }
 }

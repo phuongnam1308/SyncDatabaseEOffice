@@ -14,9 +14,9 @@ class SharePointGroupModel extends BaseModel {
   async getAllFromOldDb() {
     try {
       logger.info(`📂 Lấy dữ liệu từ bảng ${this.oldTable}...`);
-      
+
       const query = `
-        SELECT 
+        SELECT
           ID,
           Title,
           Description,
@@ -28,17 +28,17 @@ class SharePointGroupModel extends BaseModel {
         FROM ${this.oldSchema}.${this.oldTable}
         ORDER BY Created
       `;
-      
+
       const results = await this.queryOldDb(query);
-      
+
       if (results && results.length > 0) {
         logger.info(`✅ Lấy được ${results.length} records từ bảng Group`);
-        
+
         // Log mẫu
         const sample = results[0];
         logger.info(`📋 Mẫu: ID=${sample.ID}, Title=${sample.Title}, WhoView=${sample.WhoView}`);
       }
-      
+
       return results;
     } catch (error) {
       logger.error(`❌ Lỗi lấy dữ liệu ${this.oldTable}:`, error);
@@ -77,10 +77,10 @@ class SharePointGroupModel extends BaseModel {
   async checkCodeExists(code) {
     try {
       if (!code || code.trim() === '') return true;
-      
+
       const query = `
-        SELECT COUNT(*) as count 
-        FROM ${this.newSchema}.${this.newTable} 
+        SELECT COUNT(*) as count
+        FROM ${this.newSchema}.${this.newTable}
         WHERE code = @code
       `;
       const result = await this.queryNewDb(query, { code });
@@ -100,20 +100,20 @@ class SharePointGroupModel extends BaseModel {
 
       const fields = Object.keys(data);
       const values = fields.map((_, i) => `@param${i}`).join(', ');
-      
+
       const query = `
-        INSERT INTO ${this.newSchema}.${this.newTable} 
-        (${fields.join(', ')}) 
+        INSERT INTO ${this.newSchema}.${this.newTable}
+        (${fields.join(', ')})
         VALUES (${values})
       `;
 
       logger.debug(`SQL Insert: ${query}`);
-      
+
       const request = this.newPool.request();
-      
+
       fields.forEach((field, i) => {
         const value = data[field];
-        
+
         // Xử lý kiểu dữ liệu
         if (field === 'status') {
           const statusValue = parseInt(value) || 1;
@@ -131,7 +131,7 @@ class SharePointGroupModel extends BaseModel {
       await request.query(query);
       logger.debug(`✓ Insert group: ${data.code} - ${data.name}`);
       return true;
-      
+
     } catch (error) {
       logger.error('❌ Lỗi insert Group:', error.message);
       logger.error('Data:', JSON.stringify(data, null, 2));
@@ -155,17 +155,17 @@ class SharePointGroupModel extends BaseModel {
   async getUserIdFromOwnerGuid(ownerGuid) {
     try {
       if (!ownerGuid) return null;
-      
+
       // Tìm user trong bảng users
       const query = `
-        SELECT id 
-        FROM ${this.newSchema}.users 
+        SELECT id
+        FROM ${this.newSchema}.users
         WHERE id_user_bak = @ownerGuid OR id_user_del_bak = @ownerGuid OR id = @ownerGuid
       `;
-      
+
       const result = await this.queryNewDb(query, { ownerGuid });
       return result.length > 0 ? result[0].id : null;
-      
+
     } catch (error) {
       logger.error('Lỗi map Owner GUID:', error);
       return null;
@@ -177,7 +177,7 @@ class SharePointGroupModel extends BaseModel {
     try {
       const count = await this.countOldDb();
       const sample = await this.getAllFromOldDb();
-      
+
       return {
         connected: true,
         recordCount: count,

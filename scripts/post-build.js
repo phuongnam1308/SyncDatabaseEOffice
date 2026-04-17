@@ -39,31 +39,14 @@ async function postBuild() {
         process.exit(1);
     }
 
-    // 3. Chuyen doi bieu tuong (Icon) - TU DONG TOI UU HOA
-    console.log('[3/5] Dang xử lý bieu tuong (Icon) - Dang nén và thu nhỏ chuẩn Windows...');
+    // 3. Chuyen doi bieu tuong (Icon) - DUNG TRUC TIEP ANH CUA DONG CHI
+    console.log('[3/5] Dang xử lý bieu tuong (Icon) - Lay truc tiep tu file cua dong chi...');
     const pngPath = path.join(rootDir, 'icon.png');
     const icoPath = path.join(rootDir, 'icon.ico');
-    const psPath = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 
     if (fs.existsSync(pngPath)) {
         try {
-            const tempPng = path.join(distDir, 'temp_icon_256.png');
-            if (!fs.existsSync(distDir)) fs.mkdirSync(distDir, { recursive: true });
-            
-            const psResizeCmd = `
-                Add-Type -AssemblyName System.Drawing;
-                $img = [System.Drawing.Image]::FromFile('${pngPath}');
-                $bmp = New-Object System.Drawing.Bitmap(256, 256);
-                $g = [System.Drawing.Graphics]::FromImage($bmp);
-                $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic;
-                $g.DrawImage($img, 0, 0, 256, 256);
-                $bmp.Save('${tempPng}', [System.Drawing.Imaging.ImageFormat]::Png);
-                $g.Dispose(); $img.Dispose(); $bmp.Dispose();
-            `.replace(/\n/g, ' ').trim();
-
-            execSync(`"${psPath}" -ExecutionPolicy Bypass -Command "${psResizeCmd}"`);
-
-            const pngBuf = fs.readFileSync(tempPng);
+            const pngBuf = fs.readFileSync(pngPath);
             const head = Buffer.from([0,0,1,0,1,0]);
             const dir = Buffer.alloc(16);
             dir.writeUInt8(0, 0); dir.writeUInt8(0, 1); dir.writeUInt8(0, 2); dir.writeUInt8(0, 3);
@@ -72,11 +55,9 @@ async function postBuild() {
 
             fs.writeFileSync(icoPath, Buffer.concat([head, dir, pngBuf]));
             fs.copyFileSync(icoPath, path.join(distDir, 'icon.ico'));
-            if (fs.existsSync(tempPng)) fs.unlinkSync(tempPng);
-            console.log('   ✅ DA TU DONG NEN VA TAO: icon.ico (256x256 cực nét)');
+            console.log('   ✅ DA LAY TRUC TIEP VA TAO: icon.ico');
         } catch (err) {
-            console.warn('   ⚠️ Khong the tu dong resize icon, dang dung file hien co. Loi:', err.message);
-            if (fs.existsSync(icoPath)) fs.copyFileSync(icoPath, path.join(distDir, 'icon.ico'));
+            console.warn('   ⚠️ Khong the tao icon.ico tu png, bo qua.');
         }
     } else if (fs.existsSync(icoPath)) {
         fs.copyFileSync(icoPath, path.join(distDir, 'icon.ico'));
@@ -163,20 +144,28 @@ async function createBuildShortcut() {
     const iconPath = path.join(distDir, 'icon.ico');
     const psPath = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 
-    const psCommand = `
+    // Tao file PS1 tam thoi de xu ly triet de Tieng Viet (Dung BOM de PS luon nhan dung UTF8)
+    const tempPs = path.join(require('os').tmpdir(), `build_shortcut_${Date.now()}.ps1`);
+    const safeExePath = exePath.replace(/\\/g, '\\\\');
+    const safeDistDir = distDir.replace(/\\/g, '\\\\');
+    const safeIconPath = iconPath.replace(/\\/g, '\\\\');
+
+    const psScriptContent = `
         $desktop = [Environment]::GetFolderPath('Desktop');
         $path = Join-Path $desktop 'SNP - DONG BO DU LIEU.lnk';
         if (Test-Path $path) { Remove-Item $path -Force }
         $ws = New-Object -ComObject WScript.Shell;
         $s = $ws.CreateShortcut($path);
-        $s.TargetPath = '${exePath}';
-        $s.WorkingDirectory = '${distDir}';
-        if (Test-Path '${iconPath}') { $s.IconLocation = '${iconPath},0'; }
+        $s.TargetPath = '${safeExePath}';
+        $s.WorkingDirectory = '${safeDistDir}';
+        if (Test-Path '${safeIconPath}') { $s.IconLocation = '${safeIconPath},0'; }
         $s.Save();
-    `.replace(/\n/g, ' ').trim();
+    `.replace(/\n/g, '\r\n').trim();
 
     try {
-        execSync(`"${psPath}" -ExecutionPolicy Bypass -Command "${psCommand}"`);
+        require('fs').writeFileSync(tempPs, '\ufeff' + psScriptContent, { encoding: 'utf8' });
+        execSync(`"${psPath}" -ExecutionPolicy Bypass -File "${tempPs}"`);
+        try { if (require('fs').existsSync(tempPs)) require('fs').unlinkSync(tempPs); } catch(e) {}
         console.log('   ✅ DA SINH PHIEM TAT NGOAI DESKTOP! Moi dong chi ra nhan hang.');
     } catch (err) {
         console.warn('   ⚠️ Khong the tao shortcut ngoai Desktop:', err.message);

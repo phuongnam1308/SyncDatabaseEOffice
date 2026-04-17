@@ -38,6 +38,6 @@ if %errorLevel% equ 0 (
 )
 
 echo(
-echo Bay gio ban co the truy cap Dashboard tai: http://%DOMAIN_ENTRY%:3021/api/sync-manager-src/dashboard
+echo Bay gio ban co the truy cap Dashboard tai: http://%DOMAIN_ENTRY%:3025/api/sync-manager-src/dashboard
 echo(
 pause

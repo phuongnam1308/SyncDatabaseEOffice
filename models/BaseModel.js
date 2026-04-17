@@ -8,22 +8,24 @@ class BaseModel {
     this.newPool = null;
   }
 
-  // Khởi tạo kết nối
+  // Khởi tạo kết nối - SỬA LẠI: Không throw lỗi nếu database nguồn bị die
   async initialize() {
     try {
       await dbConnection.connectAll();
-    this.oldPool = dbConnection.getOldPool();
-    this.newPool = dbConnection.getNewPool();
+      this.oldPool = dbConnection.getOldPool(); // Có thể là null nếu chết server
+      this.newPool = dbConnection.getNewPool(); // Có thể là null
     } catch (error) {
-      console.log('Lỗi khởi tạo BaseModel:', error);
-      logger.error('Lỗi khởi tạo BaseModel:', error);
-      throw error;
+      logger.error('Lỗi khởi tạo BaseModel (tiếp tục app):', error.message);
+      // Không throw tiếp để các model khác vẫn được khởi tạo (cho dashboard)
     }
   }
 
   // Query từ database cũ
   async queryOldDb(query, params = {}) {
     try {
+      if (!this.oldPool) {
+        throw new Error('Chưa kết nối được Database CŨ (Nguồn). Vui lòng kiểm tra lại cấu hình OLD_DB_* trong file .env.');
+      }
       const request = this.oldPool.request();
 
       // Bind parameters
@@ -31,10 +33,12 @@ class BaseModel {
         request.input(key, params[key]);
       });
 
+      // const timer = logger.startTimer(`queryOldDb | ${query.substring(0, 50).replace(/\n/g, ' ')}...`);
       const result = await request.query(query);
+      // timer.stop(result.recordset ? result.recordset.length : 0);
       return result.recordset;
     } catch (error) {
-      logger.error(`Lỗi query database cũ: ${error.message}`);
+      logger.error(`Lỗi query database cũ: ${error.message}. Query: ${query.substring(0, 500)}. Params: ${JSON.stringify(params)}`);
       throw error;
     }
   }
@@ -42,6 +46,9 @@ class BaseModel {
   // Query từ database mới
   async queryNewDb(query, params = {}) {
     try {
+      if (!this.newPool) {
+        throw new Error('Lỗi: Chưa kết nối được Database MỚI (Đích). Không thể ghi dữ liệu.');
+      }
       const request = this.newPool.request();
 
       // Bind parameters
@@ -49,17 +56,29 @@ class BaseModel {
         request.input(key, params[key]);
       });
 
+      // const timer = logger.startTimer(`queryNewDb | ${query.substring(0, 50).replace(/\n/g, ' ')}...`);
       const result = await request.query(query);
+      // timer.stop(result.recordset ? result.recordset.length : 0);
       return result.recordset;
     } catch (error) {
-      logger.error(`Lỗi query database mới: ${error.message}`);
+      logger.error(`Lỗi query database mới: ${error.message}. Query: ${query.substring(0, 500)}. Params: ${JSON.stringify(params)}`);
       throw error;
     }
   }
 
   async queryNewDbTx(query, params = {}, transaction = null) {
     try {
-      const request = transaction
+      const canUseTransaction = Boolean(
+        transaction &&
+        transaction._acquiredConnection &&
+        !transaction._aborted
+      );
+
+      if (!canUseTransaction && !this.newPool) {
+        throw new Error('Lỗi: Chưa kết nối được Database MỚI (Đích). Không thể ghi dữ liệu.');
+      }
+
+      const request = canUseTransaction
         ? new sql.Request(transaction)
         : this.newPool.request();
 
@@ -67,10 +86,12 @@ class BaseModel {
         request.input(key, params[key]);
       });
 
+      // const timer = logger.startTimer(`queryNewDbTx | ${query.substring(0, 50).replace(/\n/g, ' ')}...`);
       const result = await request.query(query);
+      // timer.stop(result.recordset ? result.recordset.length : 0);
       return result.recordset;
     } catch (error) {
-      logger.error(`Lỗi query database mới: ${error.message}`);
+      logger.error(`Lỗi query database mới (TX): ${error.message}. Query: ${query.substring(0, 500)}. Params: ${JSON.stringify(params)}`);
       throw error;
     }
   }
@@ -88,7 +109,7 @@ class BaseModel {
       const result = await request.query(query);
       return result;
     } catch (error) {
-      logger.error(`Lỗi execute database mới: ${error.message}`);
+      logger.error(`Lỗi execute database mới: ${error.message}. Query: ${query.substring(0, 500)}. Params: ${JSON.stringify(params)}`);
       throw error;
     }
   }
@@ -150,9 +171,11 @@ class BaseModel {
     }
   }
 
-  // Đóng kết nối
+  // Đóng model (Giải phóng pool reference, không đóng pool thật)
   async close() {
-    await dbConnection.closeAll();
+    this.oldPool = null;
+    this.newPool = null;
+    logger.debug('BaseModel instance references cleared (pool remains active)');
   }
 }
 

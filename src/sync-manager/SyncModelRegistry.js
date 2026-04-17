@@ -5,8 +5,6 @@ const OutGoingDocumentModel = require('../sync-outgoing-document/models/StreamOu
 const StreamUserMigrationModel = require('../sync-user-copy/migrate/StreamUserMigrationModel');
 const StreamTaskInIncrementalModel = require('../sync-tasks-van-ban-den/models/StreamTaskInIncrementalModel');
 const StreamTaskOutIncrementalModel = require('../sync-tasks-van-ban-di/models/StreamTaskOutIncrementalModel');
-const StreamSocialMigrationModel = require('../sync-social-resource/migrate/StreamSocialMigrationModel');
-const SyncIncomingDocumentModel = require('../sync-incoming-document/models/SyncIncomingDocumentModel');
 const StreamMeetingMigrationModel = require('../sync-meeting/migrate/StreamMeetingMigrationModel');
 const IncomingDocumentModel = require('../sync-incoming-document/models/StreamIncomingIncrementalModel');
 const StreamDepartmentMigrationModel = require('../sync-department/migrate/StreamDepartmentMigrationModel');
@@ -18,47 +16,47 @@ const StreamEventMigrationModel = require('../sync-event/migrate/StreamEventMigr
 const StreamTgdScheduleMigrationModel = require('../sync-tgd-schedule/migrate/StreamTgdScheduleMigrationModel');
 const StreamMissionMigrationModel = require('../sync-mission-schedule/migrate/StreamMissionMigrationModel');
 const StreamCarBookingMigrationModel = require('../sync-car-booking/migrate/StreamCarBookingMigrationModel');
-
 const StreamPassportMigrationModel = require('../sync-passport/migrate/StreamPassportMigrationModel');
+
 const MODEL_DEFINITIONS = [
   {
-    key: 'UNIT_TEST_STREAM_OUTGOING_INCREMENTAL',
+    key: 'STREAM_OUTGOING_INCREMENTAL',
     label: 'Đồng bộ văn bản đi',
     section: 'realtime',
     ModelClass: OutGoingDocumentModel
   },
   {
-    key: 'UNIT_TEST_STREAM_DEPARTMENT_MIGRATION',
+    key: 'STREAM_DEPARTMENT_MIGRATION',
     label: 'Đồng bộ phòng ban',
     section: 'realtime',
     ModelClass: StreamDepartmentMigrationModel,
   },
   {
-    key: 'UNIT_TEST_STREAM_USER_COPY_MIGRATION',
+    key: 'STREAM_USER_COPY_MIGRATION',
     label: 'Đồng bộ người dùng',
     section: 'realtime',
     ModelClass: StreamUserMigrationModel
   },
   {
-    key: 'UNIT_TEST_STREAM_TASK_INCOMMING_INCREMENTAL',
+    key: 'STREAM_TASK_INCOMING_INCREMENTAL',
     label: 'Đồng bộ công việc đến',
     section: 'realtime',
     ModelClass: StreamTaskInIncrementalModel,
   },
   {
-    key: 'UNIT_TEST_STREAM_TASK_OUTGOING_INCREMENTAL',
+    key: 'STREAM_TASK_OUTGOING_INCREMENTAL',
     label: 'Đồng bộ công việc đi',
     section: 'realtime',
     ModelClass: StreamTaskOutIncrementalModel,
   },
   {
-    key: 'UNIT_TEST_STREAM_NEWS_ASPX_PAGE_INCREMENTAL',
-    label: 'Đồng bộ tin tức ',
+    key: 'STREAM_NEWS_ASPX_PAGE_INCREMENTAL',
+    label: 'Đồng bộ tin tức',
     section: 'realtime',
     ModelClass: StreamNewsAspxPageIncrementalModel
   },
   {
-    key: '3_incoming',
+    key: 'STREAM_INCOMING_INCREMENTAL',
     label: 'Đồng bộ văn bản đến',
     section: 'realtime',
     ModelClass: IncomingDocumentModel,
@@ -206,6 +204,14 @@ class SyncModelRegistry {
   }
 
   /**
+   * Returns a list of all labels currently in the registry.
+   * @returns {string[]}
+   */
+  getRegisteredLabels() {
+    return [...this._registry.values()].map((entry) => entry.definition.label);
+  }
+
+  /**
    * Initializes one model definition and stores it in registry.
    * @param {{key:string,label:string,ModelClass:any}} def
    * @param {import('./SyncManagerService')} syncManagerService
@@ -213,7 +219,27 @@ class SyncModelRegistry {
    * @returns {Promise<void>}
    */
   async _initializeSingle(def, syncManagerService, syncStateRepository) {
-    const { key, label, ModelClass } = def;
+    let { key, label, ModelClass } = def;
+    const instanceId = process.env.SYNC_INSTANCE_ID;
+    const isPrimaryInstance = !instanceId || instanceId === '3021';
+
+    // Các module hỗ trợ chạy song song (đa instance)
+    const parallelModules = [
+      'STREAM_INCOMING_INCREMENTAL',
+      'STREAM_OUTGOING_INCREMENTAL',
+      'STREAM_TASK_INCOMING_INCREMENTAL',
+      'STREAM_TASK_OUTGOING_INCREMENTAL'
+    ];
+    const isParallelModule = parallelModules.includes(key);
+
+    if (instanceId && isParallelModule) {
+      key = `${key}_${instanceId}`;
+      label = `${label} (${instanceId})`;
+    } else if (!isPrimaryInstance && !isParallelModule) {
+      // Nếu là cổng phụ (3022, 3023...) và không phải module song song -> Bỏ qua để không chạy trùng
+      logger.info(`[SyncModelRegistry] Skip register "${key}" on secondary instance ${instanceId}`);
+      return;
+    }
 
     try {
       logger.debug(`[SyncModelRegistry] Init: ${key}`);
@@ -222,14 +248,27 @@ class SyncModelRegistry {
       await instance.initialize();
 
       const handler = new SyncHandlerModel(instance);
-      await handler.registerHandlers(syncManagerService, label);
-
-      if (syncStateRepository) {
-        await syncStateRepository.ensureModel(label);
+      
+      // [QUY TRÌNH SỬA LỖI] Đổi tên key kỹ thuật thành Label Tiếng Việt trong DB nếu tồn tại
+      // CHỈ thực hiện rename nếu không phải chạy đa instance (để tránh tranh chấp record)
+      if (syncStateRepository && !instanceId) {
+        await syncStateRepository.renameModel(key, label, 'default');
+        if (key.startsWith('STREAM_')) {
+          const legacyKey = 'UNIT_TEST_' + key.replace('STREAM_', '');
+          // Special case for typo fix
+          const typoKey = legacyKey.includes('INCOMING') ? legacyKey.replace('INCOMING', 'INCOMMING') : legacyKey;
+          await syncStateRepository.renameModel(typoKey, label, 'default');
+        }
+        await syncStateRepository.ensureModel(label, 'default');
+      } else if (syncStateRepository && instanceId) {
+        // Nếu chạy đa instance, chỉ cần đảm bảo có dòng cho instance này
+        await syncStateRepository.ensureModel(label, instanceId);
       }
 
+      await handler.registerHandlers(syncManagerService, label);
+
       this._registry.set(key, {
-        definition: def,
+        definition: { ...def, key, label },
         instance,
         handler
       });

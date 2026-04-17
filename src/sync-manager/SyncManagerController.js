@@ -180,6 +180,47 @@ class SyncManagerController extends BaseController {
     return this.success(res, job);
   });
 
+  /**
+   * Yêu cầu dừng toàn bộ hệ thống (Đóng Chrome và Terminal).
+   */
+  shutdown = this.asyncHandler(async (req, res) => {
+    logger.warn('[SyncManagerController] Người dùng yêu cầu dừng hệ thống');
+    
+    // 1. Đóng trình duyệt Chrome (nếu đang mở qua Playwright)
+    if (global.appBrowser) {
+      await global.appBrowser.close().catch(() => {});
+    }
+
+    // 2. Dừng Scheduler
+    const CronSyncScheduler = require('./CronSyncScheduler');
+    CronSyncScheduler.stop();
+
+    // 3. Thoát process sau 1s để kịp gửi response
+    setTimeout(() => {
+      logger.info('[SyncManagerController] Đang thoát tiến trình...');
+      process.exit(0);
+    }, 1000);
+
+    return this.success(res, { message: 'Hệ thống đang thực hiện dừng lệnh... Tạm biệt đồng chí!' });
+  });
+
+  /**
+   * Xử lý đăng nhập (Mở cửa sổ Playwright giống npm run login).
+   */
+  login = this.asyncHandler(async (req, res) => {
+    logger.info('[SyncManagerController] Kích hoạt đăng nhập từ Bảng điều khiển');
+    
+    // Chạy file auth/login_playwright.js
+    const loginFlow = require('../../auth/login_playwright');
+    loginFlow({ forceHeaded: true }).catch(err => {
+      logger.error('[SyncManagerController] Lỗi quy trình đăng nhập:', err);
+    });
+
+    return this.success(res, { 
+      message: 'Đã khởi động quy trình đăng nhập (Chrome). Vui lòng kiểm tra cửa sổ trình duyệt mới.'
+    });
+  });
+
   // ── MỚI: SSE endpoint ─────────────────────────────────────
 
   /**
@@ -207,11 +248,20 @@ class SyncManagerController extends BaseController {
   getDashboard = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
 
-    // THAY ĐỔI: Lấy dữ liệu từ DB (Repository) thay vì JSON (Service)
-    // const data = await SyncManagerService.getDashboardData(); 
-    const data = await SyncStateRepository.getDashboardData();
-    const initialRows = this._renderRows(data.entities, data.jobs);
-    const noEntities = Object.keys(data.entities).length === 0;
+    const instanceId = process.env.SYNC_INSTANCE_ID || 'default';
+    const data = await SyncStateRepository.getDashboardData(instanceId);
+    const registeredLabels = this.modelRegistry.getRegisteredLabels();
+    
+    // Lọc bỏ những đối tượng không có trong đăng ký hiện tại (ẩn các bản ghi cũ/test)
+    const filteredEntities = {};
+    for (const label of registeredLabels) {
+      if (data.entities && data.entities[label]) {
+        filteredEntities[label] = data.entities[label];
+      }
+    }
+
+    const initialRows = this._renderRows(filteredEntities, data.jobs);
+    const noEntities = Object.keys(filteredEntities).length === 0;
     const tableContent = noEntities
       ? '<div class="empty-state"><i class="bi bi-inbox"></i>Chưa có đối tượng nào được đăng kí đồng bộ — liên hệ quản trị viên</div>'
       : `<table class="dash-table">
@@ -628,17 +678,20 @@ class SyncManagerController extends BaseController {
         <div class="dash-header-left">
           <div class="dash-logo"><i class="bi bi-arrow-repeat" style="color:#60a5fa;"></i></div>
           <div>
-            <div class="dash-title">SNP - ĐỒNG BỘ DỮ LIỆU</div>
-            <div class="dash-subtitle">Hệ Thống Đồng Bộ Dữ Liệu EOffice &mdash; Realtime</div>
+            <div class="dash-title">SNP - HỆ THỐNG ĐỒNG BỘ</div>
+            <div class="dash-subtitle">Điều khiển và giám sát quy trình đồng bộ EOffice</div>
           </div>
         </div>
         <div class="dash-header-right">
           <span id="running-badge" class="${data.isRunning ? 'syncing' : 'ready'}">
             ${data.isRunning ? '⟳ Đang đồng bộ...' : '✓ Sẵn sàng'}
           </span>
+          <button class="btn-close-app" onclick="triggerShutdown()" title="Tắt hệ thống" style="background: rgba(239,68,68,0.1); color: #f87171; border: 1px solid rgba(239,68,68,0.2); width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.2s; font-size: 20px;">
+            <i class="bi bi-x"></i>
+          </button>
           <div class="sse-indicator">
-            <span id="sse-dot">⏳</span>
-            <span>Realtime</span>
+            <span id="sse-dot">⌛</span>
+            <span>Trực tuyến</span>
           </div>
         </div>
       </div>
@@ -651,6 +704,8 @@ class SyncManagerController extends BaseController {
         <button id="btn-reset" onclick="triggerSync(true)"  class="btn-dash btn-dash-danger"  ${data.isRunning ? 'disabled' : ''}>
           <i class="bi bi-arrow-counterclockwise"></i> Chạy lại toàn bộ tất cả đối tượng
         </button>
+        <!-- Login button removed by request -->
+
       </div>
 
       <!-- Table -->
@@ -674,15 +729,15 @@ class SyncManagerController extends BaseController {
 
     function connectSSE() {
       _es = new EventSource('/api/sync-manager-src/events');
-      _es.onopen    = () => { 
-        document.getElementById('sse-dot').textContent = '🟢'; 
+      _es.onopen    = () => {
+        document.getElementById('sse-dot').textContent = '🟢';
         retryCount = 0; // Reset bộ đếm khi kết nối thành công
       };
       _es.onopen    = () => { document.getElementById('sse-dot').textContent = '🟢'; };
       _es.onerror   = () => {
         document.getElementById('sse-dot').textContent = '🔴';
         _es.close();
-        
+
         retryCount++;
         if (retryCount >= maxRetries) {
           // Nếu lỗi quá số lần quy định -> Chuyển trạng thái CRASHED và DỪNG
@@ -710,10 +765,20 @@ class SyncManagerController extends BaseController {
       badge.className   = data.isRunning ? 'syncing' : 'ready';
       document.getElementById('btn-all').disabled   = data.isRunning;
       document.getElementById('btn-reset').disabled = data.isRunning;
+
+      // Lọc dữ liệu hiển thị (giống logic server-side)
+      const registeredLabels = [${this.modelRegistry.getRegisteredLabels().map(l => `'${l}'`).join(',')}];
+      const filteredEntities = {};
+      for (const label of registeredLabels) {
+        if (data.entities && data.entities[label]) {
+          filteredEntities[label] = data.entities[label];
+        }
+      }
+
       document.getElementById('sync-tbody').innerHTML =
-        buildRows(data.entities || {}, data.jobs || {});
+        buildRows(filteredEntities, data.jobs || {});
       document.getElementById('last-update').textContent =
-        'Cập nhật: ' + new Date().toLocaleTimeString('vi-VN');
+        'Lần cuối: ' + new Date().toLocaleTimeString('vi-VN');
     }
 
     function buildRows(entities, jobs) {
@@ -827,6 +892,25 @@ class SyncManagerController extends BaseController {
         });
         alert((await r.json()).message || 'Đồng chí đã yêu cầu tiếp tục');
       } catch(e) { alert('Lỗi: '+e.message); }
+    }
+
+    async function triggerShutdown() {
+      if (!confirm('Bạn có chắc chắn muốn TẮT toàn bộ hệ thống? Cả trình duyệt và Command Line sẽ đóng.')) return;
+      try {
+        const r = await fetch('/api/sync-manager-src/shutdown', { method: 'POST' });
+        const j = await r.json();
+        alert(j.message);
+        window.close();
+      } catch (e) { alert('Hệ thống đang đóng...'); window.close(); }
+    }
+
+    async function triggerLogin() {
+      if (!confirm('Hệ thống sẽ mở trình duyệt để đăng nhập EOffice (npm run login). Tiếp tục?')) return;
+      try {
+        const r = await fetch('/api/sync-manager-src/login', { method: 'POST' });
+        const j = await r.json();
+        alert(j.message);
+      } catch (e) { alert('Lỗi: ' + e.message); }
     }
 
     connectSSE(); // khởi động SSE khi trang load

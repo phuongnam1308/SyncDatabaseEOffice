@@ -58,6 +58,9 @@ const SyncStateRepository = require('./SyncStateRepository');
 // STATE_FILE removed: no JSON file persistence
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 const RUNNING_STATUSES = new Set(['RUNNING', 'PAUSE_REQUESTED', 'RESUMING']);
+
+// Parallel processing config
+const SYNC_CONCURRENCY = Number(process.env.SYNC_CONCURRENCY || 3);
 const INTERRUPTED_STATUSES = new Set(['RUNNING', 'PAUSE_REQUESTED', 'RESUMING']);
 
 class SyncManagerService {
@@ -68,6 +71,7 @@ class SyncManagerService {
 
     // State được khởi tạo rỗng, sau đó hydrate từ DB qua ensureStateLoaded().
     this.state = this.normalizeState(null);
+    this.instanceId = process.env.SYNC_INSTANCE_ID || 'default';
     this._stateLoaded = false;
     this._stateLoadingPromise = null;
 
@@ -76,6 +80,10 @@ class SyncManagerService {
 
     // Setup shutdown hooks
     this.setupShutdownHandlers();
+
+    // Setup Memory Leak Protection (Auto-pause on high RAM)
+    this.memoryThresholdMB = parseInt(process.env.SYNC_MAX_RAM_MB || '2048', 10);
+    this._startMemoryMonitor();
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -141,7 +149,8 @@ class SyncManagerService {
       totalSuccess: Number(row?.total_success || 0),
       totalErrors: Number(row?.total_errors || 0),
       error: row?.error_message || null,
-      errorLog: []
+      errorLog: [],
+      instanceId: row?.instance_id || 'default'
     };
   }
 
@@ -156,9 +165,11 @@ class SyncManagerService {
           `
           SELECT
             model_name, last_sync_time, last_sync_id, total_synced,
-            status, last_run, active_job_id, last_error
+            status, last_run, active_job_id, last_error, instance_id
           FROM ${SyncStateRepository.tblModels}
-          `
+          WHERE instance_id = @instanceId
+          `,
+          { instanceId: this.instanceId }
         ),
         SyncStateRepository.queryNewDb(
           `
@@ -168,9 +179,11 @@ class SyncManagerService {
             pause_requested, is_reset, batch_size,
             last_sync_time, last_sync_id,
             total_to_sync, total_processed, total_success, total_errors,
-            error_message
+            error_message, instance_id
           FROM ${SyncStateRepository.tblJobs}
-          `
+          WHERE instance_id = @instanceId
+          `,
+          { instanceId: this.instanceId }
         )
       ]);
 
@@ -301,24 +314,68 @@ class SyncManagerService {
    * Registers SIGINT/SIGTERM handlers to persist interrupted job states.
    */
   setupShutdownHandlers() {
-    const markInterrupted = () => {
+    const markPaused = () => {
       try {
         let changed = false;
-        const now = this.now();
         for (const job of Object.values(this.state.jobs)) {
           if (INTERRUPTED_STATUSES.has(job.status)) {
-            this.markJobAsCrashed(job, 'Application is shutting down while job is running', now);
+            // Đổi RUNNING → PAUSED (không phải CRASHED)
+            // để sau khi khởi động lại user có thể Resume
+            this.markJobPaused(job);
             changed = true;
           }
         }
         if (changed) this.saveState();
       } catch (error) {
-        // eslint-disable-next-line no-console
-        console.error('[SyncManagerService] Failed to persist crash state:', error);
+        console.error('[SyncManagerService] Failed to persist pause state on shutdown:', error);
       }
     };
-    process.on('SIGINT', () => { markInterrupted(); process.exit(0); });
-    process.on('SIGTERM', () => { markInterrupted(); process.exit(0); });
+    // Chỉ dăng ký 1 lần — index.js sẽ gọi pauseAllRunningJobs() qua gracefulShutdown()
+    // Handler này là fallback đồng bộ (synchronous) nếu graceless kill xảy ra
+    process.once('SIGINT',  () => { markPaused(); process.exit(0); });
+    process.once('SIGTERM', () => { markPaused(); process.exit(0); });
+  }
+
+  /**
+   * Bộ giám sát RAM: Kiểm tra mỗi 10 giây.
+   * Nếu vượt ngưỡng SYNC_MAX_RAM_MB, tự động tạm dừng tất cả Job đang chạy.
+   * @private
+   */
+  _startMemoryMonitor() {
+    if (this._memInterval) clearInterval(this._memInterval);
+
+    this._memInterval = setInterval(() => {
+      try {
+        const mem = process.memoryUsage();
+        const rssMB = Math.round(mem.rss / 1024 / 1024);
+
+        if (rssMB > this.memoryThresholdMB) {
+          logger.error(`\n🚨🚨🚨 [MEMORY ALERT] Hệ thống phát hiện RAM vượt ngưỡng an toàn: ${rssMB}MB / ${this.memoryThresholdMB}MB 🚨🚨🚨`);
+          logger.error(`[MEMORY ALERT] Tự động kích hoạt cơ chế tạm dừng (Auto-Pause) để bảo vệ máy chủ...`);
+
+          let pausedAny = false;
+          // Duyệt qua tất cả các Job trong state
+          for (const job of Object.values(this.state.jobs)) {
+            if (RUNNING_STATUSES.has(job.status) && job.status !== 'PAUSE_REQUESTED') {
+              try {
+                logger.warn(`[MEMORY ALERT] Đang tạm dừng module: ${job.modelName} (JobId: ${job.jobId})`);
+                this.pauseJob(job.jobId);
+                pausedAny = true;
+              } catch (err) {
+                logger.error(`[MEMORY ALERT] Lỗi khi cố gắng tạm dừng ${job.modelName}: ${err.message}`);
+              }
+            }
+          }
+
+          if (pausedAny) {
+            this.saveState();
+            this._broadcastSSE(); // Cập nhật Dashboard ngay lập tức
+          }
+        }
+      } catch (err) {
+        logger.debug(`[MemoryMonitor] Error during check: ${err.message}`);
+      }
+    }, 10000); // Kiểm tra mỗi 10 giây
   }
 
   /**
@@ -329,13 +386,16 @@ class SyncManagerService {
     let changed = false;
     for (const job of Object.values(this.state.jobs)) {
       if (INTERRUPTED_STATUSES.has(job.status)) {
-        this.markJobAsCrashed(job, 'Application restarted while job was running', now);
+        // Đổi RUNNING → PAUSED (không phải CRASHED)
+        // Nếu graceful shutdown đã chạy được → job đã là PAUSED rồi, bước này không ảnh hưởng.
+        // Nếu graceful shutdown chưa kịp → vẫn mark PAUSED để user có thể Resume.
+        this.markJobPaused(job);
         changed = true;
       }
     }
     if (changed) {
       this.saveState();
-      logger.warn('[SyncManagerService] Recovered interrupted jobs → CRASHED');
+      logger.info('[SyncManagerService] Khôi phục job bị ngắt → PAUSED (có thể Resume).');
     }
   }
 
@@ -362,7 +422,6 @@ class SyncManagerService {
     }
     this.updateSyncLogFromJob(job);
 
-    // Thêm: cập nhật DB
     this._dbUpdateJob(job);
     if (modelState) this._dbUpdateModel(job.modelName, modelState);
   }
@@ -379,7 +438,8 @@ class SyncManagerService {
       status: 'IDLE',
       lastRun: null,
       activeJobId: null,
-      error: null
+      error: null,
+      instanceId: this.instanceId
     };
   }
 
@@ -481,7 +541,8 @@ class SyncManagerService {
       totalSuccess: 0,
       totalErrors: 0,
       error: null,
-      errorLog: []
+      errorLog: [],
+      instanceId: this.instanceId
     };
 
     this.state.jobs[jobId] = job;
@@ -800,6 +861,12 @@ class SyncManagerService {
       job.status = 'RUNNING';
       modelState.status = 'RUNNING';
       this._dbUpdateModel(job.modelName, modelState);
+      // Reset totalToSync để countFn/getList được gọi lại sau restart,
+      // cập nhật số pending thực tế thay vì dùng giá trị cũ từ DB.
+      // Nếu không reset, vòng for có thể thoát sớm vì offset >= totalToSync_cũ
+      // trong khi còn nhiều records chưa xử lý trong staging.
+      job.totalToSync = null;
+      logger.info(`[SyncManagerService][${job.modelName}] RESUMING: reset totalToSync để rebuild snapshot từ staging.`);
     }
 
     let cursorTime = job.lastSyncTime || modelState.lastSyncTime || DEFAULT_SYNC_TIME;
@@ -820,7 +887,8 @@ class SyncManagerService {
         this._dbUpdateJob(job); // ghi totalToSync lên DB
       }
 
-      while (true) {
+      // 2 vòng for: Outer loop theo batch size, Inner loop xử lý từng bản ghi
+      for (let offset = 0; offset < (job.totalToSync || Infinity); offset += job.batchSize) {
         if (job.pauseRequested) { this.markJobPaused(job); return; }
 
         const now = this.now();
@@ -829,36 +897,73 @@ class SyncManagerService {
         this.updateSyncLogFromJob(job);
         this.saveState();
 
-        const records = await handlers.fetchFn(cursorTime, job.batchSize, 0, {
+        const fetchTimer = logger.startTimer(`SYNC_FETCH | ${job.modelName}`);
+        // handlers.fetchFn(cursorTime, batchSize, offset, context)
+        const records = await handlers.fetchFn(cursorTime, job.batchSize, offset, {
           modelName: job.modelName,
           jobId: job.jobId,
           lastSyncTime: cursorTime,
-          lastSyncId: cursorId
+          lastSyncId: cursorId,
+          // Cần thiết để SyncHandlerModel phục hồi nextIndex đúng sau server restart (Resume)
+          totalProcessed: job.totalProcessed || 0
         });
+        fetchTimer.stop(records?.length);
 
-        if (!records || records.length === 0) { this.completeJob(job); return; }
+        if (!records || records.length === 0) break;
 
         let batchSuccess = 0;
         let batchProcessed = 0;
 
-        for (const record of records) {
-          if (job.pauseRequested) break;
+        const processTimer = logger.startTimer(`BATCH_PROCESS | ${job.modelName} | Concurrency: ${SYNC_CONCURRENCY}`);
+
+        // Helper function for parallel processing with concurrency control
+        let jobFinishedEarly = false;
+        const processTasks = async () => {
+          const results = [];
+          const executing = new Set();
+          
+          for (const record of records) {
+            if (job.pauseRequested || jobFinishedEarly) break;
+
+            const task = (async (r) => {
+              try {
+                const resProc = await handlers.processFn(r, { modelName: job.modelName, jobId: job.jobId });
+                if (resProc && resProc.done) jobFinishedEarly = true;
+                return { success: true, record: r, result: resProc };
+              } catch (err) {
+                return { success: false, record: r, error: err };
+              }
+            })(record);
+
+            results.push(task);
+            executing.add(task);
+            task.finally(() => executing.delete(task));
+
+            if (executing.size >= SYNC_CONCURRENCY) {
+              await Promise.race(executing);
+            }
+          }
+          return Promise.all(results);
+        };
+
+        const processedResults = await processTasks();
+
+        for (const res of processedResults) {
           batchProcessed += 1;
-
-          try {
-            await handlers.processFn(record, { modelName: job.modelName, jobId: job.jobId });
-
-            const recordTime = this.extractRecordTime(record);
-            const recordId = this.extractRecordId(record);
+          if (res.success) {
+            batchSuccess += 1;
+            const recordTime = this.extractRecordTime(res.record);
+            const recordId = this.extractRecordId(res.record);
             if (recordTime && this.compareCursor(recordTime, recordId, cursorTime, cursorId) > 0) {
               cursorTime = recordTime;
               cursorId = recordId;
             }
-            batchSuccess += 1;
-          } catch (recordError) {
-            this.pushJobError(job, record, recordError);
+          } else {
+            this.pushJobError(job, res.record, res.error);
           }
         }
+
+        processTimer.stop(batchProcessed);
 
         job.totalProcessed += batchProcessed;
         job.totalSuccess += batchSuccess;
@@ -878,9 +983,10 @@ class SyncManagerService {
         this._dbUpdateJob(job);      // ghi DB (thêm mới)
         this._dbUpdateModel(job.modelName, modelState); // ghi DB model state
 
-        if (job.pauseRequested) { this.markJobPaused(job); return; }
-        if (records.length < job.batchSize) { this.completeJob(job); return; }
+        if (job.pauseRequested || jobFinishedEarly) { this.markJobPaused(job); return; }
+        if (records.length < job.batchSize || jobFinishedEarly) break;
       }
+      this.completeJob(job);
     } catch (error) {
       this.failJob(job, error, 'FAILED');
     }
@@ -1027,7 +1133,7 @@ class SyncManagerService {
 
       const modelPromises = modelEntries.map(async ([modelName, modelState]) => {
         try {
-          await SyncStateRepository.ensureModel(modelName);
+          await SyncStateRepository.ensureModel(modelName, this.instanceId);
           await SyncStateRepository.updateModel(modelName, modelState);
         } catch (err) {
           logger.warn(`[SyncManagerService] DB persist model(${modelName}) failed:`, err && err.message ? err.message : err);
@@ -1078,8 +1184,8 @@ class SyncManagerService {
    * @private
    */
   _dbEnsureModel(modelName) {
-    SyncStateRepository.ensureModel(modelName).catch((err) =>
-      logger.warn(`[SyncManagerService] DB ensureModel(${modelName}) failed:`, err.message)
+    SyncStateRepository.ensureModel(modelName, this.instanceId).catch((err) =>
+      logger.warn(`[SyncManagerService] _dbEnsureModel failed: ${err.message}`)
     );
   }
 
@@ -1118,6 +1224,38 @@ class SyncManagerService {
       return null;
     });
   }
+
+  /**
+   * [GRACEFUL SHUTDOWN] Tạm dừng tất cả job đang RUNNING/RESUMING.
+   * Ghi trạng thái PAUSED vào DB để giữ an toàn khi restart.
+   */
+  async pauseAllRunningJobs() {
+    const runningJobs = Object.values(this.state.jobs || {}).filter(
+      j => j && (j.status === 'RUNNING' || j.status === 'RESUMING' || j.status === 'PAUSE_REQUESTED')
+    );
+    if (runningJobs.length === 0) {
+      logger.info('[GracefulShutdown] Không có job nào đang chạy.');
+      return;
+    }
+    logger.info(`[GracefulShutdown] Đang pause ${runningJobs.length} job(s): ${runningJobs.map(j => j.modelName).join(', ')}`);
+    for (const job of runningJobs) {
+      try {
+        job.pauseRequested = true;
+        this.markJobPaused(job);
+        logger.info(`[GracefulShutdown] ✅ Đã pause job: ${job.modelName} (jobId=${job.jobId})`);
+      } catch (err) {
+        logger.error(`[GracefulShutdown] Lỗi khi pause job ${job.modelName}: ${err.message}`);
+      }
+    }
+  }
+
+  /**
+   * Trả về singleton instance (dùng cho index.js graceful shutdown).
+   */
+  static getInstance() {
+    return _instance;
+  }
 }
 
-module.exports = new SyncManagerService();
+const _instance = new SyncManagerService();
+module.exports = _instance;

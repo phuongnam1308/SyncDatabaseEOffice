@@ -103,8 +103,15 @@ class ReceiverParserService {
         if (donViMatch && donViMatch[1]) {
           const units = this._splitNames(donViMatch[1]);
           for (const unitName of units) {
-            const unitUsers = await this._findUsersInDepartment(unitName, transaction);
-            unitUsers.forEach(u => receiverUnitIds.add(String(u.id)));
+            // Refactor: Lưu Department ID thay vì User IDs
+            if (this.helper) {
+              const unitId = await this.helper.mapSenderUnitId(unitName, transaction);
+              if (unitId) receiverUnitIds.add(String(unitId));
+            } else {
+              // Fallback if no helper
+              const unitUsers = await this._findUsersInDepartment(unitName, transaction);
+              unitUsers.forEach(u => receiverUnitIds.add(String(u.id)));
+            }
           }
         }
       }
@@ -190,8 +197,15 @@ class ReceiverParserService {
         if (donViMatch && donViMatch[1]) {
           const units = this._splitNames(donViMatch[1]);
           for (const unitName of units) {
-            const unitUsers = await this._findUsersInDepartment(unitName, transaction);
-            unitUsers.forEach(u => receiverUnitIds.add(String(u.id)));
+            // Refactor: Lưu Department ID thay vì User IDs
+            if (this.helper) {
+              const unitId = await this.helper.mapSenderUnitId(unitName, transaction);
+              if (unitId) receiverUnitIds.add(String(unitId));
+            } else {
+              // Fallback
+              const unitUsers = await this._findUsersInDepartment(unitName, transaction);
+              unitUsers.forEach(u => receiverUnitIds.add(String(u.id)));
+            }
           }
         }
       }

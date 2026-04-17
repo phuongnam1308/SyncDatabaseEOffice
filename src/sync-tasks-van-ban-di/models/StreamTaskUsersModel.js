@@ -213,7 +213,7 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
     const modifiedAtParsed = safeDateParse(rawRecord.Modified, 'Modified');
 
     return {
-      id_user_bak: userBackupId,
+      id_user_bak: processId ? String(processId) : userBackupId,
       task_id: rawRecord.newTaskId ? parseInt(rawRecord.newTaskId, 10) : null,
       process_id: processId,
       process_name: processName,

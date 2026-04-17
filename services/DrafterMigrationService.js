@@ -45,7 +45,7 @@ class DrafterMigrationService {
         WHERE o.id IN (
           SELECT TOP (${batchSize}) id
           FROM ${process.env.NEW_DB_NAME}.dbo.outgoing_documents
-          WHERE (drafter IS NULL OR report_signer IS NULL 
+          WHERE (drafter IS NULL OR report_signer IS NULL
                  OR (drafter NOT IN (SELECT id FROM ${process.env.NEW_DB_NAME}.dbo.users))
                  OR (report_signer NOT IN (SELECT id FROM ${process.env.NEW_DB_NAME}.dbo.users)))
           ORDER BY id

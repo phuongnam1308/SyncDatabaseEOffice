@@ -95,7 +95,7 @@ class StreamOutgoingMigrationModel extends BaseModel {
     const senderUnit = (await this.helper.mapSenderUnitId(
       this.helper.safeString(oldRecord.DonVi),
       transaction)) || process.env.DEFAULT_RECEIVER_UNIT_ID;
-    
+
     // Đảm bảo drafter không bao giờ là chuỗi 'NULL'
     let drafterRaw = this.helper.safeString(oldRecord.NguoiSoanThaoText || oldRecord.CreatedBy);
     const drafter = (await this.helper.mapUserDrafter(

@@ -75,7 +75,7 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
   // ---------------------------------------------------------------------------
   async _syncToAssignment(audit, auditId, transaction) {
     const {
-      document_id, time, receiver, receiver_unit,
+      document_id, time, receiver, receiver_unit, created_by,
       roleProcess, stage_status, action_code
     } = audit;
 
@@ -84,7 +84,7 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
     try {
       // 1. Xoá toàn bộ assignment của document
       await this.queryNewDbTx(
-        `DELETE FROM ${process.env.NEW_DB_NAME}.dbo.outgoing_assignment
+        `DELETE FROM ${process.env.NEW_DB_NAME}.dbo.outgoing_assignment WITH (ROWLOCK)
         WHERE document_id = @document_id`,
         { document_id },
         transaction
@@ -96,7 +96,7 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
       const isCreator = CREATOR_ACTION_CODES?.has(action_code) ? 1 : 0;
 
       const allReceivers = [
-        ...(receiver ? [{ rec: receiver, unit: receiver_unit || null }] : []),
+        ...(receiver ? [{ rec: receiver || created_by, unit: receiver_unit || null }] : []),
         ...(receiver_unit && receiver_unit !== receiver
           ? [{ rec: receiver_unit, unit: receiver_unit }]
           : [])
@@ -115,7 +115,7 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
         uniqueKeys.add(key);
 
         await this.queryNewDbTx(
-          `INSERT INTO ${process.env.NEW_DB_NAME}.dbo.outgoing_assignment
+          `INSERT INTO ${process.env.NEW_DB_NAME}.dbo.outgoing_assignment WITH (ROWLOCK)
           (document_id, receiver, role_process, stage_status,
             created_at, last_audit_id, receiver_unit, is_creator, table_backups)
           VALUES (@document_id, @receiver, @role_process, @stage_status,
@@ -149,7 +149,7 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
   // ---------------------------------------------------------------------------
   async _syncToCurrentState(audit, auditId, transaction) {
     const {
-      document_id, time, receiver, receiver_unit,
+      document_id, time, receiver, receiver_unit, created_by,
       roleProcess, stage_status, action_code
     } = audit;
 
@@ -161,10 +161,10 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
     const isHtVbtt   = (stageUp === STAGE.HT_VBTT || stageUp === STAGE.BAN_HANH_DU_THAO) ? 1 : 0;
     const isCompleted = isBanHanh;
 
-    const currentReceiver = receiver || receiver_unit;
+    const currentReceiver = receiver || receiver_unit || created_by;
 
     await this.queryNewDbTx(
-      `MERGE ${process.env.NEW_DB_NAME}.dbo.outgoing_current_state AS tgt
+      `MERGE ${process.env.NEW_DB_NAME}.dbo.outgoing_current_state WITH (ROWLOCK) AS tgt
        USING (SELECT @document_id AS document_id) AS src
        ON tgt.document_id = src.document_id
        WHEN MATCHED AND (@audit_time > tgt.last_audit_time OR (@audit_time = tgt.last_audit_time AND @last_audit_id >= tgt.last_audit_id) OR tgt.last_audit_time IS NULL) THEN

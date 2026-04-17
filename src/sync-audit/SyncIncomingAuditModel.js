@@ -78,7 +78,7 @@ class SyncIncomingAuditModel extends SyncAuditModel {
   // ---------------------------------------------------------------------------
   async _syncToAssignment(audit, auditId, transaction) {
     const {
-      document_id, created_at, receiver, receiver_unit,
+      document_id, created_at, receiver, receiver_unit, created_by,
       roleProcess, stage_status
     } = audit;
 
@@ -87,7 +87,7 @@ class SyncIncomingAuditModel extends SyncAuditModel {
     try {
       // 1. Xoá toàn bộ assignment của document
       await this.queryNewDbTx(
-        `DELETE FROM ${process.env.NEW_DB_NAME}.dbo.incomming_assignment
+        `DELETE FROM ${process.env.NEW_DB_NAME}.dbo.incomming_assignment WITH (ROWLOCK, READPAST)
         WHERE document_id = @document_id`,
         { document_id },
         transaction
@@ -96,7 +96,7 @@ class SyncIncomingAuditModel extends SyncAuditModel {
       // 2. Validate input chính
       if (!stage_status || !roleProcess) return;
 
-      const allReceivers = [receiver, receiver_unit].filter(Boolean);
+      const allReceivers = [receiver || created_by, receiver_unit].filter(Boolean);
       if (allReceivers.length === 0) return;
 
       // 3. Loại duplicate receiver + role
@@ -108,7 +108,7 @@ class SyncIncomingAuditModel extends SyncAuditModel {
         uniqueKeys.add(key);
 
         await this.queryNewDbTx(
-          `INSERT INTO ${process.env.NEW_DB_NAME}.dbo.incomming_assignment
+          `INSERT INTO ${process.env.NEW_DB_NAME}.dbo.incomming_assignment WITH (ROWLOCK)
           (document_id, receiver, role_process, stage_status,
             created_at, last_audit_id, table_backups)
           VALUES (@document_id, @receiver, @role_process, @stage_status,
@@ -139,7 +139,7 @@ class SyncIncomingAuditModel extends SyncAuditModel {
   // ---------------------------------------------------------------------------
   async _syncToCurrentState(audit, auditId, transaction) {
     const {
-      document_id, time, receiver, receiver_unit,
+      document_id, time, receiver, receiver_unit, created_by,
       roleProcess, stage_status, action_code
     } = audit;
 
@@ -149,49 +149,77 @@ class SyncIncomingAuditModel extends SyncAuditModel {
     // Văn bản đến được coi là hoàn tất khi ở trạng thái DA_XU_LY
     const isCompleted = (stageUp === STAGE.HOAN_THANH_VAN_BAN) ? 1 : 0;
     // Ưu tiên hiển thị cá nhân làm receiver chính trong current_state
-    const currentReceiver = receiver || receiver_unit;
+    const currentReceiver = receiver || receiver_unit || created_by;
 
-    // SCHEMA incomming_current_state: document_id, current_stage_status, current_action_code, current_receiver, current_role_process, current_deadline, last_audit_id, last_audit_time, is_transfer_to_room, has_open_workitem, is_completed_doc, updated_at
-    await this.queryNewDbTx(
-      `MERGE ${process.env.NEW_DB_NAME}.dbo.incomming_current_state AS tgt
-       USING (SELECT @document_id AS document_id) AS src
-       ON tgt.document_id = src.document_id
-       WHEN MATCHED AND (@audit_time > tgt.last_audit_time OR (@audit_time = tgt.last_audit_time AND @last_audit_id >= tgt.last_audit_id) OR tgt.last_audit_time IS NULL) THEN
-         UPDATE SET
-           current_stage_status  = @stage_status,
-           current_action_code   = @action_code,
-           current_receiver      = @receiver,
-           current_role_process  = @role_process,
-           last_audit_id         = @last_audit_id,
-           last_audit_time       = @audit_time,
-           is_completed_doc      = CASE WHEN @is_completed  = 1 THEN 1 ELSE tgt.is_completed_doc END,
-           updated_at            = SYSDATETIME()
-       WHEN NOT MATCHED THEN
-         INSERT (
-           document_id, current_stage_status, current_action_code,
-           current_receiver, current_role_process,
-           last_audit_id, last_audit_time,
-           is_completed_doc, has_open_workitem, is_transfer_to_room, updated_at, table_backups
-         )
-         VALUES (
-           @document_id, @stage_status, @action_code,
-           @receiver, @role_process,
-           @last_audit_id, @audit_time,
-           @is_completed, 0, 0, SYSDATETIME(), @table_backups
-         );`,
-      {
-        document_id,
-        stage_status:  String(stage_status).substring(0, 100),
-        action_code:   action_code ? String(action_code).substring(0, 100) : null,
-        receiver:      currentReceiver ? String(currentReceiver).substring(0, 100) : null,
-        role_process:  roleProcess ? String(roleProcess).substring(0, 100) : null,
-        last_audit_id: auditId || null,
-        audit_time:    time,
-        is_completed:  isCompleted,
-        table_backups: 'incomming_current_state',
-      },
-      transaction
-    );
+    // Sử dụng logic UPDATE trước, sau đó mới INSERT nếu không có bản ghi nào bị ảnh hưởng
+    // Cách tiếp cận này ổn định hơn MERGE trong môi trường high-concurrency
+    const updateQuery = `
+      UPDATE ${process.env.NEW_DB_NAME}.dbo.incomming_current_state WITH (ROWLOCK, READPAST)
+      SET 
+        current_stage_status  = @stage_status,
+        current_action_code   = @action_code,
+        current_receiver      = @receiver,
+        current_role_process  = @role_process,
+        last_audit_id         = @last_audit_id,
+        last_audit_time       = @audit_time,
+        is_completed_doc      = CASE WHEN @is_completed = 1 THEN 1 ELSE is_completed_doc END,
+        updated_at            = SYSDATETIME()
+      WHERE document_id = @document_id
+        AND (@audit_time > last_audit_time 
+             OR (@audit_time = last_audit_time AND @last_audit_id >= last_audit_id)
+             OR last_audit_time IS NULL)
+    `;
+
+    const updateRes = await this.queryNewDbTx(updateQuery, {
+      document_id,
+      stage_status:  String(stage_status).substring(0, 100),
+      action_code:   action_code ? String(action_code).substring(0, 100) : null,
+      receiver:      currentReceiver ? String(currentReceiver).substring(0, 100) : null,
+      role_process:  roleProcess ? String(roleProcess).substring(0, 100) : null,
+      last_audit_id: auditId || null,
+      audit_time:    time,
+      is_completed:  isCompleted
+    }, transaction);
+
+    // Nếu không bản ghi nào được update (nghĩa là chưa có document_id này), thực hiện INSERT
+    if (updateRes?.rowsAffected?.[0] === 0) {
+      // Kiểm tra lại lần nữa với READPAST để không bị treo
+      const checkRes = await this.queryNewDbTx(
+        `SELECT 1 FROM ${process.env.NEW_DB_NAME}.dbo.incomming_current_state WITH (ROWLOCK, READPAST) WHERE document_id = @document_id`,
+        { document_id },
+        transaction
+      );
+
+      if (!checkRes || checkRes.length === 0) {
+        const insertQuery = `
+          INSERT INTO ${process.env.NEW_DB_NAME}.dbo.incomming_current_state WITH (ROWLOCK)
+          (
+            document_id, current_stage_status, current_action_code,
+            current_receiver, current_role_process,
+            last_audit_id, last_audit_time,
+            is_completed_doc, has_open_workitem, is_transfer_to_room, updated_at, table_backups
+          )
+          VALUES (
+            @document_id, @stage_status, @action_code,
+            @receiver, @role_process,
+            @last_audit_id, @audit_time,
+            @is_completed, 0, 0, SYSDATETIME(), @table_backups
+          )
+        `;
+        await this.queryNewDbTx(insertQuery, {
+          document_id,
+          stage_status:  String(stage_status).substring(0, 100),
+          action_code:   action_code ? String(action_code).substring(0, 100) : null,
+          receiver:      currentReceiver ? String(currentReceiver).substring(0, 100) : null,
+          role_process:  roleProcess ? String(roleProcess).substring(0, 100) : null,
+          last_audit_id: auditId || null,
+          audit_time:    time,
+          is_completed:  isCompleted,
+          table_backups: 'incomming_current_state'
+        }, transaction);
+      }
+    }
+    logger.info(`[SyncIncomingAuditModel] Sync current_state success: doc=${document_id}`);
     logger.info(`[SyncIncomingAuditModel] Sync current_state success: doc=${document_id} status=${stage_status}`);
   }
 

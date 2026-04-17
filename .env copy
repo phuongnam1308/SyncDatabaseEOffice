@@ -7,7 +7,7 @@ DEFAULT_USER_PASSWORD=$2b$10$VAWeyayMFwjr1h8dtZWZEOXxG/WxWrrV4ULwtDsisJlLOxLBTim
 # SERVER CONFIG
 # ======================
 NODE_ENV=development
-PORT=3021
+PORT=3025
 HOST=localhost
 
 

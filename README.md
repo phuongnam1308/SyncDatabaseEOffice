@@ -44,8 +44,8 @@ Sau khi build, bạn chỉ cần gửi thư mục `dist/` đi. Bên trong bao g�
 5.  **`HUONG_DAN.md`**: Bản hướng dẫn sử dụng tiếng Việt cho người dùng cuối.
 
 ## 🎨 Tên miền & Thương hiệu
-*   **Hostname**: Hệ thống được cấu hình mặc định chạy tại `http://SNP-DongBoDuLieu:3021`.
-*   **Port**: Cổng mặc định là `3021`.
+*   **Hostname**: Hệ thống được cấu hình mặc định chạy tại `http://SNP-DongBoDuLieu:3025`.
+*   **Port**: Cổng mặc định là `3025`.
 *   **Tài liệu API**: Truy cập `/swagger` để xem toàn bộ tài liệu API offline.
 
 ---

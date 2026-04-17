@@ -86,7 +86,7 @@ async function run() {
                 DECLARE @NewsId INT;
                 IF EXISTS (SELECT 1 FROM dbo.news WHERE slug = @slug)
                 BEGIN
-                    UPDATE dbo.news SET 
+                    UPDATE dbo.news SET
                         title = @title,
                         summary = @summary,
                         content = @content,
@@ -115,11 +115,11 @@ async function run() {
             `;
 
             const status = row.isActive ? 1 : 0; // Assuming 1 is active/published
-            
+
             // Determine the topic ID based on newsType name comparison (Sử dụng Helper xử lý trùng lặp và tạo mới)
             const topicId = await helper.getOrCreateTopic(row.newsType || 'Tin tức', topicMap);
             console.log(`[Topic Mapping] bài viết [${row.title}] -> Topic ID: ${topicId}`);
-            
+
             const newsRequest = pool.request();
             newsRequest.input('title', sql.NVarChar, row.title);
             newsRequest.input('slug', sql.NVarChar, row.slug);
