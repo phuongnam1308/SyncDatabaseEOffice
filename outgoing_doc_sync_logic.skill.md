@@ -303,5 +303,69 @@ Tài liệu này mô tả chính xác luồng xử lý hiện tại của module
 - Outgoing thuộc nhóm module cho phép chạy song song theo instance.
 - Để tránh đụng nhau:
   - bắt buộc chia partition ngày bằng `SYNC_START_DATE` / `SYNC_END_DATE`
-  - mỗi worker claim row bằng `UPDLOCK, ROWLOCK`
+  - mỗi worker claim row bằng `UPDLOCK, ROWLOCK, READPAST`
   - cleanup `MigrateFlg=2` stale records thực hiện trong chính partition của instance hiện tại.
+
+## 18) Staging tracking columns (ownership + heartbeat)
+### 18.1 Ba cột bổ sung trong `outgoing_documents_sync`
+- `processing_owner` — `NVARCHAR(255)`, instance/pid của worker đang claim row
+- `processing_started_at` — `DATETIME2`, thời điểm worker bắt đầu xử lý
+- `processing_heartbeat_at` — `DATETIME2`, timestamp cập nhật định kỳ khi xử lý dài
+
+### 18.2 Claim record trong `fetchOneFromStaging`
+- Hint SQL: `WITH (UPDLOCK, ROWLOCK, READPAST)` — bỏ qua row đang bị lock (không blocking/chờ)
+- Claim SET đồng thời 4 trường:
+  - `MigrateFlg = 2`
+  - `processing_owner = <instanceId/pid>`
+  - `processing_started_at = SYSUTCDATETIME()`
+  - `processing_heartbeat_at = SYSUTCDATETIME()`
+- `instanceId` được gán từ `process.env.INSTANCE_ID || `pid_${process.pid}``
+
+### 18.3 Cleanup stale records trong `getList`
+- Không reset toàn bộ `MigrateFlg=2` nữa
+- Chỉ reset row stale theo ngưỡng thời gian:
+  ```
+  MigrateFlg = 2
+  AND processing_started_at < DATEADD(MINUTE, -@staleMinutes, SYSUTCDATETIME())
+  ```
+  với `staleMinutes` mặc định = 30 (configurable qua `STAGING_STALE_MINUTES`)
+- Khi reset: clear cả `processing_owner`, `processing_started_at`, `processing_heartbeat_at`
+
+### 18.4 Heartbeat định kỳ trong `processOne`
+- Timer chạy **ngoài transaction** (`setInterval`, mỗi 5 phút)
+- Mỗi tick gọi `updateHeartbeat(rowId)` — cập nhật `processing_heartbeat_at = SYSUTCDATETIME()` cho row đang xử lý
+- Timer tự clear khi transaction kết thúc (trong `finally` hoặc `catch` của `processOne`)
+- Mục tiêu: record xử lý lâu (nhiều file/audit) không bị cleanup stale coi là treo
+
+### 18.5 Clear tracking trên success/error
+- **Success**: `MigrateFlg=1`, xóa `processing_owner`, `processing_started_at`, `processing_heartbeat_at`
+- **Error**: `MigrateFlg=0`, `MigrateErrFlg=1`, xóa 3 tracking columns
+
+## 19) Cơ chế retry mở rộng trong `utils/dbUtils.js`
+### 19.1 Hàm `isRetryableSqlError(err)`
+Nhận diện các lỗi transient của SQL Server:
+- Error **1205** — deadlock
+- Error **3930** — "transaction is in abort state" / doomed transaction
+- Message chứa **"Transaction has been aborted"** (hậu quả deadlock bị nuốt trong connection session)
+- Message chứa **"Transaction context in use by other sessions"**
+- Message chứa **"Could not continue processing"**
+
+### 19.2 `withTransactionRetry` mở rộng
+- Thay `isDeadlock` đơn giản bằng `isRetryableSqlError` để retry được cả error 3930 + "Transaction has been aborted"
+- Log message đổi thành `[Deadlock/Doomed]`
+
+### 19.3 Nguyên tắc không nuốt retryable errors
+Trong `upsertDocumentAggregateById`, 6 vị trí catch blocks bên trong transaction:
+- Nếu `dbUtils.isRetryableSqlError(err)` → `throw err` ngay để toàn transaction được retry
+- Các lỗi không retryable (logic/app errors) vẫn log + warn như cũ
+- Các vị trí áp dụng:
+  1. `getByIdFromOldDb` (line ~1370)
+  2. `getByIdFromStaging` (line ~1398)
+  3. HTML comments parse loop (line ~1452)
+  4. Audit `processSingleRecord` loop (line ~1491)
+  5. `fetchAllAuditsAcrossTables` (line ~1498)
+  6. Auto-create audit block (line ~1584)
+
+## 20) Biến môi trường mới
+- `STAGING_STALE_MINUTES` — ngưỡng (phút) để cleanup coi row là stale (default: 30)
+- `INSTANCE_ID` — chuỗi định danh worker, dùng làm `processing_owner` (default: `pid_<pid>`)
