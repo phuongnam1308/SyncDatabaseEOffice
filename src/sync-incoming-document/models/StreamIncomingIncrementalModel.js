@@ -188,6 +188,7 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
     this._IncomingMigrationModels = null;
     this._fileService = null;
     this.partitionColumn = 'NgayDen'; // Cột nghiệp vụ để chia dải dữ liệu
+    this._instanceId = process.env.INSTANCE_ID || `pid_${process.pid}`;
   }
 
   /**
@@ -303,12 +304,30 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
             MigrateErrFlg NVARCHAR(MAX) NULL,
             MigrateErrMess NVARCHAR(MAX) NULL,
             ItemVBPHOld NVARCHAR(MAX) NULL,
-            DGPId NVARCHAR(MAX) NULL
+            DGPId NVARCHAR(MAX) NULL,
+            processing_owner NVARCHAR(255) NULL,
+            processing_started_at DATETIME2 NULL,
+            processing_heartbeat_at DATETIME2 NULL
             )
         END
         `;
 
       await this.queryNewDb(createQuery);
+
+      // Ensure tracking columns exist for already-created staging tables
+      try {
+        const stagingTableRef = this.getStagingTableRef();
+        await this.queryNewDb(`
+          IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTableSync}' AND COLUMN_NAME = 'processing_owner')
+            ALTER TABLE ${stagingTableRef} ADD processing_owner NVARCHAR(255) NULL;
+          IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTableSync}' AND COLUMN_NAME = 'processing_started_at')
+            ALTER TABLE ${stagingTableRef} ADD processing_started_at DATETIME2 NULL;
+          IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTableSync}' AND COLUMN_NAME = 'processing_heartbeat_at')
+            ALTER TABLE ${stagingTableRef} ADD processing_heartbeat_at DATETIME2 NULL;
+        `);
+      } catch (alterErr) {
+        logger.warn(`[IncomingDocumentModel] Failed to add tracking columns: ${alterErr.message}`);
+      }
 
       logger.info(`[IncomingDocumentModel] Staging table ready`);
     } catch (err) {
@@ -729,20 +748,28 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
       const STAGING_PARALLEL_BATCHES = Number(process.env.STAGING_PARALLEL_BATCHES || 3);
       const numIterations = Math.ceil(totalCountToFetch / fetchBatchSize);
 
-      // Cleanup stale records (MigrateFlg = 2 but too old)
+      // Cleanup stale records — chỉ reset row bị kẹt quá STAGING_STALE_MINUTES (default 30 phút)
+      // Không reset ALL MigrateFlg=2 để tránh xung đột với worker khác đang xử lý hợp lệ
+      const staleMinutes = Number(process.env.STAGING_STALE_MINUTES || 30);
       try {
         const cleanupRes = await this.queryNewDb(`
           UPDATE ${stagingTableRef}
-          SET MigrateFlg = 0, MigrateErrMess = 'Reset from stale processing'
+          SET MigrateFlg = 0,
+              MigrateErrMess = 'Reset from stale processing',
+              processing_owner = NULL,
+              processing_started_at = NULL,
+              processing_heartbeat_at = NULL
           WHERE MigrateFlg = 2
+            AND processing_started_at < DATEADD(MINUTE, -@staleMinutes, SYSUTCDATETIME())
             AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
             AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
         `, {
+          staleMinutes,
           startDate: envStartDate,
           endDate: envEndDate
         });
         if (cleanupRes?.rowsAffected?.[0] > 0) {
-          logger.info(`[IncomingDocumentModel] Đã reset ${cleanupRes.rowsAffected[0]} bản ghi bị kẹt (MigrateFlg=2) trong phân đoạn.`);
+          logger.info(`[IncomingDocumentModel] Đã reset ${cleanupRes.rowsAffected[0]} bản ghi stale (MigrateFlg=2, quá ${staleMinutes} phút) trong phân đoạn.`);
         }
       } catch (cleanupErr) {
         logger.warn(`[IncomingDocumentModel] Cleanup stale records failed: ${cleanupErr.message}`);
@@ -928,29 +955,46 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
         logger.warn(`[IncomingDocumentModel] Lỗi tải file (tiếp tục đồng bộ văn bản): ${fileErr.message}`);
       }
 
-      const result = await dbUtils.withTransactionRetry(this.newPool, async (transaction) => {
-        // Truyền thêm preparedFiles vào
-        const res = await this.processRowData(rowData, { transaction, preparedFiles });
+      // Heartbeat timer — keeps the row from being reaped as stale while we work.
+      // Runs OUTSIDE the transaction so it survives across retries.
+      const HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+      let heartbeatTimer = setInterval(() => {
+        this.updateHeartbeat(rowId).catch(err => {
+          logger.warn(`[IncomingDocumentModel] Heartbeat failed for ID=${rowId}: ${err.message}`);
+        });
+      }, HEARTBEAT_INTERVAL_MS);
 
-        // Deferred Cursor strategy: KHÔNG update last_sync_time theo từng record.
-        await this.queryNewDbTx(
-          `UPDATE sync_jobs
-           SET total_processed = ISNULL(total_processed, 0) + 1,
-               total_success   = ISNULL(total_success, 0) + 1
-           WHERE job_id = @syncJobId`,
-          { syncJobId },
-          transaction,
-        );
+      try {
+        const result = await dbUtils.withTransactionRetry(this.newPool, async (transaction) => {
+          // Truyền thêm preparedFiles vào
+          const res = await this.processRowData(rowData, { transaction, preparedFiles });
 
-        // Mark staging row as processed successfully
-        await this.queryNewDbTx(
-          `UPDATE ${stagingTableRef}  WITH (ROWLOCK)  SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE ID = @ID`,
-          { ID: rowId },
-          transaction,
-        );
+          // Deferred Cursor strategy: KHÔNG update last_sync_time theo từng record.
+          await this.queryNewDbTx(
+            `UPDATE sync_jobs
+             SET total_processed = ISNULL(total_processed, 0) + 1,
+                 total_success   = ISNULL(total_success, 0) + 1
+             WHERE job_id = @syncJobId`,
+            { syncJobId },
+            transaction,
+          );
 
-        return res;
-      }, { maxRetries: 5 });
+          // Mark staging row as processed successfully + clear tracking columns
+          await this.queryNewDbTx(
+            `UPDATE ${stagingTableRef} WITH (ROWLOCK)
+             SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL,
+                 processing_owner = NULL, processing_started_at = NULL, processing_heartbeat_at = NULL
+             WHERE ID = @ID`,
+            { ID: rowId },
+            transaction,
+          );
+
+          return res;
+        }, { maxRetries: 5 });
+
+        // Clear heartbeat on success
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
 
       return {
         syncJobId,
@@ -959,6 +1003,14 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
         rowId,
         result
       };
+      } catch (txError) {
+        // Clear heartbeat on transaction error
+        if (heartbeatTimer) {
+          clearInterval(heartbeatTimer);
+          heartbeatTimer = null;
+        }
+        throw txError;
+      }
     } catch (error) {
       // If failed, mark as error in staging so we skip it next time!
       // RESET MigrateFlg path: if it failed permanently, we set MigrateErrFlg=1.
@@ -966,7 +1018,10 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
       if (rowData && rowData.ID) {
         try {
           const stagingTableRef = this.getStagingTableRef();
-          await this.queryNewDb(`UPDATE ${stagingTableRef} SET MigrateFlg = 0, MigrateErrFlg = 1, MigrateErrMess = @Err WHERE ID = @ID`, { ID: rowData.ID, Err: String(error.message).slice(0, 1000) });
+          await this.queryNewDb(`UPDATE ${stagingTableRef} WITH (ROWLOCK)
+            SET MigrateFlg = 0, MigrateErrFlg = 1, MigrateErrMess = @Err,
+                processing_owner = NULL, processing_started_at = NULL, processing_heartbeat_at = NULL
+            WHERE ID = @ID`, { ID: rowData.ID, Err: String(error.message).slice(0, 1000) });
         } catch (updateErr) { }
       }
 
@@ -1033,7 +1088,7 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
       const query = `
       WITH CTE AS (
         SELECT TOP (1) *
-        FROM ${stagingTableRef} WITH (UPDLOCK, ROWLOCK)
+        FROM ${stagingTableRef} WITH (UPDLOCK, ROWLOCK, READPAST)
         WHERE ISNULL(MigrateFlg, 0) = 0
           AND ISNULL(MigrateErrFlg, 0) = 0
           -- Phân đoạn dữ liệu theo cột nghiệp vụ để Worker không nhặt nhầm dải của nhau
@@ -1044,18 +1099,39 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
       )
       UPDATE CTE
       SET MigrateFlg = 2,
-          MigrateErrMess = 'Processing...'
+          MigrateErrMess = 'Processing...',
+          processing_owner = @owner,
+          processing_started_at = SYSUTCDATETIME(),
+          processing_heartbeat_at = SYSUTCDATETIME()
       OUTPUT inserted.*
       `;
 
       const rows = await this.queryNewDb(query, {
         startDate: SYNC_START_DATE || null,
-        endDate: SYNC_END_DATE || null
+        endDate: SYNC_END_DATE || null,
+        owner: this._instanceId || `pid_${process.pid}`
       });
       return rows?.length ? rows[0] : null;
     } catch (error) {
       logger.error(`[IncomingDocumentModel.fetchOneFromStaging] Failed to fetch: ${error.message}`);
       throw error;
+    }
+  }
+
+  /**
+   * Updates processing_heartbeat_at for a claimed staging row.
+   * Call periodically from long-running processOne to avoid being treated as stale.
+   * @param {string|number} rowId
+   * @param {object} [transaction]
+   */
+  async updateHeartbeat(rowId, transaction = null) {
+    if (!rowId) return;
+    const stagingTableRef = this.getStagingTableRef();
+    const q = `UPDATE ${stagingTableRef} WITH (ROWLOCK) SET processing_heartbeat_at = SYSUTCDATETIME() WHERE ID = @ID AND MigrateFlg = 2`;
+    if (transaction) {
+      await this.queryNewDbTx(q, { ID: rowId }, transaction);
+    } else {
+      await this.queryNewDb(q, { ID: rowId });
     }
   }
 
@@ -1355,6 +1431,7 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
           logger.info(`[AggregateSync][STEP 3] ID=${id} -> KHÔNG có ý kiến lãnh đạo HTML nào cần bóc.`);
         }
       } catch (htmlCommentErr) {
+        if (dbUtils.isRetryableSqlError(htmlCommentErr)) throw htmlCommentErr;
         logger.warn(`[upsertDocumentAggregateById] Lỗi parse HTML YKien ID=${id}: ${htmlCommentErr.message}`);
       }
       logger.info(`[PERF] STEP 3 (HTML Comments) took ${Date.now() - _timeStep3}ms for ID=${id}`);
@@ -1402,6 +1479,7 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
                 auditInserted += Number(result.inserted || 0);
                 auditUpdated += Number(result.updated || 0);
               } catch (auditErr) {
+                if (dbUtils.isRetryableSqlError(auditErr)) throw auditErr;
                 logger.warn(
                   `[upsertDocumentAggregateById] Audit migrate failed for table=${tableName}, source ID=${id}, target documentId=${documentId}: ${auditErr.message}`, { stack: auditErr.stack }
                 );
@@ -1416,6 +1494,7 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
             );
           }
         } catch (error) {
+          if (dbUtils.isRetryableSqlError(error)) throw error;
           logger.warn(
             `[upsertDocumentAggregateById] Aggregated fetch audit failed for ID=${id}: ${error.message}`, { stack: error.stack }
           );
@@ -1497,6 +1576,7 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
           totalAffected++;
         }
       } catch (autoAuditErr) {
+        if (dbUtils.isRetryableSqlError(autoAuditErr)) throw autoAuditErr;
         logger.warn(`[AutoCreateAudit][Incoming] Failed for documentId=${documentId}: ${autoAuditErr.message}`);
       }
 
