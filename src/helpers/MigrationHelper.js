@@ -547,11 +547,18 @@ class MigrationHelper {
         
         // Nếu record cũ chưa có normalized_name -> cập nhật luôn
         if (!result[0].normalized_name) {
-          await this.queryNewDbTx(
-            `UPDATE ${process.env.NEW_DB_NAME}.dbo.organization_units SET normalized_name = @normalizedKey WHERE id = @foundId`,
-            { normalizedKey, foundId },
-            transaction
-          );
+          try {
+            await this.queryNewDbTx(
+              `UPDATE ${process.env.NEW_DB_NAME}.dbo.organization_units SET normalized_name = @normalizedKey WHERE id = @foundId`,
+              { normalizedKey, foundId },
+              null // Không dùng transaction chung để tránh deadlock chéo
+            );
+          } catch (err) {
+            // Bỏ qua lỗi duplicate key nếu normalized_name đã tồn tại ở row khác
+            if (!err.message.includes('duplicate key')) {
+               logger.warn(`[mapSenderUnitId] Update normalized_name failed for ID=${foundId}: ${err.message}`);
+            }
+          }
         }
 
         this.deptCache.set(normalizedKey, foundId);
@@ -580,11 +587,15 @@ class MigrationHelper {
         if (existed?.length) {
           const foundId = existed[0].id;
           // Cập nhật normalized_name để lần sau query nhanh
-          await this.queryNewDbTx(
-            `UPDATE ${process.env.NEW_DB_NAME}.dbo.organization_units SET normalized_name = @normalizedKey WHERE id = @foundId`,
-            { normalizedKey, foundId },
-            transaction
-          );
+          try {
+            await this.queryNewDbTx(
+              `UPDATE ${process.env.NEW_DB_NAME}.dbo.organization_units SET normalized_name = @normalizedKey WHERE id = @foundId`,
+              { normalizedKey, foundId },
+              null // Tách khỏi transaction chính
+            );
+          } catch (err) {
+            // Bỏ qua lỗi duplicate key
+          }
           this.deptCache.set(normalizedKey, foundId);
           return foundId;
         }
@@ -724,7 +735,7 @@ class MigrationHelper {
         )
       `;
 
-      await this.queryNewDbTx(insertQuery, { id, name: normalizedName }, transaction);
+      await this.queryNewDbTx(insertQuery, { id, name: normalizedName }, null); // Không dùng transaction chung
 
       if (topicMap) topicMap[lowerName] = id;
       logger.info(`[getOrCreateTopic] Đã tự động tạo Danh mục mới: "${normalizedName}" (ID: ${id})`);

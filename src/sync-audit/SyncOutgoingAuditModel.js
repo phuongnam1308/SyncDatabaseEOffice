@@ -28,13 +28,14 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
   // OVERRIDE: processSingleRecord
   // Sau khi parent đã upsert vào bảng audit, tiếp tục cập nhật 2 bảng phụ.
   // ---------------------------------------------------------------------------
-  async processSingleRecord(rawRecord, documentId, transaction = null) {
-    if (!rawRecord || !documentId) return null;
+  // ---------------------------------------------------------------------------
+  async processSingleRecord(rawRecord, newDocumentId, transaction = null, drafterId = null, isNew = false) {
+    if (!rawRecord || !newDocumentId) return null;
 
     // 1. Gọi parent thực hiện upsert vào bảng audit (trả về { inserted, updated, results })
-    const result = await super.processSingleRecord(rawRecord, documentId, transaction);
+    const result = await super.processSingleRecord(rawRecord, newDocumentId, transaction, drafterId, isNew);
 
-    // 2. Nếu có kết quả audit, tiếp tục cập nhật các bảng phụ
+    // 3. Nếu có kết quả audit, tiếp tục cập nhật các bảng phụ
     if (result && Array.isArray(result.results) && result.results.length > 0) {
       try {
         // Lưu vết các receiver đã xử lý trong record này để tránh duplicate assignment (nếu có)
@@ -44,7 +45,7 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
           const { audit, id: auditId } = res;
           if (!audit || !auditId) continue;
 
-          // 2a. Sync vào bảng assignment cho từng receiver đơn lẻ
+          // 3a. Sync vào bảng assignment cho từng receiver đơn lẻ
           // audit ở đây đã được expand nên receiver/receiver_unit là giá trị đơn
           const recKey = `${audit.receiver}|${audit.receiver_unit}|${audit.roleProcess}`;
           if (!processedReceivers.has(recKey)) {
@@ -52,14 +53,12 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
             processedReceivers.add(recKey);
           }
 
-          // 2b. Sync vào current_state. Vì MERGE trong _syncToCurrentState có check @audit_time >= last_audit_time
-          // nên row cuối cùng (hoặc row có time lớn nhất) sẽ được giữ lại làm trạng thái hiện tại.
+          // 3b. Sync vào current_state
           await this._syncToCurrentState(audit, auditId, transaction);
         }
       } catch (err) {
-        // Lỗi bảng phụ không được làm hỏng toàn bộ luồng
         logger.warn(
-          `[SyncOutgoingAuditModel] sync phụ thất bại doc=${documentId} originId=${rawRecord?.ID}: ${err.message}`
+          `[SyncOutgoingAuditModel] sync phụ thất bại doc=${newDocumentId} originId=${rawRecord?.ID}: ${err.message}`
         );
       }
     }
@@ -82,15 +81,7 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
     if (!document_id) return;
 
     try {
-      // 1. Xoá toàn bộ assignment của document
-      await this.queryNewDbTx(
-        `DELETE FROM ${process.env.NEW_DB_NAME}.dbo.outgoing_assignment  WITH (ROWLOCK) 
-        WHERE document_id = @document_id`,
-        { document_id },
-        transaction
-      );
-
-      // 2. Validate dữ liệu chính
+      // 1. Validate dữ liệu chính
       if (!stage_status || !roleProcess) return;
 
       const isCreator = CREATOR_ACTION_CODES?.has(action_code) ? 1 : 0;
@@ -114,25 +105,39 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
         if (uniqueKeys.has(key)) continue;
         uniqueKeys.add(key);
 
-        await this.queryNewDbTx(
-          `INSERT INTO ${process.env.NEW_DB_NAME}.dbo.outgoing_assignment  WITH (ROWLOCK) 
-          (document_id, receiver, role_process, stage_status,
-            created_at, last_audit_id, receiver_unit, is_creator, table_backups)
-          VALUES (@document_id, @receiver, @role_process, @stage_status,
-                  @created_at, @last_audit_id, @receiver_unit, @is_creator, @table_backups)`,
-          {
-            document_id,
-            receiver: String(rec).substring(0, 100),
-            role_process: String(roleProcess).substring(0, 50),
-            stage_status: String(stage_status).substring(0, 50),
-            created_at: time || new Date(),
-            last_audit_id: auditId || null,
-            receiver_unit: unit ? String(unit).substring(0, 100) : null,
-            is_creator: isCreator,
-            table_backups: 'outgoing_assignment',
-          },
-          transaction
-        );
+        // Sử dụng Manual Upsert thay cho MERGE để ổn định hơn, tránh Deadlock đặc thù của MERGE
+        const updateParams = {
+          document_id: String(document_id).trim().toUpperCase(),
+          receiver: String(rec).trim().substring(0, 100),
+          role_process: String(roleProcess).trim().substring(0, 50),
+          stage_status: String(stage_status).trim().substring(0, 50),
+          created_at: time || new Date(),
+          last_audit_id: auditId || null,
+          receiver_unit: unit ? String(unit).trim().substring(0, 100) : null,
+          is_creator: isCreator
+        };
+
+        const updateQuery = `
+          UPDATE dbo.outgoing_assignment WITH (ROWLOCK, UPDLOCK)
+          SET stage_status = @stage_status,
+              created_at = @created_at,
+              last_audit_id = @last_audit_id,
+              receiver_unit = @receiver_unit,
+              is_creator = @is_creator
+          WHERE document_id = @document_id AND receiver = @receiver AND role_process = @role_process
+        `;
+
+        const updateResult = await this.queryNewDbTx(updateQuery, updateParams, transaction);
+        
+        // Nếu không bản ghi nào được update, thực hiện INSERT
+        if (!updateResult || updateResult.length === 0 || updateResult.rowsAffected?.[0] === 0) {
+          const insertQuery = `
+            INSERT INTO dbo.outgoing_assignment 
+            (document_id, receiver, role_process, stage_status, created_at, last_audit_id, receiver_unit, is_creator, table_backups)
+            VALUES (@document_id, @receiver, @role_process, @stage_status, @created_at, @last_audit_id, @receiver_unit, @is_creator, 'outgoing_assignment')
+          `;
+          await this.queryNewDbTx(insertQuery, updateParams, transaction);
+        }
       }
 
     } catch (err) {
@@ -185,7 +190,7 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
              WHEN @action_code = 'TRA_LAI' AND tgt.has_da_xu_ly = 1 THEN 1
              ELSE tgt.has_tra_lai_after_da_xu_ly
            END,
-           updated_at            = SYSDATETIME()
+           updated_at            = @audit_time
        WHEN NOT MATCHED THEN
          INSERT (
            document_id, current_stage_status, current_action_code,
@@ -201,7 +206,7 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
            @last_audit_id, @audit_time,
            @has_ban_hanh, @has_da_xu_ly, @has_ht_vbtt,
            @is_completed, CASE WHEN @has_da_xu_ly = 1 THEN @last_audit_id ELSE NULL END, 0,
-           0, 0, SYSDATETIME(), @table_backups
+           0, 0, @audit_time, @table_backups
          );`,
       {
         document_id,
