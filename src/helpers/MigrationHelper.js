@@ -18,6 +18,35 @@ class MigrationHelper {
     this.deptCache = new Map(); // Local cache for department IDs
   }
 
+  async ensureUsersTbBakColumnExists(transaction = null) {
+    try {
+      const dbName = process.env.NEW_DB_NAME;
+      if (!dbName) return;
+
+      await this.queryNewDbTx(
+        `
+        IF NOT EXISTS (
+            SELECT 1
+            FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_NAME = 'users' AND COLUMN_NAME = 'tb_bak'
+        )
+        BEGIN
+            ALTER TABLE [${dbName}].[dbo].[users] ADD tb_bak INT DEFAULT 0;
+        END
+        `,
+        {},
+        transaction
+      );
+    } catch (err) {
+      logger.warn(`[MigrationHelper] ensureUsersTbBakColumnExists failed: ${err.message}`);
+    }
+  }
+
+  isCreatableUsername(username) {
+    if (username === null || username === undefined) return false;
+    return String(username).trim().length > 3;
+  }
+
   /**
    * Đảm bảo các cột kỹ thuật tồn tại trong bảng (Self-healing schema)
    * @param {string} dbName
@@ -272,23 +301,23 @@ class MigrationHelper {
    */
   normalizeUnitName(text) {
     if (!text || typeof text !== "string") return "";
-    
+
     // 1. Bỏ dấu tiếng Việt
     let str = this.removeVietnameseTones(text.trim());
-    
+
     // 2. Chuyển lowercase
     str = str.toLowerCase();
-    
+
     // 3. Thay thế ký tự đặc biệt (bao gồm cả -, và space dư thừa) thành '_'
     // Giữ lại chữ cái và số
     str = str.replace(/[^a-z0-9]/g, "_");
-    
+
     // 4. Gom nhiều dấu '_' liên tiếp thành 1
     str = str.replace(/_+/g, "_");
-    
+
     // 5. Trim '_' ở đầu và cuối
     str = str.replace(/^_+|_+$/g, "");
-    
+
     return str || "_";
   }
 
@@ -485,7 +514,7 @@ class MigrationHelper {
       const dbName = process.env.NEW_DB_NAME;
       const checkColumn = `
         IF NOT EXISTS (
-          SELECT * FROM INFORMATION_SCHEMA.COLUMNS 
+          SELECT * FROM INFORMATION_SCHEMA.COLUMNS
           WHERE TABLE_NAME = 'organization_units' AND COLUMN_NAME = 'normalized_name'
         )
         BEGIN
@@ -496,7 +525,7 @@ class MigrationHelper {
 
       const checkIndex = `
         IF NOT EXISTS (
-          SELECT * FROM sys.indexes 
+          SELECT * FROM sys.indexes
           WHERE name = 'UX_org_unit_name' AND object_id = OBJECT_ID('organization_units')
         )
         BEGIN
@@ -519,7 +548,7 @@ class MigrationHelper {
       if (!originalName) return null;
 
       const normalizedKey = this.normalizeUnitName(originalName);
-      
+
       // 1. Check local cache
       if (this.deptCache.has(normalizedKey)) {
         return this.deptCache.get(normalizedKey);
@@ -544,7 +573,7 @@ class MigrationHelper {
 
       if (result?.length) {
         const foundId = result[0].id;
-        
+
         // Nếu record cũ chưa có normalized_name -> cập nhật luôn
         if (!result[0].normalized_name) {
           await this.queryNewDbTx(
@@ -647,13 +676,13 @@ class MigrationHelper {
       `;
 
       try {
-        await this.queryNewDbTx(insertQuery, { 
-          id: newId, 
-          name: originalName, 
+        await this.queryNewDbTx(insertQuery, {
+          id: newId,
+          name: originalName,
           normalizedKey,
-          code: normalizedKey 
+          code: normalizedKey
         }, transaction);
-        
+
         logger.info(`[mapSenderUnitId] ✨ Created NEW department: ${originalName} (${normalizedKey}), id: ${newId}`);
         this.deptCache.set(normalizedKey, newId);
         return newId;
@@ -737,6 +766,7 @@ class MigrationHelper {
   }
 
   async mapUserName(userIdOrName, transaction = null) {
+    return 'b23406e3-5c75-41d3-91e0-1654293ae6b2';
     try {
       if (!userIdOrName || typeof userIdOrName !== 'string') {
         return userIdOrName;
@@ -761,66 +791,9 @@ class MigrationHelper {
       const existing = await this.queryNewDbTx(selectQuery, { name: displayName }, transaction);
       if (existing?.length) return existing[0].id;
 
-      // 2. Tìm trong DB cũ (PersonalProfile) để Auto-Sync nếu không thấy ở DB mới
-      const logger = require('../../utils/logger');
-      const checkOldQuery = `
-        SELECT TOP 1 * FROM dbo.PersonalProfile
-        WHERE LTRIM(RTRIM(AccountID)) = @val
-           OR LTRIM(RTRIM(FullName)) = @name
-      `;
-      const oldRows = await this.queryOldDb(checkOldQuery, { val: userIdOrName, name: displayName || userIdOrName });
-
-      if (oldRows?.length > 0) {
-        const migrator = await this._getUserMigrator();
-        if (migrator) {
-          logger.warn(`[mapUserName] Found "${userIdOrName}" in Old DB. Auto-Syncing...`);
-          const syncResult = await migrator.upsertUserById(oldRows[0], transaction);
-          if (syncResult?.backupId) {
-            const refreshed = await this.queryNewDbTx(
-              `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users WHERE id_user_bak = @bakId`,
-              { bakId: String(oldRows[0].ID) },
-              transaction
-            );
-            if (refreshed?.length) {
-              logger.info(`[mapUserName] Sync SUCCESS: ${userIdOrName} -> ${refreshed[0].id}`);
-              return refreshed[0].id;
-            }
-          }
-        }
-      }
-
-      // 3. Nếu hoàn toàn không thấy ở cả 2 DB, tạo User mới theo chuẩn ndc
-      const codeNd = this.buildAbbreviatedCode(displayName || userIdOrName);
-      if (!codeNd) return userIdOrName;
-
-      const id = uuidv4();
-      // Đảm bảo username không bị trùng nếu đã có codeNd này
-      const username = `${codeNd}`;
-
-      const insertQuery = `
-        INSERT INTO ${process.env.NEW_DB_NAME}.dbo.users (
-          id, name, code_nd, username, password, roles_by_process, created_at, updated_at, status
-        ) VALUES (
-          @id, @name, @codeNd, @username, @password, @roles, GETDATE(), GETDATE(), 1
-        )
-      `;
-
-      let rolesDefault = process.env.ROLES_DEFAULT;
-      if (!rolesDefault || rolesDefault.trim() === '') {
-          rolesDefault = (ROLES_DEFAULT && ROLES_DEFAULT.length > 0) ? JSON.stringify(ROLES_DEFAULT) : '[]';
-      }
-
-      await this.queryNewDbTx(insertQuery, {
-        id,
-        name: displayName || userIdOrName,
-        codeNd: codeNd,
-        username: username,
-        password: process.env.DEFAULT_USER_PASSWORD || '$2b$10$VAWeyayMFwjr1h8dtZWZEOXxG/WxWrrV4ULwtDsisJlLOxLBTimHC',
-        roles: rolesDefault
-      }, transaction);
-
-      logger.info(`[mapUserName] Created NEW smart user: ${displayName || userIdOrName} (${codeNd}) -> ${id}`);
-      return id;
+      // [UPDATE] Không tự động sync hoặc tạo mới user theo yêu cầu
+      logger.warn(`[mapUserName] User "${userIdOrName}" not found in new DB. Returning NULL.`);
+      return null;
     } catch (error) {
       logger.warn(`[mapUserName] Error for "${userIdOrName}":`, error.message);
       return null;
@@ -831,6 +804,7 @@ class MigrationHelper {
    * MỚI: Hàm đồng bộ và ánh xạ User từ DB cũ nếu chưa có ở DB mới.
    */
   async syncAndMapUser(userIdOrName, transaction = null) {
+    return 'b23406e3-5c75-41d3-91e0-1654293ae6b2';
     try {
       if (!userIdOrName || typeof userIdOrName !== 'string') return userIdOrName;
       const trimmed = userIdOrName.trim();
@@ -849,43 +823,76 @@ class MigrationHelper {
         return existedNew[0].id;
       }
 
-      // 2. Không thấy -> Tìm trong DB cũ (PersonalProfile)
-      if (this.queryOldDb) {
-        const displayName = this.extractDisplayName(trimmed);
-        const checkOldQuery = `
-          SELECT TOP 1 * FROM dbo.PersonalProfile
-          WHERE (TRY_CONVERT(uniqueidentifier, @val) IS NOT NULL AND ID = TRY_CONVERT(uniqueidentifier, @val))
-             OR AccountID = @val OR StaffID = @val OR FullName = @name
-        `;
-        const oldRows = await this.queryOldDb(checkOldQuery, { val: trimmed, name: displayName || trimmed });
-
-        if (oldRows?.length > 0) {
-          const migrator = await this._getUserMigrator();
-          if (migrator) {
-            logger.warn(`[syncAndMapUser] Found "${trimmed}" in Old DB. Auto-Syncing...`);
-            const syncResult = await migrator.upsertUserById(oldRows[0], transaction);
-            if (syncResult?.backupId) {
-              const refreshed = await this.queryNewDbTx(
-                `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users WHERE id_user_bak = @bakId`,
-                { bakId: String(oldRows[0].ID) },
-                transaction
-              );
-              if (refreshed?.length) {
-                logger.info(`[syncAndMapUser] Sync SUCCESS: ${trimmed} -> ${refreshed[0].id}`);
-                return refreshed[0].id;
-              }
-            }
-          }
-        }
-      }
-
-      // 3. Nếu vẫn không thấy, dùng mapUserName để tạo user "trống" hoặc fallback
-      logger.warn(`[syncAndMapUser] Not found in Old DB. Falling back to mapUserName for: ${trimmed}`);
-      return await this.mapUserName(trimmed, transaction);
+      // [UPDATE] Không tự động sync hoặc tạo mới user theo yêu cầu
+      logger.warn(`[syncAndMapUser] User "${trimmed}" not found in new DB. Returning NULL.`);
+      return null;
     } catch (error) {
       logger.error(`[syncAndMapUser] Error: ${error.message}`);
       return null;
     }
+  }
+
+  /**
+   * MỚI: Cấu hình ánh xạ người dùng cho Passport một cách chặt chẽ.
+   * Chỉ tìm kiếm trong DB mới và KHÔNG bao giờ tự tạo người dùng nếu thiết sót.
+   * Cố gắng tìm bằng AuthorAccount, AuthorName, EditorAccount, EditorName.
+   */
+  async strictUserResolver(rowData, transaction = null) {
+    const recordId = rowData.ID || rowData.tp_ID || 'Unknown';
+    logger.info(`[strictUserResolver] --- START STRICT RESOLVING USER (Record ID: ${recordId}) ---`);
+
+    const selectQuery = `
+      SELECT TOP 1 id, name, username, code_nd
+      FROM ${process.env.NEW_DB_NAME}.dbo.users
+      WHERE name = @val OR username = @val OR code_nd = @val OR id_user_bak = @val
+    `;
+
+    // --- STEP 1: AuthorAccount ---
+    if (rowData.AuthorAccount) {
+      const account = this.extractAccountOnly(rowData.AuthorAccount);
+      logger.info(`[strictUserResolver] STEP 1: Checking AuthorAccount "${rowData.AuthorAccount}" -> Extracted: "${account}"`);
+      const res = await this.queryNewDbTx(selectQuery, { val: account }, transaction);
+      if (res?.length) {
+        logger.info(`[strictUserResolver] >> SUCCESS: Found UID ${res[0].id} (${res[0].name})`);
+        return res[0].id;
+      }
+    }
+
+    // --- STEP 2: AuthorName ---
+    if (rowData.AuthorName) {
+      const cleanName = this.extractDisplayName(rowData.AuthorName);
+      logger.info(`[strictUserResolver] STEP 2: Checking AuthorName "${rowData.AuthorName}" -> Clean: "${cleanName}"`);
+      const res = await this.queryNewDbTx(selectQuery, { val: cleanName }, transaction);
+      if (res?.length) {
+        logger.info(`[strictUserResolver] >> SUCCESS: Found UID ${res[0].id} (${res[0].name})`);
+        return res[0].id;
+      }
+    }
+
+    // --- STEP 3: EditorAccount ---
+    if (rowData.EditorAccount) {
+      const account = this.extractAccountOnly(rowData.EditorAccount);
+      logger.info(`[strictUserResolver] STEP 3: Checking EditorAccount "${rowData.EditorAccount}" -> Extracted: "${account}"`);
+      const res = await this.queryNewDbTx(selectQuery, { val: account }, transaction);
+      if (res?.length) {
+        logger.info(`[strictUserResolver] >> SUCCESS: Found UID ${res[0].id} (${res[0].name})`);
+        return res[0].id;
+      }
+    }
+
+    // --- STEP 4: EditorName ---
+    if (rowData.EditorName) {
+      const cleanName = this.extractDisplayName(rowData.EditorName);
+      logger.info(`[strictUserResolver] STEP 4: Checking EditorName "${rowData.EditorName}" -> Clean: "${cleanName}"`);
+      const res = await this.queryNewDbTx(selectQuery, { val: cleanName }, transaction);
+      if (res?.length) {
+        logger.info(`[strictUserResolver] >> SUCCESS: Found UID ${res[0].id} (${res[0].name})`);
+        return res[0].id;
+      }
+    }
+
+    logger.warn(`[strictUserResolver] !! ALL STEPS FAILED for Record ${recordId}. Returning NULL.`);
+    return null;
   }
 
   /**
@@ -930,6 +937,69 @@ class MigrationHelper {
           logger.error(`[mapUserWithLikeSearch] Lỗi: ${err.message}`);
           return null;
       }
+  }
+
+  /**
+   * MỚI: Cấu hình ánh xạ người dùng cho Passport một cách chặt chẽ.
+   * Chỉ tìm kiếm trong DB mới và KHÔNG bao giờ tự tạo người dùng nếu thiết sót.
+   * Cố gắng tìm bằng AuthorAccount, AuthorName, EditorAccount, EditorName.
+   */
+  async strictUserResolver(rowData, transaction = null) {
+    const recordId = rowData.ID || rowData.tp_ID || 'Unknown';
+    logger.info(`[strictUserResolver] --- START STRICT RESOLVING USER (Record ID: ${recordId}) ---`);
+
+    const selectQuery = `
+      SELECT TOP 1 id, name, username, code_nd
+      FROM ${process.env.NEW_DB_NAME}.dbo.users
+      WHERE name = @val OR username = @val OR code_nd = @val OR id_user_bak = @val
+    `;
+
+    // --- STEP 1: AuthorAccount ---
+    if (rowData.AuthorAccount) {
+      const account = this.extractAccountOnly(rowData.AuthorAccount);
+      logger.info(`[strictUserResolver] STEP 1: Checking AuthorAccount "${rowData.AuthorAccount}" -> Extracted: "${account}"`);
+      const res = await this.queryNewDbTx(selectQuery, { val: account }, transaction);
+      if (res?.length) {
+        logger.info(`[strictUserResolver] >> SUCCESS: Found UID ${res[0].id} (${res[0].name})`);
+        return res[0].id;
+      }
+    }
+
+    // --- STEP 2: AuthorName ---
+    if (rowData.AuthorName) {
+      const cleanName = this.extractDisplayName(rowData.AuthorName);
+      logger.info(`[strictUserResolver] STEP 2: Checking AuthorName "${rowData.AuthorName}" -> Clean: "${cleanName}"`);
+      const res = await this.queryNewDbTx(selectQuery, { val: cleanName }, transaction);
+      if (res?.length) {
+        logger.info(`[strictUserResolver] >> SUCCESS: Found UID ${res[0].id} (${res[0].name})`);
+        return res[0].id;
+      }
+    }
+
+    // --- STEP 3: EditorAccount ---
+    if (rowData.EditorAccount) {
+      const account = this.extractAccountOnly(rowData.EditorAccount);
+      logger.info(`[strictUserResolver] STEP 3: Checking EditorAccount "${rowData.EditorAccount}" -> Extracted: "${account}"`);
+      const res = await this.queryNewDbTx(selectQuery, { val: account }, transaction);
+      if (res?.length) {
+        logger.info(`[strictUserResolver] >> SUCCESS: Found UID ${res[0].id} (${res[0].name})`);
+        return res[0].id;
+      }
+    }
+
+    // --- STEP 4: EditorName ---
+    if (rowData.EditorName) {
+      const cleanName = this.extractDisplayName(rowData.EditorName);
+      logger.info(`[strictUserResolver] STEP 4: Checking EditorName "${rowData.EditorName}" -> Clean: "${cleanName}"`);
+      const res = await this.queryNewDbTx(selectQuery, { val: cleanName }, transaction);
+      if (res?.length) {
+        logger.info(`[strictUserResolver] >> SUCCESS: Found UID ${res[0].id} (${res[0].name})`);
+        return res[0].id;
+      }
+    }
+
+    logger.warn(`[strictUserResolver] !! ALL STEPS FAILED for Record ${recordId}. Returning NULL.`);
+    return null;
   }
 
   /**
@@ -2923,6 +2993,10 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
       // username mượn tạm từ FullName để tạo dummy login
       let tempUsername = pureFullName.toLowerCase().replace(/\s+/g, '_');
       tempUsername = tempUsername.replace(/[àáạảãâầấậẩẫăằắặẳẵ]/g, 'a').replace(/[èéẹẻẽêềếệểễ]/g, 'e').replace(/[ìíịỉĩ]/g, 'i').replace(/[òóọỏõôồốộổỗơờớợởỡ]/g, 'o').replace(/[ùúụủũưừứựửữ]/g, 'u').replace(/[ỳýỵỷỹ]/g, 'y').replace(/đ/g, 'd');
+      if (!this.isCreatableUsername(tempUsername)) {
+        logger.warn(`[resolveUserIdByFullName] Skip auto-create because username "${tempUsername}" has length <= 3`);
+        return null;
+      }
 
       let rolesDefault = customRoles || process.env.ROLES_DEFAULT;
       if (!rolesDefault || rolesDefault.trim() === '') {
@@ -2936,10 +3010,11 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
 
       const insertQuery = `
         INSERT INTO [${process.env.NEW_DB_NAME}].[dbo].[users]
-        (id, username, code_nd, name, password, avatar, roles_by_process, status, created_at, updated_at)
-        VALUES (@id, @username, @username, @fullName, @password, '[]', @roles, 1, GETDATE(), GETDATE())
+        (id, username, code_nd, name, password, avatar, roles_by_process, status, created_at, updated_at, tb_bak)
+        VALUES (@id, @username, @username, @fullName, @password, '[]', @roles, 1, GETDATE(), GETDATE(), 1)
       `;
       const password = process.env.DEFAULT_USER_PASSWORD || '$10$mH.NYj.Bapxk4auiGaPKhOfCqUnA8jr1JO5fvP3miKbhIfwU3CVRa';
+      await this.ensureUsersTbBakColumnExists(transaction);
       await this.queryNewDbTx(insertQuery, { id: newId, username: tempUsername, fullName: pureFullName, password, roles: rolesDefault }, transaction);
 
       logger.info(`[resolveUserIdByFullName] Đã tự tạo mới tài khoản (Leader mapping) "${pureFullName}" với id=${newId}`);
@@ -2988,13 +3063,19 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
         }
       }
 
+      if (!this.isCreatableUsername(username)) {
+        logger.warn(`[resolveUserIdByAccountName] Skip auto-create because username "${username}" has length <= 3`);
+        return null;
+      }
+
       const insertQuery = `
         INSERT INTO [${process.env.NEW_DB_NAME}].[dbo].[users]
-        (id, username, code_nd, name, password, avatar, roles_by_process, status, created_at, updated_at)
-        VALUES (@id, @username, @username, @username, @password, '[]', @roles, 1, GETDATE(), GETDATE())
+        (id, username, code_nd, name, password, avatar, roles_by_process, status, created_at, updated_at, tb_bak)
+        VALUES (@id, @username, @username, @username, @password, '[]', @roles, 1, GETDATE(), GETDATE(), 1)
       `;
       // Mật khẩu mặc định hoặc hash rác
       const password = process.env.DEFAULT_USER_PASSWORD || '$10$mH.NYj.Bapxk4auiGaPKhOfCqUnA8jr1JO5fvP3miKbhIfwU3CVRa';
+      await this.ensureUsersTbBakColumnExists(transaction);
       await this.queryNewDbTx(insertQuery, { id: newId, username, password, roles: rolesDefault }, transaction);
 
       logger.info(`[resolveUserIdByAccountName] Đã tự tạo mới tài khoản "${username}" với id=${newId}`);

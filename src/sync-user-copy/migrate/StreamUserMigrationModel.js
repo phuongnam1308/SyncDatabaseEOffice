@@ -66,6 +66,7 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
           name: 'id_user_del_bak',
           type: 'nvarchar(255) COLLATE SQL_Latin1_General_CP1_CI_AS NULL',
         },
+        { name: 'tb_bak', type: 'INT DEFAULT 0' },
         { name: 'contentSignImage', type: 'int NULL' },
         { name: 'paraphSignImage', type: 'int NULL' },
         { name: 'paraphSignTransparentImage', type: 'int NULL' },
@@ -1042,6 +1043,10 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
           SELECT @@ROWCOUNT AS affected, 'updated' AS action;
         END
       END
+      ELSE IF LEN(LTRIM(RTRIM(ISNULL(@username, '')))) <= 3
+      BEGIN
+        SELECT 0 AS affected, 'skipped_invalid_username' AS action;
+      END
       ELSE
       BEGIN
         INSERT INTO ${tableRef} (
@@ -1053,7 +1058,7 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
           name_authorized, id_user_bak, AccountID, FullName, Department, DepartmentId,
           PhongBanID, SimKySo1, SimKySo2, DepartmentManager, IsTCT, ImagePath, SignImage,
           SignImageSmall, table_backups, id_user_del_bak, contentSignImage, paraphSignImage,
-          paraphSignTransparentImage, contentSignTransparentImage, stampSignImage
+          paraphSignTransparentImage, contentSignTransparentImage, stampSignImage, tb_bak
         )
         VALUES (
           @id, @password, @name, @avatar, @code_nd, @username, @email_user, @phone_number_user,
@@ -1064,7 +1069,7 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
           @name_authorized, @id_user_bak, @AccountID, @FullName, @Department, @DepartmentId,
           @PhongBanID, @SimKySo1, @SimKySo2, @DepartmentManager, @IsTCT, @ImagePath, @SignImage,
           @SignImageSmall, @table_backups, @id_user_del_bak, @contentSignImage, @paraphSignImage,
-          @paraphSignTransparentImage, @contentSignTransparentImage, @stampSignImage
+          @paraphSignTransparentImage, @contentSignTransparentImage, @stampSignImage, 1
         );
         SELECT @@ROWCOUNT AS affected, 'inserted' AS action;
       END
@@ -1080,6 +1085,11 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
     const params = { ...mapped, old_modified };
     const result = await this.queryNewDbTx(query, params, transaction);
     const row = Array.isArray(result) && result[0] ? result[0] : result;
+    if (row?.action === 'skipped_invalid_username') {
+      logger.warn(
+        `[upsertUserById] Skip insert user because username "${mapped.username}" has length <= 3`,
+      );
+    }
     return {
       action: row?.action || (row?.affected ? 'updated' : 'none'),
       affected: Number(row?.affected || 0),

@@ -348,8 +348,8 @@ router.post('/sync-manager-src/models/:modelName/start', SrcSyncManagerControlle
 router.post('/sync-manager-src/jobs/:jobId/pause', SrcSyncManagerController.pauseJobSync);
 router.post('/sync-manager-src/jobs/:jobId/resume', SrcSyncManagerController.resumeJobSync);
 router.get('/sync-manager-src/jobs/:jobId', SrcSyncManagerController.getJobSyncStatus);
-router.get('/sync-manager-src/events', SrcSyncManagerController.sseEvents); // ← THÊM DÒNG NÀY
-
+router.get('/sync-manager-src/events', SrcSyncManagerController.sseEvents);
+router.post('/sync-manager-src/settings', SrcSyncManagerController.updateSettings);
 
 const SyncOutgoingRoutes = require('../src/sync-outgoing-document/route');
 router.use('/sync-outgoing', SyncOutgoingRoutes);

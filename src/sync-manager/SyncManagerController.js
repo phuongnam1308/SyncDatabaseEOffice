@@ -221,7 +221,23 @@ class SyncManagerController extends BaseController {
     });
   });
 
-  // ── MỚI: SSE endpoint ─────────────────────────────────────
+  // ── MỚI: SSE endpoint và Settings endpoint ─────────────────────────────────────
+
+  /**
+   * Cập nhật cấu hình hệ thống
+   */
+  updateSettings = this.asyncHandler(async (req, res) => {
+    await this.ensureInitialized();
+    const { key, value } = req.body;
+    if (!key) return this.clientError(res, 'Thiếu key cấu hình');
+    
+    // Nếu key là SKIP_PULL_FROM_OLD, value là boolean
+    const success = await SyncManagerService.updateSetting(key, value);
+    if (!success) {
+      return this.serverError(res, 'Không thể cập nhật cấu hình');
+    }
+    return this.success(res, { message: 'Cập nhật cấu hình thành công' });
+  });
 
   /**
    * GET /api/sync-manager-src/events
@@ -667,6 +683,61 @@ class SyncManagerController extends BaseController {
       color: #94a3b8;
     }
     .empty-state i { font-size: 2.5rem; display: block; margin-bottom: 12px; color: #cbd5e1; }
+    
+    /* ── Toggle Switch ── */
+    .toggle-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-left: auto;
+      background: rgba(0,0,0,0.03);
+      padding: 6px 14px;
+      border-radius: 20px;
+      border: 1px solid var(--border-color);
+    }
+    .toggle-label {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      cursor: pointer;
+    }
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 38px;
+      height: 20px;
+    }
+    .switch input { 
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-color: #cbd5e1;
+      transition: .3s;
+      border-radius: 34px;
+    }
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 14px;
+      width: 14px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: .3s;
+      border-radius: 50%;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+    input:checked + .slider {
+      background-color: var(--accent-green);
+    }
+    input:checked + .slider:before {
+      transform: translateX(18px);
+    }
   </style>
 </head>
 <body>
@@ -704,7 +775,16 @@ class SyncManagerController extends BaseController {
         <button id="btn-reset" onclick="triggerSync(true)"  class="btn-dash btn-dash-danger"  ${data.isRunning ? 'disabled' : ''}>
           <i class="bi bi-arrow-counterclockwise"></i> Chạy lại toàn bộ tất cả đối tượng
         </button>
-        <!-- Login button removed by request -->
+        
+        <div class="toggle-wrapper">
+          <label class="toggle-label" for="skipPullToggle">
+            <i class="bi bi-fast-forward-btn me-1"></i> Bỏ qua hút DB cũ (Skip Pull)
+          </label>
+          <label class="switch">
+            <input type="checkbox" id="skipPullToggle" onchange="toggleSkipPull(this)" ${data.settings && data.settings.SKIP_PULL_FROM_OLD ? 'checked' : ''} ${data.isRunning ? 'disabled' : ''}>
+            <span class="slider"></span>
+          </label>
+        </div>
 
       </div>
 
@@ -911,6 +991,29 @@ class SyncManagerController extends BaseController {
         const j = await r.json();
         alert(j.message);
       } catch (e) { alert('Lỗi: ' + e.message); }
+    }
+
+    async function toggleSkipPull(checkbox) {
+      const isChecked = checkbox.checked;
+      checkbox.disabled = true; // Khóa lại trong khi gửi request
+      document.body.style.cursor = 'wait';
+      try {
+        const r = await fetch('/api/sync-manager-src/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: 'SKIP_PULL_FROM_OLD', value: isChecked })
+        });
+        const j = await r.json();
+        if (!r.ok) {
+          throw new Error(j.message || 'Lỗi cập nhật cấu hình');
+        }
+      } catch (e) {
+        alert('Lỗi: ' + e.message);
+        checkbox.checked = !isChecked; // Phục hồi trạng thái nếu lỗi
+      } finally {
+        checkbox.disabled = false;
+        document.body.style.cursor = 'default';
+      }
     }
 
     connectSSE(); // khởi động SSE khi trang load

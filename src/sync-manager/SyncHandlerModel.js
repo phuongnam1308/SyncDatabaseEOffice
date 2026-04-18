@@ -41,25 +41,23 @@ class SyncHandlerModel {
 
       if (!preparedJobs.has(jobId)) {
         const listResult = await this.syncModel.getList(lastTime, jobId, lastSyncId);
-        // Khi Resume sau server restart, `nextIndex` phải bắt đầu từ số records đã xử lý trước đó
-        // (context.totalProcessed) chứ không phải 0, để SyncManagerService không emit lại từ đầu.
         const resumeIndex = Number(cursor.totalProcessed || 0);
 
-        // ★ DÙNG stagedCount thay vì totalCount (pendingCount sau getList = 0)
-        // vì getList sau khi xong → tất cả đã staged, pending = 0
-        // stagedCount = tổng records đã đẩy vào staging, dùng để loop processOne()
-        const stagedCount = Number(listResult?.stagedCount || 0)
-          || Number(listResult?.totalCount || 0);
+        // Khi Resume sau server restart, `nextIndex` bắt đầu từ số records đã xử lý (resumeIndex).
+        // Tuy nhiên `listResult.totalCount` là số `pendingCount` thực tế CẦN XỬ LÝ TRONG STAGING ở thời điểm hiện tại.
+        // Do đó tổng `totalCount` trong context của preparedJobs phải là (pendingCount + resumeIndex)
+        // để đảm bảo `remaining = totalCount - processed = pendingCount`.
+        const pendingCount = Number(listResult?.totalCount || listResult?.stagedCount || 0);
 
         preparedJobs.set(jobId, {
-          totalCount: stagedCount,
+          totalCount: pendingCount + resumeIndex,
           syncTime: listResult?.lastSyncTime || lastTime,
           syncId: Number(listResult?.lastSyncId || lastSyncId || 0),
           sourceTime: listResult?.sourceLastSyncTime || lastTime,
           sourceId: Number(listResult?.sourceLastSyncId || lastSyncId || 0),
           nextIndex: resumeIndex
         });
-        logger.info(`[SyncHandlerModel] getList() → stagedCount=${stagedCount}, jobId=${jobId}`);
+        logger.info(`[SyncHandlerModel] getList() → pendingCount=${pendingCount}, jobId=${jobId}`);
         if (resumeIndex > 0) {
           logger.info(`[SyncHandlerModel] Resuming jobId=${jobId}: nextIndex restored to ${resumeIndex}`);
         }
