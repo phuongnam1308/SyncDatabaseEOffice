@@ -48,18 +48,19 @@ class TaskUsers2Model extends BaseModel {
     return result[0][''] || 0;
   }
 
-  async findByBackupKeys(taskIdBak, userIdBak) {
+  async findByBackupKeys(taskIdBak, userIdBak, role) {
     try {
       const query = `
         SELECT id
         FROM ${this.newSchema}.${this.newTable}
         WHERE id_task_bak = @taskIdBak
           AND userId_bak = @userIdBak
+          AND ISNULL(role, '') = ISNULL(@role, '')
       `;
-      const result = await this.queryNewDb(query, { taskIdBak, userIdBak });
+      const result = await this.queryNewDb(query, { taskIdBak, userIdBak, role });
       return result.length > 0 ? result[0] : null;
     } catch (error) {
-      logger.error('Lỗi tìm task_users2 theo id_task_bak + userId_bak:', error);
+      logger.error('Lỗi tìm task_users2 theo id_task_bak + userId_bak + role:', error);
       throw error;
     }
   }

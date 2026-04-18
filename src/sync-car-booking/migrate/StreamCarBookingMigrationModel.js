@@ -427,31 +427,34 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
     });
 
     const query = `
-        SELECT
-            ${udSelect.join(',\n            ')},
-            ${ciSelect.join(',\n            ')},
-            ud.[tp_Modified] AS __sync_time,
-            ud.[tp_ID] AS __sync_id_num
+        SELECT * FROM (
+            SELECT
+                ${udSelect.join(',\n                ')},
+                ${ciSelect.join(',\n                ')},
+                ud.[tp_Modified] AS __sync_time,
+                ud.[tp_ID] AS __sync_id_num,
+                ROW_NUMBER() OVER (ORDER BY ud.[tp_Modified] ASC, ud.[tp_ID] ASC) AS __page_rn
 
-        FROM [${this.oldDbName}].[dbo].[AllUserData] ud
-        INNER JOIN [${this.oldDbName}].[dbo].[AllLists] l
-            ON ud.[tp_ListId] = l.[tp_ID]
-        ${cols.hasUserInfo ? `LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_author ON ud.[tp_Author] = ui_author.[tp_ID]` : ''}
-        ${cols.hasUserInfo ? `LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_editor ON ud.[tp_Editor] = ui_editor.[tp_ID]` : ''}
-        LEFT JOIN [DataEOfficeSNP].[SNP].[CodeItem] ci ON ud.[tp_ID] = ci.[SPItemId]
+            FROM [${this.oldDbName}].[dbo].[AllUserData] ud
+            INNER JOIN [${this.oldDbName}].[dbo].[AllLists] l
+                ON ud.[tp_ListId] = l.[tp_ID]
+            ${cols.hasUserInfo ? `LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_author ON ud.[tp_Author] = ui_author.[tp_ID]` : ''}
+            ${cols.hasUserInfo ? `LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_editor ON ud.[tp_Editor] = ui_editor.[tp_ID]` : ''}
+            LEFT JOIN [DataEOfficeSNP].[SNP].[CodeItem] ci ON ud.[tp_ID] = ci.[SPItemId]
 
-        WHERE ud.[tp_ListId] IN (${listIdsStr})
-        AND ud.tp_RowOrdinal = 0
-        AND ud.[tp_IsCurrentVersion] = 1
-        AND (
-            ud.[tp_Modified] > @lastSyncTime
-            OR (
-                ud.[tp_Modified] = @lastSyncTime
-                AND ud.[tp_ID] > @lastSyncId
+            WHERE ud.[tp_ListId] IN (${listIdsStr})
+            AND ud.tp_RowOrdinal = 0
+            AND ud.[tp_IsCurrentVersion] = 1
+            AND (
+                ud.[tp_Modified] > @lastSyncTime
+                OR (
+                    ud.[tp_Modified] = @lastSyncTime
+                    AND ud.[tp_ID] > @lastSyncId
+                )
             )
-        )
-        ORDER BY ud.[tp_Modified] ASC, ud.[tp_ID] ASC
-        OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
+        ) AS t
+        WHERE __page_rn > @offset AND __page_rn <= (@offset + @limit)
+        ORDER BY __page_rn;
     `;
 
     const rows = await this.queryOldDb(query, { 
@@ -468,7 +471,9 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
     if (!Array.isArray(rows) || rows.length === 0) return { stagedCount: 0 };
     console.log(`[StreamCarBookingMigrationModel] Staging ${rows.length} rows to ${this.newTableSync}...`);
     const internalColumns = new Set(['__sync_time', '__sync_id_num']);
-    const columns = Object.keys(rows[0]).filter(c => !internalColumns.has(c));
+    const columns = Object.keys(rows[0] || {}).filter(
+      (c) => !String(c).startsWith('__') && !internalColumns.has(c)
+    );
     if (!columns.length) return { stagedCount: 0 };
 
     const keyColumn = 'ID';

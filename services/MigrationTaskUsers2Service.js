@@ -39,8 +39,10 @@ class MigrationTaskUsers2Service {
 
         for (const old of batch) {
           try {
+            const mappedRole = this.mapRoleValue(config, old.UserFieldName);
+
             // Check trùng theo cặp khóa (task + user)
-            const exists = await this.model.findByBackupKeys(old.TaskId, old.UserId);
+            const exists = await this.model.findByBackupKeys(old.TaskId, old.UserId, mappedRole);
             if (exists) {
               totalSkipped++;
               continue;
@@ -50,10 +52,7 @@ class MigrationTaskUsers2Service {
             let newRecord = mapFieldValues(old, config.fieldMapping, config.defaultValues);
 
             // Mapping role đặc biệt
-            const originalRole = old.UserFieldName;
-            newRecord.role = config.roleValueMapping[originalRole] 
-              || originalRole 
-              || null;
+            newRecord.role = mappedRole;
 
             // Nếu cần convert Modified → ISO string (nếu chưa phải string)
             if (newRecord.update_at && !(typeof newRecord.update_at === 'string')) {
@@ -103,6 +102,34 @@ class MigrationTaskUsers2Service {
 
   async close() {
     await this.model.close();
+  }
+
+  mapRoleValue(config, roleName) {
+    const raw = (roleName || '').toString().trim();
+    if (!raw) return null;
+
+    if (config.roleValueMapping[raw]) {
+      return config.roleValueMapping[raw];
+    }
+
+    const normalized = raw
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9]/g, '')
+      .toLowerCase();
+
+    const roleAliases = {
+      nguoiphanviec: 'assigner',
+      assignedto: 'director',
+      nguoichutri: 'main',
+      chutri: 'main',
+      nguoiphoihop: 'coordinator',
+      phoihop: 'coordinator',
+      nguoixem: 'viewer',
+      xem: 'viewer'
+    };
+
+    return roleAliases[normalized] || raw;
   }
 }
 

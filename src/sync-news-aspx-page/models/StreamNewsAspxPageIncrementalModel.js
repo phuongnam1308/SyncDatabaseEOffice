@@ -1,4 +1,5 @@
 const logger = require('../../../utils/logger');
+const dbUtils = require('../../../utils/dbUtils');
 const sql = require('mssql');
 const fs = require('fs');
 const path = require('path');
@@ -8,6 +9,10 @@ const HtmlFileMigrationModel = require('../migrate/HtmlFileMigrationModel');
 const MigrationHelper = require('../../helpers/MigrationHelper');
 
 const DEFAULT_SYNC_TIME = '2100-01-01T00:00:00.000Z';
+
+const SYNC_START_DATE = process.env.SYNC_START_DATE || null;
+const SYNC_END_DATE = process.env.SYNC_END_DATE || null;
+const SYNC_MIN_DATE = process.env.SYNC_MIN_DATE || '1970-01-01T00:00:00.000Z';
 
 class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
   constructor() {
@@ -282,6 +287,9 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
           AND w.[FullUrl] LIKE '%tintuc%'
           AND d.[LeafName] LIKE '%.aspx'
           AND l.[tp_Title] LIKE '%Pages%'
+          AND (d.[TimeCreated] >= @startDate OR @startDate IS NULL)
+          AND (d.[TimeCreated] <= @endDate OR @endDate IS NULL)
+          AND d.[TimeLastModified] >= '${SYNC_MIN_DATE}'
       )
       SELECT COUNT(1) AS total
       FROM src
@@ -291,6 +299,8 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
     const rows = await this.queryOldDb(query, {
       lastSyncTime: normalizedLastSyncTime,
       lastSyncId: normalizedLastSyncId,
+      startDate: SYNC_START_DATE,
+      endDate: SYNC_END_DATE
     });
 
     const total = rows?.[0]?.total || 0;
@@ -570,17 +580,27 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
           d.[DeleteTransactionId] = 0x0
           AND d.[IsCurrentVersion] = 1
           AND w.[FullUrl] LIKE '%tintuc%'
-          AND d.[LeafName] LIKE '%.aspx'
           AND l.[tp_Title] LIKE '%Pages%'
+          AND (d.[TimeCreated] >= @startDate OR @startDate IS NULL)
+          AND (d.[TimeCreated] <= @endDate OR @endDate IS NULL)
+          AND (d.[TimeLastModified] >= '${SYNC_MIN_DATE}')
+      ),
+      paged_src AS (
+        SELECT *,
+          ROW_NUMBER() OVER (
+            ORDER BY
+              __sync_time ${sortDir},
+              __sync_id ${sortDir},
+              DocId ${sortDir}
+          ) AS __page_rn
+        FROM src
+        WHERE ${filterClause}
       )
       SELECT *
-      FROM src
-      WHERE ${filterClause}
-      ORDER BY
-        __sync_time ${sortDir},
-        __sync_id ${sortDir},
-        DocId ${sortDir}
-      ${safeTake ? 'OFFSET @offset ROWS FETCH NEXT @take ROWS ONLY' : ''}
+      FROM paged_src
+      WHERE 1=1
+      ${safeTake ? 'AND __page_rn > @offset AND __page_rn <= (@offset + @take)' : ''}
+      ORDER BY __page_rn
     `;
 
     const resultRows = await this.queryOldDb(query, {
@@ -588,6 +608,8 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
       lastSyncId: lastSyncId,
       take: safeTake,
       offset: safeOffset,
+      startDate: SYNC_START_DATE,
+      endDate: SYNC_END_DATE
     });
     return resultRows;
   }
@@ -684,9 +706,10 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
   async getList(lastSyncTime, syncJobId, lastSyncId = 0) {
     if (!syncJobId) throw new Error('syncJobId is required');
 
-    const stageBatchSize = Number(
+    let stageBatchSize = Number(
       process.env.TINTUC_STAGE_BATCH_SIZE || process.env.COMPLETED_LIMIT || 500,
     );
+    if (!stageBatchSize || stageBatchSize <= 0) stageBatchSize = 500;
     // Số giờ quét lùi đọc từ biến môi trường (mặc định 24 giờ)
     const lookbackHours = Number(process.env.TINTUC_LOOKBACK_HOURS || 24);
 
@@ -1036,8 +1059,8 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
         }, 60000);
 
         try {
-          // Truyền tham số timeout động vào hàm downloadFile
-          buffer = await downloadFile(fullUrl, 0, loadTimeoutMs);
+          // Truyền đúng thứ tự tham số để dùng cơ chế lấy/lưu cookie từ DB + auto refresh auth
+          buffer = await downloadFile(fullUrl, this.newPool, 0, loadTimeoutMs);
         } finally {
           clearInterval(waitingInterval); // Tải xong hoặc lỗi thì tắt bộ đếm ngay
         }
@@ -1192,7 +1215,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
                   const imgLocalPath = path.join(imgOutDir, imgFileName);
 
                   logger.info(`[Image Downloader] Đang tải ảnh từ SharePoint: ${img.fullUrl}`);
-                  const imgBuffer = await downloadFile(img.fullUrl, 0, 60000); // Timeout 1 phút/ảnh
+                  const imgBuffer = await downloadFile(img.fullUrl, this.newPool, 0, 60000); // Timeout 1 phút/ảnh
 
                   if (imgBuffer && imgBuffer.length > 0) {
                     // CHẠY SONG SONG: 1. Lưu ảnh cục bộ & 2. Upload API
@@ -1268,21 +1291,19 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
     // Step 3: Production Sync (news & audit) - Like sync-social-resource
     const actionLogs = [];
     if (parsedData) {
-      const trans = new sql.Transaction(this.newPool);
-      await trans.begin();
       try {
-        const resultProd = await this.upsertToProduction(parsedData, trans);
-        actionLogs.push({ table: 'news', action: resultProd.action });
+        await dbUtils.withTransactionRetry(this.newPool, async (trans) => {
+          const resultProd = await this.upsertToProduction(parsedData, trans);
+          actionLogs.push({ table: 'news', action: resultProd.action });
 
-        if (parsedData.isActive && resultProd.newsId) {
-          await this.createAuditRecord(resultProd.newsId, parsedData.publishedAt, trans);
-          actionLogs.push({ table: 'audit', action: 'DUYET' });
-        }
-        await trans.commit();
+          if (parsedData.isActive && resultProd.newsId) {
+            await this.createAuditRecord(resultProd.newsId, parsedData.publishedAt, trans);
+            actionLogs.push({ table: 'audit', action: 'DUYET' });
+          }
+        }, { maxRetries: 5 });
       } catch (e) {
-        await trans.rollback();
-        logger.error(`[Production Sync] Rollback for ${docPath}: ${e.message}`);
-        actionLogs.push({ action: 'rollback', error: e.message });
+        logger.error(`[Production Sync] Failed for ${docPath} after retries: ${e.message}`);
+        actionLogs.push({ action: 'failed', error: e.message });
       }
     }
 

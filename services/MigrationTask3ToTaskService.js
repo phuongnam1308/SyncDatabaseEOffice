@@ -40,7 +40,7 @@ class MigrationTask3ToTaskService {
         logger.info(`Đang xử lý batch ${i + 1}/${batches.length}`);
         for (const record of batches[i]) {
           try {
-            const exists = await this.model.findByBackupId(record.ID);
+            const exists = await this.model.findByBackupId(record.id);
             if (exists) {
               totalSkipped++;
               continue;

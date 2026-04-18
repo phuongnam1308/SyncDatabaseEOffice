@@ -9,15 +9,15 @@ const logger = require('../../utils/logger');
 // ── Các stage_status quan trọng ──────────────────────────────────────────────
 const STAGE = {
   // Văn bản hoàn tất phát hành
-  BAN_HANH:       'BAN_HANH',
-  DA_BAN_HANH:    'DA_BAN_HANH',
+  BAN_HANH: 'BAN_HANH',
+  DA_BAN_HANH: 'DA_BAN_HANH',
   // Văn bản đã được hoàn thành phê duyệt nội dung
-  DA_XU_LY:       'DA_XU_LY',
+  DA_XU_LY: 'DA_XU_LY',
   // Văn bản đang chờ hoàn thiện thể thức
-  HT_VBTT:        'HT_VBTT',
+  HT_VBTT: 'HT_VBTT',
   BAN_HANH_DU_THAO: 'BAN_HANH_DU_THAO',
   // Trả lại
-  TRA_LAI:        'TRA_LAI',
+  TRA_LAI: 'TRA_LAI',
 };
 
 // action_code tương ứng với sự kiện "tạo văn bản" → is_creator = 1
@@ -84,7 +84,7 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
     try {
       // 1. Xoá toàn bộ assignment của document
       await this.queryNewDbTx(
-        `DELETE FROM ${process.env.NEW_DB_NAME}.dbo.outgoing_assignment
+        `DELETE FROM ${process.env.NEW_DB_NAME}.dbo.outgoing_assignment  WITH (ROWLOCK) 
         WHERE document_id = @document_id`,
         { document_id },
         transaction
@@ -115,20 +115,20 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
         uniqueKeys.add(key);
 
         await this.queryNewDbTx(
-          `INSERT INTO ${process.env.NEW_DB_NAME}.dbo.outgoing_assignment
+          `INSERT INTO ${process.env.NEW_DB_NAME}.dbo.outgoing_assignment  WITH (ROWLOCK) 
           (document_id, receiver, role_process, stage_status,
             created_at, last_audit_id, receiver_unit, is_creator, table_backups)
           VALUES (@document_id, @receiver, @role_process, @stage_status,
                   @created_at, @last_audit_id, @receiver_unit, @is_creator, @table_backups)`,
           {
             document_id,
-            receiver:      String(rec).substring(0, 100),
-            role_process:  String(roleProcess).substring(0, 50),
-            stage_status:  String(stage_status).substring(0, 50),
-            created_at:    time || new Date(),
+            receiver: String(rec).substring(0, 100),
+            role_process: String(roleProcess).substring(0, 50),
+            stage_status: String(stage_status).substring(0, 50),
+            created_at: time || new Date(),
             last_audit_id: auditId || null,
             receiver_unit: unit ? String(unit).substring(0, 100) : null,
-            is_creator:    isCreator,
+            is_creator: isCreator,
             table_backups: 'outgoing_assignment',
           },
           transaction
@@ -155,16 +155,16 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
 
     if (!document_id || !stage_status) return;
 
-    const stageUp  = (stage_status || '').toUpperCase();
-    const isBanHanh  = (stageUp === STAGE.BAN_HANH || stageUp === STAGE.DA_BAN_HANH) ? 1 : 0;
-    const isDaXuLy   = stageUp === STAGE.DA_XU_LY ? 1 : 0;
-    const isHtVbtt   = (stageUp === STAGE.HT_VBTT || stageUp === STAGE.BAN_HANH_DU_THAO) ? 1 : 0;
+    const stageUp = (stage_status || '').toUpperCase();
+    const isBanHanh = (stageUp === STAGE.BAN_HANH || stageUp === STAGE.DA_BAN_HANH) ? 1 : 0;
+    const isDaXuLy = stageUp === STAGE.DA_XU_LY ? 1 : 0;
+    const isHtVbtt = (stageUp === STAGE.HT_VBTT || stageUp === STAGE.BAN_HANH_DU_THAO) ? 1 : 0;
     const isCompleted = isBanHanh;
 
     const currentReceiver = receiver || receiver_unit || created_by;
 
     await this.queryNewDbTx(
-      `MERGE ${process.env.NEW_DB_NAME}.dbo.outgoing_current_state AS tgt
+      `MERGE ${process.env.NEW_DB_NAME}.dbo.outgoing_current_state  WITH (ROWLOCK)  AS tgt
        USING (SELECT @document_id AS document_id) AS src
        ON tgt.document_id = src.document_id
        WHEN MATCHED AND (@audit_time > tgt.last_audit_time OR (@audit_time = tgt.last_audit_time AND @last_audit_id >= tgt.last_audit_id) OR tgt.last_audit_time IS NULL) THEN
@@ -205,16 +205,16 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
          );`,
       {
         document_id,
-        stage_status:  String(stage_status).substring(0, 100),
-        action_code:   action_code ? String(action_code).substring(0, 100) : null,
-        receiver:      currentReceiver ? String(currentReceiver).substring(0, 100) : null,
-        role_process:  roleProcess ? String(roleProcess).substring(0, 100) : null,
+        stage_status: String(stage_status).substring(0, 100),
+        action_code: action_code ? String(action_code).substring(0, 100) : null,
+        receiver: currentReceiver ? String(currentReceiver).substring(0, 100) : null,
+        role_process: roleProcess ? String(roleProcess).substring(0, 100) : null,
         last_audit_id: auditId || null,
-        audit_time:    time,
-        has_ban_hanh:  isBanHanh,
-        has_da_xu_ly:  isDaXuLy,
-        has_ht_vbtt:   isHtVbtt,
-        is_completed:  isCompleted,
+        audit_time: time,
+        has_ban_hanh: isBanHanh,
+        has_da_xu_ly: isDaXuLy,
+        has_ht_vbtt: isHtVbtt,
+        is_completed: isCompleted,
         table_backups: 'outgoing_current_state',
       },
       transaction

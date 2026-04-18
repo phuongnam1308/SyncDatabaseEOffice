@@ -116,11 +116,11 @@ class FileUploadService {
    * @param {import('mssql').ConnectionPool|null} pool - DB pool đã được khởi tạo (this.newPool từ BaseModel)
    */
   constructor(pool = null) {
-    this.fileModel          = new FileModel();
+    this.fileModel = new FileModel();
     this.fileRelationsModel = new FileRelationsModel();
     // Gán pool trực tiếp vào 2 model — tránh phải gọi initialize() riêng
     if (pool) {
-      this.fileModel.newPool          = pool;
+      this.fileModel.newPool = pool;
       this.fileRelationsModel.newPool = pool;
     }
   }
@@ -134,7 +134,7 @@ class FileUploadService {
       // Nếu forceRefresh, xóa file trước
       if (forceRefresh && fsSync.existsSync(NEW_SYSTEM_TOKEN_FILE)) {
         logger.info('[FileUploadService] Đang xóa token cũ để lấy token mới...');
-        try { await fs.unlink(NEW_SYSTEM_TOKEN_FILE); } catch (_) {}
+        try { await fs.unlink(NEW_SYSTEM_TOKEN_FILE); } catch (_) { }
       }
 
       // Thử đọc từ file trước
@@ -142,7 +142,7 @@ class FileUploadService {
         const token = await fs.readFile(NEW_SYSTEM_TOKEN_FILE, 'utf-8');
         if (token && token.trim()) return token.trim();
       }
-      
+
       // Nếu không có hoặc lỗi, gọi login để lấy mới
       logger.info('[FileUploadService] Token hệ thống mới không tìm thấy hoặc bị bắt buộc lấy mới, đang thực hiện login...');
       const newToken = await getAccessToken();
@@ -185,9 +185,9 @@ class FileUploadService {
     formData.append('object_id', String(objectId || ''));
 
     if (retryCount === 0) {
-      logger.info(`[FileUploadService] Đang upload lên hệ thống mới: ${url} | object_type=${objectType} | object_id=${objectId}`);
+      logger.info(`[FileUploadService] Đang upload lên hệ thống mới: ${url} | object_type=${objectType} | object_id=${objectId} | size=${fileBuffer.length} bytes`);
     } else {
-      logger.info(`[FileUploadService] Đang upload lại (lần ${retryCount}): ${url} | object_type=${objectType} | object_id=${objectId}`);
+      logger.info(`[FileUploadService] Đang upload lại (lần ${retryCount}): ${url} | object_type=${objectType} | object_id=${objectId} | size=${fileBuffer.length} bytes`);
     }
 
     try {
@@ -196,20 +196,32 @@ class FileUploadService {
           ...formData.getHeaders(),
           'Authorization': `Bearer ${token}`,
           'Accept': 'application/json, text/plain, */*'
-        }
+        },
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity,
+        timeout: 60000 // 1 phút timeout cho file lớn
       });
 
       logger.info(`[FileUploadService] Upload hệ thống mới thành công: ${JSON.stringify(response.data)}`);
       return response.data;
     } catch (error) {
       const isRateLimit = error.response && (
-        error.response.status === 429 || 
+        error.response.status === 429 ||
         (error.response.data && error.response.data.message === 'API rate limit exceeded')
+      );
+
+      // Mở rộng retry cho các lỗi mạng (ECONNRESET, ETIMEDOUT, etc.)
+      const isNetworkError = !error.response && (
+        error.code === 'ECONNRESET' ||
+        error.code === 'ETIMEDOUT' ||
+        error.code === 'ECONNABORTED' ||
+        error.code === 'EPIPE' ||
+        (error.message && error.message.includes('ECONNRESET'))
       );
 
       // Nếu là lỗi 401 (Unauthorized), thử xóa token và login lại 1 lần duy nhất
       const isUnauthorized = error.response && error.response.status === 401;
-      
+
       const maxRetries = parseInt(process.env.NEW_SYSTEM_UPLOAD_RETRY_COUNT || '5', 10);
       const retryDelay = parseInt(process.env.NEW_SYSTEM_UPLOAD_RETRY_DELAY_MS || '3000', 10);
 
@@ -220,16 +232,16 @@ class FileUploadService {
         return this.uploadToNewSystem({ fileBuffer, originalName, objectType, objectId }, retryCount + 1);
       }
 
-      if (isRateLimit && retryCount < maxRetries) {
-        // Sử dụng exponential backoff: 2^retryCount * baseDelay (ví dụ: 3s, 6s, 12s, 24s, 48s)
-        const delay = Math.pow(2, retryCount) * retryDelay; 
-        logger.warn(`[FileUploadService] Bị rate limit (429). Đang chờ ${delay}ms trước khi thử lại lần ${retryCount + 1}/${maxRetries}...`);
+      if ((isRateLimit || isNetworkError) && retryCount < maxRetries) {
+        const delay = Math.pow(2, retryCount) * retryDelay;
+        const reason = isRateLimit ? 'rate limit (429)' : `lỗi mạng (${error.code || error.message})`;
+        logger.warn(`[FileUploadService] Bị ${reason}. Đang chờ ${delay}ms trước khi thử lại lần ${retryCount + 1}/${maxRetries}...`);
         await this._sleep(delay);
         return this.uploadToNewSystem({ fileBuffer, originalName, objectType, objectId }, retryCount + 1);
       }
 
-      const errorDetail = error.response ? JSON.stringify(error.response.data) : error.message;
-      logger.error(`[FileUploadService] Upload he thong moi (MinIO API) THAT BAI (retry=${retryCount}): ${errorDetail}`);
+      const errorDetail = error.response ? JSON.stringify(error.response.data) : (error.code ? `${error.code}: ${error.message}` : error.message);
+      logger.error(`[FileUploadService] Upload he thong moi (API) THAT BAI (retry=${retryCount}): ${errorDetail}`);
       return null;
     }
   }
@@ -323,9 +335,9 @@ class FileUploadService {
     }
 
     const targetBucket = bucket || DEFAULT_BUCKET;
-    const objectName   = this._buildObjectName(originalName, folder);
-    const fileSize     = fileBuffer.length;
-    const mime         = mimeType || fileRecord?.mime_type || null;
+    const objectName = this._buildObjectName(originalName, folder);
+    const fileSize = fileBuffer.length;
+    const mime = mimeType || fileRecord?.mime_type || null;
 
     // ── (Optional) save local copy before DB insert ──
     let localFullPath = null;
@@ -352,10 +364,10 @@ class FileUploadService {
         objectType: relationRecord.object_type,
         objectId: relationRecord.object_id
       });
-      
+
       if (apiResponse && apiResponse.id) {
         uploadSuccess = true;
-        storagePath = apiResponse.file_path; 
+        storagePath = apiResponse.file_path;
         logger.info(`[FileUploadService] THANH CONG: Da upload qua API hệ thống mới. storagePath: ${storagePath}`);
       } else {
         throw new Error(`[FileUploadService] Upload qua API thất bại: ${JSON.stringify(apiResponse)}`);
@@ -366,7 +378,7 @@ class FileUploadService {
     }
 
     // ── BƯỚC 2 & 3: Insert files + file_relations ──
-    let fileId     = null;
+    let fileId = null;
     let relationId = null;
 
     try {
@@ -375,12 +387,12 @@ class FileUploadService {
         ...fileRecord,
         // Ưu tiên: tên file gốc (fileRecord.file_name) → originalName → cuối cùng mới dùng apiResponse.file_name
         // Lý do: apiResponse.file_name thường trả về UUID/ID thay vì tên file thật
-        file_name:    fileRecord.file_name || originalName || apiResponse?.file_name,
-        mime_type:    fileRecord.mime_type || mime || null,
-        file_size:    fileRecord.file_size ?? fileSize,
-        storage_path: storagePath, 
+        file_name: fileRecord.file_name || originalName || apiResponse?.file_name,
+        mime_type: fileRecord.mime_type || mime || null,
+        file_size: fileRecord.file_size ?? fileSize,
+        storage_path: storagePath,
         storage_type: apiResponse?.storage_type || 'minio',
-        id_bak:       apiResponse?.id ? String(apiResponse.id) : (fileRecord.id_bak || null), // Lưu ID từ hệ thống mới
+        id_bak: apiResponse?.id ? String(apiResponse.id) : (fileRecord.id_bak || null), // Lưu ID từ hệ thống mới
       };
 
       logger.info(
@@ -406,7 +418,7 @@ class FileUploadService {
 
     } catch (dbError) {
       logger.error(`[FileUploadService] Lỗi ghi DB: ${dbError.message}.`);
-      
+
       // Rollback MinIO if we uploaded it ourselves
       if (!apiResponse && storagePath) { // Only rollback if it was MinIO and we have a storagePath
         try {
@@ -591,10 +603,10 @@ class FileUploadService {
 
   /** Tạo tên object duy nhất: [folder/]<uuid>-<sanitized-name><ext> */
   _buildObjectName(originalName, folder) {
-    const ext        = path.extname(originalName);
-    const baseName   = path.basename(originalName, ext)
-                         .replace(/[^a-zA-Z0-9._-]/g, '_')
-                         .substring(0, 80);
+    const ext = path.extname(originalName);
+    const baseName = path.basename(originalName, ext)
+      .replace(/[^a-zA-Z0-9._-]/g, '_')
+      .substring(0, 80);
     const uniqueName = `${uuidv4()}-${baseName}${ext}`;
     return folder ? `${folder.replace(/\/$/, '')}/${uniqueName}` : uniqueName;
   }
@@ -667,7 +679,7 @@ class FileUploadService {
       throw new Error(`[FileUploadService] storage_path thiếu bucket: ${storagePath}`);
     }
     return {
-      bucket:     storagePath.substring(0, idx),
+      bucket: storagePath.substring(0, idx),
       objectName: storagePath.substring(idx + 1),
     };
   }

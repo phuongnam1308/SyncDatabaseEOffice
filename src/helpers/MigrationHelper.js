@@ -746,7 +746,7 @@ class MigrationHelper {
 
       const isIdFormat = /^\d+$/.test(trimmed) || /^[0-9a-f-]{32,}$/i.test(trimmed);
       if (isIdFormat) {
-        const checkNewQuery = `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users WHERE id = @id`;
+        const checkNewQuery = `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users WHERE id = @id OR id_user_bak = @id`;
         const existedNew = await this.queryNewDbTx(checkNewQuery, { id: trimmed }, transaction);
         if (existedNew?.length) return existedNew[0].id;
         return trimmed;
@@ -841,7 +841,7 @@ class MigrationHelper {
       // 1. Tìm trong DB mới (theo ID, Username, hoặc Name)
       const checkNewQuery = `
         SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users
-        WHERE id = @val OR username = @val OR name = @val OR code_nd = @val
+        WHERE id = @val OR username = @val OR name = @val OR code_nd = @val OR id_user_bak = @val
       `;
       const existedNew = await this.queryNewDbTx(checkNewQuery, { val: trimmed }, transaction);
       if (existedNew?.length) {
@@ -945,7 +945,7 @@ class MigrationHelper {
     const selectQuery = `
       SELECT TOP 1 id, name, username, code_nd
       FROM ${process.env.NEW_DB_NAME}.dbo.users
-      WHERE name = @val OR username = @val OR code_nd = @val
+      WHERE name = @val OR username = @val OR code_nd = @val OR id_user_bak = @val
     `;
 
     // --- STEP 1: AuthorAccount ---
@@ -1264,6 +1264,162 @@ class MigrationHelper {
     return this.buildAbbreviatedCode(name);
   }
 
+  normalizeMeetingRoomName(name) {
+    if (!name || typeof name !== 'string') return '';
+
+    return this.removeVietnameseTones(this.cleanText(name))
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  tokenizeMeetingRoomName(name) {
+    const normalized = this.normalizeMeetingRoomName(name);
+    if (!normalized) return [];
+
+    return normalized
+      .replace(/([a-z])(\d)/g, '$1 $2')
+      .replace(/(\d)([a-z])/g, '$1 $2')
+      .split(/\s+/)
+      .filter(Boolean);
+  }
+
+  expandMeetingRoomTokens(tokens = []) {
+    const expandedTokens = [];
+    const tokenMap = new Map([
+      ['ht', ['hoi', 'truong']],
+      ['htr', ['hoi', 'truong']],
+      ['hoitruong', ['hoi', 'truong']],
+      ['p', ['phong']],
+      ['ph', ['phong']],
+      ['phg', ['phong']],
+      ['phonghop', ['phong', 'hop']],
+      ['phophop', ['phong', 'hop']],
+      ['php', ['phong', 'hop']],
+      ['meetingroom', ['phong', 'hop']],
+      ['room', ['phong']],
+      ['mtg', ['meeting']]
+    ]);
+
+    for (const token of tokens) {
+      if (!token) continue;
+      const mapped = tokenMap.get(token);
+      if (mapped?.length) {
+        expandedTokens.push(...mapped);
+      } else {
+        expandedTokens.push(token);
+      }
+    }
+
+    return expandedTokens;
+  }
+
+  buildMeetingRoomMatchProfile(name) {
+    const originalName = this.cleanText(name);
+    const tokens = this.tokenizeMeetingRoomName(originalName);
+    const expandedTokens = this.expandMeetingRoomTokens(tokens);
+    const normalized = this.normalizeMeetingRoomName(originalName);
+    const compact = normalized.replace(/\s+/g, '');
+    const canonical = expandedTokens.join(' ').trim();
+    const canonicalCompact = canonical.replace(/\s+/g, '');
+    const acronym = expandedTokens
+      .map((token) => (/^\d+$/.test(token) ? token : token[0]))
+      .join('');
+
+    return {
+      originalName,
+      normalized,
+      compact,
+      canonical,
+      canonicalCompact,
+      acronym
+    };
+  }
+
+  getMeetingRoomMatchScore(inputProfile, existingProfile) {
+    if (!inputProfile?.normalized || !existingProfile?.normalized) return 0;
+
+    if (inputProfile.normalized === existingProfile.normalized) return { score: 100, reason: 'normalized_exact' };
+    if (inputProfile.compact && inputProfile.compact === existingProfile.compact) return { score: 98, reason: 'compact_exact' };
+    if (inputProfile.canonical && inputProfile.canonical === existingProfile.canonical) return { score: 96, reason: 'canonical_exact' };
+    if (inputProfile.canonicalCompact && inputProfile.canonicalCompact === existingProfile.canonicalCompact) {
+      return { score: 94, reason: 'canonical_compact_exact' };
+    }
+
+    if (
+      inputProfile.normalized === existingProfile.canonical ||
+      inputProfile.canonical === existingProfile.normalized
+    ) {
+      return { score: 92, reason: 'normalized_canonical_cross' };
+    }
+
+    if (
+      inputProfile.compact === existingProfile.canonicalCompact ||
+      inputProfile.canonicalCompact === existingProfile.compact
+    ) {
+      return { score: 90, reason: 'compact_canonical_cross' };
+    }
+
+    if (!inputProfile.acronym || !existingProfile.acronym) return { score: 0, reason: null };
+
+    if (
+      inputProfile.acronym === existingProfile.acronym ||
+      inputProfile.compact === existingProfile.acronym ||
+      inputProfile.acronym === existingProfile.compact ||
+      inputProfile.canonicalCompact === existingProfile.acronym ||
+      inputProfile.acronym === existingProfile.canonicalCompact
+    ) {
+      return { score: 80, reason: 'acronym_match' };
+    }
+
+    return { score: 0, reason: null };
+  }
+
+  findBestMeetingRoomMatch(roomName, existingRooms = []) {
+    const inputProfile = this.buildMeetingRoomMatchProfile(roomName);
+    if (!inputProfile.normalized) {
+      return { match: null, score: 0, ambiguous: false };
+    }
+
+    let bestMatch = null;
+    let bestScore = 0;
+    let ambiguous = false;
+
+    for (const existingRoom of existingRooms) {
+      const { score, reason } = this.getMeetingRoomMatchScore(inputProfile, existingRoom);
+      if (score <= 0) continue;
+
+      if (score > bestScore) {
+        bestMatch = { ...existingRoom, _matchReason: reason };
+        bestScore = score;
+        ambiguous = false;
+        continue;
+      }
+
+      if (score === bestScore && bestMatch && existingRoom.id !== bestMatch.id) {
+        if (bestScore < 90) {
+          ambiguous = true;
+          continue;
+        }
+
+        if ((existingRoom.name || '').length < (bestMatch.name || '').length) {
+          bestMatch = { ...existingRoom, _matchReason: reason };
+        }
+      }
+    }
+
+    if (!bestMatch) {
+      return { match: null, score: 0, ambiguous: false };
+    }
+
+    if (ambiguous && bestScore < 90) {
+      return { match: null, score: bestScore, ambiguous: true };
+    }
+
+    return { match: bestMatch, score: bestScore, ambiguous };
+  }
+
   async hashDefaultPassword() {
     try {
       if (!DEFAULT_PASSWORD) {
@@ -1512,37 +1668,59 @@ class MigrationHelper {
       // 🔥 Tách nhiều phòng theo ;
       const roomList = roomName
         .split(';')
-        .map(r => r.trim())
+        .map(r => this.cleanText(r))
         .filter(Boolean);
 
       if (!roomList.length) return null;
 
+      const roomTable = `${process.env.NEW_DB_NAME}.dbo.meeting_rooms`;
+      const existingRooms = await this.queryNewDbTx(
+        `
+          SELECT id, name
+          FROM ${roomTable}
+          WHERE name IS NOT NULL
+        `,
+        {},
+        transaction
+      );
+      const existingRoomProfiles = (existingRooms || []).map((existingRoom) => ({
+        id: existingRoom.id,
+        name: existingRoom.name,
+        ...this.buildMeetingRoomMatchProfile(existingRoom.name)
+      }));
+
       const ids = [];
+      const seenNormalizedNames = new Set();
 
       for (const room of roomList) {
+        const normalizedRoomName = this.normalizeMeetingRoomName(room);
+        if (!normalizedRoomName || seenNormalizedNames.has(normalizedRoomName)) {
+          continue;
+        }
+        seenNormalizedNames.add(normalizedRoomName);
 
-        const selectQuery = `
-          SELECT TOP 1 id
-          FROM ${process.env.NEW_DB_NAME}.dbo.meeting_rooms
-          WHERE name = @name
-        `;
-
-        const existing = await this.queryNewDbTx(
-          selectQuery,
-          { name: room },
-          transaction
+        const { match: matchedRoom, score, ambiguous } = this.findBestMeetingRoomMatch(
+          room,
+          existingRoomProfiles
         );
 
-        if (existing?.length) {
-          ids.push(existing[0].id);
+        if (matchedRoom?.id) {
+          logger.info(
+            `[mapMeetingRoom] Reusing room "${matchedRoom.name}" for "${room}" (score=${score}, reason=${matchedRoom._matchReason || 'unknown'})`
+          );
+          ids.push(matchedRoom.id);
           continue;
+        }
+
+        if (ambiguous) {
+          logger.warn(`[mapMeetingRoom] Ambiguous room match for "${room}", creating new room skipped exact reuse.`);
         }
 
         // Chưa có → tạo mới
         const id = uuidv4();
 
         const insertQuery = `
-          INSERT INTO ${process.env.NEW_DB_NAME}.dbo.meeting_rooms (
+          INSERT INTO ${roomTable} (
             id,
             name,
             location,
@@ -1581,18 +1759,39 @@ class MigrationHelper {
           );
 
           logger.warn(`[mapMeetingRoom] Created new room: ${room}`);
+          existingRoomProfiles.push({
+            id,
+            name: room,
+            ...this.buildMeetingRoomMatchProfile(room)
+          });
           ids.push(id);
 
         } catch (err) {
           // race condition fallback
           const retry = await this.queryNewDbTx(
-            selectQuery,
-            { name: room },
+            `
+              SELECT id, name
+              FROM ${roomTable}
+              WHERE name IS NOT NULL
+            `,
+            {},
             transaction
           );
 
-          if (retry?.length) {
-            ids.push(retry[0].id);
+          const retryProfiles = (retry || []).map((item) => ({
+            id: item.id,
+            name: item.name,
+            ...this.buildMeetingRoomMatchProfile(item.name)
+          }));
+          const { match: retryMatched } = this.findBestMeetingRoomMatch(room, retryProfiles);
+
+          if (retryMatched?.id) {
+            existingRoomProfiles.push({
+              id: retryMatched.id,
+              name: retryMatched.name,
+              ...this.buildMeetingRoomMatchProfile(retryMatched.name)
+            });
+            ids.push(retryMatched.id);
           }
         }
       }
@@ -2769,7 +2968,7 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
       if (!username) return null;
 
       // 2. Tìm trong bảng users (Tìm theo username HOẶC code_nd)
-      const findQuery = `SELECT TOP 1 id FROM [${process.env.NEW_DB_NAME}].[dbo].[users] WHERE username = @username OR code_nd = @username`;
+      const findQuery = `SELECT TOP 1 id FROM [${process.env.NEW_DB_NAME}].[dbo].[users] WHERE username = @username OR code_nd = @username OR id_user_bak = @username`;
       const findResult = await this.queryNewDbTx(findQuery, { username }, transaction);
       if (findResult && findResult.length > 0) {
         return findResult[0].id;

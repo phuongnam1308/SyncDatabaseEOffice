@@ -68,7 +68,17 @@ class BaseModel {
 
   async queryNewDbTx(query, params = {}, transaction = null) {
     try {
-      const request = transaction
+      const canUseTransaction = Boolean(
+        transaction &&
+        transaction._acquiredConnection &&
+        !transaction._aborted
+      );
+
+      if (!canUseTransaction && !this.newPool) {
+        throw new Error('Lỗi: Chưa kết nối được Database MỚI (Đích). Không thể ghi dữ liệu.');
+      }
+
+      const request = canUseTransaction
         ? new sql.Request(transaction)
         : this.newPool.request();
 

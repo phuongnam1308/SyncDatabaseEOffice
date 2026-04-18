@@ -185,21 +185,26 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
             ORDER BY ID DESC -- Lấy bản ghi mới nhất nếu có nhiều Subject
         ) ci
       )
-      SELECT
-        *,
-        ISNULL(__sync_id_num, 0) AS __sync_id
-      FROM source_rows
-      WHERE rn_dedup = 1 AND (
-        __sync_time > @lastSyncTime
-        OR (
-          __sync_time = @lastSyncTime
-          AND ISNULL(__sync_id_num, -2147483648) > @lastSyncId
+      SELECT * FROM (
+        SELECT
+          *,
+          ISNULL(__sync_id_num, 0) AS __sync_id,
+          ROW_NUMBER() OVER (
+            ORDER BY
+              __sync_time ASC,
+              ISNULL(__sync_id_num, -2147483648) ASC
+          ) AS __page_rn
+        FROM source_rows
+        WHERE rn_dedup = 1 AND (
+          __sync_time > @lastSyncTime
+          OR (
+            __sync_time = @lastSyncTime
+            AND ISNULL(__sync_id_num, -2147483648) > @lastSyncId
+          )
         )
-      )
-      ORDER BY
-        __sync_time ASC,
-        ISNULL(__sync_id_num, -2147483648) ASC
-      OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY
+      ) AS t
+      WHERE __page_rn > @offset AND __page_rn <= (@offset + @limit)
+      ORDER BY __page_rn
     `;
 
         const params = {
@@ -256,7 +261,9 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
         }
 
         const internalColumns = new Set(['__sync_time', '__sync_id', '__sync_id_num']);
-        const columns = Object.keys(rows[0] || {}).filter((column) => !internalColumns.has(column));
+        const columns = Object.keys(rows[0] || {}).filter(
+            (column) => !String(column).startsWith('__') && !internalColumns.has(column)
+        );
         if (!columns.length) return { stagedCount: 0 };
 
         if (!columns.includes('ID')) {

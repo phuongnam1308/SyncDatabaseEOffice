@@ -14,8 +14,8 @@ const CATEGORY_OUTGOING = "Văn bản đi";
 // Định nghĩa các hằng số cho danh mục (Category) của văn bản đến
 const CATEGORY_INCOMING_SUBMIT = "Văn bản trình ký";
 const CATEGORY_INCOMING_TCT = "Văn bản đến TCT";
-const CATEGORY_INCOMING= "Văn bản đến";
-const CATEGORY_INCOMING_INTERNAL= "Văn bản nội bộ";
+const CATEGORY_INCOMING = "Văn bản đến";
+const CATEGORY_INCOMING_INTERNAL = "Văn bản nội bộ";
 
 // Tạo các tập hợp (Set) để kiểm tra category hiệu quả
 const INCOMING_CATEGORIES = new Set([
@@ -89,58 +89,58 @@ class SyncAuditModel extends BaseModel {
           {
             table: 'audit',
             cols: [
-              { name: 'table_backups',   type: 'NVARCHAR(255)' },
-              { name: 'type_document',   type: 'VARCHAR(100)'  },
-              { name: 'processed_by',    type: 'VARCHAR(100)'  },
-              { name: 'acting_as',       type: 'VARCHAR(100)'  },
-              { name: 'status_code',     type: 'VARCHAR(50)'   },
-              { name: 'bpmn_version',    type: 'VARCHAR(100)'  },
-              { name: 'type_of_process', type: 'VARCHAR(100)'  },
-              { name: 'curStatusCode',   type: 'INT'           },
-              { name: 'role',            type: 'VARCHAR(100)'  }
+              { name: 'table_backups', type: 'NVARCHAR(255)' },
+              { name: 'type_document', type: 'VARCHAR(100)' },
+              { name: 'processed_by', type: 'VARCHAR(100)' },
+              { name: 'acting_as', type: 'VARCHAR(100)' },
+              { name: 'status_code', type: 'VARCHAR(50)' },
+              { name: 'bpmn_version', type: 'VARCHAR(100)' },
+              { name: 'type_of_process', type: 'VARCHAR(100)' },
+              { name: 'curStatusCode', type: 'INT' },
+              { name: 'role', type: 'VARCHAR(100)' }
             ]
           },
           {
             table: 'incomming_assignment',
             cols: [
-              { name: 'table_backups',   type: 'NVARCHAR(255)' },
-              { name: 'last_audit_id',   type: 'INT'           }
+              { name: 'table_backups', type: 'NVARCHAR(255)' },
+              { name: 'last_audit_id', type: 'INT' }
             ]
           },
           {
             table: 'incomming_current_state',
             cols: [
-              { name: 'table_backups',     type: 'NVARCHAR(255)' },
-              { name: 'is_completed_doc',   type: 'BIT'           },
-              { name: 'has_open_workitem',  type: 'BIT'           },
-              { name: 'is_transfer_to_room', type: 'BIT'           },
-              { name: 'last_audit_id',     type: 'INT'           },
-              { name: 'last_audit_time',   type: 'DATETIME2'     }
+              { name: 'table_backups', type: 'NVARCHAR(255)' },
+              { name: 'is_completed_doc', type: 'BIT' },
+              { name: 'has_open_workitem', type: 'BIT' },
+              { name: 'is_transfer_to_room', type: 'BIT' },
+              { name: 'last_audit_id', type: 'INT' },
+              { name: 'last_audit_time', type: 'DATETIME2' }
             ]
           },
           {
             table: 'outgoing_assignment',
             cols: [
-              { name: 'table_backups',   type: 'NVARCHAR(255)' },
-              { name: 'receiver_unit',   type: 'NVARCHAR(100)' },
-              { name: 'is_creator',      type: 'BIT'           },
-              { name: 'last_audit_id',   type: 'INT'           }
+              { name: 'table_backups', type: 'NVARCHAR(255)' },
+              { name: 'receiver_unit', type: 'NVARCHAR(100)' },
+              { name: 'is_creator', type: 'BIT' },
+              { name: 'last_audit_id', type: 'INT' }
             ]
           },
           {
             table: 'outgoing_current_state',
             cols: [
-              { name: 'table_backups',              type: 'NVARCHAR(255)' },
-              { name: 'has_ban_hanh',               type: 'BIT'           },
-              { name: 'has_da_xu_ly',               type: 'BIT'           },
-              { name: 'has_ht_vbtt',                type: 'BIT'           },
-              { name: 'is_completed_doc',           type: 'BIT'           },
-              { name: 'last_da_xu_ly_audit_id',     type: 'INT'           },
-              { name: 'has_tra_lai_after_da_xu_ly', type: 'BIT'           },
-              { name: 'has_open_workitem',          type: 'BIT'           },
-              { name: 'is_transfer_to_room',        type: 'BIT'           },
-              { name: 'last_audit_id',              type: 'INT'           },
-              { name: 'last_audit_time',            type: 'DATETIME2'     }
+              { name: 'table_backups', type: 'NVARCHAR(255)' },
+              { name: 'has_ban_hanh', type: 'BIT' },
+              { name: 'has_da_xu_ly', type: 'BIT' },
+              { name: 'has_ht_vbtt', type: 'BIT' },
+              { name: 'is_completed_doc', type: 'BIT' },
+              { name: 'last_da_xu_ly_audit_id', type: 'INT' },
+              { name: 'has_tra_lai_after_da_xu_ly', type: 'BIT' },
+              { name: 'has_open_workitem', type: 'BIT' },
+              { name: 'is_transfer_to_room', type: 'BIT' },
+              { name: 'last_audit_id', type: 'INT' },
+              { name: 'last_audit_time', type: 'DATETIME2' }
             ]
           }
         ];
@@ -265,11 +265,11 @@ class SyncAuditModel extends BaseModel {
       );
     }
 
-// Các cột có thể chứa ID văn bản trong bảng audit cũ
-// LTRIM(RTRIM(ISNULL(IDVanBan, ''))) = @oldDocumentId
-//           OR LTRIM(RTRIM(ISNULL(VBId, ''))) = @oldDocumentId
-//           OR LTRIM(RTRIM(ISNULL(IDVanBanGoc, ''))) = @oldDocumentId
-//           OR LTRIM(RTRIM(ISNULL(VBGocId, ''))) = @oldDocumentId
+    // Các cột có thể chứa ID văn bản trong bảng audit cũ
+    // LTRIM(RTRIM(ISNULL(IDVanBan, ''))) = @oldDocumentId
+    //           OR LTRIM(RTRIM(ISNULL(VBId, ''))) = @oldDocumentId
+    //           OR LTRIM(RTRIM(ISNULL(IDVanBanGoc, ''))) = @oldDocumentId
+    //           OR LTRIM(RTRIM(ISNULL(VBGocId, ''))) = @oldDocumentId
 
     const query = `
       SELECT *
@@ -614,9 +614,9 @@ class SyncAuditModel extends BaseModel {
           // 5c. Cập nhật status_code cho bảng văn bản tương ứng
           if (audit.status_code && audit.document_id) {
             await this._updateDocumentStatusCode(
-              audit.document_id, 
-              audit.type_document, 
-              audit.status_code, 
+              audit.document_id,
+              audit.type_document,
+              audit.status_code,
               transaction
             );
           }
@@ -707,7 +707,7 @@ class SyncAuditModel extends BaseModel {
     );
 
     const query = `
-      INSERT INTO ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} (
+      INSERT INTO ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable}  WITH (ROWLOCK)  (
         document_id,
         [time],
         user_id,
@@ -824,7 +824,7 @@ class SyncAuditModel extends BaseModel {
     );
 
     const query = `
-      UPDATE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable}
+      UPDATE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable}  WITH (ROWLOCK) 
       SET
         document_id = @document_id,
         display_name = @display_name,
@@ -1141,13 +1141,13 @@ class SyncAuditModel extends BaseModel {
     const tableName = isIncoming ? 'incomming_documents' : 'outgoing_documents';
     const idColumn = 'document_id';
     const query = `
-      UPDATE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${tableName}
+      UPDATE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${tableName}  WITH (ROWLOCK) 
       SET status_code = @status_code,
           updated_at = GETDATE()
       WHERE ${idColumn} = @id
         AND (
           status_code IS NULL
-          OR TRY_CAST(status_code AS INT) < TRY_CAST(@status_code AS INT)
+          OR status_code < @status_code
         )
     `;
 
@@ -1158,6 +1158,8 @@ class SyncAuditModel extends BaseModel {
       }, transaction);
     } catch (err) {
       logger.warn(`[SyncAuditModel] Không thể cập nhật status_code cho ${tableName} ID=${documentId}: ${err.message}`);
+      // Ném lại lỗi để withDeadlockRetry ở lớp ngoài có thể thực hiện retry toàn bộ transaction
+      throw err;
     }
   }
 
@@ -1333,12 +1335,12 @@ class SyncAuditModel extends BaseModel {
 }
 
 module.exports = SyncAuditModel;
-module.exports.CATEGORY_RELEASE_DV      = CATEGORY_RELEASE_DV;
-module.exports.CATEGORY_RELEASE_TCT     = CATEGORY_RELEASE_TCT;
-module.exports.CATEGORY_OUTGOING        = CATEGORY_OUTGOING;
+module.exports.CATEGORY_RELEASE_DV = CATEGORY_RELEASE_DV;
+module.exports.CATEGORY_RELEASE_TCT = CATEGORY_RELEASE_TCT;
+module.exports.CATEGORY_OUTGOING = CATEGORY_OUTGOING;
 module.exports.CATEGORY_INCOMING_SUBMIT = CATEGORY_INCOMING_SUBMIT;
-module.exports.CATEGORY_INCOMING_TCT    = CATEGORY_INCOMING_TCT;
-module.exports.CATEGORY_INCOMING        = CATEGORY_INCOMING;
+module.exports.CATEGORY_INCOMING_TCT = CATEGORY_INCOMING_TCT;
+module.exports.CATEGORY_INCOMING = CATEGORY_INCOMING;
 module.exports.CATEGORY_INCOMING_INTERNAL = CATEGORY_INCOMING_INTERNAL;
-module.exports.INCOMING_CATEGORIES      = INCOMING_CATEGORIES;
-module.exports.OUTGOING_CATEGORIES      = OUTGOING_CATEGORIES;
+module.exports.INCOMING_CATEGORIES = INCOMING_CATEGORIES;
+module.exports.OUTGOING_CATEGORIES = OUTGOING_CATEGORIES;

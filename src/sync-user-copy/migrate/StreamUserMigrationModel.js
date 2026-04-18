@@ -591,25 +591,32 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
           ) AS __sync_id_num
         FROM ${this.oldDbSchema}.${this.oldDbTable}
       )
-      SELECT
-        *,
-        ISNULL(__sync_id_num, 0) AS __sync_id
-      FROM source_rows
-      WHERE (
-        StaffID IS NOT NULL AND LTRIM(RTRIM(StaffID)) <> ''
-        AND (
-          __sync_time > @lastSyncTime
-          OR (
-            __sync_time = @lastSyncTime
-            AND ISNULL(__sync_id_num, -9223372036854775808) > @lastSyncId
+      SELECT * FROM (
+        SELECT
+          *,
+          ISNULL(__sync_id_num, 0) AS __sync_id,
+          ROW_NUMBER() OVER (
+            ORDER BY
+              __sync_time ASC,
+              ISNULL(__sync_id_num, -9223372036854775808) ASC,
+              ID ASC
+          ) AS __page_rn
+        FROM source_rows
+        WHERE (
+          StaffID IS NOT NULL AND LTRIM(RTRIM(StaffID)) <> ''
+          AND (
+            __sync_time > @lastSyncTime
+            OR (
+              __sync_time = @lastSyncTime
+              AND ISNULL(__sync_id_num, -9223372036854775808) > @lastSyncId
+            )
           )
         )
-      )
-      ORDER BY
-        __sync_time ASC,
-        ISNULL(__sync_id_num, -9223372036854775808) ASC,
-        ID ASC
-      ${limit != null ? 'OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY' : ''}
+      ) AS t
+      WHERE 1=1
+      ${offset != null ? `AND __page_rn > @offset` : ''}
+      ${limit != null ? `AND __page_rn <= (@offset + @limit)` : ''}
+      ORDER BY __page_rn
     `;
 
     return this.queryOldDb(query, {
@@ -626,7 +633,9 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
     }
 
     const internalColumns = new Set(['__sync_time', '__sync_id', '__sync_id_num']);
-    const columns = Object.keys(rows[0] || {}).filter((column) => !internalColumns.has(column));
+    const columns = Object.keys(rows[0] || {}).filter(
+      (column) => !String(column).startsWith('__') && !internalColumns.has(column),
+    );
     if (!columns.length) {
       return { stagedCount: 0 };
     }

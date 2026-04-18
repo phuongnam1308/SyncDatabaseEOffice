@@ -26,6 +26,12 @@ const tableMappings = {
       'GroupThayTheLanhDaoTCT':  'assigner',
       'NguoiPhanViec':           'assigner',
       'AssignedTo':              'director',
+      'NguoiChuTri':             'main',
+      'ChuTri':                  'main',
+      'NguoiPhoiHop':            'coordinator',
+      'PhoiHop':                 'coordinator',
+      'NguoiXem':                'viewer',
+      'Xem':                     'viewer',
       // Thêm các mapping khác nếu cần
     },
 

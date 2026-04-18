@@ -1,4 +1,5 @@
 const logger = require('../../../utils/logger');
+const dbUtils = require('../../../utils/dbUtils');
 const sql = require('mssql');
 const { v4: uuidv4 } = require("uuid");
 const SyncCommentModel = require('../../sync-document-comment/SyncCommentModel');
@@ -19,21 +20,21 @@ const {
 function detectFileType(buffer) {
   if (!buffer || buffer.length < 4) return { mime: 'application/octet-stream', ext: 'bin' };
   const b = buffer;
-  if (b[0]===0x25&&b[1]===0x50&&b[2]===0x44&&b[3]===0x46) return { mime:'application/pdf', ext:'pdf' };
-  if (b[0]===0x89&&b[1]===0x50&&b[2]===0x4E&&b[3]===0x47) return { mime:'image/png', ext:'png' };
-  if (b[0]===0xFF&&b[1]===0xD8&&b[2]===0xFF)               return { mime:'image/jpeg', ext:'jpg' };
-  if (b[0]===0x47&&b[1]===0x49&&b[2]===0x46)               return { mime:'image/gif', ext:'gif' };
-  if (b[0]===0x42&&b[1]===0x4D)                             return { mime:'image/bmp', ext:'bmp' };
-  if (b[0]===0x50&&b[1]===0x4B&&b[2]===0x03&&b[3]===0x04) {
-    const s = buffer.slice(0,200).toString('latin1');
-    if (s.includes('word/')) return { mime:'application/vnd.openxmlformats-officedocument.wordprocessingml.document', ext:'docx' };
-    if (s.includes('xl/'))   return { mime:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', ext:'xlsx' };
-    if (s.includes('ppt/'))  return { mime:'application/vnd.openxmlformats-officedocument.presentationml.presentation', ext:'pptx' };
-    return { mime:'application/zip', ext:'zip' };
+  if (b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46) return { mime: 'application/pdf', ext: 'pdf' };
+  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47) return { mime: 'image/png', ext: 'png' };
+  if (b[0] === 0xFF && b[1] === 0xD8 && b[2] === 0xFF) return { mime: 'image/jpeg', ext: 'jpg' };
+  if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) return { mime: 'image/gif', ext: 'gif' };
+  if (b[0] === 0x42 && b[1] === 0x4D) return { mime: 'image/bmp', ext: 'bmp' };
+  if (b[0] === 0x50 && b[1] === 0x4B && b[2] === 0x03 && b[3] === 0x04) {
+    const s = buffer.slice(0, 200).toString('latin1');
+    if (s.includes('word/')) return { mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', ext: 'docx' };
+    if (s.includes('xl/')) return { mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', ext: 'xlsx' };
+    if (s.includes('ppt/')) return { mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', ext: 'pptx' };
+    return { mime: 'application/zip', ext: 'zip' };
   }
-  if (b[0]===0xD0&&b[1]===0xCF&&b[2]===0x11&&b[3]===0xE0) return { mime:'application/msword', ext:'doc' };
-  if (b[0]===0x52&&b[1]===0x61&&b[2]===0x72&&b[3]===0x21) return { mime:'application/x-rar-compressed', ext:'rar' };
-  return { mime:'application/octet-stream', ext:'bin' };
+  if (b[0] === 0xD0 && b[1] === 0xCF && b[2] === 0x11 && b[3] === 0xE0) return { mime: 'application/msword', ext: 'doc' };
+  if (b[0] === 0x52 && b[1] === 0x61 && b[2] === 0x72 && b[3] === 0x21) return { mime: 'application/x-rar-compressed', ext: 'rar' };
+  return { mime: 'application/octet-stream', ext: 'bin' };
 }
 const DEFAULT_SYNC_TIME = '9999-12-31T23:59:59.999Z';
 
@@ -155,6 +156,8 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     this._syncCommentModel = [];
     this._outGoingMigrationModels = null;
     this._fileService = null;
+    this.partitionColumn = 'Created'; // Cột nghiệp vụ để chia dải dữ liệu — Created có dữ liệu datetime đầy đủ
+    this._instanceId = process.env.INSTANCE_ID || `pid_${process.pid}`;
   }
 
   /**
@@ -297,7 +300,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
             ALTER TABLE dbo.outgoing_documents ADD table_backups NVARCHAR(MAX) NULL;
       `);
       logger.info('[OutGoingDocumentModel] Checked and added missing columns (reply_incoming_doc, sign_type, table_backups...) for dbo.outgoing_documents');
-    } catch(err) {
+    } catch (err) {
       logger.warn(`[OutGoingDocumentModel] Failed to alter table outgoing_documents schema: ${err.message}`);
     }
 
@@ -351,6 +354,10 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
             NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
           ) AS __sync_id_num
         FROM ${this.oldDbSchema}.${this.oldDbTable}
+        WHERE 1=1
+          -- Phân đoạn dữ liệu theo cột nghiệp vụ
+          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
+          AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
       )
       SELECT COUNT(1) AS total
       FROM source_rows
@@ -361,13 +368,15 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
           AND ISNULL(__sync_id_num, 9223372036854775807) < @lastSyncId
         )
       )
-      -- Chỉ lấy bản ghi từ năm 2026 trở đi
+      -- Chỉ lấy bản ghi từ năm 2026 trở đi (Nếu SYNC_MIN_DATE được bật)
       AND __sync_time >= '${SYNC_MIN_DATE}'
     `;
 
     const rows = await this.queryOldDb(query, {
       lastSyncTime: normalizedLastSyncTime,
-      lastSyncId: normalizedLastSyncId
+      lastSyncId: normalizedLastSyncId,
+      startDate: process.env.SYNC_START_DATE || null,
+      endDate: process.env.SYNC_END_DATE || null
     });
 
     return Number(rows?.[0]?.total || 0);
@@ -377,71 +386,73 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
    * Tự động tạo bảng staging `outgoing_documents_sync` trong DB mới nếu chưa tồn tại.
    * Clone cấu trúc từ `VanBanBanHanh` (DB cũ) qua SELECT TOP 0 * INTO.
    */
-    async ensureStagingTableExists() {
-      const table = this.getStagingTableRef();
+  async ensureStagingTableExists() {
+    const table = this.getStagingTableRef();
 
-      const query = `
-      IF OBJECT_ID('${table}', 'U') IS NOT NULL
-          DROP TABLE ${table};
-
-      CREATE TABLE ${table} (
-        -- Source columns (raw from VanBanBanHanh / old DB)
-        ID                          NVARCHAR(255)   NOT NULL,
-        Title                       NVARCHAR(MAX),
-        BanLanhDao                  NVARCHAR(MAX),
-        ChenSo                      NVARCHAR(MAX),
-        TrangThai                   NVARCHAR(MAX),
-        IsLibrary                   NVARCHAR(MAX),
-        DoKhan                      NVARCHAR(MAX),
-        DoMat                       NVARCHAR(MAX),
+    // ★ KHÔNG DROP bảng nếu đã tồn tại — data đã staged phải được giữ nguyên
+    // Chỉ tạo bảng mới nếu chưa có, để tránh xóa dữ liệu đã sync khi restart server
+    // ★ SỬA: Dùng đúng data types từ VanBanBanHanh (DB cũ) để date filter hoạt động đúng
+    const query = `
+      IF OBJECT_ID('${table}', 'U') IS NULL
+      BEGIN
+        CREATE TABLE ${table} (
+        -- Source columns (raw from VanBanBanHanh / old DB) — đúng kiểu data types
+        ID                          BIGINT           NOT NULL,
+        Title                       NVARCHAR(150),
+        BanLanhDao                  NVARCHAR(1000),
+        ChenSo                      BIT,
+        TrangThai                   NVARCHAR(100),
+        IsLibrary                   BIT,
+        DoKhan                      NVARCHAR(50),
+        DoMat                       NVARCHAR(50),
         DonVi                       NVARCHAR(MAX),
-        Files                       NVARCHAR(MAX),
-        ChucVu                      NVARCHAR(MAX),
-        DocNum                      NVARCHAR(MAX),
-        NguoiSoanThaoText           NVARCHAR(MAX),
-        FolderLocation              NVARCHAR(MAX),
-        HoSoXuLyLink                NVARCHAR(MAX),
-        InfoVBDi                    NVARCHAR(MAX),
-        ItemVBPH                    NVARCHAR(MAX),
-        LoaiBanHanh                 NVARCHAR(MAX),
-        LoaiVanBan                  NVARCHAR(MAX),
-        NoiLuuTru                   NVARCHAR(MAX),
-        NoiNhan                     NVARCHAR(MAX),
-        NgayBanHanh                 NVARCHAR(MAX),
-        NgayHieuLuc                 NVARCHAR(MAX),
-        NgayHoanTat                 NVARCHAR(MAX),
-        NguoiKyVanBan               NVARCHAR(MAX),
-        NguoiKyVanBanText           NVARCHAR(MAX),
-        PhanCong                    NVARCHAR(MAX),
-        TraLoiVBDen                 NVARCHAR(MAX),
-        SoBan                       NVARCHAR(MAX),
-        SoTrang                     NVARCHAR(MAX),
-        SoVanBan                    NVARCHAR(MAX),
-        SoVanBanText                NVARCHAR(MAX),
-        TrichYeu                    NVARCHAR(MAX),
-        BanLanhDaoTCT               NVARCHAR(MAX),
+        Files                       NVARCHAR(4000),
+        ChucVu                      NVARCHAR(255),
+        DocNum                      NVARCHAR(50),
+        NguoiSoanThaoText           NVARCHAR(255),
+        FolderLocation              NVARCHAR(500),
+        HoSoXuLyLink                NVARCHAR(500),
+        InfoVBDi                    NVARCHAR(150),
+        ItemVBPH                    NVARCHAR(500),
+        LoaiBanHanh                 NVARCHAR(255),
+        LoaiVanBan                  NVARCHAR(255),
+        NoiLuuTru                   NVARCHAR(1000),
+        NoiNhan                     NVARCHAR(1000),
+        NgayBanHanh                 DATE,
+        NgayHieuLuc                 DATE,
+        NgayHoanTat                 DATE,
+        NguoiKyVanBan               NVARCHAR(255),
+        NguoiKyVanBanText           NVARCHAR(255),
+        PhanCong                    BIT,
+        TraLoiVBDen                 NVARCHAR(2000),
+        SoBan                       INT,
+        SoTrang                     INT,
+        SoVanBan                    NVARCHAR(255),
+        SoVanBanText                NVARCHAR(255),
+        TrichYeu                    NVARCHAR(4000),
+        BanLanhDaoTCT               NVARCHAR(4000),
         YKien                       NVARCHAR(MAX),
         YKienChiHuy                 NVARCHAR(MAX),
-        ModuleId                    NVARCHAR(MAX),
-        SiteName                    NVARCHAR(MAX),
-        ListName                    NVARCHAR(MAX),
-        ItemId                      NVARCHAR(MAX),
-        YearMonth                   NVARCHAR(MAX),
-        Modified                    NVARCHAR(MAX),
-        Created                     NVARCHAR(MAX),
-        ModifiedBy                  NVARCHAR(MAX),
-        CreatedBy                   NVARCHAR(MAX),
-        MigrateFlg                  NVARCHAR(MAX),
-        MigrateErrFlg               NVARCHAR(MAX),
+        ModuleId                    INT,
+        SiteName                    VARCHAR(50),
+        ListName                    NVARCHAR(50),
+        ItemId                      INT,
+        YearMonth                   VARCHAR(20),
+        Modified                    DATETIME,
+        Created                     DATETIME,
+        ModifiedBy                  UNIQUEIDENTIFIER,
+        CreatedBy                   UNIQUEIDENTIFIER,
+        MigrateFlg                  INT,
+        MigrateErrFlg               INT,
         MigrateErrMess              NVARCHAR(MAX),
-        LoaiMoc                     NVARCHAR(MAX),
+        LoaiMoc                     NVARCHAR(200),
         KySoFiles                   NVARCHAR(MAX),
-        DGPId                       NVARCHAR(MAX),
-        Workflow                    NVARCHAR(MAX),
-        IsKyQuyChe                  NVARCHAR(MAX),
-        DocSignType                 NVARCHAR(MAX),
-        IsConverting                NVARCHAR(MAX),
-        CodeItemId                  NVARCHAR(MAX),
+        DGPId                       INT,
+        Workflow                    NVARCHAR(255),
+        IsKyQuyChe                  BIT,
+        DocSignType                 SMALLINT,
+        IsConverting                BIT,
+        CodeItemId                  BIGINT,
 
         -- Mapped/output columns (từ StreamOutgoingMigrationModel)
         document_id                 NVARCHAR(MAX),
@@ -460,7 +471,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         abstract_note               NVARCHAR(MAX),
         recipient_ids               NVARCHAR(MAX),
         internal_receiving_unit     NVARCHAR(MAX),
-        reply_incoming_doc         NVARCHAR(MAX),
+        reply_incoming_doc          NVARCHAR(MAX),
         created_at                  NVARCHAR(MAX),
         updated_at                  NVARCHAR(MAX),
         draft_signer                NVARCHAR(MAX),
@@ -495,19 +506,23 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         from_create_draf            NVARCHAR(MAX),
         replaced                    NVARCHAR(MAX),
         tb_bak                      NVARCHAR(MAX),
-        table_backups                NVARCHAR(MAX),
+        table_backups               NVARCHAR(MAX),
         send_id_bak_bef_test        NVARCHAR(MAX),
         status_code_bak_bef_test    NVARCHAR(MAX),
         drafter_bak_bef_test        NVARCHAR(MAX),
+        processing_owner             NVARCHAR(255),
+        processing_started_at        DATETIME2,
+        processing_heartbeat_at      DATETIME2,
         stage_status               NVARCHAR(50),
         curStatusCode              NVARCHAR(10),
 
         CONSTRAINT PK_outgoing_documents_sync PRIMARY KEY (ID)
       );
+      END
       `;
 
-      await this.queryNewDb(query);
-    }
+    await this.queryNewDb(query);
+  }
 
   /**
    * Resolves fully-qualified staging table reference in NEW DB.
@@ -595,12 +610,12 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     `;
   }
 
-    /**
-   * Tìm một bản ghi đầy đủ trong bảng staging theo ID.
-   * @param {string|number} id - ID của bản ghi cần tìm
-   * @param {object} [transaction] - SQL Transaction (nếu có)
-   * @returns {Promise<object|null>} Bản ghi đầy đủ hoặc null nếu không tìm thấy
-   */
+  /**
+ * Tìm một bản ghi đầy đủ trong bảng staging theo ID.
+ * @param {string|number} id - ID của bản ghi cần tìm
+ * @param {object} [transaction] - SQL Transaction (nếu có)
+ * @returns {Promise<object|null>} Bản ghi đầy đủ hoặc null nếu không tìm thấy
+ */
   async getByIdFromStaging(id, transaction = null) {
     if (!id) {
       throw new Error('[getByIdFromStaging] id là bắt buộc.');
@@ -662,26 +677,34 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
             NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
           ) AS __sync_id_num
         FROM ${this.oldDbSchema}.${this.oldDbTable}
+        WHERE 1=1
+          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
+          AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
       )
-      SELECT
-        *,
-        ISNULL(__sync_id_num, 0) AS __sync_id
-      FROM source_rows
-      WHERE (
-        __sync_time < @lastSyncTime
-        OR (
-          __sync_time = @lastSyncTime
-          AND ISNULL(__sync_id_num, 9223372036854775807) < @lastSyncId
+      SELECT * FROM (
+        SELECT
+          *,
+          ISNULL(__sync_id_num, 0) AS __sync_id,
+          ROW_NUMBER() OVER (
+            ORDER BY
+              __sync_time DESC,
+              ISNULL(__sync_id_num, 9223372036854775807) DESC,
+              ID DESC
+          ) AS __page_rn
+        FROM source_rows
+        WHERE (
+          __sync_time < @lastSyncTime
+          OR (
+            __sync_time = @lastSyncTime
+            AND ISNULL(__sync_id_num, 9223372036854775807) < @lastSyncId
+          )
         )
-      )
-      -- Chỉ lấy bản ghi từ năm 2026 trở đi
-      AND __sync_time >= '${SYNC_MIN_DATE}'
-      ORDER BY
-        __sync_time DESC,
-        ISNULL(__sync_id_num, 9223372036854775807) DESC,
-        ID DESC
-      OFFSET @offset ROWS
-      ${limit ? `FETCH NEXT @limit ROWS ONLY` : ''}
+        -- Chỉ lấy bản ghi từ năm 2026 trở đi
+        AND __sync_time >= '${SYNC_MIN_DATE}'
+      ) AS t
+      WHERE __page_rn > @offset
+      ${limit ? `AND __page_rn <= (@offset + @limit)` : ''}
+      ORDER BY __page_rn
     `;
 
     logger.info(`[OutGoingDoc.fetchListFromOldDb] Fetching: lastSyncTime=${lastSyncTime}, lastSyncId=${lastSyncId}, limit=${limit}, offset=${offset}`);
@@ -689,7 +712,9 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       lastSyncTime,
       lastSyncId: Number(lastSyncId || 0),
       limit: limit ? Number(limit) : null,
-      offset: Number(offset || 0)
+      offset: Number(offset || 0),
+      startDate: process.env.SYNC_START_DATE || null,
+      endDate: process.env.SYNC_END_DATE || null
     });
     logger.info(`[OutGoingDoc.fetchListFromOldDb] Fetched ${results?.length || 0} rows.`);
     return results;
@@ -706,8 +731,10 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       return { stagedCount: 0 };
     }
 
-    const internalColumns = new Set(['__sync_time', '__sync_id', '__sync_id_num']);
-    const columns = Object.keys(rows[0] || {}).filter((column) => !internalColumns.has(column));
+    const internalColumns = new Set(['MigrateFlg', 'MigrateErrFlg', 'MigrateErrMess', '_sync_time_val', '_sync_id_val']);
+    const columns = Object.keys(rows[0] || {}).filter((column) => {
+      return !String(column).startsWith('__') && !internalColumns.has(column);
+    });
     if (!columns.length) {
       return { stagedCount: 0 };
     }
@@ -777,13 +804,28 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     const batchSize = Number(process.env.STAGING_FETCH_BATCH_SIZE || 2000);
     const stagingTableRef = this.getStagingTableRef();
 
-    // Cleanup stale records
+    const envStartDate = process.env.SYNC_START_DATE ? new Date(process.env.SYNC_START_DATE).toISOString() : null;
+    const envEndDate = process.env.SYNC_END_DATE ? new Date(process.env.SYNC_END_DATE).toISOString() : null;
+
+    // Cleanup stale records (only rows claimed > STALE_MINUTES ago)
+    const staleMinutes = Number(process.env.STAGING_STALE_MINUTES || 30);
     try {
       await this.queryNewDb(`
         UPDATE ${stagingTableRef}
-        SET MigrateFlg = 0, MigrateErrMess = 'Reset from stale processing'
+        SET MigrateFlg = 0,
+            MigrateErrMess = 'Reset from stale processing',
+            processing_owner = NULL,
+            processing_started_at = NULL,
+            processing_heartbeat_at = NULL
         WHERE MigrateFlg = 2
-      `);
+          AND processing_started_at < DATEADD(MINUTE, -@staleMinutes, SYSUTCDATETIME())
+          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
+          AND (${this.partitionColumn} <= @endDate   OR @endDate IS NULL)
+      `, {
+        staleMinutes,
+        startDate: envStartDate,
+        endDate: envEndDate
+      });
     } catch (cleanupErr) {
       logger.warn(`[OutGoingDoc] Cleanup stale records failed: ${cleanupErr.message}`);
     }
@@ -813,7 +855,10 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       );
       if (!rows || rows.length === 0) return { rowsCount: 0, stagedCount: 0 };
 
-      const stageResult = await this.syncOldToStaging(rows);
+      const stageResult = await dbUtils.withTransactionRetry(this.newPool, async (transaction) => {
+        return await this.syncOldToStaging(rows, { transaction });
+      }, { maxRetries: 5 });
+
       return { rowsCount: rows.length, stagedCount: Number(stageResult?.stagedCount || 0), lastRow: rows[rows.length - 1] };
     };
 
@@ -826,7 +871,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       results.push(task);
       executing.add(task);
       task.finally(() => executing.delete(task));
-      
+
       if (executing.size >= STAGING_PARALLEL_BATCHES) {
         await Promise.race(executing);
       }
@@ -836,7 +881,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     for (const res of batchResults) {
       if (!res || res.rowsCount === 0) continue;
       totalStaged += res.stagedCount;
-      
+
       const rowTime = this.extractRowSyncTime(res.lastRow);
       const rowId = this.extractRowSyncId(res.lastRow);
       if (rowTime && this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId)) {
@@ -848,19 +893,35 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     logger.info(`🔥 [OutGoingDoc] Hoàn tất hút dữ liệu về Staging. Staged=${totalStaged}/${totalCount}. LastSyncTime: ${nextSyncTime}, LastSyncId: ${nextSyncId}`);
 
     // Fix Bug #3: Đếm số bản ghi THỰC TẾ trong staging chưa xử lý
+    // FIX: Phải lọc theo dải ngày của instance này (SYNC_START_DATE/SYNC_END_DATE)
+    // để tránh đếm nhầm records của các terminal khác đang chạy song song.
+    // ★ Với DATE type đúng: lọc trực tiếp, NULL vẫn hoạt động
     let pendingCount = 0;
     try {
       const pendingRes = await this.queryNewDb(`
         SELECT COUNT(1) AS cnt FROM ${stagingTableRef}
         WHERE ISNULL(MigrateFlg, 0) = 0
           AND ISNULL(MigrateErrFlg, 0) = 0
-      `);
+          AND (
+            ${this.partitionColumn} IS NULL
+            OR (${this.partitionColumn} >= @startDate AND @startDate IS NOT NULL)
+            OR (@startDate IS NULL AND ${this.partitionColumn} IS NOT NULL)
+          )
+          AND (
+            ${this.partitionColumn} IS NULL
+            OR (${this.partitionColumn} <= @endDate AND @endDate IS NOT NULL)
+            OR (@endDate IS NULL AND ${this.partitionColumn} IS NOT NULL)
+          )
+      `, {
+        startDate: envStartDate,
+        endDate: envEndDate
+      });
       pendingCount = Number(pendingRes?.[0]?.cnt || 0);
     } catch (e) {
       logger.warn(`[OutGoingDoc] Không đếm được pending staging: ${e.message}`);
       pendingCount = totalStaged;
     }
-    logger.info(`[OutGoingDoc] Pending records trong Staging có thể xử lý: ${pendingCount}`);
+    logger.info(`[OutGoingDoc] Pending records trong Staging có thể xử lý: ${pendingCount} (range: ${envStartDate || 'ALL'} → ${envEndDate || 'ALL'})`);
 
     return {
       syncJobId,
@@ -930,7 +991,10 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       rowData = await this.fetchOneFromStaging();
 
       if (!rowData) {
-        logger.info(`[OutGoingDoc] Không còn dữ liệu trong staging cho job ${syncJobId}.`);
+        if (!this._finishedLogged) {
+          logger.info(`[OutGoingDoc] Không còn dữ liệu trong staging cho job ${syncJobId}`);
+          this._finishedLogged = true;
+        }
         await this.finalizeProcessingCursor(syncJobId);
         return {
           syncJobId,
@@ -943,29 +1007,40 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       const current = Number(jobState?.total_processed || 0) + 1;
       logger.info(`[OutGoingDoc] Process ${current}: record ID=${rowId}`);
 
-      transaction = new sql.Transaction(this.newPool);
-      await transaction.begin();
+      // Heartbeat timer — keeps the row from being reaped as stale while we work.
+      // Runs OUTSIDE the transaction so it survives across retries.
+      const HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+      const heartbeatTimer = setInterval(() => {
+        this.updateHeartbeat(rowId).catch(err => {
+          logger.warn(`[OutGoingDoc] Heartbeat failed for ID=${rowId}: ${err.message}`);
+        });
+      }, HEARTBEAT_INTERVAL_MS);
 
-      const result = await this.processRowData(rowData, { transaction });
+      const result = await dbUtils.withTransactionRetry(this.newPool, async (transaction) => {
+        const res = await this.processRowData(rowData, { transaction, preparedFiles });
 
-      // Update counters in sync_jobs
-      await this.queryNewDbTx(
-        `UPDATE sync_jobs
-         SET total_processed = ISNULL(total_processed, 0) + 1,
-             total_success   = ISNULL(total_success, 0) + 1
-         WHERE job_id = @syncJobId`,
-        { syncJobId },
-        transaction
-      );
+        // Update counters in sync_jobs
+        await this.queryNewDbTx(
+          `UPDATE sync_jobs
+           SET total_processed = ISNULL(total_processed, 0) + 1,
+               total_success   = ISNULL(total_success, 0) + 1
+           WHERE job_id = @syncJobId`,
+          { syncJobId },
+          transaction,
+        );
 
-      // Mark staging row as processed successfully
-      await this.queryNewDbTx(
-        `UPDATE ${stagingTableRef} SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE ID = @ID`,
-        { ID: rowId },
-        transaction
-      );
+        // Mark staging row as processed successfully
+        await this.queryNewDbTx(
+          `UPDATE ${stagingTableRef} WITH (ROWLOCK)
+           SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL,
+               processing_owner = NULL, processing_started_at = NULL, processing_heartbeat_at = NULL
+           WHERE ID = @ID`,
+          { ID: rowId },
+          transaction,
+        );
 
-      await transaction.commit();
+        return res;
+      }, { maxRetries: 5 });
 
       return {
         syncJobId,
@@ -975,17 +1050,18 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         result
       };
     } catch (error) {
-      if (transaction) {
-        try {
-          await transaction.rollback().catch(() => {});
-        } catch (rollbackError) {}
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
       }
-
       if (rowData && rowData.ID) {
         try {
-           const stagingTableRef = this.getStagingTableRef();
-           await this.queryNewDb(`UPDATE ${stagingTableRef} SET MigrateErrFlg = 1, MigrateErrMess = @Err WHERE ID = @ID`, { ID: rowData.ID, Err: String(error.message).slice(0, 1000) });
-        } catch (updateErr) {}
+          const stagingTableRef = this.getStagingTableRef();
+          await this.queryNewDb(`UPDATE ${stagingTableRef} WITH (ROWLOCK)
+            SET MigrateFlg = 0, MigrateErrFlg = 1, MigrateErrMess = @Err,
+                processing_owner = NULL, processing_started_at = NULL, processing_heartbeat_at = NULL
+            WHERE ID = @ID`, { ID: rowData.ID, Err: String(error.message).slice(0, 1000) });
+        } catch (updateErr) { }
       }
 
       logger.error(`[OutGoingDoc.processOne] Failed row ID=${rowData?.ID}: ${error.message}`);
@@ -999,16 +1075,29 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
   async finalizeProcessingCursor(syncJobId) {
     try {
       const stagingTableRef = this.getStagingTableRef();
+      const startDate = process.env.SYNC_START_DATE || null;
+      const endDate = process.env.SYNC_END_DATE || null;
       const res = await this.queryNewDb(`
         SELECT
           MAX(Modified) AS maxTime,
-          MAX(TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), ''))) AS maxId
+          MAX(ID) AS maxId
         FROM ${stagingTableRef}
         WHERE ISNULL(MigrateFlg, 0) = 1
-      `);
+          -- ★ Với DATE type đúng: lọc trực tiếp
+          AND (
+            ${this.partitionColumn} IS NULL
+            OR (${this.partitionColumn} >= @startDate AND @startDate IS NOT NULL)
+            OR (@startDate IS NULL AND ${this.partitionColumn} IS NOT NULL)
+          )
+          AND (
+            ${this.partitionColumn} IS NULL
+            OR (${this.partitionColumn} <= @endDate AND @endDate IS NOT NULL)
+            OR (@endDate IS NULL AND ${this.partitionColumn} IS NOT NULL)
+          )
+      `, { startDate, endDate });
       if (res?.[0]?.maxTime) {
         const finalTime = new Date(res[0].maxTime).toISOString();
-        const finalId   = Number(res[0].maxId || 0);
+        const finalId = Number(res[0].maxId || 0);
         await this.queryNewDb(
           `UPDATE sync_jobs
            SET last_sync_time = @t,
@@ -1016,7 +1105,9 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
            WHERE job_id = @jobId`,
           { t: finalTime, id: finalId, jobId: syncJobId }
         );
-        logger.info(`[OutGoingDoc] Cursor finalized: last_sync_time=${finalTime}, last_sync_id=${finalId}`);
+        logger.info(`[OutGoingDoc] Cursor finalized for partition: last_sync_time=${finalTime}, last_sync_id=${finalId}`);
+      } else {
+        logger.info(`[OutGoingDoc] finalizeProcessingCursor: không có bản ghi đã xử lý trong phân đoạn, cursor giữ nguyên.`);
       }
     } catch (err) {
       logger.warn(`[OutGoingDoc.finalizeProcessingCursor] Lỗi khi finalize cursor: ${err.message}`);
@@ -1029,26 +1120,94 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
   async fetchOneFromStaging() {
     try {
       const stagingTableRef = this.getStagingTableRef();
-      const query = `
-      WITH CTE AS (
-        SELECT TOP (1) *
+      const startDate = process.env.SYNC_START_DATE || null;
+      const endDate = process.env.SYNC_END_DATE || null;
+
+      // ★ DEBUG: Đếm records sẵn sàng xử lý trước khi fetch
+      const countQuery = `
+        SELECT COUNT(1) AS cnt,
+               MIN(${this.partitionColumn}) AS minDate,
+               MAX(${this.partitionColumn}) AS maxDate
         FROM ${stagingTableRef}
         WHERE ISNULL(MigrateFlg, 0) = 0
           AND ISNULL(MigrateErrFlg, 0) = 0
-        ORDER BY TRY_CONVERT(datetime2, Modified) DESC,
-                 TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')) DESC
+          -- ★ Với DATE type đúng: lọc trực tiếp, NULL vẫn hoạt động
+          AND (
+            ${this.partitionColumn} IS NULL
+            OR (${this.partitionColumn} >= @startDate AND @startDate IS NOT NULL)
+            OR (@startDate IS NULL AND ${this.partitionColumn} IS NOT NULL)
+          )
+          AND (
+            ${this.partitionColumn} IS NULL
+            OR (${this.partitionColumn} <= @endDate AND @endDate IS NOT NULL)
+            OR (@endDate IS NULL AND ${this.partitionColumn} IS NOT NULL)
+          )
+      `;
+      const countResult = await this.queryNewDb(countQuery, { startDate, endDate });
+      const availableCount = Number(countResult?.[0]?.cnt || 0);
+      const minDate = countResult?.[0]?.minDate;
+      const maxDate = countResult?.[0]?.maxDate;
+      logger.info(`[OutGoingDoc.fetchOneFromStaging] DEBUG: available=${availableCount}, partitionRange=[${minDate} → ${maxDate}], filter=[${startDate} → ${endDate}]`);
+
+      if (availableCount === 0) {
+        return null;
+      }
+
+      const query = `
+      WITH CTE AS (
+        SELECT TOP (1) *
+        FROM ${stagingTableRef} WITH (UPDLOCK, ROWLOCK, READPAST)
+        WHERE ISNULL(MigrateFlg, 0) = 0
+          AND ISNULL(MigrateErrFlg, 0) = 0
+          -- ★ Với DATE type đúng: lọc trực tiếp, NULL vẫn được xử lý
+          AND (
+            ${this.partitionColumn} IS NULL
+            OR (${this.partitionColumn} >= @startDate AND @startDate IS NOT NULL)
+            OR (@startDate IS NULL AND ${this.partitionColumn} IS NOT NULL)
+          )
+          AND (
+            ${this.partitionColumn} IS NULL
+            OR (${this.partitionColumn} <= @endDate AND @endDate IS NOT NULL)
+            OR (@endDate IS NULL AND ${this.partitionColumn} IS NOT NULL)
+          )
+        ORDER BY Modified DESC,
+                 ID DESC
       )
       UPDATE CTE
       SET MigrateFlg = 2,
-          MigrateErrMess = 'Processing...'
+          MigrateErrMess = 'Processing...',
+          processing_owner = @owner,
+          processing_started_at = SYSUTCDATETIME(),
+          processing_heartbeat_at = SYSUTCDATETIME()
       OUTPUT inserted.*
       `;
 
-      const rows = await this.queryNewDb(query);
+      const rows = await this.queryNewDb(query, {
+        startDate: process.env.SYNC_START_DATE || null,
+        endDate: process.env.SYNC_END_DATE || null,
+        owner: this._instanceId || `pid_${process.pid}`,
+      });
       return rows?.length ? rows[0] : null;
     } catch (error) {
       logger.error(`[OutGoingDoc.fetchOneFromStaging] Failed to fetch: ${error.message}`);
       throw error;
+    }
+  }
+
+  /**
+   * Updates processing_heartbeat_at for a claimed staging row.
+   * Call periodically from long-running processOne to avoid being treated as stale.
+   * @param {string|number} rowId
+   * @param {object} [transaction]
+   */
+  async updateHeartbeat(rowId, transaction = null) {
+    if (!rowId) return;
+    const stagingTableRef = this.getStagingTableRef();
+    const q = `UPDATE ${stagingTableRef} WITH (ROWLOCK) SET processing_heartbeat_at = SYSUTCDATETIME() WHERE ID = @ID AND MigrateFlg = 2`;
+    if (transaction) {
+      await this.queryNewDbTx(q, { ID: rowId }, transaction);
+    } else {
+      await this.queryNewDb(q, { ID: rowId });
     }
   }
 
@@ -1058,7 +1217,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
    * @param {{transaction?: object}} [context]
    * @returns {Promise<{action:string,backupId:string,affected:number}>}
    */
-  async processRowData(rowData, { transaction } = {}) {
+  async processRowData(rowData, { transaction, preparedFiles = [] } = {}) {
     if (!rowData) {
       throw new Error('rowData is required');
     }
@@ -1069,7 +1228,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       throw new Error('Invalid document ID from staging');
     }
 
-    const res = await this.upsertDocumentAggregateById(rowData, { transaction });
+    const res = await this.upsertDocumentAggregateById(rowData, { transaction, preparedFiles });
     const affected = Number(res?.affected || 0);
 
     if (affected === 0) {
@@ -1082,110 +1241,104 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       affected
     };
   }
-  // hàm nhận vào bản ghi cũ và mới để thêm file
-  async ThemFileDinhKem(oldRecord, newDocumentRecord) {
-
+  /**
+   * Tải các file đính kèm từ SharePoint về bộ nhớ (NGOÀI Transaction SQL).
+   */
+  async prepareFilesFromSharePoint(oldRecord) {
     const files = oldRecord?.Files || '';
+    if (!files) return [];
 
-    if (!files) {
-      return false;
+    const baseUrl = (process.env.BASE_URL || "").replace(/\/$/, "");
+    if (!baseUrl) return [];
+
+    const parts = files.split('|').filter(Boolean);
+    if (parts.length === 0) return [];
+
+    let filesToPath = [];
+    const firstPartIsLikelyFile = /\.(pdf|docx?|xlsx?|pptx?|jpe?g|png|gif|bmp|txt|zip|rar)$/i.test(parts[0]);
+
+    if (firstPartIsLikelyFile) {
+      filesToPath.push(parts[0]);
+    } else {
+      const directory = parts[0];
+      const names = parts.slice(1);
+      for (const name of names) {
+        if (!name) continue;
+        filesToPath.push(directory.endsWith('/') ? `${directory}${name}` : `${directory}/${name}`);
+      }
     }
 
-    try {
-      const fileSvc = this._fileService;
-      const baseUrl = (process.env.BASE_URL || "").replace(/\/$/, "");
-      if (!baseUrl) {
-        logger.error('[ThemFileDinhKem][Outgoing] BASE_URL is not configured in .env');
-        return false;
-      }
-
-      const parts = files.split('|').filter(Boolean);
-      if (parts.length === 0) return true;
-
-      let filesToProcess = [];
-
-      // Heuristic to decide parsing strategy based on the format of the first part.
-      const firstPartIsLikelyFile = /\.(pdf|docx?|xlsx?|pptx?|jpe?g|png|gif|bmp|txt|zip|rar)$/i.test(parts[0]);
-
-      if (firstPartIsLikelyFile) {
-        // FORMAT 1: "path/to/file.ext|other_data..."
-        filesToProcess.push(parts[0]);
-      } else {
-        // FORMAT 2: "path/to/dir/|file1.pdf|file2.docx"
-        const directory = parts[0];
-        const names = parts.slice(1);
-        for (const name of names) {
-          if (!name) continue;
-          const relativePath = directory.endsWith('/') ? `${directory}${name}` : `${directory}/${name}`;
-          filesToProcess.push(relativePath);
-        }
-      }
-
-      logger.info(`[ThemFileDinhKem][Outgoing] Record ${oldRecord?.ID}: Found ${filesToProcess.length} files to process.`);
-
-      const uploadPromises = filesToProcess.map(async (relativePath) => {
-        if (!relativePath || !relativePath.includes('/')) {
-          logger.warn(`[ThemFileDinhKem][Outgoing] Skipping invalid path part: "${relativePath}" for record ${oldRecord?.ID}`);
-          return;
-        }
-
+    const preparedResults = [];
+    for (const relativePath of filesToPath) {
+      try {
+        if (!relativePath.includes('/')) continue;
         const fullUrl = `${baseUrl}${relativePath}`;
         const fileName = relativePath.substring(relativePath.lastIndexOf('/') + 1);
 
-        let buffer;
-        try {
-          buffer = await spDownload(fullUrl);
-        } catch (downloadErr) {
-          logger.error(`[ThemFileDinhKem][Outgoing] Failed to download file from ${fullUrl}: ${downloadErr.message}`);
-          return;
+        logger.info(`[OutGoingDoc][prepareFiles] Đang tải: ${fileName}`);
+        const buffer = await spDownload(fullUrl, this.newPool); // Truyền Pool để lock đa tiến trình
+
+        if (buffer && buffer.length > 0) {
+          preparedResults.push({ buffer, fileName, relativePath });
         }
-
-        const fileType = detectFileType(buffer);
-        const mimeType = fileType.mime;
-
-        const fileIdBak = uuidv4();
-        const fileRecord = {
-          file_name: fileName,
-          file_path: relativePath,
-          mime_type: mimeType,
-          created_by: newDocumentRecord?.drafter,
-          version: 1,
-          id_bak: fileIdBak,
-          table_bak: 'VanBanBanHanh',
-          type_doc: newDocumentRecord?.type_doc,
-          isBak: 1
-        };
-
-        const relationRecord = {
-          object_type: 'docDraft',
-          object_id: String(newDocumentRecord?.id),  // ID văn bản trong DB mới — NOT NULL
-          object_id_bak: oldRecord?.ID,
-          file_id_bak: fileIdBak,
-          table_bak: 'VanBanBanHanh',
-          type_doc: 'docDraft',
-        };
-
-        const result = await fileSvc.uploadAndInsert({
-          fileBuffer: buffer,
-          originalName: fileName,
-          mimeType,
-          fileRecord,
-          relationRecord,
-          folder: 'outgoing',
-          localFolder: 'outgoing'
-        });
-        logger.info(`  └─ [File] Uploaded: ${fileName} | Success: ${!!result}`);
-      });
-
-      await Promise.all(uploadPromises);
-
-      return true;
-    } catch (error) {
-      logger.error(`[ThemFileDinhKem][Outgoing] Unexpected error while migrating files for record ID ${oldRecord?.ID}: ${error.message}`, { stack: error.stack });
-      return false;
+      } catch (err) {
+        logger.error(`[OutGoingDoc][prepareFiles] Lỗi tải file ${relativePath}: ${err.message}`);
+      }
     }
+    return preparedResults;
+  }
 
-}
+  /**
+   * Ghi dữ liệu file vào database (TRONG Transaction SQL).
+   */
+  async applyPreparedFiles(preparedFiles, oldRecord, newDocumentRecord, transaction) {
+    if (!Array.isArray(preparedFiles) || preparedFiles.length === 0) return true;
+
+    for (const fileItem of preparedFiles) {
+      const { buffer, fileName, relativePath } = fileItem;
+      const fileType = detectFileType(buffer);
+      const mimeType = fileType.mime;
+
+      const fileIdBak = uuidv4();
+      const fileRecord = {
+        file_name: fileName,
+        file_path: relativePath,
+        mime_type: mimeType,
+        created_by: newDocumentRecord?.drafter || null,
+        version: 1,
+        id_bak: fileIdBak,
+        table_bak: 'VanBanBanHanh',
+        type_doc: newDocumentRecord?.type_doc || null,
+        isBak: 1
+      };
+
+      const relationRecord = {
+        object_type: 'docDraft',
+        object_id: String(newDocumentRecord?.id),
+        object_id_bak: oldRecord?.ID,
+        file_id_bak: fileIdBak,
+        table_bak: 'VanBanBanHanh',
+        type_doc: 'docDraft',
+      };
+
+      await this._fileService.uploadAndInsert({
+        fileBuffer: buffer,
+        originalName: fileName,
+        mimeType,
+        fileRecord,
+        relationRecord,
+        folder: 'outgoing',
+        localFolder: 'outgoing',
+        transaction // Dùng chung TX
+      });
+    }
+    return true;
+  }
+
+  async ThemFileDinhKem(oldRecord, newDocumentRecord) {
+    const prepared = await this.prepareFilesFromSharePoint(oldRecord);
+    return await this.applyPreparedFiles(prepared, oldRecord, newDocumentRecord, null);
+  }
 
   /**
    * Upserts one outgoing document and its related audit/comment entities.
@@ -1193,7 +1346,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
    * @param {{transaction?: object}} [context]
    * @returns {Promise<{action:string,affected:number}>}
    */
-  async upsertDocumentAggregateById(oldRecord, { transaction } = {}) {
+  async upsertDocumentAggregateById(oldRecord, { transaction, preparedFiles = [] } = {}) {
     if (!oldRecord) {
       return { action: 'none', affected: 0 };
     }
@@ -1202,199 +1355,186 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     try {
       const oldDbRecord = id
         ? await this.getByIdFromOldDb(id).catch(err => {
-            logger.warn(`[upsertDocumentAggregateById] Không lấy được old record ID=${id}: ${err.message}`);
-            return null;
-          })
+          if (dbUtils.isRetryableSqlError(err)) throw err;
+          logger.warn(`[upsertDocumentAggregateById] Không lấy được old record ID=${id}: ${err.message}`);
+          return null;
+        })
         : null;
-    if (!this._outGoingMigrationModels) {
-      throw new Error(`[upsertDocumentAggregateById] Model not initialized for ID=${id}`);
-    }
+      if (!this._outGoingMigrationModels) {
+        throw new Error(`[upsertDocumentAggregateById] Model not initialized for ID=${id}`);
+      }
 
-    let totalAffected = 0;
+      let totalAffected = 0;
 
-    const _timeStep1 = Date.now();
-    const documentResult = await this._outGoingMigrationModels.processSingleRecord(
-      oldRecord,
-      transaction
-    );
-    logger.info(`[PERF] STEP 1 (Document) took ${Date.now() - _timeStep1}ms for ID=${id}`);
+      const _timeStep1 = Date.now();
+      const documentResult = await this._outGoingMigrationModels.processSingleRecord(
+        oldRecord,
+        transaction
+      );
+      logger.info(`[PERF] STEP 1 (Document) took ${Date.now() - _timeStep1}ms for ID=${id}`);
 
-    if (!documentResult || documentResult.affected === 0) {
-      return { action: 'none', affected: 0 };
-    }
-    logger.info(
-      `[AggregateSync][Document] documentId=${documentResult.documentId} action=${documentResult?.action} affected=${documentResult?.affected}`
-    );
+      if (!documentResult || documentResult.affected === 0) {
+        return { action: 'none', affected: 0 };
+      }
+      logger.info(
+        `[AggregateSync][Document] documentId=${documentResult.documentId} action=${documentResult?.action} affected=${documentResult?.affected}`
+      );
 
-    totalAffected += Number(documentResult.affected || 0);
-    const documentId = documentResult.documentId;
-    const stagingRecord = documentId
-      ? await this.getByIdFromStaging(id, transaction).catch(err => {
+      totalAffected += Number(documentResult.affected || 0);
+      const documentId = documentResult.documentId;
+      const stagingRecord = documentId
+        ? await this.getByIdFromStaging(id, transaction).catch(err => {
+          if (dbUtils.isRetryableSqlError(err)) throw err;
           logger.warn(`[upsertDocumentAggregateById] Không lấy được staging record ID=${id}: ${err.message}`);
           return null;
         })
-      : null;
-    if (!documentId) {
-      return {
-        action: documentResult.action || 'upsert',
-        affected: Number(totalAffected || 0)
-      };
-    }
-    const drafter = documentResult.drafter;
-    /* ====== thêm file====== */
-    try {
-      if (oldRecord?.Files) {
-        const _timeStep2 = Date.now();
-        const ok = await this.ThemFileDinhKem(
-          oldRecord,
-          {
-            id: documentId,
-            type_doc: stagingRecord?.type_doc
-          }
-        );
+        : null;
+      if (!documentId) {
+        return {
+          action: documentResult.action || 'upsert',
+          affected: Number(totalAffected || 0)
+        };
+      }
+      const drafter = documentResult.drafter;
+      /* ====== Thêm file (Đã tải trước) ====== */
+      const _timeStep2 = Date.now();
+      await this.applyPreparedFiles(preparedFiles, oldRecord, { id: documentId, type_doc: stagingRecord?.type_doc, drafter }, transaction);
+      logger.info(`[PERF] STEP 2 (Files DB) took ${Date.now() - _timeStep2}ms for ID=${id}`);
 
-        logger.info(
-          `[AggregateSync][Files] documentId=${documentId} migrated=${ok}`
-        );
-        logger.info(`[PERF] STEP 2 (Files) took ${Date.now() - _timeStep2}ms for ID=${id}`);
-      }
-    } catch (fileErr) {
-      logger.warn(
-        `[upsertDocumentAggregateById] File migrate failed ID=${id}: ${fileErr.message}`
-      );
-    }
-
-    /* ====== Phân tách bình luận từ HTML (Ý kiến lãnh đạo SP cũ) ====== */
-    const _timeStep3 = Date.now();
-    try {
-      let totalParsedComments = 0;
-      if (oldRecord?.YKien) {
-         totalParsedComments += await this._outGoingMigrationModels.helper.parseAndInsertHtmlComments(
-            oldRecord.YKien, documentId, id, 'VanBanBanHanh', 'YKien', transaction
-         );
-      }
-      if (oldRecord?.YKienChiHuy) {
-         totalParsedComments += await this._outGoingMigrationModels.helper.parseAndInsertHtmlComments(
-            oldRecord.YKienChiHuy, documentId, id, 'VanBanBanHanh', 'YKienChiHuy', transaction
-         );
-      }
-      if (oldRecord?.YKienLanhDao) {
-         totalParsedComments += await this._outGoingMigrationModels.helper.parseAndInsertHtmlComments(
-            oldRecord.YKienLanhDao, documentId, id, 'VanBanBanHanh', 'YKienLanhDao', transaction
-         );
-      }
-      if (oldRecord?.YKienLanhDaoTCT) {
-         totalParsedComments += await this._outGoingMigrationModels.helper.parseAndInsertHtmlComments(
-            oldRecord.YKienLanhDaoTCT, documentId, id, 'VanBanBanHanh', 'YKienLanhDaoTCT', transaction
-         );
-      }
-      if (oldRecord?.YKienLanhDaoVPDN) {
-         totalParsedComments += await this._outGoingMigrationModels.helper.parseAndInsertHtmlComments(
-            oldRecord.YKienLanhDaoVPDN, documentId, id, 'VanBanBanHanh', 'YKienLanhDaoVPDN', transaction
-         );
-      }
-      if (oldRecord?.YKienCuaLDVPChoVanThu) {
-         totalParsedComments += await this._outGoingMigrationModels.helper.parseAndInsertHtmlComments(
-            oldRecord.YKienCuaLDVPChoVanThu, documentId, id, 'VanBanBanHanh', 'YKienCuaLDVPChoVanThu', transaction
-         );
-      }
-      if (totalParsedComments > 0) {
-        logger.info(`  └─ [ParsedHTMLComments] Extracted ${totalParsedComments} comments from HTML fields.`);
-      }
-    } catch (htmlCommentErr) {
-      logger.warn(`[upsertDocumentAggregateById] Lỗi parse HTML YKien ID=${id}: ${htmlCommentErr.message}`);
-    }
-    logger.info(`[PERF] STEP 3 (HTML Comments) took ${Date.now() - _timeStep3}ms for ID=${id}`);
-
-    // ══════════════════════════════════════════════════════════════
-    // AGGREGATED AUDIT SYNC: Gộp tất cả audit từ các bảng và xử lý theo thứ tự thời gian
-    // ══════════════════════════════════════════════════════════════
-    const _timeStep4 = Date.now();
-    const auditModels = this._syncAuditModel || [];
-    if (auditModels.length > 0) {
+      /* ====== Phân tách bình luận từ HTML (Ý kiến lãnh đạo SP cũ) ====== */
+      const _timeStep3 = Date.now();
       try {
-        const auditTableNames = auditModels.map(m => m.oldDbTable);
-        const firstModel = auditModels[0];
+        let totalParsedComments = 0;
+        if (oldRecord?.YKien) {
+          totalParsedComments += await this._outGoingMigrationModels.helper.parseAndInsertHtmlComments(
+            oldRecord.YKien, documentId, id, 'VanBanBanHanh', 'YKien', transaction
+          );
+        }
+        if (oldRecord?.YKienChiHuy) {
+          totalParsedComments += await this._outGoingMigrationModels.helper.parseAndInsertHtmlComments(
+            oldRecord.YKienChiHuy, documentId, id, 'VanBanBanHanh', 'YKienChiHuy', transaction
+          );
+        }
+        if (oldRecord?.YKienLanhDao) {
+          totalParsedComments += await this._outGoingMigrationModels.helper.parseAndInsertHtmlComments(
+            oldRecord.YKienLanhDao, documentId, id, 'VanBanBanHanh', 'YKienLanhDao', transaction
+          );
+        }
+        if (oldRecord?.YKienLanhDaoTCT) {
+          totalParsedComments += await this._outGoingMigrationModels.helper.parseAndInsertHtmlComments(
+            oldRecord.YKienLanhDaoTCT, documentId, id, 'VanBanBanHanh', 'YKienLanhDaoTCT', transaction
+          );
+        }
+        if (oldRecord?.YKienLanhDaoVPDN) {
+          totalParsedComments += await this._outGoingMigrationModels.helper.parseAndInsertHtmlComments(
+            oldRecord.YKienLanhDaoVPDN, documentId, id, 'VanBanBanHanh', 'YKienLanhDaoVPDN', transaction
+          );
+        }
+        if (oldRecord?.YKienCuaLDVPChoVanThu) {
+          totalParsedComments += await this._outGoingMigrationModels.helper.parseAndInsertHtmlComments(
+            oldRecord.YKienCuaLDVPChoVanThu, documentId, id, 'VanBanBanHanh', 'YKienCuaLDVPChoVanThu', transaction
+          );
+        }
+        if (totalParsedComments > 0) {
+          logger.info(`  └─ [ParsedHTMLComments] Extracted ${totalParsedComments} comments from HTML fields.`);
+        }
+      } catch (htmlCommentErr) {
+        if (dbUtils.isRetryableSqlError(htmlCommentErr)) throw htmlCommentErr;
+        logger.warn(`[upsertDocumentAggregateById] Lỗi parse HTML YKien ID=${id}: ${htmlCommentErr.message}`);
+      }
+      logger.info(`[PERF] STEP 3 (HTML Comments) took ${Date.now() - _timeStep3}ms for ID=${id}`);
 
-        // Lấy tất cả audit từ tất cả các bảng, đã được sắp xếp chronologically bên trong method này
-        const allRawAudits = await firstModel.fetchAllAuditsAcrossTables(
-          id,
-          auditTableNames,
-          [CATEGORY_RELEASE_DV, CATEGORY_RELEASE_TCT, CATEGORY_OUTGOING] // Categories cho văn bản đi
-        );
+      // ══════════════════════════════════════════════════════════════
+      // AGGREGATED AUDIT SYNC: Gộp tất cả audit từ các bảng và xử lý theo thứ tự thời gian
+      // ══════════════════════════════════════════════════════════════
+      const _timeStep4 = Date.now();
+      const auditModels = this._syncAuditModel || [];
+      if (auditModels.length > 0) {
+        try {
+          const auditTableNames = auditModels.map(m => m.oldDbTable);
+          const firstModel = auditModels[0];
 
-        if (allRawAudits.length > 0) {
-          // Tạo map để tìm nhanh model xử lý dựa trên tên bảng
-          const modelMap = new Map(auditModels.map(m => [m.oldDbTable, m]));
+          // Lấy tất cả audit từ tất cả các bảng, đã được sắp xếp chronologically bên trong method này
+          const allRawAudits = await firstModel.fetchAllAuditsAcrossTables(
+            id,
+            auditTableNames,
+            [CATEGORY_RELEASE_DV, CATEGORY_RELEASE_TCT, CATEGORY_OUTGOING] // Categories cho văn bản đi
+          );
 
-          for (const rawAudit of allRawAudits) {
-            const tableName = rawAudit.__source_table;
-            const model = modelMap.get(tableName) || firstModel;
+          if (allRawAudits.length > 0) {
+            // Tạo map để tìm nhanh model xử lý dựa trên tên bảng
+            const modelMap = new Map(auditModels.map(m => [m.oldDbTable, m]));
 
-            try {
-              const result = await model.processSingleRecord(rawAudit, documentId, transaction, drafter);
-              if (!result) continue;
+            for (const rawAudit of allRawAudits) {
+              const tableName = rawAudit.__source_table;
+              const model = modelMap.get(tableName) || firstModel;
 
-              logger.info(
-                `[AggregateSync][Audit] table=${tableName} documentId=${documentId} inserted=${result?.inserted || 0} updated=${result?.updated || 0}`
-              );
-              totalAffected += Number(result.inserted || 0);
-              totalAffected += Number(result.updated || 0);
-            } catch (auditErr) {
-              logger.warn(
-                `[upsertDocumentAggregateById] Audit migrate failed table=${tableName} ID=${id}: ${auditErr.message}`
-              );
+              try {
+                const result = await model.processSingleRecord(rawAudit, documentId, transaction, drafter);
+                if (!result) continue;
+
+                logger.info(
+                  `[AggregateSync][Audit] table=${tableName} documentId=${documentId} inserted=${result?.inserted || 0} updated=${result?.updated || 0}`
+                );
+                totalAffected += Number(result.inserted || 0);
+                totalAffected += Number(result.updated || 0);
+              } catch (auditErr) {
+                if (dbUtils.isRetryableSqlError(auditErr)) throw auditErr;
+                logger.warn(
+                  `[upsertDocumentAggregateById] Audit migrate failed table=${tableName} ID=${id}: ${auditErr.message}`
+                );
+              }
             }
           }
+        } catch (error) {
+          if (dbUtils.isRetryableSqlError(error)) throw error;
+          logger.warn(
+            `[upsertDocumentAggregateById] Aggregated fetch audit failed for ID=${id}: ${error.message}`
+          );
         }
-      } catch (error) {
-        logger.warn(
-          `[upsertDocumentAggregateById] Aggregated fetch audit failed for ID=${id}: ${error.message}`
-        );
       }
-    }
-    logger.info(`[PERF] STEP 4 (Audits) took ${Date.now() - _timeStep4}ms for ID=${id}`);
+      logger.info(`[PERF] STEP 4 (Audits) took ${Date.now() - _timeStep4}ms for ID=${id}`);
 
-    // ══════════════════════════════════════════════════════════════
-    // AUTO-CREATE AUDIT: Nếu document_id chưa có audit nào → tạo 1 bản ghi CREATE
-    // ══════════════════════════════════════════════════════════════
-    try {
-      const existingAudit = await this.queryNewDbTx(
-        `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.audit WHERE document_id = @docId`,
-        { docId: documentId },
-        transaction
-      );
+      // ══════════════════════════════════════════════════════════════
+      // AUTO-CREATE AUDIT: Nếu document_id chưa có audit nào → tạo 1 bản ghi CREATE
+      // ══════════════════════════════════════════════════════════════
+      try {
+        const existingAudit = await this.queryNewDbTx(
+          `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.audit WHERE document_id = @docId`,
+          { docId: documentId },
+          transaction
+        );
 
-      if (!existingAudit || existingAudit.length === 0) {
-        // Lấy thông tin người tạo từ bản ghi cũ
-        const creatorName = oldRecord.CreatedBy || oldRecord.NguoiSoanThaoText || oldRecord.NguoiSoanThao || '';
-        const parsedDate = this.helper
-          ? this.helper.parseDate(oldRecord.Created)
-          : null;
-        const createdDate = parsedDate || new Date();
+        if (!existingAudit || existingAudit.length === 0) {
+          // Lấy thông tin người tạo từ bản ghi cũ
+          const creatorName = oldRecord.CreatedBy || oldRecord.NguoiSoanThaoText || oldRecord.NguoiSoanThao || '';
+          const parsedDate = this.helper
+            ? this.helper.parseDate(oldRecord.Created)
+            : null;
+          const createdDate = parsedDate || new Date();
 
-        // Resolve creator ID qua MigrationHelper.mapUserName
-        // Ưu tiên dùng drafter (người đã tạo văn bản), nếu không có mới dùng Máy Văn Thư làm dự phòng
-        let creatorId = drafter || process.env.VANTHU_USER_ID;
-        let displayName = creatorName;
+          // Resolve creator ID qua MigrationHelper.mapUserName
+          // Ưu tiên dùng drafter (người đã tạo văn bản), nếu không có mới dùng Máy Văn Thư làm dự phòng
+          let creatorId = drafter || process.env.VANTHU_USER_ID;
+          let displayName = creatorName;
 
-        if (this.helper && creatorName && !creatorId) {
-          try {
-            const cleanName = this.helper.extractDisplayName
-              ? this.helper.extractDisplayName(creatorName)
-              : creatorName;
-            displayName = cleanName || creatorName;
-            const resolvedId = await this.helper.mapUserName(cleanName, transaction);
-            if (resolvedId) creatorId = resolvedId;
-          } catch (mapErr) {
-            logger.warn(`[AutoCreateAudit] mapUserName failed for "${creatorName}": ${mapErr.message}`);
+          if (this.helper && creatorName && !creatorId) {
+            try {
+              const cleanName = this.helper.extractDisplayName
+                ? this.helper.extractDisplayName(creatorName)
+                : creatorName;
+              displayName = cleanName || creatorName;
+              const resolvedId = await this.helper.mapUserName(cleanName, transaction);
+              if (resolvedId) creatorId = resolvedId;
+            } catch (mapErr) {
+              logger.warn(`[AutoCreateAudit] mapUserName failed for "${creatorName}": ${mapErr.message}`);
+            }
           }
-        }
 
-        // Xác định type_document dựa trên loại
-        const typeDoc = 'OutgoingDocument';
+          // Xác định type_document dựa trên loại
+          const typeDoc = 'OutgoingDocument';
 
-        const insertQuery = `
+          const insertQuery = `
           INSERT INTO ${process.env.NEW_DB_NAME}.dbo.audit (
             document_id, [time], user_id, display_name,
             action_code, details, origin_id, created_by,
@@ -1410,63 +1550,64 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
           )
         `;
 
-        await this.queryNewDbTx(insertQuery, {
-          document_id: documentId,
-          time: createdDate || new Date(),
-          user_id: creatorId,
-          display_name: displayName || null,
-          action_code: 'CREATE',
-          details: JSON.stringify({ note: 'Tạo văn bản (tự động tạo từ migration)', isTransferOption: false }),
-          origin_id: `auto_create_${String(oldRecord.ID || '').substring(0, 80)}`,
-          created_by: creatorId,
-          receiver: creatorId,
-          receiver_unit: null,
-          group_: null,
-          roleProcess: 'VANTHU',
-          action: 'Tạo văn bản',
-          stage_status: 'DA_XU_LY',
-          created_at: createdDate || new Date(),
-          type_document: typeDoc,
-          table_backups: 'auto_create'
-        }, transaction);
+          await this.queryNewDbTx(insertQuery, {
+            document_id: documentId,
+            time: createdDate || new Date(),
+            user_id: creatorId,
+            display_name: displayName || null,
+            action_code: 'CREATE',
+            details: JSON.stringify({ note: 'Tạo văn bản (tự động tạo từ migration)', isTransferOption: false }),
+            origin_id: `auto_create_${String(oldRecord.ID || '').substring(0, 80)}`,
+            created_by: creatorId,
+            receiver: creatorId,
+            receiver_unit: null,
+            group_: null,
+            roleProcess: 'VANTHU',
+            action: 'Tạo văn bản',
+            stage_status: 'DA_XU_LY',
+            created_at: createdDate || new Date(),
+            type_document: typeDoc,
+            table_backups: 'auto_create'
+          }, transaction);
 
-        logger.info(`[AutoCreateAudit] Created initial CREATE audit for documentId=${documentId} creator=${displayName}`);
-        totalAffected++;
+          logger.info(`[AutoCreateAudit] Created initial CREATE audit for documentId=${documentId} creator=${displayName}`);
+          totalAffected++;
+        }
+      } catch (autoAuditErr) {
+        if (dbUtils.isRetryableSqlError(autoAuditErr)) throw autoAuditErr;
+        logger.warn(`[AutoCreateAudit] Failed for documentId=${documentId}: ${autoAuditErr.message}`);
       }
-    } catch (autoAuditErr) {
-      logger.warn(`[AutoCreateAudit] Failed for documentId=${documentId}: ${autoAuditErr.message}`);
-    }
 
-    // for (const commentModel of this._syncCommentModel || []) {
-    //   try {
-    //     const rawComments = await commentModel.fetchByDocumentId(id);
-    //
-    //     if (!Array.isArray(rawComments) || !rawComments.length) {
-    //       continue;
-    //     }
-    //
-    //     for (const rawComment of rawComments) {
-    //       try {
-    //         const result = await commentModel.processSingleRecord(rawComment, documentId, transaction);
-    //         if (!result) continue;
-    //         logger.info(
-    //           `[AggregateSync][Comment] table=${commentModel?.oldDbTable} documentId=${documentResult.documentId} inserted=${result?.inserted || 0} updated=${result?.updated || 0}`
-    //         );
-    //         totalAffected += Number(result.inserted || 0);
-    //         totalAffected += Number(result.updated || 0);
-    //       } catch (error) {
-    //         logger.warn(
-    //           `[upsertDocumentAggregateById] Comment migrate failed table=${commentModel?.oldDbTable} ID=${id}: ${error.message}`
-    //         );
-    //       }
-    //     }
-    //   } catch (error) {
-    //     logger.warn(
-    //       `[upsertDocumentAggregateById] Fetch comment failed table=${commentModel?.oldDbTable} ID=${id}: ${error.message}`
-    //     );
-    //   }
-    // }
-    // logic xu
+      // for (const commentModel of this._syncCommentModel || []) {
+      //   try {
+      //     const rawComments = await commentModel.fetchByDocumentId(id);
+      //
+      //     if (!Array.isArray(rawComments) || !rawComments.length) {
+      //       continue;
+      //     }
+      //
+      //     for (const rawComment of rawComments) {
+      //       try {
+      //         const result = await commentModel.processSingleRecord(rawComment, documentId, transaction);
+      //         if (!result) continue;
+      //         logger.info(
+      //           `[AggregateSync][Comment] table=${commentModel?.oldDbTable} documentId=${documentResult.documentId} inserted=${result?.inserted || 0} updated=${result?.updated || 0}`
+      //         );
+      //         totalAffected += Number(result.inserted || 0);
+      //         totalAffected += Number(result.updated || 0);
+      //       } catch (error) {
+      //         logger.warn(
+      //           `[upsertDocumentAggregateById] Comment migrate failed table=${commentModel?.oldDbTable} ID=${id}: ${error.message}`
+      //         );
+      //       }
+      //     }
+      //   } catch (error) {
+      //     logger.warn(
+      //       `[upsertDocumentAggregateById] Fetch comment failed table=${commentModel?.oldDbTable} ID=${id}: ${error.message}`
+      //     );
+      //   }
+      // }
+      // logic xu
 
       return {
         action: documentResult.action || 'upsert',
