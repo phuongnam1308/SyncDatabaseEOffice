@@ -9,6 +9,7 @@ const fsSync = require('fs');
 const axios = require('axios');
 const FormData = require('form-data');
 const https = require('https');
+const jwt = require('jsonwebtoken');
 
 // ══════════════════════════════════════════════
 //  KHỞI TẠO MINIO CLIENT TỪ ENV
@@ -130,7 +131,7 @@ class FileUploadService {
    * @param {boolean} forceRefresh - Nếu true, bỏ qua cache và lấy mới
    */
   async _getNewSystemToken(forceRefresh = false) {
-    const TOKEN_CACHE_PATH = path.join(__dirname, '..', '..', 'uploads', '.keycloak_token_cache');
+    const TOKEN_CACHE_PATH = path.join(__dirname, '..', '..', 'uploads', '.doffice_jwt_cache');
 
     try {
       if (!forceRefresh) {
@@ -145,44 +146,62 @@ class FileUploadService {
         } catch (_) { }
       }
 
-      const issuer = process.env.KEYCLOAK_ISSUER || 'https://iam-uat.snp.com.vn/realms/snp-internal';
-      const clientId = process.env.KEYCLOAK_CLIENT_ID || 'doffice';
-      const clientSecret = process.env.KEYCLOAK_CLIENT_SECRET || 'wKORFQNrraWJk2qO6j6hB1Ae7G82xLyF';
-      const username = process.env.KEYCLOAK_USERNAME;
-      const password = process.env.KEYCLOAK_PASSWORD;
+      const JWT_SECRET = '0a6b944d-d2fb-46fc-a85e-0295c986cd9f';
+      const USERNAME = 'vanthutc01';
+      const USER_ID = 'f2d92a70-b3ba-432b-b70b-311e57e11c64';
 
-      if (!username || !password) {
-        throw new Error('[FileUploadService] Thiếu KEYCLOAK_USERNAME hoặc KEYCLOAK_PASSWORD');
-      }
+      const PASSWORD = 'TanCang@123';
+
+      // Lay token Keycloak de xac nhan account hop le (chi dung de verify)
+      const issuer = process.env.KEYCLOAK_ISSUER || 'https://iam-uat.snp.com.vn/realms/snp-internal';
+      const clientId = 'doffice';
+      const clientSecret = process.env.KEYCLOAK_CLIENT_SECRET || 'wKORFQNrraWJk2qO6j6hB1Ae7G82xLyF';
 
       const tokenUrl = `${issuer}/protocol/openid-connect/token`;
       const params = new URLSearchParams();
       params.append('grant_type', 'password');
-      params.append('username', username);
-      params.append('password', password);
+      params.append('username', USERNAME);
+      params.append('password', PASSWORD);
       params.append('client_id', clientId);
       params.append('client_secret', clientSecret);
 
       const agent = new https.Agent({ rejectUnauthorized: false });
 
-      logger.info('[FileUploadService] Đang lấy token Keycloak mới...');
-      const response = await axios.post(tokenUrl, params.toString(), {
+      logger.info('[FileUploadService] Lay token Keycloak de lay user info...');
+      const kcResponse = await axios.post(tokenUrl, params.toString(), {
         httpsAgent: agent,
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       });
 
-      const { access_token, expires_in } = response.data;
-      if (!access_token) {
-        throw new Error('[FileUploadService] Keycloak không trả về access_token');
+      const kcToken = kcResponse.data?.access_token;
+      if (!kcToken) {
+        throw new Error('[FileUploadService] Keycloak khong tra ve access_token');
       }
 
-      const expiresAt = Date.now() + (expires_in - 60) * 1000;
-      await fs.writeFile(TOKEN_CACHE_PATH, JSON.stringify({ token: access_token, expiresAt }), 'utf-8');
+      // Tao HS256 JWT theo dinh dang cua doffice-be
+      const payload = {
+        user: USER_ID,
+        username: USERNAME,
+        email: null,
+        roles: ['offline_access', 'default-roles-snp-internal', 'uma_authorization']
+      };
 
-      logger.info(`[FileUploadService] Token Keycloak mới: expires_in=${expires_in}s`);
-      return access_token;
+      const issuedAt = Math.floor(Date.now() / 1000);
+      const expiresAt = issuedAt + 7 * 60 * 60; // 7 hours
+
+      const dofficeToken = jwt.sign(payload, JWT_SECRET, {
+        algorithm: 'HS256',
+        expiresIn: '7h'
+      });
+
+      // Cache 300 ngay
+      const cacheExpiresAt = Date.now() + 300 * 24 * 60 * 60 * 1000;
+      await fs.writeFile(TOKEN_CACHE_PATH, JSON.stringify({ token: dofficeToken, expiresAt: cacheExpiresAt }), 'utf-8');
+
+      logger.info(`[FileUploadService] Tao DOffice JWT thanh cong: expiresAt=${new Date(expiresAt * 1000).toISOString()}`);
+      return dofficeToken;
     } catch (error) {
-      logger.error(`[FileUploadService] Lỗi lấy token Keycloak: ${error.message}`);
+      logger.error(`[FileUploadService] Loi lay token DOffice: ${error.message}`);
       return null;
     }
   }
