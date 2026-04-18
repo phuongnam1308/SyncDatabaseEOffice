@@ -225,11 +225,16 @@ async function downloadFile(url, pool = null, retryCount = 0, timeoutMs = 600000
     try {
       _cachedCookie = null; // Clear cache để force load mới
       await refreshAuth(pool);
-      return downloadFile(url, pool, retryCount + 1, timeoutMs); 
+      return downloadFile(url, pool, retryCount + 1, timeoutMs);
     } catch (err) {
       logger.error('[SharePointAuth] Không thể tự động làm mới token:', err.message);
       throw new Error('Authentication required and auto-refresh failed.');
     }
+  }
+
+  // ★ FIX: Khi needsRetry = true nhưng đã retry quá 1 lần rồi → throw error thay vì return HTML buffer
+  if (needsRetry && retryCount >= 1) {
+    throw new Error(`[SharePointAuth] Download thất bại sau ${retryCount + 1} lần thử. File có thể yêu cầu đăng nhập hoặc không tồn tại: ${url}`);
   }
 
   if (response.status !== 200) {

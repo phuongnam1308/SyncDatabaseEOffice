@@ -156,7 +156,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     this._syncCommentModel = [];
     this._outGoingMigrationModels = null;
     this._fileService = null;
-    this.partitionColumn = 'NgayBanHanh'; // Cột nghiệp vụ để chia dải dữ liệu
+    this.partitionColumn = 'Created'; // Cột nghiệp vụ để chia dải dữ liệu — Created có dữ liệu datetime đầy đủ
   }
 
   /**
@@ -388,68 +388,70 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
   async ensureStagingTableExists() {
     const table = this.getStagingTableRef();
 
+    // ★ KHÔNG DROP bảng nếu đã tồn tại — data đã staged phải được giữ nguyên
+    // Chỉ tạo bảng mới nếu chưa có, để tránh xóa dữ liệu đã sync khi restart server
+    // ★ SỬA: Dùng đúng data types từ VanBanBanHanh (DB cũ) để date filter hoạt động đúng
     const query = `
-      IF OBJECT_ID('${table}', 'U') IS NOT NULL
-          DROP TABLE ${table};
-
-      CREATE TABLE ${table} (
-        -- Source columns (raw from VanBanBanHanh / old DB)
-        ID                          NVARCHAR(255)   NOT NULL,
-        Title                       NVARCHAR(MAX),
-        BanLanhDao                  NVARCHAR(MAX),
-        ChenSo                      NVARCHAR(MAX),
-        TrangThai                   NVARCHAR(MAX),
-        IsLibrary                   NVARCHAR(MAX),
-        DoKhan                      NVARCHAR(MAX),
-        DoMat                       NVARCHAR(MAX),
+      IF OBJECT_ID('${table}', 'U') IS NULL
+      BEGIN
+        CREATE TABLE ${table} (
+        -- Source columns (raw from VanBanBanHanh / old DB) — đúng kiểu data types
+        ID                          BIGINT           NOT NULL,
+        Title                       NVARCHAR(150),
+        BanLanhDao                  NVARCHAR(1000),
+        ChenSo                      BIT,
+        TrangThai                   NVARCHAR(100),
+        IsLibrary                   BIT,
+        DoKhan                      NVARCHAR(50),
+        DoMat                       NVARCHAR(50),
         DonVi                       NVARCHAR(MAX),
-        Files                       NVARCHAR(MAX),
-        ChucVu                      NVARCHAR(MAX),
-        DocNum                      NVARCHAR(MAX),
-        NguoiSoanThaoText           NVARCHAR(MAX),
-        FolderLocation              NVARCHAR(MAX),
-        HoSoXuLyLink                NVARCHAR(MAX),
-        InfoVBDi                    NVARCHAR(MAX),
-        ItemVBPH                    NVARCHAR(MAX),
-        LoaiBanHanh                 NVARCHAR(MAX),
-        LoaiVanBan                  NVARCHAR(MAX),
-        NoiLuuTru                   NVARCHAR(MAX),
-        NoiNhan                     NVARCHAR(MAX),
-        NgayBanHanh                 NVARCHAR(MAX),
-        NgayHieuLuc                 NVARCHAR(MAX),
-        NgayHoanTat                 NVARCHAR(MAX),
-        NguoiKyVanBan               NVARCHAR(MAX),
-        NguoiKyVanBanText           NVARCHAR(MAX),
-        PhanCong                    NVARCHAR(MAX),
-        TraLoiVBDen                 NVARCHAR(MAX),
-        SoBan                       NVARCHAR(MAX),
-        SoTrang                     NVARCHAR(MAX),
-        SoVanBan                    NVARCHAR(MAX),
-        SoVanBanText                NVARCHAR(MAX),
-        TrichYeu                    NVARCHAR(MAX),
-        BanLanhDaoTCT               NVARCHAR(MAX),
+        Files                       NVARCHAR(4000),
+        ChucVu                      NVARCHAR(255),
+        DocNum                      NVARCHAR(50),
+        NguoiSoanThaoText           NVARCHAR(255),
+        FolderLocation              NVARCHAR(500),
+        HoSoXuLyLink                NVARCHAR(500),
+        InfoVBDi                    NVARCHAR(150),
+        ItemVBPH                    NVARCHAR(500),
+        LoaiBanHanh                 NVARCHAR(255),
+        LoaiVanBan                  NVARCHAR(255),
+        NoiLuuTru                   NVARCHAR(1000),
+        NoiNhan                     NVARCHAR(1000),
+        NgayBanHanh                 DATE,
+        NgayHieuLuc                 DATE,
+        NgayHoanTat                 DATE,
+        NguoiKyVanBan               NVARCHAR(255),
+        NguoiKyVanBanText           NVARCHAR(255),
+        PhanCong                    BIT,
+        TraLoiVBDen                 NVARCHAR(2000),
+        SoBan                       INT,
+        SoTrang                     INT,
+        SoVanBan                    NVARCHAR(255),
+        SoVanBanText                NVARCHAR(255),
+        TrichYeu                    NVARCHAR(4000),
+        BanLanhDaoTCT               NVARCHAR(4000),
         YKien                       NVARCHAR(MAX),
         YKienChiHuy                 NVARCHAR(MAX),
-        ModuleId                    NVARCHAR(MAX),
-        SiteName                    NVARCHAR(MAX),
-        ListName                    NVARCHAR(MAX),
-        ItemId                      NVARCHAR(MAX),
-        YearMonth                   NVARCHAR(MAX),
-        Modified                    NVARCHAR(MAX),
-        Created                     NVARCHAR(MAX),
-        ModifiedBy                  NVARCHAR(MAX),
-        CreatedBy                   NVARCHAR(MAX),
-        MigrateFlg                  NVARCHAR(MAX),
-        MigrateErrFlg               NVARCHAR(MAX),
+        ModuleId                    INT,
+        SiteName                    VARCHAR(50),
+        ListName                    NVARCHAR(50),
+        ItemId                      INT,
+        YearMonth                   VARCHAR(20),
+        Modified                    DATETIME,
+        Created                     DATETIME,
+        ModifiedBy                  UNIQUEIDENTIFIER,
+        CreatedBy                   UNIQUEIDENTIFIER,
+        MigrateFlg                  INT,
+        MigrateErrFlg               INT,
         MigrateErrMess              NVARCHAR(MAX),
-        LoaiMoc                     NVARCHAR(MAX),
+        LoaiMoc                     NVARCHAR(200),
         KySoFiles                   NVARCHAR(MAX),
-        DGPId                       NVARCHAR(MAX),
-        Workflow                    NVARCHAR(MAX),
-        IsKyQuyChe                  NVARCHAR(MAX),
-        DocSignType                 NVARCHAR(MAX),
-        IsConverting                NVARCHAR(MAX),
-        CodeItemId                  NVARCHAR(MAX),
+        DGPId                       INT,
+        Workflow                    NVARCHAR(255),
+        IsKyQuyChe                  BIT,
+        DocSignType                 SMALLINT,
+        IsConverting                BIT,
+        CodeItemId                  BIGINT,
 
         -- Mapped/output columns (từ StreamOutgoingMigrationModel)
         document_id                 NVARCHAR(MAX),
@@ -468,7 +470,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         abstract_note               NVARCHAR(MAX),
         recipient_ids               NVARCHAR(MAX),
         internal_receiving_unit     NVARCHAR(MAX),
-        reply_incoming_doc         NVARCHAR(MAX),
+        reply_incoming_doc          NVARCHAR(MAX),
         created_at                  NVARCHAR(MAX),
         updated_at                  NVARCHAR(MAX),
         draft_signer                NVARCHAR(MAX),
@@ -503,7 +505,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         from_create_draf            NVARCHAR(MAX),
         replaced                    NVARCHAR(MAX),
         tb_bak                      NVARCHAR(MAX),
-        table_backups                NVARCHAR(MAX),
+        table_backups               NVARCHAR(MAX),
         send_id_bak_bef_test        NVARCHAR(MAX),
         status_code_bak_bef_test    NVARCHAR(MAX),
         drafter_bak_bef_test        NVARCHAR(MAX),
@@ -512,6 +514,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
 
         CONSTRAINT PK_outgoing_documents_sync PRIMARY KEY (ID)
       );
+      END
       `;
 
     await this.queryNewDb(query);
@@ -724,8 +727,9 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       return { stagedCount: 0 };
     }
 
+    const internalColumns = new Set(['MigrateFlg', 'MigrateErrFlg', 'MigrateErrMess', '_sync_time_val', '_sync_id_val']);
     const columns = Object.keys(rows[0] || {}).filter((column) => {
-      return !String(column).startsWith('__') && !['_sync_time_val', '_sync_id_val'].includes(column);
+      return !String(column).startsWith('__') && !internalColumns.has(column);
     });
     if (!columns.length) {
       return { stagedCount: 0 };
@@ -796,13 +800,21 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     const batchSize = Number(process.env.STAGING_FETCH_BATCH_SIZE || 2000);
     const stagingTableRef = this.getStagingTableRef();
 
+    const envStartDate = process.env.SYNC_START_DATE ? new Date(process.env.SYNC_START_DATE).toISOString() : null;
+    const envEndDate = process.env.SYNC_END_DATE ? new Date(process.env.SYNC_END_DATE).toISOString() : null;
+
     // Cleanup stale records
     try {
       await this.queryNewDb(`
         UPDATE ${stagingTableRef}
         SET MigrateFlg = 0, MigrateErrMess = 'Reset from stale processing'
         WHERE MigrateFlg = 2
-      `);
+          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
+          AND (${this.partitionColumn} <= @endDate   OR @endDate IS NULL)
+      `, {
+        startDate: envStartDate,
+        endDate: envEndDate
+      });
     } catch (cleanupErr) {
       logger.warn(`[OutGoingDoc] Cleanup stale records failed: ${cleanupErr.message}`);
     }
@@ -872,24 +884,33 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     // Fix Bug #3: Đếm số bản ghi THỰC TẾ trong staging chưa xử lý
     // FIX: Phải lọc theo dải ngày của instance này (SYNC_START_DATE/SYNC_END_DATE)
     // để tránh đếm nhầm records của các terminal khác đang chạy song song.
+    // ★ Với DATE type đúng: lọc trực tiếp, NULL vẫn hoạt động
     let pendingCount = 0;
     try {
       const pendingRes = await this.queryNewDb(`
         SELECT COUNT(1) AS cnt FROM ${stagingTableRef}
         WHERE ISNULL(MigrateFlg, 0) = 0
           AND ISNULL(MigrateErrFlg, 0) = 0
-          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
-          AND (${this.partitionColumn} <= @endDate   OR @endDate IS NULL)
+          AND (
+            ${this.partitionColumn} IS NULL
+            OR (${this.partitionColumn} >= @startDate AND @startDate IS NOT NULL)
+            OR (@startDate IS NULL AND ${this.partitionColumn} IS NOT NULL)
+          )
+          AND (
+            ${this.partitionColumn} IS NULL
+            OR (${this.partitionColumn} <= @endDate AND @endDate IS NOT NULL)
+            OR (@endDate IS NULL AND ${this.partitionColumn} IS NOT NULL)
+          )
       `, {
-        startDate: process.env.SYNC_START_DATE || null,
-        endDate: process.env.SYNC_END_DATE || null
+        startDate: envStartDate,
+        endDate: envEndDate
       });
       pendingCount = Number(pendingRes?.[0]?.cnt || 0);
     } catch (e) {
       logger.warn(`[OutGoingDoc] Không đếm được pending staging: ${e.message}`);
       pendingCount = totalStaged;
     }
-    logger.info(`[OutGoingDoc] Pending records trong Staging có thể xử lý: ${pendingCount} (range: ${process.env.SYNC_START_DATE || 'ALL'} → ${process.env.SYNC_END_DATE || 'ALL'})`);
+    logger.info(`[OutGoingDoc] Pending records trong Staging có thể xử lý: ${pendingCount} (range: ${envStartDate || 'ALL'} → ${envEndDate || 'ALL'})`);
 
     return {
       syncJobId,
@@ -978,29 +999,28 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       // --- BƯỚC MỚI: Tải file từ SharePoint (NGOÀI giao dịch SQL) ---
       const preparedFiles = await this.prepareFilesFromSharePoint(rowData);
 
-      transaction = new sql.Transaction(this.newPool);
-      await transaction.begin();
+      const result = await dbUtils.withTransactionRetry(this.newPool, async (transaction) => {
+        const res = await this.processRowData(rowData, { transaction, preparedFiles });
 
-      const result = await this.processRowData(rowData, { transaction, preparedFiles });
+        // Update counters in sync_jobs
+        await this.queryNewDbTx(
+          `UPDATE sync_jobs
+           SET total_processed = ISNULL(total_processed, 0) + 1,
+               total_success   = ISNULL(total_success, 0) + 1
+           WHERE job_id = @syncJobId`,
+          { syncJobId },
+          transaction,
+        );
 
-      // Update counters in sync_jobs
-      await this.queryNewDbTx(
-        `UPDATE sync_jobs
-         SET total_processed = ISNULL(total_processed, 0) + 1,
-             total_success   = ISNULL(total_success, 0) + 1
-         WHERE job_id = @syncJobId`,
-        { syncJobId },
-        transaction
-      );
+        // Mark staging row as processed successfully
+        await this.queryNewDbTx(
+          `UPDATE ${stagingTableRef}  WITH (ROWLOCK)  SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE ID = @ID`,
+          { ID: rowId },
+          transaction,
+        );
 
-      // Mark staging row as processed successfully
-      await this.queryNewDbTx(
-        `UPDATE ${stagingTableRef} WITH (ROWLOCK) SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE ID = @ID`,
-        { ID: rowId },
-        transaction
-      );
-
-      await transaction.commit();
+        return res;
+      }, { maxRetries: 5 });
 
       return {
         syncJobId,
@@ -1010,16 +1030,10 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         result
       };
     } catch (error) {
-      if (transaction) {
-        try {
-          await transaction.rollback().catch(() => { });
-        } catch (rollbackError) { }
-      }
-
       if (rowData && rowData.ID) {
         try {
           const stagingTableRef = this.getStagingTableRef();
-          await this.queryNewDb(`UPDATE ${stagingTableRef} SET MigrateErrFlg = 1, MigrateErrMess = @Err WHERE ID = @ID`, { ID: rowData.ID, Err: String(error.message).slice(0, 1000) });
+          await this.queryNewDb(`UPDATE ${stagingTableRef} SET MigrateFlg = 0, MigrateErrFlg = 1, MigrateErrMess = @Err WHERE ID = @ID`, { ID: rowData.ID, Err: String(error.message).slice(0, 1000) });
         } catch (updateErr) { }
       }
 
@@ -1034,18 +1048,26 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
   async finalizeProcessingCursor(syncJobId) {
     try {
       const stagingTableRef = this.getStagingTableRef();
+      const startDate = process.env.SYNC_START_DATE || null;
+      const endDate = process.env.SYNC_END_DATE || null;
       const res = await this.queryNewDb(`
         SELECT
           MAX(Modified) AS maxTime,
-          MAX(TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), ''))) AS maxId
+          MAX(ID) AS maxId
         FROM ${stagingTableRef}
         WHERE ISNULL(MigrateFlg, 0) = 1
-          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
-          AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
-      `, {
-        startDate: process.env.SYNC_START_DATE || null,
-        endDate: process.env.SYNC_END_DATE || null
-      });
+          -- ★ Với DATE type đúng: lọc trực tiếp
+          AND (
+            ${this.partitionColumn} IS NULL
+            OR (${this.partitionColumn} >= @startDate AND @startDate IS NOT NULL)
+            OR (@startDate IS NULL AND ${this.partitionColumn} IS NOT NULL)
+          )
+          AND (
+            ${this.partitionColumn} IS NULL
+            OR (${this.partitionColumn} <= @endDate AND @endDate IS NOT NULL)
+            OR (@endDate IS NULL AND ${this.partitionColumn} IS NOT NULL)
+          )
+      `, { startDate, endDate });
       if (res?.[0]?.maxTime) {
         const finalTime = new Date(res[0].maxTime).toISOString();
         const finalId = Number(res[0].maxId || 0);
@@ -1071,17 +1093,58 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
   async fetchOneFromStaging() {
     try {
       const stagingTableRef = this.getStagingTableRef();
+      const startDate = process.env.SYNC_START_DATE || null;
+      const endDate = process.env.SYNC_END_DATE || null;
+
+      // ★ DEBUG: Đếm records sẵn sàng xử lý trước khi fetch
+      const countQuery = `
+        SELECT COUNT(1) AS cnt,
+               MIN(${this.partitionColumn}) AS minDate,
+               MAX(${this.partitionColumn}) AS maxDate
+        FROM ${stagingTableRef}
+        WHERE ISNULL(MigrateFlg, 0) = 0
+          AND ISNULL(MigrateErrFlg, 0) = 0
+          -- ★ Với DATE type đúng: lọc trực tiếp, NULL vẫn hoạt động
+          AND (
+            ${this.partitionColumn} IS NULL
+            OR (${this.partitionColumn} >= @startDate AND @startDate IS NOT NULL)
+            OR (@startDate IS NULL AND ${this.partitionColumn} IS NOT NULL)
+          )
+          AND (
+            ${this.partitionColumn} IS NULL
+            OR (${this.partitionColumn} <= @endDate AND @endDate IS NOT NULL)
+            OR (@endDate IS NULL AND ${this.partitionColumn} IS NOT NULL)
+          )
+      `;
+      const countResult = await this.queryNewDb(countQuery, { startDate, endDate });
+      const availableCount = Number(countResult?.[0]?.cnt || 0);
+      const minDate = countResult?.[0]?.minDate;
+      const maxDate = countResult?.[0]?.maxDate;
+      logger.info(`[OutGoingDoc.fetchOneFromStaging] DEBUG: available=${availableCount}, partitionRange=[${minDate} → ${maxDate}], filter=[${startDate} → ${endDate}]`);
+
+      if (availableCount === 0) {
+        return null;
+      }
+
       const query = `
       WITH CTE AS (
         SELECT TOP (1) *
-        FROM ${stagingTableRef} WITH (UPDLOCK, READPAST, ROWLOCK)
+        FROM ${stagingTableRef} WITH (UPDLOCK, ROWLOCK)
         WHERE ISNULL(MigrateFlg, 0) = 0
           AND ISNULL(MigrateErrFlg, 0) = 0
-          -- Lọc theo dải ngày của partitionColumn để chia tải giữa các Worker
-          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
-          AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
-        ORDER BY TRY_CONVERT(datetime2, Modified) DESC,
-                 TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')) DESC
+          -- ★ Với DATE type đúng: lọc trực tiếp, NULL vẫn được xử lý
+          AND (
+            ${this.partitionColumn} IS NULL
+            OR (${this.partitionColumn} >= @startDate AND @startDate IS NOT NULL)
+            OR (@startDate IS NULL AND ${this.partitionColumn} IS NOT NULL)
+          )
+          AND (
+            ${this.partitionColumn} IS NULL
+            OR (${this.partitionColumn} <= @endDate AND @endDate IS NOT NULL)
+            OR (@endDate IS NULL AND ${this.partitionColumn} IS NOT NULL)
+          )
+        ORDER BY Modified DESC,
+                 ID DESC
       )
       UPDATE CTE
       SET MigrateFlg = 2,
