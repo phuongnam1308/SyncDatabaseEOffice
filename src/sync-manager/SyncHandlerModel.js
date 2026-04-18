@@ -44,16 +44,24 @@ class SyncHandlerModel {
         // Khi Resume sau server restart, `nextIndex` phải bắt đầu từ số records đã xử lý trước đó
         // (context.totalProcessed) chứ không phải 0, để SyncManagerService không emit lại từ đầu.
         const resumeIndex = Number(cursor.totalProcessed || 0);
+
+        // ★ DÙNG stagedCount thay vì totalCount (pendingCount sau getList = 0)
+        // vì getList sau khi xong → tất cả đã staged, pending = 0
+        // stagedCount = tổng records đã đẩy vào staging, dùng để loop processOne()
+        const stagedCount = Number(listResult?.stagedCount || 0)
+          || Number(listResult?.totalCount || 0);
+
         preparedJobs.set(jobId, {
-          totalCount: Number(listResult?.totalCount || 0),
+          totalCount: stagedCount,
           syncTime: listResult?.lastSyncTime || lastTime,
           syncId: Number(listResult?.lastSyncId || lastSyncId || 0),
           sourceTime: listResult?.sourceLastSyncTime || lastTime,
           sourceId: Number(listResult?.sourceLastSyncId || lastSyncId || 0),
           nextIndex: resumeIndex
         });
+        logger.info(`[SyncHandlerModel] getList() → stagedCount=${stagedCount}, jobId=${jobId}`);
         if (resumeIndex > 0) {
-          logger.info(`[SyncHandlerModel] Resuming jobId=${jobId}: nextIndex restored to ${resumeIndex} (totalProcessed from context).`);
+          logger.info(`[SyncHandlerModel] Resuming jobId=${jobId}: nextIndex restored to ${resumeIndex}`);
         }
       }
 
@@ -64,6 +72,10 @@ class SyncHandlerModel {
       const take = Math.min(Number(limit || 1), remaining);
 
       if (take <= 0) {
+        // ★ KHI take <= 0: XÓA preparedJobs để buộc getList() chạy lại lần sau
+        // Điều này quan trọng khi processOne() trả về {done: true} vì staging đã hết
+        // mà không phải lỗi logic - sẽ không bị infinite loop
+        logger.warn(`[SyncHandlerModel] take=${take}, total=${total}, processed=${processed} → delete preparedJobs, return empty`);
         preparedJobs.delete(jobId);
         return [];
       }

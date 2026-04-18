@@ -569,7 +569,8 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
       return { stagedCount: 0 };
     }
 
-    const columns = Object.keys(rows[0] || {}).filter((column) => !String(column).startsWith('__'));
+    const internalColumns = new Set(['MigrateFlg', 'MigrateErrFlg', 'MigrateErrMess']);
+    const columns = Object.keys(rows[0] || {}).filter((column) => !String(column).startsWith('__') && !internalColumns.has(column));
     if (!columns.length) {
       return { stagedCount: 0 };
     }
@@ -734,9 +735,14 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
           UPDATE ${stagingTableRef}
           SET MigrateFlg = 0, MigrateErrMess = 'Reset from stale processing'
           WHERE MigrateFlg = 2
-        `);
+            AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
+            AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
+        `, {
+          startDate: envStartDate,
+          endDate: envEndDate
+        });
         if (cleanupRes?.rowsAffected?.[0] > 0) {
-          logger.info(`[IncomingDocumentModel] Đã reset ${cleanupRes.rowsAffected[0]} bản ghi bị kẹt (MigrateFlg=2).`);
+          logger.info(`[IncomingDocumentModel] Đã reset ${cleanupRes.rowsAffected[0]} bản ghi bị kẹt (MigrateFlg=2) trong phân đoạn.`);
         }
       } catch (cleanupErr) {
         logger.warn(`[IncomingDocumentModel] Cleanup stale records failed: ${cleanupErr.message}`);
@@ -922,30 +928,29 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
         logger.warn(`[IncomingDocumentModel] Lỗi tải file (tiếp tục đồng bộ văn bản): ${fileErr.message}`);
       }
 
-      transaction = new sql.Transaction(this.newPool);
-      await transaction.begin();
+      const result = await dbUtils.withTransactionRetry(this.newPool, async (transaction) => {
+        // Truyền thêm preparedFiles vào
+        const res = await this.processRowData(rowData, { transaction, preparedFiles });
 
-      // Truyền thêm preparedFiles vào
-      const result = await this.processRowData(rowData, { transaction, preparedFiles });
+        // Deferred Cursor strategy: KHÔNG update last_sync_time theo từng record.
+        await this.queryNewDbTx(
+          `UPDATE sync_jobs
+           SET total_processed = ISNULL(total_processed, 0) + 1,
+               total_success   = ISNULL(total_success, 0) + 1
+           WHERE job_id = @syncJobId`,
+          { syncJobId },
+          transaction,
+        );
 
-      // Deferred Cursor strategy: KHÔNG update last_sync_time theo từng record.
-      await this.queryNewDbTx(
-        `UPDATE sync_jobs
-         SET total_processed = ISNULL(total_processed, 0) + 1,
-             total_success   = ISNULL(total_success, 0) + 1
-         WHERE job_id = @syncJobId`,
-        { syncJobId },
-        transaction
-      );
+        // Mark staging row as processed successfully
+        await this.queryNewDbTx(
+          `UPDATE ${stagingTableRef}  WITH (ROWLOCK)  SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE ID = @ID`,
+          { ID: rowId },
+          transaction,
+        );
 
-      // Mark staging row as processed successfully
-      await this.queryNewDbTx(
-        `UPDATE ${stagingTableRef} WITH (ROWLOCK) SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE ID = @ID`,
-        { ID: rowId },
-        transaction
-      );
-
-      await transaction.commit();
+        return res;
+      }, { maxRetries: 5 });
 
       return {
         syncJobId,
@@ -955,17 +960,13 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
         result
       };
     } catch (error) {
-      if (transaction) {
-        try {
-          await transaction.rollback();
-        } catch (rollbackError) { }
-      }
-
       // If failed, mark as error in staging so we skip it next time!
+      // RESET MigrateFlg path: if it failed permanently, we set MigrateErrFlg=1.
+      // But we set MigrateFlg=0 so it might be picked up again if we want to retry it manually or automatically after fix.
       if (rowData && rowData.ID) {
         try {
           const stagingTableRef = this.getStagingTableRef();
-          await this.queryNewDb(`UPDATE ${stagingTableRef} SET MigrateErrFlg = 1, MigrateErrMess = @Err WHERE ID = @ID`, { ID: rowData.ID, Err: String(error.message).slice(0, 1000) });
+          await this.queryNewDb(`UPDATE ${stagingTableRef} SET MigrateFlg = 0, MigrateErrFlg = 1, MigrateErrMess = @Err WHERE ID = @ID`, { ID: rowData.ID, Err: String(error.message).slice(0, 1000) });
         } catch (updateErr) { }
       }
 
@@ -1032,7 +1033,7 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
       const query = `
       WITH CTE AS (
         SELECT TOP (1) *
-        FROM ${stagingTableRef} WITH (UPDLOCK, READPAST, ROWLOCK)
+        FROM ${stagingTableRef} WITH (UPDLOCK, ROWLOCK)
         WHERE ISNULL(MigrateFlg, 0) = 0
           AND ISNULL(MigrateErrFlg, 0) = 0
           -- Phân đoạn dữ liệu theo cột nghiệp vụ để Worker không nhặt nhầm dải của nhau

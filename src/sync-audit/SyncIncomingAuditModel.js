@@ -10,16 +10,16 @@ const logger = require('../../utils/logger');
 // TODO: Cần kiểm tra lại các stage_status này cho phù hợp với Văn bản đến
 const STAGE = {
   // Văn bản hoàn tất phát hành
-  BAN_HANH:       'BAN_HANH',
-  DA_BAN_HANH:    'DA_BAN_HANH',
+  BAN_HANH: 'BAN_HANH',
+  DA_BAN_HANH: 'DA_BAN_HANH',
   // Văn bản đã được hoàn thành phê duyệt nội dung
-  DA_XU_LY:       'DA_XU_LY',
+  DA_XU_LY: 'DA_XU_LY',
   // Văn bản đang chờ hoàn thiện thể thức
-  HT_VBTT:        'HT_VBTT',
+  HT_VBTT: 'HT_VBTT',
   BAN_HANH_DU_THAO: 'BAN_HANH_DU_THAO',
   HOAN_THANH_VAN_BAN: 'HOAN_THANH_VAN_BAN',
   // Trả lại
-  TRA_LAI:        'TRA_LAI',
+  TRA_LAI: 'TRA_LAI',
 };
 
 // action_code tương ứng với sự kiện "tạo văn bản" → is_creator = 1
@@ -87,7 +87,7 @@ class SyncIncomingAuditModel extends SyncAuditModel {
     try {
       // 1. Xoá toàn bộ assignment của document
       await this.queryNewDbTx(
-        `DELETE FROM ${process.env.NEW_DB_NAME}.dbo.incomming_assignment WITH (ROWLOCK, READPAST)
+        `DELETE FROM ${process.env.NEW_DB_NAME}.dbo.incomming_assignment WITH (ROWLOCK)
         WHERE document_id = @document_id`,
         { document_id },
         transaction
@@ -108,17 +108,17 @@ class SyncIncomingAuditModel extends SyncAuditModel {
         uniqueKeys.add(key);
 
         await this.queryNewDbTx(
-          `INSERT INTO ${process.env.NEW_DB_NAME}.dbo.incomming_assignment WITH (ROWLOCK)
+          `INSERT INTO ${process.env.NEW_DB_NAME}.dbo.incomming_assignment  WITH (ROWLOCK) 
           (document_id, receiver, role_process, stage_status,
             created_at, last_audit_id, table_backups)
           VALUES (@document_id, @receiver, @role_process, @stage_status,
                   @created_at, @last_audit_id, @table_backups)`,
           {
             document_id,
-            receiver:      String(rec).substring(0, 100),
-            role_process:  String(roleProcess).substring(0, 50),
-            stage_status:  String(stage_status).substring(0, 50),
-            created_at:    created_at || new Date(),
+            receiver: String(rec).substring(0, 100),
+            role_process: String(roleProcess).substring(0, 50),
+            stage_status: String(stage_status).substring(0, 50),
+            created_at: created_at || new Date(),
             last_audit_id: auditId || null,
             table_backups: 'incomming_assignment',
           },
@@ -145,7 +145,7 @@ class SyncIncomingAuditModel extends SyncAuditModel {
 
     if (!document_id || !stage_status) return;
 
-    const stageUp  = (stage_status || '').toUpperCase();
+    const stageUp = (stage_status || '').toUpperCase();
     // Văn bản đến được coi là hoàn tất khi ở trạng thái DA_XU_LY
     const isCompleted = (stageUp === STAGE.HOAN_THANH_VAN_BAN) ? 1 : 0;
     // Ưu tiên hiển thị cá nhân làm receiver chính trong current_state
@@ -154,7 +154,7 @@ class SyncIncomingAuditModel extends SyncAuditModel {
     // Sử dụng logic UPDATE trước, sau đó mới INSERT nếu không có bản ghi nào bị ảnh hưởng
     // Cách tiếp cận này ổn định hơn MERGE trong môi trường high-concurrency
     const updateQuery = `
-      UPDATE ${process.env.NEW_DB_NAME}.dbo.incomming_current_state WITH (ROWLOCK, READPAST)
+      UPDATE ${process.env.NEW_DB_NAME}.dbo.incomming_current_state WITH (ROWLOCK)
       SET 
         current_stage_status  = @stage_status,
         current_action_code   = @action_code,
@@ -172,27 +172,27 @@ class SyncIncomingAuditModel extends SyncAuditModel {
 
     const updateRes = await this.queryNewDbTx(updateQuery, {
       document_id,
-      stage_status:  String(stage_status).substring(0, 100),
-      action_code:   action_code ? String(action_code).substring(0, 100) : null,
-      receiver:      currentReceiver ? String(currentReceiver).substring(0, 100) : null,
-      role_process:  roleProcess ? String(roleProcess).substring(0, 100) : null,
+      stage_status: String(stage_status).substring(0, 100),
+      action_code: action_code ? String(action_code).substring(0, 100) : null,
+      receiver: currentReceiver ? String(currentReceiver).substring(0, 100) : null,
+      role_process: roleProcess ? String(roleProcess).substring(0, 100) : null,
       last_audit_id: auditId || null,
-      audit_time:    time,
-      is_completed:  isCompleted
+      audit_time: time,
+      is_completed: isCompleted
     }, transaction);
 
     // Nếu không bản ghi nào được update (nghĩa là chưa có document_id này), thực hiện INSERT
     if (updateRes?.rowsAffected?.[0] === 0) {
       // Kiểm tra lại lần nữa với READPAST để không bị treo
       const checkRes = await this.queryNewDbTx(
-        `SELECT 1 FROM ${process.env.NEW_DB_NAME}.dbo.incomming_current_state WITH (ROWLOCK, READPAST) WHERE document_id = @document_id`,
+        `SELECT 1 FROM ${process.env.NEW_DB_NAME}.dbo.incomming_current_state WITH (ROWLOCK) WHERE document_id = @document_id`,
         { document_id },
         transaction
       );
 
       if (!checkRes || checkRes.length === 0) {
         const insertQuery = `
-          INSERT INTO ${process.env.NEW_DB_NAME}.dbo.incomming_current_state WITH (ROWLOCK)
+          INSERT INTO ${process.env.NEW_DB_NAME}.dbo.incomming_current_state  WITH (ROWLOCK) 
           (
             document_id, current_stage_status, current_action_code,
             current_receiver, current_role_process,
@@ -208,13 +208,13 @@ class SyncIncomingAuditModel extends SyncAuditModel {
         `;
         await this.queryNewDbTx(insertQuery, {
           document_id,
-          stage_status:  String(stage_status).substring(0, 100),
-          action_code:   action_code ? String(action_code).substring(0, 100) : null,
-          receiver:      currentReceiver ? String(currentReceiver).substring(0, 100) : null,
-          role_process:  roleProcess ? String(roleProcess).substring(0, 100) : null,
+          stage_status: String(stage_status).substring(0, 100),
+          action_code: action_code ? String(action_code).substring(0, 100) : null,
+          receiver: currentReceiver ? String(currentReceiver).substring(0, 100) : null,
+          role_process: roleProcess ? String(roleProcess).substring(0, 100) : null,
           last_audit_id: auditId || null,
-          audit_time:    time,
-          is_completed:  isCompleted,
+          audit_time: time,
+          is_completed: isCompleted,
           table_backups: 'incomming_current_state'
         }, transaction);
       }

@@ -1,4 +1,5 @@
 const logger = require('../../../utils/logger');
+const dbUtils = require('../../../utils/dbUtils');
 const sql = require('mssql');
 const fs = require('fs');
 const path = require('path');
@@ -1290,21 +1291,19 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
     // Step 3: Production Sync (news & audit) - Like sync-social-resource
     const actionLogs = [];
     if (parsedData) {
-      const trans = new sql.Transaction(this.newPool);
-      await trans.begin();
       try {
-        const resultProd = await this.upsertToProduction(parsedData, trans);
-        actionLogs.push({ table: 'news', action: resultProd.action });
+        await dbUtils.withTransactionRetry(this.newPool, async (trans) => {
+          const resultProd = await this.upsertToProduction(parsedData, trans);
+          actionLogs.push({ table: 'news', action: resultProd.action });
 
-        if (parsedData.isActive && resultProd.newsId) {
-          await this.createAuditRecord(resultProd.newsId, parsedData.publishedAt, trans);
-          actionLogs.push({ table: 'audit', action: 'DUYET' });
-        }
-        await trans.commit();
+          if (parsedData.isActive && resultProd.newsId) {
+            await this.createAuditRecord(resultProd.newsId, parsedData.publishedAt, trans);
+            actionLogs.push({ table: 'audit', action: 'DUYET' });
+          }
+        }, { maxRetries: 5 });
       } catch (e) {
-        await trans.rollback();
-        logger.error(`[Production Sync] Rollback for ${docPath}: ${e.message}`);
-        actionLogs.push({ action: 'rollback', error: e.message });
+        logger.error(`[Production Sync] Failed for ${docPath} after retries: ${e.message}`);
+        actionLogs.push({ action: 'failed', error: e.message });
       }
     }
 
