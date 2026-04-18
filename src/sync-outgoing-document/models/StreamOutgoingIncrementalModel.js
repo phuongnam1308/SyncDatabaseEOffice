@@ -157,6 +157,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     this._outGoingMigrationModels = null;
     this._fileService = null;
     this.partitionColumn = 'Created'; // Cột nghiệp vụ để chia dải dữ liệu — Created có dữ liệu datetime đầy đủ
+    this._instanceId = process.env.INSTANCE_ID || `pid_${process.pid}`;
   }
 
   /**
@@ -509,6 +510,9 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         send_id_bak_bef_test        NVARCHAR(MAX),
         status_code_bak_bef_test    NVARCHAR(MAX),
         drafter_bak_bef_test        NVARCHAR(MAX),
+        processing_owner             NVARCHAR(255),
+        processing_started_at        DATETIME2,
+        processing_heartbeat_at      DATETIME2,
         stage_status               NVARCHAR(50),
         curStatusCode              NVARCHAR(10),
 
@@ -803,15 +807,22 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     const envStartDate = process.env.SYNC_START_DATE ? new Date(process.env.SYNC_START_DATE).toISOString() : null;
     const envEndDate = process.env.SYNC_END_DATE ? new Date(process.env.SYNC_END_DATE).toISOString() : null;
 
-    // Cleanup stale records
+    // Cleanup stale records (only rows claimed > STALE_MINUTES ago)
+    const staleMinutes = Number(process.env.STAGING_STALE_MINUTES || 30);
     try {
       await this.queryNewDb(`
         UPDATE ${stagingTableRef}
-        SET MigrateFlg = 0, MigrateErrMess = 'Reset from stale processing'
+        SET MigrateFlg = 0,
+            MigrateErrMess = 'Reset from stale processing',
+            processing_owner = NULL,
+            processing_started_at = NULL,
+            processing_heartbeat_at = NULL
         WHERE MigrateFlg = 2
+          AND processing_started_at < DATEADD(MINUTE, -@staleMinutes, SYSUTCDATETIME())
           AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
           AND (${this.partitionColumn} <= @endDate   OR @endDate IS NULL)
       `, {
+        staleMinutes,
         startDate: envStartDate,
         endDate: envEndDate
       });
@@ -996,8 +1007,14 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       const current = Number(jobState?.total_processed || 0) + 1;
       logger.info(`[OutGoingDoc] Process ${current}: record ID=${rowId}`);
 
-      // --- BƯỚC MỚI: Tải file từ SharePoint (NGOÀI giao dịch SQL) ---
-      const preparedFiles = await this.prepareFilesFromSharePoint(rowData);
+      // Heartbeat timer — keeps the row from being reaped as stale while we work.
+      // Runs OUTSIDE the transaction so it survives across retries.
+      const HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+      const heartbeatTimer = setInterval(() => {
+        this.updateHeartbeat(rowId).catch(err => {
+          logger.warn(`[OutGoingDoc] Heartbeat failed for ID=${rowId}: ${err.message}`);
+        });
+      }, HEARTBEAT_INTERVAL_MS);
 
       const result = await dbUtils.withTransactionRetry(this.newPool, async (transaction) => {
         const res = await this.processRowData(rowData, { transaction, preparedFiles });
@@ -1014,7 +1031,10 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
 
         // Mark staging row as processed successfully
         await this.queryNewDbTx(
-          `UPDATE ${stagingTableRef}  WITH (ROWLOCK)  SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE ID = @ID`,
+          `UPDATE ${stagingTableRef} WITH (ROWLOCK)
+           SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL,
+               processing_owner = NULL, processing_started_at = NULL, processing_heartbeat_at = NULL
+           WHERE ID = @ID`,
           { ID: rowId },
           transaction,
         );
@@ -1030,10 +1050,17 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         result
       };
     } catch (error) {
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+      }
       if (rowData && rowData.ID) {
         try {
           const stagingTableRef = this.getStagingTableRef();
-          await this.queryNewDb(`UPDATE ${stagingTableRef} SET MigrateFlg = 0, MigrateErrFlg = 1, MigrateErrMess = @Err WHERE ID = @ID`, { ID: rowData.ID, Err: String(error.message).slice(0, 1000) });
+          await this.queryNewDb(`UPDATE ${stagingTableRef} WITH (ROWLOCK)
+            SET MigrateFlg = 0, MigrateErrFlg = 1, MigrateErrMess = @Err,
+                processing_owner = NULL, processing_started_at = NULL, processing_heartbeat_at = NULL
+            WHERE ID = @ID`, { ID: rowData.ID, Err: String(error.message).slice(0, 1000) });
         } catch (updateErr) { }
       }
 
@@ -1129,7 +1156,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       const query = `
       WITH CTE AS (
         SELECT TOP (1) *
-        FROM ${stagingTableRef} WITH (UPDLOCK, ROWLOCK)
+        FROM ${stagingTableRef} WITH (UPDLOCK, ROWLOCK, READPAST)
         WHERE ISNULL(MigrateFlg, 0) = 0
           AND ISNULL(MigrateErrFlg, 0) = 0
           -- ★ Với DATE type đúng: lọc trực tiếp, NULL vẫn được xử lý
@@ -1148,18 +1175,39 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       )
       UPDATE CTE
       SET MigrateFlg = 2,
-          MigrateErrMess = 'Processing...'
+          MigrateErrMess = 'Processing...',
+          processing_owner = @owner,
+          processing_started_at = SYSUTCDATETIME(),
+          processing_heartbeat_at = SYSUTCDATETIME()
       OUTPUT inserted.*
       `;
 
       const rows = await this.queryNewDb(query, {
         startDate: process.env.SYNC_START_DATE || null,
-        endDate: process.env.SYNC_END_DATE || null
+        endDate: process.env.SYNC_END_DATE || null,
+        owner: this._instanceId || `pid_${process.pid}`,
       });
       return rows?.length ? rows[0] : null;
     } catch (error) {
       logger.error(`[OutGoingDoc.fetchOneFromStaging] Failed to fetch: ${error.message}`);
       throw error;
+    }
+  }
+
+  /**
+   * Updates processing_heartbeat_at for a claimed staging row.
+   * Call periodically from long-running processOne to avoid being treated as stale.
+   * @param {string|number} rowId
+   * @param {object} [transaction]
+   */
+  async updateHeartbeat(rowId, transaction = null) {
+    if (!rowId) return;
+    const stagingTableRef = this.getStagingTableRef();
+    const q = `UPDATE ${stagingTableRef} WITH (ROWLOCK) SET processing_heartbeat_at = SYSUTCDATETIME() WHERE ID = @ID AND MigrateFlg = 2`;
+    if (transaction) {
+      await this.queryNewDbTx(q, { ID: rowId }, transaction);
+    } else {
+      await this.queryNewDb(q, { ID: rowId });
     }
   }
 
@@ -1307,6 +1355,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     try {
       const oldDbRecord = id
         ? await this.getByIdFromOldDb(id).catch(err => {
+          if (dbUtils.isRetryableSqlError(err)) throw err;
           logger.warn(`[upsertDocumentAggregateById] Không lấy được old record ID=${id}: ${err.message}`);
           return null;
         })
@@ -1335,6 +1384,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       const documentId = documentResult.documentId;
       const stagingRecord = documentId
         ? await this.getByIdFromStaging(id, transaction).catch(err => {
+          if (dbUtils.isRetryableSqlError(err)) throw err;
           logger.warn(`[upsertDocumentAggregateById] Không lấy được staging record ID=${id}: ${err.message}`);
           return null;
         })
@@ -1389,6 +1439,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
           logger.info(`  └─ [ParsedHTMLComments] Extracted ${totalParsedComments} comments from HTML fields.`);
         }
       } catch (htmlCommentErr) {
+        if (dbUtils.isRetryableSqlError(htmlCommentErr)) throw htmlCommentErr;
         logger.warn(`[upsertDocumentAggregateById] Lỗi parse HTML YKien ID=${id}: ${htmlCommentErr.message}`);
       }
       logger.info(`[PERF] STEP 3 (HTML Comments) took ${Date.now() - _timeStep3}ms for ID=${id}`);
@@ -1428,6 +1479,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
                 totalAffected += Number(result.inserted || 0);
                 totalAffected += Number(result.updated || 0);
               } catch (auditErr) {
+                if (dbUtils.isRetryableSqlError(auditErr)) throw auditErr;
                 logger.warn(
                   `[upsertDocumentAggregateById] Audit migrate failed table=${tableName} ID=${id}: ${auditErr.message}`
                 );
@@ -1435,6 +1487,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
             }
           }
         } catch (error) {
+          if (dbUtils.isRetryableSqlError(error)) throw error;
           logger.warn(
             `[upsertDocumentAggregateById] Aggregated fetch audit failed for ID=${id}: ${error.message}`
           );
@@ -1521,6 +1574,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
           totalAffected++;
         }
       } catch (autoAuditErr) {
+        if (dbUtils.isRetryableSqlError(autoAuditErr)) throw autoAuditErr;
         logger.warn(`[AutoCreateAudit] Failed for documentId=${documentId}: ${autoAuditErr.message}`);
       }
 
