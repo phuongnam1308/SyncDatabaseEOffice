@@ -915,14 +915,14 @@ class SyncManagerService {
         this.saveState();
 
         const fetchTimer = logger.startTimer(`SYNC_FETCH | ${job.modelName}`);
-        // handlers.fetchFn(cursorTime, batchSize, offset, context)
         const records = await handlers.fetchFn(cursorTime, job.batchSize, offset, {
           modelName: job.modelName,
           jobId: job.jobId,
           lastSyncTime: cursorTime,
           lastSyncId: cursorId,
           // Cần thiết để SyncHandlerModel phục hồi nextIndex đúng sau server restart (Resume)
-          totalProcessed: job.totalProcessed || 0
+          totalProcessed: job.totalProcessed || 0,
+          settings: this.state.settings
         });
         fetchTimer.stop(records?.length);
 

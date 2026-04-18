@@ -766,6 +766,7 @@ class MigrationHelper {
   }
 
   async mapUserName(userIdOrName, transaction = null) {
+    return 'b23406e3-5c75-41d3-91e0-1654293ae6b2';
     try {
       if (!userIdOrName || typeof userIdOrName !== 'string') {
         return userIdOrName;
@@ -865,6 +866,7 @@ class MigrationHelper {
    * MỚI: Hàm đồng bộ và ánh xạ User từ DB cũ nếu chưa có ở DB mới.
    */
   async syncAndMapUser(userIdOrName, transaction = null) {
+    return 'b23406e3-5c75-41d3-91e0-1654293ae6b2';
     try {
       if (!userIdOrName || typeof userIdOrName !== 'string') return userIdOrName;
       const trimmed = userIdOrName.trim();
