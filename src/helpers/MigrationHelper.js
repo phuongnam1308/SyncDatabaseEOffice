@@ -150,10 +150,15 @@ class MigrationHelper {
           trimmed
         )
       ) {
-        const iso = trimmed.includes("T")
-          ? trimmed
-          : trimmed.replace(" ", "T");
-        const parsed = new Date(iso);
+        const [datePart, timePart] = trimmed.split(/[ T]/);
+        const [year, month, day] = datePart.split("-").map(Number);
+        const [hour = 0, minute = 0, second = 0] = (timePart || "")
+          .split(":")
+          .map((part) => Number(part || 0));
+
+        const parsed = new Date(
+          Date.UTC(year, month - 1, day, hour, minute, second) - 7 * 60 * 60 * 1000
+        );
         return isNaN(parsed.getTime()) ? null : parsed;
       }
 
@@ -169,18 +174,13 @@ class MigrationHelper {
         const second = Number(vnMatch[6] || 0);
 
         const parsed = new Date(
-          year,
-          month - 1,
-          day,
-          hour,
-          minute,
-          second
+          Date.UTC(year, month - 1, day, hour, minute, second) - 7 * 60 * 60 * 1000
         );
 
         if (
-          parsed.getFullYear() === year &&
-          parsed.getMonth() === month - 1 &&
-          parsed.getDate() === day
+          parsed.getUTCFullYear() === year &&
+          parsed.getUTCMonth() === month - 1 &&
+          parsed.getUTCDate() === day
         ) {
           return parsed;
         }
@@ -2824,6 +2824,7 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
     }
 
     let count = 0;
+    let commentIndex = 0;
     // Tìm các cụm có dạng: <span ...>Nguyễn Văn Phương - CVP (03/03/2014 13:09)</span>...<div ...>Nội dung</div>
     const regex = /<span[^>]*noidung[^>]*>(.*?)<\/span>[\s\S]*?<div[^>]*noidung[^>]*>([\s\S]*?)<\/div>/gi;
     let match;
@@ -2848,35 +2849,80 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
 
       const cleanName = this.extractDisplayName(userNameExtracted) || userNameExtracted;
       const userId = await this.mapUserName(cleanName, transaction);
-      const commentId = Date.now() * 1000 + Math.floor(Math.random() * 1000);
-
+      const commentBackupId = `${String(oldDocumentId)}|${String(oldTableName)}|${String(columnName || 'HTML')}|${commentIndex}`;
+      commentIndex += 1;
       const formattedContent = columnName ? `${columnName} : ${contentRaw}` : contentRaw;
 
-        const insertQuery = `
-        INSERT INTO ${process.env.NEW_DB_NAME}.dbo.document_comments (
-          id, document_id, parent_id, user_id, user_name, content, [type],
-          is_edited, created_at, updated_at, fileId, likes, is_leader_suggestion,
-          org_id, id_comments_bak, table_bak, parent_id_bak, user_id_bak
-        ) VALUES (
-          @id, @docId, NULL, @userId, @userName, @content, 1,
-          0, @createdAt, @createdAt, NULL, NULL, 1,
-          NULL, NULL, @tableBak, NULL, NULL
-        )
-      `;
-
-      try {
-        await this.queryNewDbTx(insertQuery, {
-          id: commentId,
-          docId: newDocumentId,
-          userId: userId || null,
-          userName: cleanName || null,
-          content: formattedContent || '',
-          createdAt: createdAt,
+      const existingComment = await this.queryNewDbTx(
+        `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.document_comments
+         WHERE id_comments_bak = @idCommentsBak
+           AND table_bak = @tableBak`,
+        {
+          idCommentsBak: commentBackupId,
           tableBak: String(oldTableName)
-        }, transaction);
-        count++;
-      } catch (insertErr) {
-        logger.warn(`[parseAndInsertHtmlComments] Lỗi insert comment ID=${commentId}: ${insertErr.message}`);
+        },
+        transaction
+      );
+
+      if (existingComment && existingComment.length > 0) {
+        const updateQuery = `
+          UPDATE ${process.env.NEW_DB_NAME}.dbo.document_comments
+          SET
+            document_id = @docId,
+            user_id = @userId,
+            user_name = @userName,
+            content = @content,
+            [type] = 1,
+            is_edited = 0,
+            created_at = @createdAt,
+            updated_at = GETDATE(),
+            user_id_bak = @userIdBak
+          WHERE id = @id
+        `;
+
+        try {
+          await this.queryNewDbTx(updateQuery, {
+            id: existingComment[0].id,
+            docId: newDocumentId,
+            userId: userId || null,
+            userIdBak: userId || null,
+            userName: cleanName || null,
+            content: formattedContent || '',
+            createdAt: createdAt,
+          }, transaction);
+        } catch (updateErr) {
+          logger.warn(`[parseAndInsertHtmlComments] Lỗi update comment id_comments_bak=${commentBackupId}: ${updateErr.message}`);
+        }
+      } else {
+        const commentId = Date.now() * 1000 + Math.floor(Math.random() * 1000);
+        const insertQuery = `
+          INSERT INTO ${process.env.NEW_DB_NAME}.dbo.document_comments (
+            id, document_id, parent_id, user_id, user_name, content, [type],
+            is_edited, created_at, updated_at, fileId, likes, is_leader_suggestion,
+            org_id, id_comments_bak, table_bak, parent_id_bak, user_id_bak
+          ) VALUES (
+            @id, @docId, NULL, @userId, @userName, @content, 1,
+            0, @createdAt, @createdAt, NULL, NULL, 1,
+            NULL, @idCommentsBak, @tableBak, NULL, @userIdBak
+          )
+        `;
+
+        try {
+          await this.queryNewDbTx(insertQuery, {
+            id: commentId,
+            docId: newDocumentId,
+            userId: userId || null,
+            userIdBak: userId || null,
+            userName: cleanName || null,
+            content: formattedContent || '',
+            createdAt: createdAt,
+            idCommentsBak: commentBackupId,
+            tableBak: String(oldTableName)
+          }, transaction);
+          count++;
+        } catch (insertErr) {
+          logger.warn(`[parseAndInsertHtmlComments] Lỗi insert comment ID=${commentId}: ${insertErr.message}`);
+        }
       }
     }
 
