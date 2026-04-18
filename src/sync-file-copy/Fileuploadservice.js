@@ -8,7 +8,7 @@ const fs = require('fs/promises');
 const fsSync = require('fs');
 const axios = require('axios');
 const FormData = require('form-data');
-const { getAccessToken, TOKEN_FILE_PATH: NEW_SYSTEM_TOKEN_FILE } = require('../../auth/newSortAccess');
+const https = require('https');
 
 // ══════════════════════════════════════════════
 //  KHỞI TẠO MINIO CLIENT TỪ ENV
@@ -126,29 +126,63 @@ class FileUploadService {
   }
 
   /**
-   * Lấy token của hệ thống mới từ file cache hoặc login lại nếu cần
-   * @param {boolean} forceRefresh - Nếu true, sẽ xóa token cũ và lấy lại từ đầu
+   * Lấy token từ Keycloak dùng password grant flow
+   * @param {boolean} forceRefresh - Nếu true, bỏ qua cache và lấy mới
    */
   async _getNewSystemToken(forceRefresh = false) {
+    const TOKEN_CACHE_PATH = path.join(__dirname, '..', '..', 'uploads', '.keycloak_token_cache');
+
     try {
-      // Nếu forceRefresh, xóa file trước
-      if (forceRefresh && fsSync.existsSync(NEW_SYSTEM_TOKEN_FILE)) {
-        logger.info('[FileUploadService] Đang xóa token cũ để lấy token mới...');
-        try { await fs.unlink(NEW_SYSTEM_TOKEN_FILE); } catch (_) { }
+      if (!forceRefresh) {
+        try {
+          const cached = await fs.readFile(TOKEN_CACHE_PATH, 'utf-8');
+          if (cached) {
+            const { token, expiresAt } = JSON.parse(cached);
+            if (token && expiresAt && Date.now() < expiresAt) {
+              return token;
+            }
+          }
+        } catch (_) { }
       }
 
-      // Thử đọc từ file trước
-      if (fsSync.existsSync(NEW_SYSTEM_TOKEN_FILE)) {
-        const token = await fs.readFile(NEW_SYSTEM_TOKEN_FILE, 'utf-8');
-        if (token && token.trim()) return token.trim();
+      const issuer = process.env.KEYCLOAK_ISSUER || 'https://iam-uat.snp.com.vn/realms/snp-internal';
+      const clientId = process.env.KEYCLOAK_CLIENT_ID || 'doffice';
+      const clientSecret = process.env.KEYCLOAK_CLIENT_SECRET || 'wKORFQNrraWJk2qO6j6hB1Ae7G82xLyF';
+      const username = process.env.KEYCLOAK_USERNAME;
+      const password = process.env.KEYCLOAK_PASSWORD;
+
+      if (!username || !password) {
+        throw new Error('[FileUploadService] Thiếu KEYCLOAK_USERNAME hoặc KEYCLOAK_PASSWORD');
       }
 
-      // Nếu không có hoặc lỗi, gọi login để lấy mới
-      logger.info('[FileUploadService] Token hệ thống mới không tìm thấy hoặc bị bắt buộc lấy mới, đang thực hiện login...');
-      const newToken = await getAccessToken();
-      return newToken;
+      const tokenUrl = `${issuer}/protocol/openid-connect/token`;
+      const params = new URLSearchParams();
+      params.append('grant_type', 'password');
+      params.append('username', username);
+      params.append('password', password);
+      params.append('client_id', clientId);
+      params.append('client_secret', clientSecret);
+
+      const agent = new https.Agent({ rejectUnauthorized: false });
+
+      logger.info('[FileUploadService] Đang lấy token Keycloak mới...');
+      const response = await axios.post(tokenUrl, params.toString(), {
+        httpsAgent: agent,
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      });
+
+      const { access_token, expires_in } = response.data;
+      if (!access_token) {
+        throw new Error('[FileUploadService] Keycloak không trả về access_token');
+      }
+
+      const expiresAt = Date.now() + (expires_in - 60) * 1000;
+      await fs.writeFile(TOKEN_CACHE_PATH, JSON.stringify({ token: access_token, expiresAt }), 'utf-8');
+
+      logger.info(`[FileUploadService] Token Keycloak mới: expires_in=${expires_in}s`);
+      return access_token;
     } catch (error) {
-      logger.error(`[FileUploadService] Lỗi khi lấy token hệ thống mới: ${error.message}`);
+      logger.error(`[FileUploadService] Lỗi lấy token Keycloak: ${error.message}`);
       return null;
     }
   }
@@ -353,7 +387,6 @@ class FileUploadService {
     }
 
     // ── BƯỚC 1: Chọn phương thức upload (CHỈ DÙNG HỆ THỐNG MỚI) ──
-    let uploadSuccess = false;
     let apiResponse = null;
     let storagePath = null;
 
