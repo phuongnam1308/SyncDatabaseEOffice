@@ -11,6 +11,8 @@ const SyncOutgoingModel = require('../sync-outgoing-v2/models/SyncOutgoingModel'
 
 class SyncOutgoingAdapter {
   constructor() {
+    this._instanceId = process.env.INSTANCE_ID || '1';
+    this._name = `StreamOutgoingV2_Instance_${this._instanceId}`;
     this._model = null;
     this._initialized = false;
   }
@@ -21,17 +23,21 @@ class SyncOutgoingAdapter {
   async initialize() {
     if (this._initialized) return;
 
-    // Initialize instance ID cho multi-terminal support
-    this._instanceId = process.env.INSTANCE_ID || '1';
-
     // Tạo instance của SyncOutgoingModel v2
     this._model = new SyncOutgoingModel();
-
+    
     // Gọi initialize của model để khởi tạo đầy đủ (pools, loader, staging table)
     await this._model.initialize(this._instanceId);
 
     this._initialized = true;
-    logger.info(`[SyncOutgoingAdapter] Initialized with instanceId=${this._instanceId}`);
+    logger.info(`[SyncOutgoingAdapter] Initialized as ${this._name}`);
+  }
+
+  /**
+   * Trả về tên định danh duy nhất cho instance này
+   */
+  getName() {
+    return this._name || 'StreamOutgoingV2_Unknown';
   }
 
   /**
@@ -75,12 +81,18 @@ class SyncOutgoingAdapter {
     // Default to max date (DESC ordering starts from newest)
     const DEFAULT_SYNC_TIME = '2999-12-31T23:59:59.999Z';
 
-    // Handle epoch time (1970-01-01) as "not set" - use default
-    const isValidTime = lastSyncTime && lastSyncTime !== '1970-01-01T00:00:00.000Z';
+    // Handle epoch time (1970-01-01) or 1900-01-01 as "reset" - use default (2999) for DESC sync
+    const lastSyncDate = new Date(lastSyncTime);
+    const isDateValid = !isNaN(lastSyncDate.getTime());
+    const isValidTime = lastSyncTime && 
+                        lastSyncTime !== '1970-01-01T00:00:00.000Z' &&
+                        isDateValid &&
+                        lastSyncDate.getFullYear() > 2000; // Nếu nhỏ hơn năm 2000, coi như Reset
+
     let cursorTime = isValidTime ? lastSyncTime : DEFAULT_SYNC_TIME;
     let cursorId = Number(lastSyncId || 0);
 
-    logger.info(`[SyncOutgoingAdapter] getList start: cursorTime=${cursorTime}, lastSyncId=${cursorId}`);
+    logger.info(`[SyncOutgoingAdapter] getList start: cursorTime=${cursorTime}, lastSyncId=${cursorId} (Raw lastSyncTime: ${lastSyncTime})`);
 
     while (hasMore) {
       const batch = await this._model.extractor.fetchBatchFromOldDb(

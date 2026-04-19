@@ -248,11 +248,11 @@ class SyncManagerController extends BaseController {
   getDashboard = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
 
-    const instanceId = process.env.SYNC_INSTANCE_ID || 'default';
+    const instanceId = process.env.SYNC_INSTANCE_ID || process.env.INSTANCE_ID || 'default';
     const data = await SyncStateRepository.getDashboardData(instanceId);
     const registeredLabels = this.modelRegistry.getRegisteredLabels();
     
-    // Lọc bỏ những đối tượng không có trong đăng ký hiện tại (ẩn các bản ghi cũ/test)
+    // ĐÃ KHÔI PHỤC: Lọc bỏ những đối tượng máy này không phụ trách
     const filteredEntities = {};
     for (const label of registeredLabels) {
       if (data.entities && data.entities[label]) {

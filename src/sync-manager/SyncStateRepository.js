@@ -156,6 +156,7 @@ class SyncStateRepository extends BaseModel {
             totalSynced: m.total_synced || 0,
             lastRun: m.last_run,
             activeJobId: m.active_job_id,
+            instanceId: m.instance_id,
             error: m.last_error,
             // Các trường tính toán cho dashboard
             currentJobId: currentJob ? currentJob.jobId : null,

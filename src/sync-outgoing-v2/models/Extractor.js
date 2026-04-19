@@ -73,7 +73,13 @@ class Extractor extends BaseExtractor {
       ORDER BY __page_rn
     `;
 
-    const isValidTime = lastSyncTime && lastSyncTime !== '1970-01-01T00:00:00.000Z';
+    const lastSyncDate = new Date(lastSyncTime);
+    const isDateValid = !isNaN(lastSyncDate.getTime());
+    const isValidTime = lastSyncTime && 
+                        lastSyncTime !== '1970-01-01T00:00:00.000Z' &&
+                        isDateValid &&
+                        lastSyncDate.getFullYear() > 2000;
+    
     const effectiveSyncTime = isValidTime ? lastSyncTime : defaultSyncTime;
 
     logger.info(`[${this.modelName}] Fetching batch: lastSyncTime=${effectiveSyncTime}, lastSyncId=${lastSyncId}, limit=${batchSize}, offset=${offset}`);

@@ -236,7 +236,106 @@ const stats = await model.loader.getStats(instanceId);
 - **Extract có thể song song** vì upsert logic (IF EXISTS UPDATE) đảm bảo không trùng
 - Nếu cần load song song, dùng INSTANCE_ID khác nhau cho từng terminal
 
-## 7. Điểm mở rộng
+## 7. Logic Download/Upload File (Sync V2)
+
+### 7.1 Tổng quan flow
+
+```
+VanBanBanHanh.Files (SharePoint paths)
+       │
+       ▼
+SharePointAuthService.downloadFile()
+  → Parse pipe-separated paths
+  → Download từ SharePoint (NTLM cookie auth)
+  → Buffer
+       │
+       ▼
+FileUploadService.uploadAndInsert()
+  → Upload lên hệ thống mới (Lifetex API)
+  → Insert bảng files
+  → Insert bảng file_relations
+```
+
+### 7.2 Download từ SharePoint (SharePointAuthService.js)
+
+**Cơ chế authentication:**
+- Dùng cookie-based NTLM auth
+- Cache 3 lớp: Memory → Database (`sync_auth_state`) → File (`auth/cookie.txt`)
+- Multi-terminal support: dùng DB lock (`is_refreshing` column) để tránh conflict
+
+**Refresh token logic:**
+- Phát hiện login page (HTML response) khi truy cập file
+- Phát hiện HTTP 401/403/302
+- Tự động gọi `npm run login` để refresh cookie
+- Stale lock: nếu terminal khác lock > 10 phút thì terminal khác được chiếm quyền
+
+**Retry logic:**
+- Retry 1 lần nếu token hết hạn
+- Timeout: 600000ms (10 phút)
+
+```javascript
+// Trong UpsertHandler
+const preparedFiles = await this._prepareFilesFromSharePoint(oldRecord);
+await this._applyPreparedFiles(preparedFiles, oldRecord, { id: documentId, type_doc: 1, drafter }, transaction);
+```
+
+### 7.3 Upload lên hệ thống mới (Fileuploadservice.js)
+
+**Phương thức upload:**
+- Ưu tiên: Gọi API `NEW_SYSTEM_UPLOAD_URL` (Lifetex API)
+- fallback: MinIO (hiện tại bị disable, throw error nếu không có API URL)
+
+**Authentication cho API:**
+- Lấy token Keycloak via password grant flow
+- Username: `vanthutc01`, Password: `TanCang@123`
+- Client: `doffice` với secret
+- Token cache: 7h expiry, lưu tại `uploads/.doffice_jwt_cache`
+
+**Retry logic cho upload:**
+- Max 5 retries với exponential backoff
+- Retry khi: rate limit (429), network error (ECONNRESET, ETIMEDOUT)
+- Retry khi: 401 Unauthorized (xóa token cũ, lấy token mới)
+
+**Sau khi upload thành công:**
+1. Insert vào bảng `files` với `storage_path` từ API response
+2. Insert vào bảng `file_relations` với `file_id` vừa tạo
+3. Nếu DB insert fail → rollback file trên MinIO (nếu có)
+
+### 7.4 File relation structure
+
+```javascript
+// Trong UpsertHandler._applyPreparedFiles()
+const fileRecord = {
+  file_name,        // Tên file gốc
+  file_path,        // SharePoint path
+  mime_type,        // Detect từ magic bytes
+  created_by,       // drafter của văn bản
+  version: 1,
+  id_bak: uuidv4,   // UUID cho file backup
+  table_bak: 'VanBanBanHanh',
+  type_doc: 1,
+  isBak: 1
+};
+
+const relationRecord = {
+  object_type: 'docDraft',
+  object_id: documentId,
+  object_id_bak: oldRecord.ID,
+  file_id_bak: fileIdBak,
+  table_bak: 'VanBanBanHanh',
+  type_doc: 'docDraft'
+};
+```
+
+### 7.5 MIME type detection
+
+```javascript
+// Trong UpsertHandler.detectFileType()
+- Magic bytes check cho: PDF, PNG, JPG, GIF, BMP, ZIP/DOCX/XLSX/PPTX, DOC, RAR
+- Default: 'application/octet-stream'
+```
+
+## 8. Điểm mở rộng
 
 - Muốn thêm loại document khác: tạo tương tự `SyncIncomingModel`, `SyncAuditModel`
 - Muốn thêm field mapping: sửa `OutgoingMapper.mapRecord()`
