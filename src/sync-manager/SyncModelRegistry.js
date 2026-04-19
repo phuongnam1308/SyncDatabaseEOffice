@@ -2,6 +2,7 @@ const logger = require('../../utils/logger');
 const SyncHandlerModel = require('./SyncHandlerModel');
 
 const OutGoingDocumentModel = require('../sync-outgoing-document/models/StreamOutgoingIncrementalModel');
+const SyncOutgoingAdapter = require('./SyncOutgoingAdapter'); // NEW: v2 adapter with instance staging tables
 const StreamUserMigrationModel = require('../sync-user-copy/migrate/StreamUserMigrationModel');
 const StreamTaskInIncrementalModel = require('../sync-tasks-van-ban-den/models/StreamTaskInIncrementalModel');
 const StreamTaskOutIncrementalModel = require('../sync-tasks-van-ban-di/models/StreamTaskOutIncrementalModel');
@@ -24,6 +25,12 @@ const MODEL_DEFINITIONS = [
     label: 'Đồng bộ văn bản đi',
     section: 'realtime',
     ModelClass: OutGoingDocumentModel
+  },
+  {
+    key: 'STREAM_OUTGOING_V2',
+    label: 'Đồng bộ văn bản đi v2',
+    section: 'realtime',
+    ModelClass: SyncOutgoingAdapter
   },
   {
     key: 'STREAM_DEPARTMENT_MIGRATION',

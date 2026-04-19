@@ -418,7 +418,6 @@ class FileUploadService {
       });
 
       if (apiResponse && apiResponse.id) {
-        uploadSuccess = true;
         storagePath = apiResponse.file_path;
         logger.info(`[FileUploadService] THANH CONG: Da upload qua API hệ thống mới. storagePath: ${storagePath}`);
       } else {
@@ -738,4 +737,3 @@ class FileUploadService {
 }
 
 module.exports = FileUploadService;
-
