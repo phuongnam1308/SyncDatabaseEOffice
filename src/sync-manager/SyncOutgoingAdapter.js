@@ -126,7 +126,7 @@ class SyncOutgoingAdapter {
     const batchSize = Number(limit) || Number(process.env.STAGING_FETCH_BATCH_SIZE || 2000);
     const effectiveOffset = Number(offset) || 0;
     // Handle epoch time as "not set"
-    const DEFAULT_SYNC_TIME = '9999-12-31T23:59:59.999Z';
+    const DEFAULT_SYNC_TIME = '2999-12-31T23:59:59.999Z';
     const isValidTime = lastSyncTime && lastSyncTime !== '1970-01-01T00:00:00.000Z';
     const effectiveSyncTime = isValidTime ? lastSyncTime : DEFAULT_SYNC_TIME;
 
