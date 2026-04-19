@@ -1,3 +1,4 @@
+const logger = require('../../../utils/logger');
 const MigrationHelper = require('../../helpers/MigrationHelper');
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 const { tableMappings } = require('./config');
@@ -24,7 +25,7 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
   }
 
   async initialize() {
-    console.log(`[StreamCarBookingMigrationModel] Initializing...`);
+    logger.info(`[StreamCarBookingMigrationModel] Initializing...`);
     await super.initialize();
 
     // 🔥 Cache Source Schema to prevent "Invalid column name" errors
@@ -32,7 +33,7 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
 
     await this.ensureStagingTableExists();
     await this.ensureTargetColumnsExist();
-    console.log(`[StreamCarBookingMigrationModel] Initialization complete.`);
+    logger.info(`[StreamCarBookingMigrationModel] Initialization complete.`);
   }
 
   async cacheSourceSchema() {
@@ -40,11 +41,13 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
           this.sourceSchema.allUserData = await this.helper.getExistingColumnsSource(this.oldDbName, 'AllUserData');
           this.sourceSchema.codeItem = await this.helper.getExistingColumnsSource('DataEOfficeSNP', 'CodeItem', 'SNP');
           this.sourceSchema.hasUserInfo = await this.helper.checkTableExistsSource(this.oldUserDb, 'UserInfo');
+          this.sourceSchema.hasDepartment = await this.helper.checkTableExistsSource(this.oldUserDb, 'Department');
 
-          console.log(`[StreamCarBookingMigrationModel] Source Schema Cached:
+          logger.info(`[StreamCarBookingMigrationModel] Source Schema Cached:
             AllUserData: ${this.sourceSchema.allUserData.size} columns,
             CodeItem: ${this.sourceSchema.codeItem.size} columns,
-            UserInfo exists: ${this.sourceSchema.hasUserInfo}`);
+            UserInfo exists: ${this.sourceSchema.hasUserInfo},
+            Department exists: ${this.sourceSchema.hasDepartment}`);
       } catch (err) {
           console.warn(`[StreamCarBookingMigrationModel] cacheSourceSchema Error: ${err.message}`);
       }
@@ -431,6 +434,7 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
             SELECT
                 ${udSelect.join(',\n                ')},
                 ${ciSelect.join(',\n                ')},
+                ${cols.hasDepartment ? `dept.[Title] AS DepartmentName` : `NULL AS DepartmentName`},
                 ud.[tp_Modified] AS __sync_time,
                 ud.[tp_ID] AS __sync_id_num,
                 ROW_NUMBER() OVER (ORDER BY ud.[tp_Modified] ASC, ud.[tp_ID] ASC) AS __page_rn
@@ -441,6 +445,7 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
             ${cols.hasUserInfo ? `LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_author ON ud.[tp_Author] = ui_author.[tp_ID]` : ''}
             ${cols.hasUserInfo ? `LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_editor ON ud.[tp_Editor] = ui_editor.[tp_ID]` : ''}
             LEFT JOIN [DataEOfficeSNP].[SNP].[CodeItem] ci ON ud.[tp_ID] = ci.[SPItemId]
+            ${cols.hasDepartment ? `LEFT JOIN [${this.oldUserDb}].[dbo].[Department] dept ON ci.[DepartmentId] = dept.[ID]` : ''}
 
             WHERE ud.[tp_ListId] IN (${listIdsStr})
             AND ud.tp_RowOrdinal = 0
@@ -546,13 +551,7 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
     const normalizedLastSyncId = Number(lastSyncId || 0);
 
     const totalCount = await this.getCount(normalizedLastSyncTime, normalizedLastSyncId);
-    console.log(`[StreamCarBookingMigrationModel] Total records to sync: ${totalCount}`);
-
-    // Cập nhật Dashboard ngay lập tức
-    await this.queryNewDb(`UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`, {
-      total: totalCount,
-      jobId: syncJobId
-    });
+    logger.info(`[StreamCarBookingMigrationModel] Total records to sync: ${totalCount}`);
 
     const fetchBatchSize = Number(process.env.STAGING_FETCH_BATCH_SIZE || 2000);
     const numIterations = Math.ceil(totalCount / fetchBatchSize);
@@ -775,12 +774,29 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         const now = new Date();
 
         // 🔥 1.7. ÉP CỨNG DỮ LIỆU CHUẨN HIỂN THỊ (Strict Hardcoding - No Fallbacks)
-        // name = destination (Location) theo yêu cầu của bạn
-        rowData.name = rowData.Location;
+        // name = Title gốc từ SharePoint (nếu có), fallback sang Location
+        rowData.name = rowData.Title || rowData.Location || 'Yêu cầu đặt xe';
         
         // contact_person là Tên hiển thị (không phải mã ID/UUID)
         rowData.contact_person = rowData.AuthorName || rowData.Organizer || 'Cán bộ 01';
+
+        // Mapping Phòng ban từ DepartmentName
+        if (rowData.DepartmentName) {
+            const mappedDeptId = await this.helper.mapSenderUnitId(rowData.DepartmentName, transaction);
+            if (mappedDeptId) {
+                rowData.department = mappedDeptId;
+                console.log(`[StreamCarBookingMigrationModel] Resolved Department: ${rowData.DepartmentName} -> ${mappedDeptId}`);
+            }
+        }
         
+        // Mapping Status dựa trên DocumentStatus (SharePoint) -> status_code (DiOffice)
+        // Mặc định 2 (Đã duyệt) nếu không bóc tách được
+        let statusCode = 2;
+        if (rowData.DocumentStatus === 1 || rowData.DocumentStatus === '1') statusCode = 1; // Chờ duyệt
+        if (rowData.DocumentStatus === 3 || rowData.DocumentStatus === '3') statusCode = 2; // Đã duyệt
+        if (rowData.DocumentStatus === 4 || rowData.DocumentStatus === '4') statusCode = 3; // Từ chối
+        rowData.status_code = statusCode;
+
         // Ép cứng đồng loạt các thông số nghiệp vụ (Strict)
         rowData.request_type = 'Tp';
         rowData.priority = 'bt';
@@ -796,15 +812,19 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         rowData.request_submitted_at = rowData.tp_Created || now;
 
         // 🔥 1.8. Tính toán các trường bổ trợ (Thời lượng & Chuẩn hóa thời gian)
-        if (rowData.StartDate && rowData.EndDate) {
-            const start = new Date(rowData.StartDate);
-            const end = new Date(rowData.EndDate);
+        // Ưu tiên StartDate/EndDate từ SharePoint, nếu không có dùng tp_Created làm fallback
+        const start = rowData.StartDate ? new Date(rowData.StartDate) : (rowData.tp_Created ? new Date(rowData.tp_Created) : now);
+        const end = rowData.EndDate ? new Date(rowData.EndDate) : (rowData.StartDate ? new Date(rowData.StartDate) : (rowData.tp_Created ? new Date(rowData.tp_Created) : now));
+
+        if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
             const diffMs = end - start;
             rowData.trip_duration_minutes = diffMs > 0 ? Math.floor(diffMs / (1000 * 60)) : 0;
-            // Đảm bảo không ghi đè thời gian kết thúc bằng thời gian hiện tại
+            rowData.departure_time = start;
             rowData.return_time = end;
         } else {
             rowData.trip_duration_minutes = 0;
+            rowData.departure_time = now;
+            rowData.return_time = now;
         }
 
         // 🔥 2. Ghi vào bảng MASTER (vehicle_registrations)
@@ -818,7 +838,7 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         rowData.car_ids                  = normalizeArr(rowData.car_ids);
         rowData.coordination_information = normalizeArr(rowData.coordination_information);
 
-        console.log(`[StreamCarBookingMigrationModel] Executing Upsert for MASTER table...`);
+        logger.info(`[StreamCarBookingMigrationModel] Executing Upsert for MASTER table...`);
         const masterResult = await this.upsertDataToNewDB(rowData, this.oldConfig, 'id_sp_bak', recordId, transaction);
         const masterId = masterResult.id;
         console.log(`[StreamCarBookingMigrationModel] MASTER Upsert successful: Action=${masterResult.action}, Master_ID=${masterId}`);
@@ -902,51 +922,35 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
     const creatorId = rowData.AuthorAccount || 'SYSTEM_MIGRATION';
     const createTime = rowData.tp_Created ? new Date(rowData.tp_Created) : new Date();
 
-    const auditSteps = [
-      {
-        action_code: 'TAO_VA_GUI_YEU_CAU_DANG_KY_XE',
-        display_name: 'Người đăng ký xe',
-        role: 'NGUOI_DANG_KY_XE',
-        details: '"Tạo và gửi yêu cầu đăng ký xe"',
-        action: 'Tạo và gửi yêu cầu đăng ký xe',
-        from_node_id: 'Activity_00hcfcm',
-        to_node_id: 'Activity_00hcfcm',
-        curStatusCode: '1',
-        stage_status: 'DA_XU_LY',
-        receiver: creatorId,
-        origin_id: 'preview'
-      },
-      {
-        action_code: 'TAO_VA_GUI_YEU_CAU_DANG_KY_XE',
-        display_name: 'Phòng hậu cần, đội xe',
-        role: 'NGUOI_DANG_KY_XE',
-        details: '"Yêu cầu điều phối"',
-        action: 'Yêu cầu điều phối',
-        from_node_id: 'Activity_00hcfcm',
-        to_node_id: 'Gateway_1ilkpo8',
-        curStatusCode: '2',
-        stage_status: 'DA_XU_LY',
-        receiver: 'PHONG_DOI_HAU_CAN_NGUOI_DIEU_PHOI',
-        origin_id: 'preview'
-      },
-      {
-        action_code: 'DIEU_PHOI_XE_PHONG_HAU_CAN',
-        display_name: 'Điều phối yêu cầu',
-        role: 'PHONG_HAU_CAN_DOI_XE',
-        details: '"Đã điều phối"',
-        action: 'Điều phối lại',
-        from_node_id: 'Gateway_1ilkpo8',
-        to_node_id: 'Gateway_1ilkpo8',
-        curStatusCode: '2',
-        stage_status: 'DA_XU_LY',
-        receiver: 'TAI_XE_TIEP_NHAN',
-        origin_id: 'wi_' + Date.now()
-      }
-    ];
+    let auditSteps = [];
 
+    // 1. Phân tích YKien từ HTML (nếu có)
+    if (rowData.YKien && typeof rowData.YKien === 'string' && rowData.YKien.trim().length > 0) {
+        auditSteps = this.parseYKienHTML(rowData.YKien, masterId);
+    }
+
+    // 2. Nếu không có YKien, tạo log mặc định tối thiểu (Yêu cầu đăng ký)
+    if (auditSteps.length === 0) {
+        auditSteps.push({
+            action_code: 'TAO_VA_GUI_YEU_CAU_DANG_KY_XE',
+            display_name: rowData.AuthorName || 'Người đăng ký',
+            role: 'NGUOI_DANG_KY_XE',
+            details: '"Bản ghi được đồng bộ từ SharePoint (Không có lịch sử chi tiết)"',
+            action: 'Khởi tạo yêu cầu',
+            from_node_id: 'Activity_00hcfcm',
+            to_node_id: 'Activity_00hcfcm',
+            curStatusCode: '1',
+            stage_status: 'DA_XU_LY',
+            receiver: creatorId,
+            origin_id: 'migrated_init',
+            time: createTime
+        });
+    }
+
+    // 3. Thực hiện Insert
     for (const step of auditSteps) {
         const query = `
-        IF NOT EXISTS (SELECT 1 FROM ${tableRef} WHERE document_id = @document_id AND action_code = @action_code AND [action] = @action AND to_node_id = @to_node_id)
+        IF NOT EXISTS (SELECT 1 FROM ${tableRef} WHERE document_id = @document_id AND action_code = @action_code AND [time] = @time)
         BEGIN
             INSERT INTO ${tableRef} (
                 document_id, [time], user_id, display_name, [role], action_code,
@@ -962,22 +966,70 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         `;
         const params = {
             document_id: masterId,
-            time: createTime,
-            user_id: creatorId,
+            time: step.time || createTime,
+            user_id: step.user_id || creatorId,
             created_by: creatorId,
             ...step
         };
+        // Xóa thuộc tính time khỏi params để tránh trùng lặp
+        delete params.time;
+
         try {
-            console.log(`[StreamCarBookingMigrationModel] Inserting Audit Item: ActionCode=${step.action_code}, Role=${step.role}`);
-            await this.queryNewDbTx(query, params, transaction);
+            await this.queryNewDbTx(query, { ...params, time: step.time || createTime }, transaction);
         } catch (auditErr) {
-            console.error(`\n[StreamCarBookingMigrationModel] ❌ AUDIT SQL EXECUTION FAILED!`);
-            console.error(`[StreamCarBookingMigrationModel] Audit Step: ${step.action_code}`);
-            console.error(`[StreamCarBookingMigrationModel] Error Message: ${auditErr.message}`);
-            console.error(`[StreamCarBookingMigrationModel] Params Dump: ${JSON.stringify(params, null, 2)}`);
-            console.error(`====================================================================\n`);
-            throw auditErr;
+            logger.warn(`[StreamCarBookingMigrationModel] Audit insertion failed: ${auditErr.message}`);
         }
+    }
+  }
+
+  /**
+   * Parse HTML YKien từ SharePoint
+   * Cấu trúc: <span class='noidung title'>Name (Date)</span> <div class='noidung'>Comment</div>
+   */
+  parseYKienHTML(html, masterId) {
+    const steps = [];
+    try {
+        // Regex bóc tách các khối ý kiến
+        // Format: <span class='noidung title'>... (DD/MM/YYYY HH:mm)</span> ... <div class='noidung'>...</div>
+        const entryRegex = /<span class='noidung title'>\s*(.*?)\s*\((\d{1,2}\/\d{1,2}\/\d{4}\s*\d{1,2}:\d{2})\)\s*<\/span>\s*<div class='noidung'>\s*(.*?)\s*<\/div>/gs;
+        
+        let match;
+        let index = 0;
+        while ((match = entryRegex.exec(html)) !== null) {
+            const userName = match[1].trim();
+            const dateStr = match[2].trim();
+            const comment = match[3].trim().replace(/<br\s*\/?>/gi, '\n').replace(/&nbsp;/g, ' ');
+
+            // Parse ngày Việt Nam (DD/MM/YYYY HH:mm)
+            const [dmy, hm] = dateStr.split(/\s+/);
+            const [d, m, y] = dmy.split('/');
+            const [h, min] = hm.split(':');
+            const stepTime = new Date(y, m - 1, d, h, min);
+
+            steps.push({
+                action_code: index === 0 ? 'DONG_BO_Y_KIEN_CUOI' : `DONG_BO_Y_KIEN_${index}`,
+                display_name: userName,
+                role: 'NGUOI_XU_LY',
+                details: JSON.stringify(comment),
+                action: 'Ghi ý kiến/Phê duyệt',
+                from_node_id: 'Activity_External',
+                to_node_id: 'Activity_External',
+                curStatusCode: '2',
+                stage_status: 'DA_XU_LY',
+                receiver: 'SYSTEM',
+                origin_id: `sp_bak_${masterId}_${index}`,
+                time: isNaN(stepTime.getTime()) ? new Date() : stepTime,
+                user_id: userName // Sẽ lưu tên tạm để hiển thị nếu chưa resolve UUID
+            });
+            index++;
+        }
+        
+        // Sắp xếp theo thời gian tăng dần
+        steps.sort((a, b) => a.time - b.time);
+        return steps;
+    } catch (e) {
+        logger.error(`[StreamCarBookingMigrationModel] Error parsing YKien HTML: ${e.message}`);
+        return [];
     }
   }
 
