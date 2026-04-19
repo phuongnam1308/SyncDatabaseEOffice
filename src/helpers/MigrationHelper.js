@@ -940,180 +940,137 @@ class MigrationHelper {
   }
 
   /**
-   * MỚI: Cấu hình ánh xạ người dùng cho Passport một cách chặt chẽ.
-   * Chỉ tìm kiếm trong DB mới và KHÔNG bao giờ tự tạo người dùng nếu thiết sót.
-   * Cố gắng tìm bằng AuthorAccount, AuthorName, EditorAccount, EditorName.
+   * DÀNH RIÊNG CHO PASSPORT: Giải quyết User theo mức độ ưu tiên:
+   * 1. UserId (id_user_bak hoặc id)
+   * 2. LoginName (tách account) -> username hoặc code_nd
+   * 3. Email (tách prefix) -> email_user hoặc code_nd
+   * 4. FullName (extract name) -> name
    */
-  async strictUserResolver(rowData, transaction = null) {
-    const recordId = rowData.ID || rowData.tp_ID || 'Unknown';
-    logger.info(`[strictUserResolver] --- START STRICT RESOLVING USER (Record ID: ${recordId}) ---`);
+  async passportUserResolver(identityObj, transaction = null) {
+    if (!identityObj) return null;
+
+    // Mapping SharePoint fields to standard identities
+    const userId = identityObj.UserId || identityObj.AuthorId;
+    const loginName = identityObj.LoginName || identityObj.AuthorAccount;
+    const email = identityObj.Email || identityObj.AuthorEmail;
+    const fullName = identityObj.FullName || identityObj.AuthorName || identityObj.AuthorFullName || identityObj.name_passport_request;
 
     const selectQuery = `
       SELECT TOP 1 id, name, username, code_nd
-      FROM ${process.env.NEW_DB_NAME}.dbo.users
-      WHERE name = @val OR username = @val OR code_nd = @val OR id_user_bak = @val
+      FROM ${process.env.NEW_DB_NAME || 'DiOffice'}.dbo.users
+      WHERE id = @val 
+         OR id_user_bak = @val 
+         OR username = @val 
+         OR code_nd = @val 
+         OR email_user = @val
+         OR name = @val
     `;
 
-    // --- STEP 1: AuthorAccount ---
-    if (rowData.AuthorAccount) {
-      const account = this.extractAccountOnly(rowData.AuthorAccount);
-      logger.info(`[strictUserResolver] STEP 1: Checking AuthorAccount "${rowData.AuthorAccount}" -> Extracted: "${account}"`);
-      const res = await this.queryNewDbTx(selectQuery, { val: account }, transaction);
-      if (res?.length) {
-        logger.info(`[strictUserResolver] >> SUCCESS: Found UID ${res[0].id} (${res[0].name})`);
-        return res[0].id;
+    // 1. Theo UserId
+    if (userId) {
+      const val = String(userId).trim();
+      if (val) {
+        const res = await this.queryNewDbTx(selectQuery, { val }, transaction);
+        if (res?.length) return res[0].id;
       }
     }
 
-    // --- STEP 2: AuthorName ---
-    if (rowData.AuthorName) {
-      const cleanName = this.extractDisplayName(rowData.AuthorName);
-      logger.info(`[strictUserResolver] STEP 2: Checking AuthorName "${rowData.AuthorName}" -> Clean: "${cleanName}"`);
-      const res = await this.queryNewDbTx(selectQuery, { val: cleanName }, transaction);
-      if (res?.length) {
-        logger.info(`[strictUserResolver] >> SUCCESS: Found UID ${res[0].id} (${res[0].name})`);
-        return res[0].id;
+    // 2. Theo LoginName (Account)
+    if (loginName) {
+      const account = this.extractAccountOnly(loginName);
+      if (account) {
+        const res = await this.queryNewDbTx(selectQuery, { val: account }, transaction);
+        if (res?.length) return res[0].id;
       }
     }
 
-    // --- STEP 3: EditorAccount ---
-    if (rowData.EditorAccount) {
-      const account = this.extractAccountOnly(rowData.EditorAccount);
-      logger.info(`[strictUserResolver] STEP 3: Checking EditorAccount "${rowData.EditorAccount}" -> Extracted: "${account}"`);
-      const res = await this.queryNewDbTx(selectQuery, { val: account }, transaction);
-      if (res?.length) {
-        logger.info(`[strictUserResolver] >> SUCCESS: Found UID ${res[0].id} (${res[0].name})`);
-        return res[0].id;
+    // 3. Theo Email (Prefix)
+    if (email) {
+      const prefix = this.extractEmailPrefix(email);
+      if (prefix) {
+        const res = await this.queryNewDbTx(selectQuery, { val: prefix }, transaction);
+        if (res?.length) return res[0].id;
       }
     }
 
-    // --- STEP 4: EditorName ---
-    if (rowData.EditorName) {
-      const cleanName = this.extractDisplayName(rowData.EditorName);
-      logger.info(`[strictUserResolver] STEP 4: Checking EditorName "${rowData.EditorName}" -> Clean: "${cleanName}"`);
-      const res = await this.queryNewDbTx(selectQuery, { val: cleanName }, transaction);
-      if (res?.length) {
-        logger.info(`[strictUserResolver] >> SUCCESS: Found UID ${res[0].id} (${res[0].name})`);
-        return res[0].id;
+    // 4. Theo FullName
+    if (fullName) {
+      const cleanName = this.extractDisplayName(fullName);
+      if (cleanName) {
+        const res = await this.queryNewDbTx(selectQuery, { val: cleanName }, transaction);
+        if (res?.length) return res[0].id;
+        
+        // Bonus: Try without suffix mapping if still not found
+        const namePart = cleanName.split(/\s*[-–—(]\s*/)[0].trim();
+        if (namePart !== cleanName) {
+            const res2 = await this.queryNewDbTx(selectQuery, { val: namePart }, transaction);
+            if (res2?.length) return res2[0].id;
+        }
       }
     }
 
-    logger.warn(`[strictUserResolver] !! ALL STEPS FAILED for Record ${recordId}. Returning NULL.`);
     return null;
   }
 
   /**
-   * MỚI: Hàm giải quyết User "siêu cấp" với 6 bước ưu tiên và log chi tiết.
+   * MỚI: Hàm giải quyết User "siêu cấp" với 6 bước ưu tiên.
    * Chuyên dùng cho Meeting để tìm Creator/Chairman.
    */
   async robustUserResolver(rowData, transaction = null) {
-    const recordId = rowData.ID || rowData.tp_ID || 'Unknown';
     const defaultVanthuId = process.env.VANTHU_USER_ID || 'eac9bcb6-efcd-4b23-a656-dd351037a138';
-
-    logger.info(`[robustUserResolver] --- START RESOLVING USER (Record ID: ${recordId}) ---`);
-
     const selectQuery = `
       SELECT TOP 1 id, name, username, code_nd
-      FROM ${process.env.NEW_DB_NAME}.dbo.users
+      FROM ${process.env.NEW_DB_NAME || 'DiOffice'}.dbo.users
       WHERE name = @val OR username = @val OR code_nd = @val OR id_user_bak = @val
     `;
 
     // --- STEP 1: AuthorAccount ---
     if (rowData.AuthorAccount) {
       const account = this.extractAccountOnly(rowData.AuthorAccount);
-      logger.info(`[robustUserResolver] STEP 1: Checking AuthorAccount "${rowData.AuthorAccount}" -> Extracted: "${account}"`);
       const res = await this.queryNewDbTx(selectQuery, { val: account }, transaction);
-      if (res?.length) {
-        logger.info(`[robustUserResolver] >> SUCCESS via Step 1: Found UID ${res[0].id} (${res[0].name})`);
-        return res[0].id;
-      }
+      if (res?.length) return res[0].id;
     }
 
     // --- STEP 2: AuthorName ---
     if (rowData.AuthorName) {
       const cleanName = this.extractDisplayName(rowData.AuthorName);
-      logger.info(`[robustUserResolver] STEP 2: Checking AuthorName "${rowData.AuthorName}" -> Clean: "${cleanName}"`);
       const res = await this.queryNewDbTx(selectQuery, { val: cleanName }, transaction);
-      if (res?.length) {
-        logger.info(`[robustUserResolver] >> SUCCESS via Step 2: Found UID ${res[0].id} (${res[0].name})`);
-        return res[0].id;
-      }
+      if (res?.length) return res[0].id;
     }
 
-    // --- STEP 3: AuthorEmail ---
-    if (rowData.AuthorEmail) {
-      const prefix = this.extractEmailPrefix(rowData.AuthorEmail);
-      logger.info(`[robustUserResolver] STEP 3: Checking AuthorEmail "${rowData.AuthorEmail}" -> Prefix: "${prefix}"`);
-      const res = await this.queryNewDbTx(selectQuery, { val: prefix }, transaction);
-      if (res?.length) {
-        logger.info(`[robustUserResolver] >> SUCCESS via Step 3: Found UID ${res[0].id} (${res[0].name})`);
-        return res[0].id;
-      }
-    }
-
-    // --- STEP 4: EditorAccount ---
-    if (rowData.EditorAccount) {
-      const account = this.extractAccountOnly(rowData.EditorAccount);
-      logger.info(`[robustUserResolver] STEP 4: Checking EditorAccount "${rowData.EditorAccount}" -> Extracted: "${account}"`);
-      const res = await this.queryNewDbTx(selectQuery, { val: account }, transaction);
-      if (res?.length) {
-        logger.info(`[robustUserResolver] >> SUCCESS via Step 4: Found UID ${res[0].id} (${res[0].name})`);
-        return res[0].id;
-      }
-    }
-
-    // --- STEP 5: EditorName ---
-    if (rowData.EditorName) {
-      const cleanName = this.extractDisplayName(rowData.EditorName);
-      logger.info(`[robustUserResolver] STEP 5: Checking EditorName "${rowData.EditorName}" -> Clean: "${cleanName}"`);
-      const res = await this.queryNewDbTx(selectQuery, { val: cleanName }, transaction);
-      if (res?.length) {
-        logger.info(`[robustUserResolver] >> SUCCESS via Step 5: Found UID ${res[0].id} (${res[0].name})`);
-        return res[0].id;
-      }
-    }
-
-    // --- STEP 6: nvarchar4 (Chairman Name with LIKE) ---
+    // --- STEP 3: nvarchar4 (Chairman Name with LIKE) ---
     const chairmanSrc = rowData.nvarchar4 || rowData.Organizer;
     if (chairmanSrc) {
-      const cleanName = this.cleanTitleFromName(chairmanSrc);
-      logger.info(`[robustUserResolver] STEP 6: Checking nvarchar4/Organizer "${chairmanSrc}" -> Clean: "${cleanName}"`);
-
-      const likeQuery = `
-        SELECT TOP 1 id, name, username
-        FROM ${process.env.NEW_DB_NAME}.dbo.users
-        WHERE name LIKE '%' + @name + '%'
-      `;
+      const cleanName = (typeof this.cleanTitleFromName === 'function') 
+          ? this.cleanTitleFromName(chairmanSrc) 
+          : chairmanSrc.split(/\s*[-–—(]\s*/)[0].trim();
+      const likeQuery = `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME || 'DiOffice'}.dbo.users WHERE name LIKE '%' + @name + '%'`;
       const res = await this.queryNewDbTx(likeQuery, { name: cleanName }, transaction);
-      if (res?.length) {
-        logger.info(`[robustUserResolver] >> SUCCESS via Step 6 (LIKE): Found UID ${res[0].id} (${res[0].name})`);
-        return res[0].id;
-      }
+      if (res?.length) return res[0].id;
     }
 
-    // --- FINAL FALLBACK ---
-    logger.warn(`[robustUserResolver] !! ALL STEPS FAILED for Record ${recordId}. Using Default ID: ${defaultVanthuId}`);
     return defaultVanthuId;
   }
 
   extractAccountOnly(value) {
     if (!value || typeof value !== 'string') return value;
     const lastPipe = value.lastIndexOf('|');
-    if (lastPipe !== -1) {
-      return value.substring(lastPipe + 1).trim();
-    }
+    if (lastPipe !== -1) return value.substring(lastPipe + 1).trim();
     return value.trim();
   }
 
   extractEmailPrefix(value) {
     if (!value || typeof value !== 'string') return value;
     const atIndex = value.indexOf('@');
-    if (atIndex !== -1) {
-      const prefix = value.substring(0, atIndex).trim();
-      // Loại bỏ số ở cuối nếu cần (VD: hahtv1 -> hahtv) - Tùy hệ thống
-      return prefix.replace(/\d+$/, '');
-    }
+    if (atIndex !== -1) return value.substring(0, atIndex).trim();
     return value.trim();
+  }
+
+  extractDisplayName(value) {
+    if (!value || typeof value !== 'string') return value;
+    // Bỏ các tiền tố như "Võ Phương Châm - MKT" -> "Võ Phương Châm"
+    const clean = value.split(/\s*[-–—(]\s*/)[0].trim();
+    return clean.replace(/^(Đ\/c\.|Đ\/c|Ông|Bà|Anh|Chị|Đồng chí|Đại tá|Thượng tá)\s+/i, "").trim();
   }
 
   cleanTitleFromName(value) {
@@ -1131,6 +1088,200 @@ class MigrationHelper {
       // Loại bỏ tiền tố danh xưng Việt Nam
       name = name.replace(/^(Đ\/c\.|Đ\/c|Ông|Bà|Anh|Chị|Đồng chí)\s+/i, "").trim();
       return name;
+  }
+
+  normalizeVietnameseText(value) {
+    if (value == null) return '';
+    return String(value)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/đ/g, 'd')
+      .replace(/Đ/g, 'D')
+      .trim()
+      .toLowerCase();
+  }
+
+  async findUserByIdentity(identity, transaction = null) {
+    const value = this.safeString(identity);
+    if (!value) return null;
+
+    try {
+      const query = `
+        SELECT TOP 1 id, name, username, code_nd, id_user_bak, email_user
+        FROM ${process.env.NEW_DB_NAME}.dbo.users
+        WHERE id = @val
+           OR id_user_bak = @val
+           OR username = @val
+           OR code_nd = @val
+           OR email_user = @val
+           OR name = @val
+      `;
+
+      const result = await this.queryNewDbTx(query, { val: value }, transaction);
+      return result?.length ? result[0] : null;
+    } catch (error) {
+      logger.warn(`[findUserByIdentity] Error for "${value}": ${error.message}`);
+      return null;
+    }
+  }
+
+  async resolvePassportAuditActor(auditItem = {}, transaction = null) {
+    const userId = await this.passportUserResolver(auditItem, transaction);
+    const fullName = this.extractDisplayName(auditItem.FullName || '');
+    const account = this.extractAccountOnly(auditItem.LoginName || '');
+    return {
+      id: userId,
+      displayName: fullName || account || auditItem.Email || 'Unknown',
+      username: account,
+      code_nd: this.extractEmailPrefix(auditItem.Email) || account,
+      matched: !!userId
+    };
+  }
+
+  buildPassportAuditMetaFromNtext2(auditItem = {}) {
+    const rawValue = this.safeString(auditItem.Value) || '';
+    const normalized = this.normalizeVietnameseText(rawValue);
+    const compact = normalized.replace(/\s+/g, ' ');
+
+    if (!rawValue) {
+      return {
+        role: 'NGUOI_XU_LY',
+        roleProcess: 'NGUOI_XU_LY',
+        actionCode: 'COMMENT',
+        fromNodeId: null,
+        toNodeId: null,
+        actionLabel: null,
+        curStatusCode: 'COMMENT',
+        stageStatus: 'DA_XU_LY',
+        details: null
+      };
+    }
+
+    const approvePatterns = [
+      'dong y',
+      'nhat tri',
+      'phe duyet',
+      'duyet',
+      'chap thuan',
+      'tao dieu kien',
+      'dong y giai quyet',
+      'dong y voi de nghi',
+      'approve'
+    ];
+
+    const rejectPatterns = [
+      'tu choi',
+      'khong dong y',
+      'reject'
+    ];
+
+    const handoverPatterns = [
+      'xac nhan muon',
+      'da nhan hc',
+      'nhan tra ho chieu',
+      'da tra',
+      'da hoan tra',
+      'hoan tra ho chieu',
+      'da nhan lai',
+      'da nhan ho chieu',
+      'da nop lai',
+      'nhan lai ho chieu',
+      'tct da nhan ho chieu',
+      'van phong tct da nhan ho chieu',
+      'da nhan ngay',
+      'da nhan lai ngay',
+      'nhan ho chieu moi',
+      'tra lai ho chieu',
+      'tra lai nguoi lao dong',
+      'ho chieu het han',
+      'ho chieu sap het han'
+    ];
+
+    const hasAnyPattern = (patterns) => patterns.some((pattern) => compact.includes(pattern));
+
+    if (hasAnyPattern(rejectPatterns)) {
+      return {
+        role: 'CHI_HUY_DON_VI',
+        roleProcess: 'CHI_HUY_DON_VI',
+        actionCode: 'REJECT',
+        fromNodeId: 'Gateway_0rbwxs6',
+        toNodeId: 'Gateway_0rbwxs6',
+        actionLabel: 'Từ chối',
+        curStatusCode: 'REJECT',
+        stageStatus: 'DA_XU_LY',
+        details: rawValue
+      };
+    }
+
+    if (
+      hasAnyPattern(approvePatterns)
+    ) {
+      return {
+        role: 'CHI_HUY_DON_VI',
+        roleProcess: 'CHI_HUY_DON_VI',
+        actionCode: 'APPROVE',
+        fromNodeId: 'Gateway_0rbwxs6',
+        toNodeId: 'Gateway_0fkk071',
+        actionLabel: 'Phê duyệt',
+        curStatusCode: 'APPROVE',
+        stageStatus: 'DA_XU_LY',
+        details: rawValue
+      };
+    }
+
+    if (compact.includes('chuyen xu ly')) {
+      return {
+        role: 'NGUOI_XU_LY',
+        roleProcess: 'NGUOI_XU_LY',
+        actionCode: 'COMMENT',
+        fromNodeId: 'Gateway_0rbwxs6',
+        toNodeId: null,
+        actionLabel: rawValue.length > 255 ? rawValue.substring(0, 255) : rawValue,
+        curStatusCode: 'COMMENT',
+        stageStatus: 'DA_XU_LY',
+        details: rawValue
+      };
+    }
+
+    if (normalized.includes('huy') || normalized === 'cancel') {
+      return {
+        role: 'NGUOI_XU_LY',
+        roleProcess: 'NGUOI_XU_LY',
+        actionCode: 'CANCEL',
+        fromNodeId: 'Gateway_0rbwxs6',
+        toNodeId: 'EndEvent_1',
+        actionLabel: 'Hủy phiếu',
+        curStatusCode: 'CANCEL',
+        stageStatus: 'DA_XU_LY',
+        details: rawValue
+      };
+    }
+
+    if (hasAnyPattern(handoverPatterns)) {
+      return {
+        role: 'NGUOI_XU_LY',
+        roleProcess: 'NGUOI_XU_LY',
+        actionCode: 'COMMENT',
+        fromNodeId: null,
+        toNodeId: null,
+        actionLabel: rawValue.length > 255 ? rawValue.substring(0, 255) : rawValue,
+        curStatusCode: 'COMMENT',
+        stageStatus: 'DA_XU_LY',
+        details: rawValue
+      };
+    }
+
+    return {
+      role: 'NGUOI_XU_LY',
+      roleProcess: 'NGUOI_XU_LY',
+      actionCode: 'COMMENT',
+      fromNodeId: null,
+      toNodeId: null,
+      actionLabel: rawValue.length > 255 ? rawValue.substring(0, 255) : rawValue,
+      curStatusCode: 'COMMENT',
+      stageStatus: 'DA_XU_LY',
+      details: rawValue
+    };
   }
 
   /**

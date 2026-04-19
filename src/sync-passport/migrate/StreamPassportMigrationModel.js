@@ -203,6 +203,7 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
         { name: 'tp_Editor', type: 'INT' },
         { name: 'tp_IsCurrent', type: 'BIT' },
         { name: 'tp_ListId', type: 'NVARCHAR(255)' },
+        { name: 'tp_Title', type: 'NVARCHAR(MAX)' },
         // User info
         { name: 'AuthorName', type: 'NVARCHAR(500)' },
         { name: 'AuthorFullName', type: 'NVARCHAR(500)' },
@@ -226,6 +227,7 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
         { name: 'ntext2',    type: 'NVARCHAR(MAX)' },
         { name: 'float1',   type: 'FLOAT' },
         { name: 'float2',   type: 'FLOAT' },
+        { name: 'float3',   type: 'FLOAT' },
         { name: 'int1',     type: 'INT' },
         { name: 'int2',     type: 'INT' },
         { name: 'tb_bak',   type: 'INT' },  // 1 = đồng bộ từ SharePoint
@@ -684,6 +686,7 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
                 ud.[tp_Editor]    AS tp_Editor,
                 ud.[tp_IsCurrent] AS tp_IsCurrent,
                 ud.[tp_ListId]    AS tp_ListId,
+                ud.[nvarchar1]    AS tp_Title,
                 ui_author.[tp_Title] AS AuthorName,
                 ui_author.[tp_Title] AS AuthorFullName,
                 ui_author.[tp_Login] AS AuthorAccount,
@@ -1011,9 +1014,17 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
     logger.info(`[StreamPassportMigrationModel] processRowData: recordId=${recordId}`);
     const { externalKey } = this.oldConfig;
 
-    // 1. Resolve người tạo phiếu (requester) từ thông tin Author
-    let requesterId = await this.helper.strictUserResolver(rowData, transaction);
-    logger.info(`[StreamPassportMigrationModel] [recordId=${recordId}] Resolved Requester: ${requesterId || 'NULL'}`);
+    // 1. Resolve người tạo phiếu (requester) theo rule đặc thù passport: UserId -> Account -> Email -> FullName
+    let requesterId = await this.helper.passportUserResolver(rowData, transaction);
+    
+    // FALLBACK: Nếu không tìm thấy user, dùng VANTHU_USER_ID để tránh lỗi NOT NULL DB
+    if (!requesterId) {
+      const defaultVanthuId = process.env.VANTHU_USER_ID || 'b23406e3-5c75-41d3-91e0-1654293ae6b2';
+      logger.warn(`[StreamPassportMigrationModel] [recordId=${recordId}] KHÔNG resolve được requester (${rowData.AuthorName || 'Unknown'}). Dùng fallback VANTHU_USER_ID.`);
+      requesterId = defaultVanthuId;
+    }
+
+    logger.info(`[StreamPassportMigrationModel] [recordId=${recordId}] Resolved Requester: ${requesterId}`);
 
     // Update roles_by_process & Group for the requester
     if (requesterId) {
@@ -1058,7 +1069,7 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
 
     // 8. Tạo audit trail mặc định và audit từ ntext2
     if (result.id) {
-      await this.createDefaultAuditForPassport(result.id, requesterId, mappedStatus, rowData.ntext2, transaction);
+      await this.createDefaultAuditForPassport(result.id, requesterId, mappedStatus, rowData.ntext2, transaction, rowData.tp_Title);
     }
 
     return {
@@ -1133,6 +1144,14 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
         updateSet.push(`[${field}] = @${field}`);
       }
     }
+    
+    // Đảm bảo updated_by luôn matching với created_by khi update
+    if (existingCols.has('updated_by') && fieldValues.created_by) {
+      if (!updateSet.some(s => s.includes('updated_by'))) {
+         params['updated_by'] = fieldValues.created_by;
+         updateSet.push(`[updated_by] = @updated_by`);
+      }
+    }
 
     params._externalKeyValue = externalKeyValue;
 
@@ -1169,10 +1188,11 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
   /**
    * Tạo audit trail cho phiếu mượn hộ chiếu sau khi migrate, bao gồm audit mặc định và audit từ ntext2.
    */
-  async createDefaultAuditForPassport(requestId, requesterId, status, ntext2Str = null, transaction = null) {
+  async createDefaultAuditForPassport(requestId, requesterId, status, ntext2Str = null, transaction = null, tpTitle = null) {
     const db = this.newDbName || 'app_tancang';
     const auditTable = `[${db}].[dbo].[audit]`;
     const creatorId = requesterId || null;
+    const receiverId = process.env.DEFAULT_RECEIVER_UNIT_ID || 'TCT_LOGIST'; // Mặc định từ ENV
     const typeDoc = 'PASSPORT_REQUEST';
 
     // 1. Bước CREATE (Luôn có)
@@ -1185,6 +1205,7 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
           WHERE document_id = @requestId
             AND action_code = 'CREATE'
             AND type_document = @typeDoc
+            AND origin_id = 'migration_origin'
       )
       BEGIN
           INSERT INTO ${auditTable}
@@ -1201,7 +1222,7 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
             'StartEvent_1', 'Gateway_0rbwxs6',
             N'${JSON.stringify({ transferType: 'migration', source: 'sharepoint' }).replace(/'/g, "''")}',
             'migration_origin',
-            @creatorId, @creatorId, 'NGUOI_TAO_PHIEU',
+            @creatorId, @receiverId, 'NGUOI_TAO_PHIEU',
             @createActionLabel,
             @stageStatus, '1', @typeDoc, 'QT_MTHC',
             SYSUTCDATETIME(), SYSUTCDATETIME()
@@ -1211,8 +1232,48 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
 
     try {
       await this.queryNewDbTx(insertCreateQuery, {
-        requestId, creatorId, createActionLabel, stageStatus, typeDoc
+        requestId, creatorId, createActionLabel, stageStatus, typeDoc, receiverId
       }, transaction);
+
+      // 1b. Bước CREATE từ tp_Title (MỚI)
+      if (tpTitle) {
+        const cleanTitleName = this.helper.extractDisplayName(tpTitle);
+        if (cleanTitleName) {
+           const titleUserId = await this.helper.passportUserResolver({ FullName: tpTitle }, transaction);
+
+           const insertTitleCreateQuery = `
+             IF NOT EXISTS (
+                 SELECT 1 FROM ${auditTable}
+                 WHERE document_id = @requestId
+                   AND action_code = 'CREATE'
+                   AND origin_id = 'migration_tp_title_create'
+             )
+             BEGIN
+                 INSERT INTO ${auditTable}
+                 (
+                   document_id, [time], user_id, display_name, [role], action_code,
+                   from_node_id, to_node_id, details, origin_id, created_by,
+                   receiver, roleProcess, [action], stage_status,
+                   curStatusCode, type_document, bpmn_version, created_at, updated_at
+                 )
+                 VALUES
+                 (
+                   @requestId, DATEADD(SECOND, -1, SYSUTCDATETIME()), @titleUserId, @cleanTitleName,
+                   'BO_PHAN_CHUYEN_TRACH', 'CREATE',
+                   NULL, 'Gateway_1ju0gk3',
+                   N'Tạo phản ánh kiến nghị', 'migration_tp_title_create',
+                   @titleUserId, @receiverId, 'BO_PHAN_CHUYEN_TRACH',
+                   N'Tạo phản ánh kiến nghị',
+                   'DA_XU_LY', 'CREATE', @typeDoc, 'QT_MTHC',
+                   DATEADD(SECOND, -1, SYSUTCDATETIME()), DATEADD(SECOND, -1, SYSUTCDATETIME())
+                 );
+             END
+           `;
+           await this.queryNewDbTx(insertTitleCreateQuery, {
+             requestId, titleUserId, cleanTitleName, typeDoc, receiverId
+           }, transaction);
+        }
+      }
 
       // 2. Bước kết quả (Nếu đã COMPLETED, REJECTED, CANCELLED...)
       const finalStates = ['COMPLETED', 'IN_USE', 'REJECTED', 'CANCELLED'];
@@ -1253,7 +1314,7 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
                 'CHI_HUY_DON_VI', @actionCode,
                 @fromNode, @toNode,
                 null, 'migration_origin',
-                @creatorId, @creatorId, 'CHI_HUY_DON_VI',
+                @creatorId, @receiverId, 'CHI_HUY_DON_VI',
                 @actionLabel,
                 'DA_XU_LY', @actionCode, @typeDoc, 'QT_MTHC',
                 DATEADD(SECOND, 5, SYSUTCDATETIME()), DATEADD(SECOND, 5, SYSUTCDATETIME())
@@ -1261,7 +1322,7 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
           END
         `;
         await this.queryNewDbTx(insertFinalQuery, {
-          requestId, creatorId, actionLabel, actionCode, fromNode, toNode, typeDoc
+          requestId, creatorId, actionLabel, actionCode, fromNode, toNode, typeDoc, receiverId
         }, transaction);
       }
 
@@ -1270,21 +1331,31 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
         try {
           const auditItems = JSON.parse(ntext2Str);
           if (Array.isArray(auditItems)) {
+            logger.info(`[StreamPassportMigrationModel] [requestId=${requestId}] Found ${auditItems.length} audit items in ntext2.`);
+            
             for (let i = 0; i < auditItems.length; i++) {
               const item = auditItems[i];
-              if (!item.Value || !item.Created) continue;
-
-              const loginName = item.LoginName || '';
-              const extractedAccount = this.helper.extractAccountOnly(loginName);
-
-              let auditUserId = null;
-              if (extractedAccount) {
-                auditUserId = await this.helper.strictUserResolver({ AuthorAccount: extractedAccount }, transaction);
+              if (!item?.Created) {
+                logger.info(`[StreamPassportMigrationModel] [requestId=${requestId}] Skipping item ${i}: Missing 'Created' field.`);
+                continue;
               }
 
-              const itemActionLabel = item.Value.length > 255 ? item.Value.substring(0, 255) : item.Value;
+              const actor = await this.helper.resolvePassportAuditActor(item, transaction);
+              const auditMeta = this.helper.buildPassportAuditMetaFromNtext2(item);
+              
+              if (!auditMeta.details && !auditMeta.actionLabel) {
+                logger.info(`[StreamPassportMigrationModel] [requestId=${requestId}] Skipping item ${i}: Empty metadata.`);
+                continue;
+              }
+
               const itemTime = parseDate(item.Created) || new Date();
               const originIdMsg = `migration_ntext2_${i}_${requestId}`;
+              
+              // FALLBACK: Nếu không resolve được actor, dùng VANTHU_USER_ID để tránh lỗi DB
+              const resolvedAuditUserId = actor.id || process.env.VANTHU_USER_ID || 'b23406e3-5c75-41d3-91e0-1654293ae6b2';
+              if (!actor.id) {
+                logger.warn(`[StreamPassportMigrationModel] [requestId=${requestId}] Item ${i}: Not resolved (${item.FullName || item.LoginName}). Using fallback.`);
+              }
 
               const insertItemQuery = `
                 IF NOT EXISTS (SELECT 1 FROM ${auditTable} WHERE document_id = @requestId AND origin_id = @originId)
@@ -1293,23 +1364,38 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
                       document_id, [time], user_id, display_name, [role], action_code,
                       from_node_id, to_node_id, details, origin_id, created_by,
                       receiver, roleProcess, [action], stage_status,
-                      curStatusCode, type_document, bpmn_version, created_at, updated_at
+                      curStatusCode, type_document, bpmn_version, created_at, updated_at,
+                      processed_by
                     ) VALUES (
                       @requestId, @itemTime, @auditUserId, @displayName,
-                      'NGUOI_XU_LY', 'COMMENT', null, null,
-                      @details, @originId, @auditUserId, @auditUserId, 'NGUOI_XU_LY',
-                      @itemActionLabel, 'DA_XU_LY', 'COMMENT', @typeDoc, 'QT_MTHC',
-                      @itemTime, @itemTime
+                      @role, @actionCode, @fromNodeId, @toNodeId,
+                      @details, @originId, @auditUserId, @receiverId, @roleProcess,
+                      @itemActionLabel, @stageStatus, @curStatusCode, @typeDoc, 'QT_MTHC',
+                      @itemTime, @itemTime, @auditUserId
                     );
                 END
               `;
 
               await this.queryNewDbTx(insertItemQuery, {
-                requestId, itemTime, auditUserId: auditUserId || null,
-                displayName: item.FullName || 'Unknown',
-                originId: originIdMsg, details: item.Value,
-                itemActionLabel, typeDoc
+                requestId,
+                itemTime,
+                auditUserId: resolvedAuditUserId,
+                displayName: actor.displayName || 'Unknown',
+                role: auditMeta.role,
+                actionCode: auditMeta.actionCode,
+                fromNodeId: auditMeta.fromNodeId,
+                toNodeId: auditMeta.toNodeId,
+                originId: originIdMsg,
+                details: auditMeta.details,
+                roleProcess: auditMeta.roleProcess,
+                itemActionLabel: auditMeta.actionLabel,
+                stageStatus: auditMeta.stageStatus,
+                curStatusCode: auditMeta.curStatusCode,
+                typeDoc,
+                receiverId
               }, transaction);
+              
+              logger.info(`[StreamPassportMigrationModel] [requestId=${requestId}] Processed item ${i} - Action: ${auditMeta.actionCode} - Resolved: ${actor.matched}`);
             }
           }
         } catch (parseErr) {
