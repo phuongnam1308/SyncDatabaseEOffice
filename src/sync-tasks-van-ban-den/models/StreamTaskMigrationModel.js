@@ -3,23 +3,98 @@ const MigrationHelper = require('../../helpers/MigrationHelper');
 const logger = require('../../../utils/logger');
 
 /**
- * Safely parse dates, treating 'NULL' string as null
+ * Parse many legacy date formats and return SQL datetime string: YYYY-MM-DD HH:mm:ss.SSS
+ * Supported examples:
+ * - 2014-03-04 09:19:53.000
+ * - 2014-03-04T09:19:53.000Z
+ * - Mar  8 2026  7:24AM
  */
 function safeDateParse(dateValue, fieldName = '') {
-  if (!dateValue) return null;
-  if (typeof dateValue === 'string' && dateValue.toUpperCase() === 'NULL') return null;
+  if (dateValue === undefined || dateValue === null) return null;
+  const raw = String(dateValue).trim();
+  if (!raw) return null;
+  if (raw.toUpperCase() === 'NULL') return null;
 
-  try {
-    if (typeof dateValue.getTime === 'function' && !isNaN(dateValue.getTime())) {
-      return dateValue.toISOString();
-    }
-  } catch (e) {
-    if (fieldName) logger.warn(`[safeDateParse] Failed to convert ${fieldName}: ${e.message}`);
+  // 1) SQL-like: YYYY-MM-DD HH:mm:ss(.SSS)
+  const sqlLike = raw.match(
+    /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?(?:\.(\d{1,3}))?)?$/
+  );
+  if (sqlLike) {
+    const [, y, mo, d, hh = '00', mi = '00', ss = '00', ms = '000'] = sqlLike;
+    return `${y}-${mo}-${d} ${hh}:${mi}:${ss}.${String(ms).padEnd(3, '0').slice(0, 3)}`;
   }
+
+  // 2) Legacy text: Mar  8 2026  7:24AM (or with spaces before AM/PM)
+  const compact = raw.replace(/\s+/g, ' ').replace(/(\d)(AM|PM)$/i, '$1 $2');
+  const textLike = compact.match(
+    /^([A-Za-z]{3,9})\s+(\d{1,2})\s+(\d{4})\s+(\d{1,2}):(\d{2})\s*(AM|PM)$/i
+  );
+  if (textLike) {
+    const monthMap = {
+      jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
+      jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12'
+    };
+    const mon = monthMap[textLike[1].slice(0, 3).toLowerCase()];
+    if (mon) {
+      const day = String(Number(textLike[2])).padStart(2, '0');
+      const year = textLike[3];
+      let hour = Number(textLike[4]);
+      const minute = textLike[5];
+      const ap = textLike[6].toUpperCase();
+      if (ap === 'AM') {
+        if (hour === 12) hour = 0;
+      } else if (hour < 12) {
+        hour += 12;
+      }
+      return `${year}-${mon}-${day} ${String(hour).padStart(2, '0')}:${minute}:00.000`;
+    }
+  }
+
+  // 3) Fallback parser (JS Date)
+  const d = new Date(raw);
+  if (!Number.isNaN(d.getTime())) {
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mi = String(d.getMinutes()).padStart(2, '0');
+    const ss = String(d.getSeconds()).padStart(2, '0');
+    const mss = String(d.getMilliseconds()).padStart(3, '0');
+    return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}.${mss}`;
+  }
+
+  if (fieldName) logger.warn(`[safeDateParse] Invalid ${fieldName}: ${raw}`);
   return null;
 }
 
-/** Maps TaskVBDen → task (35 columns with id_task_bak) */
+function safeInt(value, defaultValue = null) {
+  if (value === undefined || value === null || value === '') return defaultValue;
+  const parsed = parseInt(value, 10);
+  return Number.isNaN(parsed) ? defaultValue : parsed;
+}
+
+function normalizeText(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * Maps TaskVBDen → task (35 columns with id_task_bak)
+ *
+ * Core field mapping (old -> new):
+ * - TaskVBDen.ID        -> task.id_task_bak
+ * - TaskVBDen.Title     -> task.name
+ * - TaskVBDen.VBId      -> task.doc_id (via helper.findDocumentIdByOldId)
+ * - TaskVBDen.StartDate -> task.start_date
+ * - TaskVBDen.DueDate   -> task.end_date
+ * - TaskVBDen.Created   -> task.created_at
+ * - TaskVBDen.Modified  -> task.update_at
+ * - TaskVBDen.CreatedBy -> task.created_by (temp forced id for now)
+ * - TaskVBDen.ModifiedBy-> task.updated_by (temp forced id for now)
+ */
 class StreamTaskMigrationModel extends BaseModel {
   constructor() {
     super();
@@ -118,6 +193,14 @@ class StreamTaskMigrationModel extends BaseModel {
 
       const mapped = await this.mapSingleRecord(stagingRow, transaction);
 
+      // Chống race khi nhiều worker cùng xử lý một id_task_bak:
+      // khóa logic theo từng backupId trong phạm vi transaction hiện tại.
+      await this.queryNewDbTx(
+        `EXEC sp_getapplock @Resource = @res, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 10000;`,
+        { res: `task:id_task_bak:${backupId}` },
+        transaction
+      );
+
       // Validate required field: name
       if (!mapped.name || String(mapped.name).trim() === '') {
         throw new Error(`Task name is required for ID=${backupId}`);
@@ -172,7 +255,8 @@ class StreamTaskMigrationModel extends BaseModel {
               template_id = @templateId,
               dependent_task_id = @dependentTaskId,
               is_confidential = @isConfidential,
-              update_at = GETDATE()
+              created_at = @createdAt,
+              update_at = @updateAt
           WHERE id_task_bak = @idTaskBak
         `;
 
@@ -211,6 +295,8 @@ class StreamTaskMigrationModel extends BaseModel {
             templateId: mapped.template_id,
             dependentTaskId: mapped.dependent_task_id,
             isConfidential: mapped.is_confidential,
+            createdAt: mapped.created_at,
+            updateAt: mapped.update_at,
             idTaskBak: backupId,
           },
           transaction,
@@ -234,7 +320,7 @@ class StreamTaskMigrationModel extends BaseModel {
            @processStatus, @status, @approvalStatus, @createdBy, @updatedBy, @recurringFromId,
            @typeTask, @docId, @meetingId, @meetingConclusionId, @weekDays, @projectId,
            @typeTaskMeeting, @templateId, @dependentTaskId, @isConfidential, @idTaskBak,
-           GETDATE(), GETDATE());
+           @createdAt, @updateAt);
           SELECT SCOPE_IDENTITY() as id
         `;
 
@@ -276,6 +362,8 @@ class StreamTaskMigrationModel extends BaseModel {
               dependentTaskId: mapped.dependent_task_id,
               isConfidential: mapped.is_confidential,
               idTaskBak: backupId,
+              createdAt: mapped.created_at,
+              updateAt: mapped.update_at,
             },
             transaction,
           );
@@ -315,69 +403,83 @@ class StreamTaskMigrationModel extends BaseModel {
     }
   }
 
-  /** Map TaskVBDen → task (12 mapped + 23 defaults) */
+  /** Map TaskVBDen -> task (12 mapped + 23 defaults) */
   async mapSingleRecord(rawRecord, transaction = null) {
     if (!rawRecord) {
       throw new Error('rawRecord is required');
     }
 
-    const createdBy = (await this.helper.mapUserName(rawRecord.CreatedBy)) || null;
-    const modifiedBy = (await this.helper.mapUserName(rawRecord.ModifiedBy)) || null;
+    const backupId = String(rawRecord.ID || '').trim();
+    if (!backupId) {
+      throw new Error('rawRecord.ID is required for id_task_bak');
+    }
 
-    // Parse dates from helper, then apply safeDateParse
-    const startDateRaw = this.helper.parseDate(rawRecord.StartDate);
-    const endDateRaw = this.helper.parseDate(rawRecord.DueDate);
-    const completedDateRaw = this.helper.parseDate(rawRecord.CompletedDate);
-    const createdAtRaw = this.helper.parseDate(rawRecord.Created);
-    const updatedAtRaw = this.helper.parseDate(rawRecord.Modified);
+    // TEMP: force creator/updater để nhìn thấy dữ liệu trước trên UI.
+    // TODO (logic chuẩn): bật lại map user từ dữ liệu cũ:
+    // const createdBy = (await this.helper.mapUserName(this.helper.safeString(rawRecord.CreatedBy))) || null;
+    // const modifiedBy = (await this.helper.mapUserName(this.helper.safeString(rawRecord.ModifiedBy))) || null;
+    const forcedActorId =
+      process.env.TASK_TEMP_CREATED_BY_ID ||
+      process.env.VANTHU_USER_ID ||
+      'b23406e3-5c75-41d3-91e0-1654293ae6b2';
+    const createdBy = forcedActorId;
+    const modifiedBy = forcedActorId;
 
-    // Multiple layers of safety: convert to ISO string or null
+    // Read raw values directly from staging to preserve legacy formats.
+    const startDateRaw = rawRecord.StartDate;
+    const endDateRaw = rawRecord.DueDate;
+    const completedDateRaw = rawRecord.CompletedDate;
+    const createdAtRaw = rawRecord.Created;
+    const updatedAtRaw = rawRecord.Modified;
+
     const startDate = safeDateParse(startDateRaw, 'StartDate');
     const endDate = safeDateParse(endDateRaw, 'DueDate');
     const completedDate = safeDateParse(completedDateRaw, 'CompletedDate');
     const createdAt = safeDateParse(createdAtRaw, 'Created');
     const updatedAt = safeDateParse(updatedAtRaw, 'Modified');
 
-    // log debug data bẩn
     if (!startDate && rawRecord.StartDate) {
       logger.warn(`[mapSingleRecord] Invalid StartDate: ${rawRecord.StartDate} ID=${rawRecord.ID}`);
     }
-
     if (!endDate && rawRecord.DueDate) {
       logger.warn(`[mapSingleRecord] Invalid DueDate: ${rawRecord.DueDate} ID=${rawRecord.ID}`);
     }
-    const typeTask = 'form_doc';
-    const progress = rawRecord.Percent ? parseInt(rawRecord.Percent, 10) : null;
 
-    const mapProcessStatus = (val) => {
-      const key = String(val || '').trim();
-      return (
-        {
-          'Chưa bắt đầu': '1',
-          'Đang thực hiện': '2',
-          'Chờ phê duyệt': '3',
-          'Hoàn tất': '4',
-          'Từ chối phê duyệt': '5',
-          'Điều chỉnh': '6',
-          'Từ chối điều chỉnh': '7',
-          Huỷ: '8',
-        }[key] || '1'
-      );
+    const mapTaskStatus = (val) => {
+      const key = normalizeText(this.helper.safeString(val));
+      const map = {
+        'chua bat dau': { processStatus: '1', priority: 'binhthuong', bpmnId: null },
+        'chưa bắt đầu': { processStatus: '1', priority: 'binhthuong', bpmnId: null },
+        'dang thuc hien': { processStatus: '2', priority: 'binhthuong', bpmnId: null },
+        'đang thực hiện': { processStatus: '2', priority: 'binhthuong', bpmnId: null },
+        'cho phe duyet': { processStatus: '3', priority: 'binhthuong', bpmnId: null },
+        'hoan tat': { processStatus: '4', priority: 'binhthuong', bpmnId: null },
+        'tu choi phe duyet': { processStatus: '5', priority: 'binhthuong', bpmnId: null },
+        'dieu chinh': { processStatus: '6', priority: 'binhthuong', bpmnId: null },
+        'tu choi dieu chinh': { processStatus: '7', priority: 'binhthuong', bpmnId: null },
+        'huy': { processStatus: '8', priority: 'binhthuong', bpmnId: null }
+      };
+      if (map[key]) return map[key];
+
+      const numeric = safeInt(val, null);
+      if (numeric === 1) return { processStatus: '2', priority: 'gap', bpmnId: null };
+      if (numeric === 0) return { processStatus: '1', priority: 'binhthuong', bpmnId: null };
+
+      if (key.includes('dang thuc hien')) {
+        return { processStatus: '2', priority: 'binhthuong', bpmnId: null };
+      }
+
+      return {
+        processStatus: process.env.TASK_IN_PROCESS_STATUS_DEFAULT || '1',
+        priority: process.env.TASK_IN_PRIORITY_DEFAULT || 'binhthuong',
+        bpmnId: process.env.TASK_IN_BPMN_DEFAULT || null
+      };
     };
-    const processStatus = mapProcessStatus(rawRecord.TrangThai);
 
-    const mapPriority = (val) => {
-      const key = String(val || '').trim();
-      return (
-        {
-          0: 'binhthuong',
-          1: 'gap',
-        }[key] || 'binhthuong'
-      );
-    };
-    const priority = mapPriority(rawRecord.TrangThai);
-
-    const parentRaw = rawRecord.ParentId ? String(rawRecord.ParentId).trim() : null;
+    const taskStatus = mapTaskStatus(rawRecord.TrangThai);
+    const typeTask = process.env.TASK_IN_TYPE_TASK_DEFAULT || 'form_doc';
+    const progress = safeInt(rawRecord.Percent, null);
+    const parentRaw = this.helper.safeString(rawRecord.ParentId).trim() || null;
 
     const docLookup = await this.helper.findDocumentIdByOldId(
       rawRecord.VBId,
@@ -387,25 +489,21 @@ class StreamTaskMigrationModel extends BaseModel {
     const docId = docLookup?.document_id || null;
 
     return {
-      id_task_bak: String(rawRecord.ID || '').trim() || null,
-      name: rawRecord.Title || null,
+      id_task_bak: backupId,
+      name: this.helper.cleanText(this.helper.safeString(rawRecord.Title)) || null,
       doc_id: docId,
-
-      start_date: startDate,
-      end_date: endDate || completedDate || startDate,
-
+      start_date: startDate || createdAt || updatedAt,
+      end_date: endDate || completedDate || startDate || createdAt || updatedAt,
       status: 1,
-      priority: priority,
-      note: rawRecord.YKienChiDao || null,
-
+      priority: taskStatus.priority,
+      note: this.helper.cleanText(this.helper.safeString(rawRecord.YKienChiDao)) || null,
       created_by: createdBy,
       updated_by: modifiedBy,
-
-      created_at: createdAt || new Date().toISOString(),
-      update_at: updatedAt || new Date().toISOString(),
-
+      // Avoid fallback to "now" because it distorts old migrated timeline.
+      created_at: createdAt || updatedAt || startDate || endDate || null,
+      update_at: updatedAt || createdAt || endDate || startDate || null,
       code: null,
-      bpmn_id: null,
+      bpmn_id: taskStatus.bpmnId,
       reminder_time: null,
       topic: null,
       repetitive_task: null,
@@ -414,8 +512,8 @@ class StreamTaskMigrationModel extends BaseModel {
       repetitive_end: null,
       parent: parentRaw,
       path: null,
-      progress: progress,
-      process_status: processStatus,
+      progress,
+      process_status: taskStatus.processStatus,
       approval_status: null,
       recurring_from_id: null,
       type_task: typeTask,
