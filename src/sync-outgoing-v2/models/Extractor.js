@@ -20,7 +20,7 @@ class Extractor extends BaseExtractor {
 
   /**
    * Get cursor comparison direction
-   * Outgoing uses DESC (newer records first, start from 9999-12-31)
+   * Outgoing uses DESC (newer records first, start from 2999-12-31)
    */
   getCursorDirection() {
     return 'DESC';
@@ -31,7 +31,7 @@ class Extractor extends BaseExtractor {
    */
   async fetchBatchFromOldDb(lastSyncTime, lastSyncId = 0, batchSize = 1000, offset = 0) {
     const syncTimeExpr = this.getSyncTimeExpression();
-    const defaultSyncTime = '9999-12-31T23:59:59.999Z';
+    const defaultSyncTime = '2999-12-31T23:59:59.999Z';
 
     const query = `
       ;WITH source_rows AS (
@@ -73,7 +73,13 @@ class Extractor extends BaseExtractor {
       ORDER BY __page_rn
     `;
 
-    const isValidTime = lastSyncTime && lastSyncTime !== '1970-01-01T00:00:00.000Z';
+    const lastSyncDate = new Date(lastSyncTime);
+    const isDateValid = !isNaN(lastSyncDate.getTime());
+    const isValidTime = lastSyncTime && 
+                        lastSyncTime !== '1970-01-01T00:00:00.000Z' &&
+                        isDateValid &&
+                        lastSyncDate.getFullYear() > 2000;
+    
     const effectiveSyncTime = isValidTime ? lastSyncTime : defaultSyncTime;
 
     logger.info(`[${this.modelName}] Fetching batch: lastSyncTime=${effectiveSyncTime}, lastSyncId=${lastSyncId}, limit=${batchSize}, offset=${offset}`);

@@ -7,7 +7,7 @@ const { v4: uuidv4 } = require('uuid');
 const FileService = require('../../sync-file-copy/Fileuploadservice');
 const { downloadFile: spDownload } = require('../../sync-file-copy/SharePointAuthService');
 
-const DEFAULT_SYNC_TIME = '9999-12-31T23:59:59.999Z';
+const DEFAULT_SYNC_TIME = '2999-12-31T23:59:59.999Z';
 
 // Lọc bản ghi cũ hơn ngưỡng này. Đặt trong .env với key SYNC_MIN_DATE.
 // Ví dụ: SYNC_MIN_DATE=2026-01-01T00:00:00.000Z

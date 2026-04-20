@@ -36,7 +36,7 @@ function detectFileType(buffer) {
   if (b[0] === 0x52 && b[1] === 0x61 && b[2] === 0x72 && b[3] === 0x21) return { mime: 'application/x-rar-compressed', ext: 'rar' };
   return { mime: 'application/octet-stream', ext: 'bin' };
 }
-const DEFAULT_SYNC_TIME = '9999-12-31T23:59:59.999Z';
+const DEFAULT_SYNC_TIME = '2999-12-31T23:59:59.999Z';
 
 // Lọc bản ghi cũ hơn ngưỡng này. Đặt trong .env với key SYNC_MIN_DATE.
 // Để lấy toàn bộ lịch sử, hãy đặt thành: 1753-01-01T00:00:00.000Z

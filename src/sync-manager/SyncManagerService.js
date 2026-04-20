@@ -307,7 +307,13 @@ class SyncManagerService {
    * @returns {string}
    */
   generateJobId(modelName) {
-    return `${modelName}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const slug = String(modelName || 'job')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^\w\s-]/g, '')
+      .replace(/[\s_-]+/g, '-')
+      .toLowerCase();
+    return `${slug}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   }
 
   /**
@@ -1049,6 +1055,9 @@ class SyncManagerService {
     const now = this.now(); const modelState = this.getModelState(job.modelName);
     job.status = status; job.error = error.message; job.updatedAt = now; job.heartbeatAt = now; job.endedAt = now;
     modelState.status = status; modelState.error = error.message; modelState.activeJobId = null;
+
+    logger.error(`[SyncManagerService][${job.modelName}] Job ${job.jobId} FAILED: ${error.message}`, error);
+
     if (job.lastSyncTime) modelState.lastSyncTime = job.lastSyncTime;
     if (job.lastSyncId !== undefined) modelState.lastSyncId = job.lastSyncId;
     this.updateSyncLogFromJob(job); this.saveState(); this._dbUpdateJob(job); this._dbUpdateModel(job.modelName, modelState);

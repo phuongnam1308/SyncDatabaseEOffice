@@ -227,20 +227,20 @@ class SyncModelRegistry {
    */
   async _initializeSingle(def, syncManagerService, syncStateRepository) {
     let { key, label, ModelClass } = def;
-    const instanceId = process.env.SYNC_INSTANCE_ID;
-    const isPrimaryInstance = !instanceId || instanceId === '3021';
+    const instanceId = process.env.SYNC_INSTANCE_ID || process.env.INSTANCE_ID;
+    const isPrimaryInstance = !instanceId || instanceId === '3021' || instanceId === '1';
 
     // Các module hỗ trợ chạy song song (đa instance)
     const parallelModules = [
       'STREAM_INCOMING_INCREMENTAL',
       'STREAM_OUTGOING_INCREMENTAL',
       'STREAM_TASK_INCOMING_INCREMENTAL',
-      'STREAM_TASK_OUTGOING_INCREMENTAL'
+      'STREAM_TASK_OUTGOING_INCREMENTAL',
+      'STREAM_OUTGOING_V2'
     ];
     const isParallelModule = parallelModules.includes(key);
 
-    if (instanceId && isParallelModule) {
-      key = `${key}_${instanceId}`;
+    if (instanceId && isParallelModule && instanceId !== '1' && instanceId !== '3021') {
       label = `${label} (${instanceId})`;
     } else if (!isPrimaryInstance && !isParallelModule) {
       // Nếu là cổng phụ (3022, 3023...) và không phải module song song -> Bỏ qua để không chạy trùng

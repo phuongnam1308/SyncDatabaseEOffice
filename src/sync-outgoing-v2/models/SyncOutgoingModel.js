@@ -66,7 +66,7 @@ class SyncOutgoingModel extends BaseSyncModel {
   async runExtract() {
     logger.info(`[${this.modelName}] Starting extract phase...`);
     let totalExtracted = 0;
-    let lastSyncTime = '9999-12-31T23:59:59.999Z'; // Start from max time for DESC ordering
+    let lastSyncTime = '2999-12-31T23:59:59.999Z'; // Start from max time for DESC ordering
     let lastSyncId = 0;
     let hasMore = true;
 
