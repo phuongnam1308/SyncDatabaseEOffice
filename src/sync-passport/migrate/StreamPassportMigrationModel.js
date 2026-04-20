@@ -43,10 +43,12 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
     await this.ensurePassportVouchersTableExists();
     await this.ensurePassportVoucherItemsTableExists();
     await this.ensureAuditTableExists();
+    await this.ensurePassportHistoriesTableExists();
 
     // Seed dữ liệu mẫu cho test
     await this.seedPassportMockData();
     await this.seedAuditMockData();
+    await this.seedPassportHistoriesMockData();
 
     logger.info(`[StreamPassportMigrationModel] Initialization complete.`);
   }
@@ -597,6 +599,83 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
     }
 
     logger.info(`[StreamPassportMigrationModel] [ensureAuditTableExists] OK`);
+  }
+
+  async ensurePassportHistoriesTableExists() {
+    try {
+      const db = this.newDbName || process.env.NEW_DB_NAME;
+      const schema = this.newDbSchema || 'dbo';
+      const table = 'passport_histories';
+      const tableRef = `[${db}].[${schema}].[${table}]`;
+
+      logger.info(`[StreamPassportMigrationModel] Checking/Creating Passport Histories table: ${table}`);
+
+      const createTableQuery = `
+      IF NOT EXISTS (SELECT 1 FROM [${db}].INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '${table}' AND TABLE_SCHEMA = '${schema}')
+      BEGIN
+          CREATE TABLE ${tableRef} (
+              id uniqueidentifier DEFAULT newid() NOT NULL,
+              request_id nvarchar(100) NOT NULL,
+              [action] nvarchar(255) NOT NULL,
+              note nvarchar(MAX) NULL,
+              performer_id nvarchar(100) NULL,
+              performed_at datetime2 DEFAULT getdate() NULL,
+              CONSTRAINT PK_passport_histories PRIMARY KEY (id)
+          );
+          
+          CREATE NONCLUSTERED INDEX IX_PassportHistory_RequestId ON ${tableRef} (request_id);
+      END
+      `;
+      await this.queryNewDb(createTableQuery);
+
+      // Add FK constraints separately to avoid errors if parent tables don't exist yet or columns different
+      try {
+        await this.queryNewDb(`
+          IF NOT EXISTS (SELECT 1 FROM [${db}].sys.foreign_keys WHERE name = 'FK_PassportHistory_Performer')
+          BEGIN
+              ALTER TABLE ${tableRef}
+              ADD CONSTRAINT FK_PassportHistory_Performer
+              FOREIGN KEY ([performer_id]) REFERENCES [${db}].[${schema}].[users]([id]);
+          END
+        `);
+        await this.queryNewDb(`
+          IF NOT EXISTS (SELECT 1 FROM [${db}].sys.foreign_keys WHERE name = 'FK_PassportHistory_Request')
+          BEGIN
+              ALTER TABLE ${tableRef}
+              ADD CONSTRAINT FK_PassportHistory_Request
+              FOREIGN KEY ([request_id]) REFERENCES [${db}].[${schema}].[passport_borrow_requests]([id]);
+          END
+        `);
+      } catch (fkErr) {
+        logger.warn(`[StreamPassportMigrationModel] [passport_histories] FK constraint skip: ${fkErr.message}`);
+      }
+
+      logger.info(`[StreamPassportMigrationModel] [ensurePassportHistoriesTableExists] OK`);
+    } catch (err) {
+      logger.error(`[StreamPassportMigrationModel] [ensurePassportHistoriesTableExists] ERROR: ${err.message}`);
+    }
+  }
+
+  async seedPassportHistoriesMockData() {
+    try {
+      const db = this.newDbName || process.env.NEW_DB_NAME;
+      const schema = this.newDbSchema || 'dbo';
+      const tableRef = `[${db}].[${schema}].[passport_histories]`;
+
+      const checkExisted = await this.queryNewDb(`SELECT COUNT(1) AS cnt FROM ${tableRef} WHERE id = '8DB1D95E-77F4-45EA-8FEB-01FF678520FC'`);
+      if (checkExisted?.[0]?.cnt > 0) return;
+
+      logger.info(`[StreamPassportMigrationModel] Seeding mock passport_histories data...`);
+
+      const insertQuery = `
+      INSERT INTO ${tableRef} (id, request_id, [action], note, performer_id, performed_at)
+      VALUES ('8DB1D95E-77F4-45EA-8FEB-01FF678520FC', '8636318f-4f96-459b-83e2-9c41168d1029', 'FORWARD', N'Chỉ huy chuyển tiếp cho: phogiamdoctc', '2916a5f3-2dd9-4f82-8741-ef957454f904', '2026-03-17 23:14:12.0300000');
+      `;
+      await this.queryNewDb(insertQuery);
+      logger.info(`[StreamPassportMigrationModel] [seedPassportHistoriesMockData] OK`);
+    } catch (err) {
+      logger.warn(`[StreamPassportMigrationModel] [seedPassportHistoriesMockData] Error: ${err.message}`);
+    }
   }
 
   getStagingTableRef() {
@@ -1288,6 +1367,28 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
               requestId, itemTime, auditUserId: resolvedId, displayName: actor.displayName || 'Unknown', role: auditMeta.role, actionCode: auditMeta.actionCode,
               fromNodeId: auditMeta.fromNodeId, toNodeId: auditMeta.toNodeId, originId: originIdMsg, details: auditMeta.details, roleProcess: auditMeta.roleProcess,
               itemActionLabel: auditMeta.actionLabel, stageStatus: auditMeta.stageStatus, curStatusCode: auditMeta.curStatusCode, typeDoc, receiverId
+            }, transaction);
+
+            // 3.1 Insert into passport_histories
+            const historyTable = `[${db}].[dbo].[passport_histories]`;
+            const actionForHistory = auditMeta.actionCode || 'COMMENT';
+            const noteForHistory = item.Value || '';
+            const historyOriginId = `history_ntext2_${i}_${requestId}`;
+
+            const insertHistoryQuery = `
+              IF NOT EXISTS (SELECT 1 FROM ${historyTable} WHERE request_id = @requestId AND note = @note AND performer_id = @performerId AND performed_at = @performedAt)
+              BEGIN
+                  INSERT INTO ${historyTable} (request_id, [action], note, performer_id, performed_at)
+                  VALUES (@requestId, @action, @note, @performerId, @performedAt);
+              END
+            `;
+
+            await this.queryNewDbTx(insertHistoryQuery, {
+              requestId,
+              action: actionForHistory,
+              note: noteForHistory,
+              performerId: resolvedId,
+              performedAt: itemTime
             }, transaction);
           }
         }

@@ -976,10 +976,10 @@ class MigrationHelper {
     const selectQuery = `
       SELECT TOP 1 id, name, username, code_nd
       FROM [${db}].[dbo].[users]
-      WHERE id = @val 
-         OR id_user_bak = @val 
-         OR username = @val 
-         OR code_nd = @val 
+      WHERE id = @val
+         OR id_user_bak = @val
+         OR username = @val
+         OR code_nd = @val
          OR email_user = @val
          OR name = @val
     `;
@@ -1018,7 +1018,7 @@ class MigrationHelper {
       if (cleanName) {
         const res = await this.queryNewDbTx(selectQuery, { val: cleanName }, transaction);
         if (res?.length) return res[0].id;
-        
+
         // Bonus: Try without suffix mapping if still not found
         const namePart = cleanName.split(/\s*[-–—(]\s*/)[0].trim();
         if (namePart !== cleanName) {
@@ -1060,8 +1060,8 @@ class MigrationHelper {
     // --- STEP 3: nvarchar4 (Chairman Name with LIKE) ---
     const chairmanSrc = rowData.nvarchar4 || rowData.Organizer;
     if (chairmanSrc) {
-      const cleanName = (typeof this.cleanTitleFromName === 'function') 
-          ? this.cleanTitleFromName(chairmanSrc) 
+      const cleanName = (typeof this.cleanTitleFromName === 'function')
+          ? this.cleanTitleFromName(chairmanSrc)
           : chairmanSrc.split(/\s*[-–—(]\s*/)[0].trim();
       const likeQuery = `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME || 'DiOffice'}.dbo.users WHERE name LIKE '%' + @name + '%'`;
       const res = await this.queryNewDbTx(likeQuery, { name: cleanName }, transaction);
@@ -1257,6 +1257,20 @@ class MigrationHelper {
         toNodeId: null,
         actionLabel: rawValue.length > 255 ? rawValue.substring(0, 255) : rawValue,
         curStatusCode: 'COMMENT',
+        stageStatus: 'DA_XU_LY',
+        details: rawValue
+      };
+    }
+
+    if (compact.includes('chuyen tiep') || compact.includes('forward')) {
+      return {
+        role: 'CHI_HUY_DON_VI',
+        roleProcess: 'CHI_HUY_DON_VI',
+        actionCode: 'FORWARD',
+        fromNodeId: 'Gateway_0rbwxs6',
+        toNodeId: 'Gateway_0fkk071',
+        actionLabel: 'Chuyển tiếp',
+        curStatusCode: 'FORWARD',
         stageStatus: 'DA_XU_LY',
         details: rawValue
       };
