@@ -293,9 +293,16 @@ class Extractor extends BaseExtractor {
         BEGIN
           ${nonIdColumns.length > 0 ? `
           UPDATE ${stagingTable}
-          SET ${updateClause}
+          SET ${updateClause},
+              MigrateFlg = 0,
+              MigrateErrFlg = 0,
+              MigrateErrMess = NULL
           WHERE ID = @ID;` : `
-          SELECT 1 AS noop;`}
+          UPDATE ${stagingTable}
+          SET MigrateFlg = 0,
+              MigrateErrFlg = 0,
+              MigrateErrMess = NULL
+          WHERE ID = @ID;`}
         END
         ELSE
         BEGIN
