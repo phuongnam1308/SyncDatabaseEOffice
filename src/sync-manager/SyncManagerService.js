@@ -945,7 +945,12 @@ class SyncManagerService {
             const task = (async (r) => {
               try {
                 const resProc = await handlers.processFn(r, { modelName: job.modelName, jobId: job.jobId });
-                if (resProc && resProc.done) jobFinishedEarly = true;
+                if (resProc && resProc.done) {
+                  jobFinishedEarly = true;
+                  logger.warn(
+                    `[SyncManagerService][${job.modelName}] processFn returned done=true (jobId=${job.jobId}, itemIndex=${Number(r?.__item_index ?? -1)}, pauseRequested=${Boolean(job.pauseRequested)}, processed=${Number(job.totalProcessed || 0)}, totalToSync=${job.totalToSync == null ? 'null' : Number(job.totalToSync)})`
+                  );
+                }
                 return { success: true, record: r, result: resProc };
               } catch (err) {
                 return { success: false, record: r, error: err };
@@ -1000,7 +1005,13 @@ class SyncManagerService {
         this._dbUpdateJob(job);      // ghi DB (thêm mới)
         this._dbUpdateModel(job.modelName, modelState); // ghi DB model state
 
-        if (job.pauseRequested || jobFinishedEarly) { this.markJobPaused(job); return; }
+        if (job.pauseRequested || jobFinishedEarly) {
+          logger.warn(
+            `[SyncManagerService][${job.modelName}] markJobPaused triggered (jobId=${job.jobId}, pauseRequested=${Boolean(job.pauseRequested)}, jobFinishedEarly=${Boolean(jobFinishedEarly)}, batchProcessed=${batchProcessed}, totalProcessed=${job.totalProcessed}, totalToSync=${job.totalToSync == null ? 'null' : Number(job.totalToSync)})`
+          );
+          this.markJobPaused(job);
+          return;
+        }
         if (records.length < job.batchSize || jobFinishedEarly) break;
       }
       this.completeJob(job);

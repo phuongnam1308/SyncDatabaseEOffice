@@ -617,8 +617,8 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
           ) AS __sync_id_num
         FROM ${this.oldDbSchema}.${this.oldDbTable}
         WHERE 1=1
-          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
-          AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
+          AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) >= @startDate OR @startDate IS NULL)
+          AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) <= @endDate OR @endDate IS NULL)
       )
       SELECT COUNT(1) AS total
       FROM source_rows
@@ -684,14 +684,14 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
           ) AS __page_rn
         FROM source_rows
         WHERE (
-          __sync_time < @lastSyncTime
+          _sync_time_val < @lastSyncTime
           OR (
-            __sync_time = @lastSyncTime
-            AND ISNULL(__sync_id, 9223372036854775807) < @lastSyncId
+            _sync_time_val = @lastSyncTime
+            AND ISNULL(_sync_id_val, 9223372036854775807) < @lastSyncId
           )
         )
         -- Chỉ lấy bản ghi từ năm 2026 trở đi
-        AND __sync_time >= '${SYNC_MIN_DATE}'
+        AND _sync_time_val >= '${SYNC_MIN_DATE}'
       ) AS t
       WHERE __page_rn > @offset
       ${limit ? `AND __page_rn <= (@offset + @limit)` : ''}
@@ -885,9 +885,8 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       const pendingRes = await this.queryNewDb(`
         SELECT COUNT(1) AS cnt FROM ${stagingTableRef}
         WHERE ISNULL(MigrateFlg, 0) = 0
-          AND ISNULL(MigrateErrFlg, 0) = 0
-          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
-          AND (${this.partitionColumn} <= @endDate   OR @endDate IS NULL)
+          AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) >= @startDate OR @startDate IS NULL)
+          AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) <= @endDate   OR @endDate IS NULL)
       `, {
         startDate: process.env.SYNC_START_DATE || null,
         endDate: process.env.SYNC_END_DATE || null
@@ -898,6 +897,29 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       pendingCount = totalStaged;
     }
     logger.info(`[StreamTaskIn] Pending records trong Staging có thể xử lý: ${pendingCount} (range: ${process.env.SYNC_START_DATE || 'ALL'} → ${process.env.SYNC_END_DATE || 'ALL'})`);
+    if (totalStaged > 0 && pendingCount === 0) {
+      try {
+        const diag = await this.queryNewDb(`
+          SELECT
+            COUNT(1) AS total_rows,
+            SUM(CASE WHEN ISNULL(MigrateFlg,0)=0 THEN 1 ELSE 0 END) AS flg_0,
+            SUM(CASE WHEN ISNULL(MigrateFlg,0)=1 THEN 1 ELSE 0 END) AS flg_1,
+            SUM(CASE WHEN ISNULL(MigrateFlg,0)=2 THEN 1 ELSE 0 END) AS flg_2,
+            SUM(CASE WHEN ISNULL(MigrateErrFlg,0)=1 THEN 1 ELSE 0 END) AS err_1,
+            SUM(CASE WHEN TRY_CONVERT(datetime2, ${this.partitionColumn}) IS NULL THEN 1 ELSE 0 END) AS invalid_partition_date
+          FROM ${stagingTableRef}
+          WHERE (TRY_CONVERT(datetime2, ${this.partitionColumn}) >= @startDate OR @startDate IS NULL)
+            AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) <= @endDate OR @endDate IS NULL)
+        `, {
+          startDate: process.env.SYNC_START_DATE || null,
+          endDate: process.env.SYNC_END_DATE || null
+        });
+        const d = diag?.[0] || {};
+        logger.warn(`[StreamTaskIn][diag-after-stage] staged=${totalStaged}, pending=${pendingCount}, total_rows=${Number(d.total_rows || 0)}, flg0=${Number(d.flg_0 || 0)}, flg1=${Number(d.flg_1 || 0)}, flg2=${Number(d.flg_2 || 0)}, err1=${Number(d.err_1 || 0)}, invalid_partition_date=${Number(d.invalid_partition_date || 0)}`);
+      } catch (diagErr) {
+        logger.warn(`[StreamTaskIn][diag-after-stage] failed: ${diagErr.message}`);
+      }
+    }
 
 
     // Cập nhật Dashboard lần cuối với tổng số thực tế (bao gồm cả các bản ghi tồn đọng cũ trong staging)
@@ -935,10 +957,9 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
         SELECT TOP (1) *
         FROM ${stagingTableRef} WITH (UPDLOCK, ROWLOCK)
         WHERE ISNULL(MigrateFlg, 0) = 0
-          AND ISNULL(MigrateErrFlg, 0) = 0
           -- Lọc theo cột nghiệp vụ để chia tải giữa các Worker
-          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
-          AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
+          AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) >= @startDate OR @startDate IS NULL)
+          AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) <= @endDate OR @endDate IS NULL)
         ORDER BY TRY_CONVERT(datetime2, Modified) DESC,
                  TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(ID)), '')) DESC
       )
@@ -1045,6 +1066,62 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
         // or just make it silent if we've already logged once.
         if (!this._finishedLogged) {
           logger.info(`[StreamTaskIn] No more data in staging for job ${syncJobId}`);
+          const expected = Number(jobState?.total_to_sync || 0);
+          const processed = Number(jobState?.total_processed || 0);
+          if (expected > processed) {
+            logger.warn(`[StreamTaskIn][gap] processed=${processed}/${expected}, missing=${expected - processed}`);
+          }
+          try {
+            const diag = await this.queryNewDb(`
+              SELECT
+                COUNT(1) AS pending_total,
+                SUM(CASE WHEN ISNULL(MigrateErrFlg, 0) = 1 THEN 1 ELSE 0 END) AS pending_err,
+                SUM(CASE WHEN ISNULL(MigrateErrFlg, 0) = 0 THEN 1 ELSE 0 END) AS pending_clean
+              FROM ${stagingTableRef}
+              WHERE ISNULL(MigrateFlg, 0) = 0
+                AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) >= @startDate OR @startDate IS NULL)
+                AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) <= @endDate OR @endDate IS NULL)
+            `, {
+              startDate: process.env.SYNC_START_DATE || null,
+              endDate: process.env.SYNC_END_DATE || null
+            });
+            const d = diag?.[0] || {};
+            logger.info(`[StreamTaskIn][diag] pending_total=${Number(d.pending_total || 0)}, pending_clean=${Number(d.pending_clean || 0)}, pending_err=${Number(d.pending_err || 0)}`);
+
+            const samplePending = await this.queryNewDb(`
+              SELECT TOP (20) ID, Created, Modified, MigrateFlg, MigrateErrFlg, MigrateErrMess
+              FROM ${stagingTableRef}
+              WHERE ISNULL(MigrateFlg, 0) = 0
+                AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) >= @startDate OR @startDate IS NULL)
+                AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) <= @endDate OR @endDate IS NULL)
+              ORDER BY TRY_CONVERT(datetime2, Modified) DESC,
+                       TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(ID)), '')) DESC
+            `, {
+              startDate: process.env.SYNC_START_DATE || null,
+              endDate: process.env.SYNC_END_DATE || null
+            });
+            if (Array.isArray(samplePending) && samplePending.length > 0) {
+              logger.warn(`[StreamTaskIn][pending-sample] ${JSON.stringify(samplePending)}`);
+            }
+
+            const sampleError = await this.queryNewDb(`
+              SELECT TOP (20) ID, Created, Modified, MigrateFlg, MigrateErrFlg, MigrateErrMess
+              FROM ${stagingTableRef}
+              WHERE ISNULL(MigrateErrFlg, 0) = 1
+                AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) >= @startDate OR @startDate IS NULL)
+                AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) <= @endDate OR @endDate IS NULL)
+              ORDER BY TRY_CONVERT(datetime2, Modified) DESC,
+                       TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(ID)), '')) DESC
+            `, {
+              startDate: process.env.SYNC_START_DATE || null,
+              endDate: process.env.SYNC_END_DATE || null
+            });
+            if (Array.isArray(sampleError) && sampleError.length > 0) {
+              logger.warn(`[StreamTaskIn][error-sample] ${JSON.stringify(sampleError)}`);
+            }
+          } catch (diagErr) {
+            logger.warn(`[StreamTaskIn][diag] failed: ${diagErr.message}`);
+          }
           this._finishedLogged = true;
         }
         await this.finalizeProcessingCursor(syncJobId);
@@ -1118,18 +1195,28 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       const stagingTableRef = this.getStagingTableRef();
       const res = await this.queryNewDb(`
         SELECT
-          MAX(Modified) AS maxTime,
+          MAX(
+            COALESCE(
+              TRY_CONVERT(datetime2, Modified),
+              TRY_CONVERT(datetime2, Created)
+            )
+          ) AS maxTime,
           MAX(TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), ''))) AS maxId
         FROM ${stagingTableRef}
         WHERE ISNULL(MigrateFlg, 0) = 1
-          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
-          AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
+          AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) >= @startDate OR @startDate IS NULL)
+          AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) <= @endDate OR @endDate IS NULL)
       `, {
         startDate: process.env.SYNC_START_DATE || null,
         endDate: process.env.SYNC_END_DATE || null
       });
       if (res?.[0]?.maxTime) {
-        const finalTime = new Date(res[0].maxTime).toISOString();
+        const parsed = new Date(res[0].maxTime);
+        if (Number.isNaN(parsed.getTime())) {
+          logger.warn(`[StreamTaskIn.finalizeProcessingCursor] maxTime invalid: ${res[0].maxTime}`);
+          return;
+        }
+        const finalTime = parsed.toISOString();
         const finalId = Number(res[0].maxId || 0);
         await this.queryNewDb(
           `UPDATE sync_jobs
@@ -1257,18 +1344,32 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       null;
     // ── 3. System log ─────────────────────────────────────────────
     try {
-      const logResult = await this.systemLogsModel.createLogForTask(
-        { idTask: newTaskId, userInfo: createdBy, createdAt },
-        transaction
-      );
+      const oldDocumentId = stagingRow?.VBId ? String(stagingRow.VBId).trim() : null;
+      const historyResult = oldDocumentId
+        ? await this.systemLogsModel.syncFullHistoryForTask(
+          { idTask: newTaskId, oldDocumentId, userInfo: createdBy, createdAt },
+          transaction
+        )
+        : { success: true, inserted: 0, updated: 0, total: 0 };
 
-      if (logResult.success) {
-        logger.info(`[log] logId=${logResult.logId} created=true`);
-        totalAffected += 1;
+      if (historyResult?.success && Number(historyResult.total || 0) > 0) {
+        logger.info(
+          `[log] full_history synced task=${newTaskId} total=${historyResult.total} inserted=${historyResult.inserted} updated=${historyResult.updated}`
+        );
+        totalAffected += Number(historyResult.inserted || 0) + Number(historyResult.updated || 0);
       } else {
-        logger.warn(`[StreamTaskInIncrementalModel] Log creation returned success=false for task_id=${newTaskId}`, {
-          logResult
-        });
+        const logResult = await this.systemLogsModel.createLogForTask(
+          { idTask: newTaskId, userInfo: createdBy, createdAt },
+          transaction
+        );
+        if (logResult.success) {
+          logger.info(`[log] fallback logId=${logResult.logId} created=true`);
+          totalAffected += 1;
+        } else {
+          logger.warn(`[StreamTaskInIncrementalModel] Log creation returned success=false for task_id=${newTaskId}`, {
+            logResult
+          });
+        }
       }
     } catch (logErr) {
       // SUB-TABLE ERROR: Log warning only, do NOT throw
@@ -1331,3 +1432,4 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
 }
 
 module.exports = StreamTaskInIncrementalModel;
+
