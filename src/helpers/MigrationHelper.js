@@ -966,9 +966,18 @@ class MigrationHelper {
     const email = identityObj.Email || identityObj.AuthorEmail;
     const fullName = identityObj.FullName || identityObj.AuthorName || identityObj.AuthorFullName || identityObj.name_passport_request;
 
+    const db = process.env.NEW_DB_NAME || 'DiOffice';
+
+    // ★ BƯỚC ƯU TIÊN 1: Tìm bằng Email đầy đủ (So khớp email_user) theo yêu cầu mới
+    if (email && typeof email === 'string' && email.includes('@')) {
+      const emailQuery = `SELECT TOP 1 id FROM [${db}].[dbo].[users] WHERE LTRIM(RTRIM(email_user)) = @email`;
+      const emailRes = await this.queryNewDbTx(emailQuery, { email: email.trim() }, transaction);
+      if (emailRes?.length) return emailRes[0].id;
+    }
+
     const selectQuery = `
       SELECT TOP 1 id, name, username, code_nd
-      FROM ${process.env.NEW_DB_NAME || 'DiOffice'}.dbo.users
+      FROM [${db}].[dbo].[users]
       WHERE id = @val 
          OR id_user_bak = @val 
          OR username = @val 
@@ -1003,6 +1012,7 @@ class MigrationHelper {
         if (res?.length) return res[0].id;
       }
     }
+
 
     // 4. Theo FullName
     if (fullName) {

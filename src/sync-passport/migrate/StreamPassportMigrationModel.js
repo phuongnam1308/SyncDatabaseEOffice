@@ -1192,90 +1192,36 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
     const db = this.newDbName || 'app_tancang';
     const auditTable = `[${db}].[dbo].[audit]`;
     const creatorId = requesterId || null;
-    const receiverId = process.env.DEFAULT_RECEIVER_UNIT_ID || 'TCT_LOGIST'; // Mặc định từ ENV
+    const receiverId = process.env.DEFAULT_RECEIVER_UNIT_ID || 'TCT_LOGIST';
     const typeDoc = 'PASSPORT_REQUEST';
 
-    // 1. Bước CREATE (Luôn có)
+    logger.info(`[Audit-Passport] === START AUDIT GENERATION FOR REQUEST: ${requestId} ===`);
+
+    // 1. Bước CREATE (Dựa trên Author/Requester)
     const createActionLabel = N('Tạo phiếu mượn hộ chiếu');
     const stageStatus = (status === 'COMPLETED' || status === 'IN_USE') ? 'DA_XU_LY' : 'CHUA_XU_LY';
 
+    logger.info(`[Audit-Passport] [Step: CREATE] RequesterID: ${creatorId || 'NOT_FOUND'}`);
+
     const insertCreateQuery = `
-      IF NOT EXISTS (
-          SELECT 1 FROM ${auditTable}
-          WHERE document_id = @requestId
-            AND action_code = 'CREATE'
-            AND type_document = @typeDoc
-            AND origin_id = 'migration_origin'
-      )
+      IF NOT EXISTS (SELECT 1 FROM ${auditTable} WHERE document_id = @requestId AND action_code = 'CREATE' AND origin_id = 'migration_origin')
       BEGIN
-          INSERT INTO ${auditTable}
-          (
-            document_id, [time], user_id, display_name, [role], action_code,
-            from_node_id, to_node_id, details, origin_id, created_by,
-            receiver, roleProcess, [action], stage_status,
-            curStatusCode, type_document, bpmn_version, created_at, updated_at
-          )
-          VALUES
-          (
-            @requestId, SYSUTCDATETIME(), @creatorId, N'Người tạo phiếu',
-            'NGUOI_TAO_PHIEU', 'CREATE',
-            'StartEvent_1', 'Gateway_0rbwxs6',
-            N'${JSON.stringify({ transferType: 'migration', source: 'sharepoint' }).replace(/'/g, "''")}',
-            'migration_origin',
-            @creatorId, @receiverId, 'NGUOI_TAO_PHIEU',
-            @createActionLabel,
-            @stageStatus, '1', @typeDoc, 'QT_MTHC',
-            SYSUTCDATETIME(), SYSUTCDATETIME()
+          INSERT INTO ${auditTable} (
+            document_id, [time], user_id, display_name, [role], action_code, from_node_id, to_node_id, details, origin_id, created_by,
+            receiver, roleProcess, [action], stage_status, curStatusCode, type_document, bpmn_version, created_at, updated_at
+          ) VALUES (
+            @requestId, SYSUTCDATETIME(), @creatorId, N'Người tạo phiếu', 'NGUOI_TAO_PHIEU', 'CREATE', 'StartEvent_1', 'Gateway_0rbwxs6',
+            N'{"transferType": "migration", "source": "sharepoint", "authorResolved": "${!!creatorId}"}', 'migration_origin',
+            @creatorId, @receiverId, 'NGUOI_TAO_PHIEU', @createActionLabel, @stageStatus, '1', @typeDoc, 'QT_MTHC', SYSUTCDATETIME(), SYSUTCDATETIME()
           );
       END
     `;
 
     try {
-      await this.queryNewDbTx(insertCreateQuery, {
-        requestId, creatorId, createActionLabel, stageStatus, typeDoc, receiverId
-      }, transaction);
+      await this.queryNewDbTx(insertCreateQuery, { requestId, creatorId, createActionLabel, stageStatus, typeDoc, receiverId }, transaction);
+      logger.info(`[Audit-Passport] [Step: CREATE] OK`);
 
-      // 1b. Bước CREATE từ tp_Title (MỚI)
-      if (tpTitle) {
-        const cleanTitleName = this.helper.extractDisplayName(tpTitle);
-        if (cleanTitleName) {
-           const titleUserId = await this.helper.passportUserResolver({ FullName: tpTitle }, transaction);
-
-           const insertTitleCreateQuery = `
-             IF NOT EXISTS (
-                 SELECT 1 FROM ${auditTable}
-                 WHERE document_id = @requestId
-                   AND action_code = 'CREATE'
-                   AND origin_id = 'migration_tp_title_create'
-             )
-             BEGIN
-                 INSERT INTO ${auditTable}
-                 (
-                   document_id, [time], user_id, display_name, [role], action_code,
-                   from_node_id, to_node_id, details, origin_id, created_by,
-                   receiver, roleProcess, [action], stage_status,
-                   curStatusCode, type_document, bpmn_version, created_at, updated_at
-                 )
-                 VALUES
-                 (
-                   @requestId, DATEADD(SECOND, -1, SYSUTCDATETIME()), @titleUserId, @cleanTitleName,
-                   'BO_PHAN_CHUYEN_TRACH', 'CREATE',
-                   NULL, 'Gateway_1ju0gk3',
-                   N'Tạo phản ánh kiến nghị', 'migration_tp_title_create',
-                   @titleUserId, @receiverId, 'BO_PHAN_CHUYEN_TRACH',
-                   N'Tạo phản ánh kiến nghị',
-                   'DA_XU_LY', 'CREATE', @typeDoc, 'QT_MTHC',
-                   DATEADD(SECOND, -1, SYSUTCDATETIME()), DATEADD(SECOND, -1, SYSUTCDATETIME())
-                 );
-             END
-           `;
-           await this.queryNewDbTx(insertTitleCreateQuery, {
-             requestId, titleUserId, cleanTitleName, typeDoc, receiverId
-           }, transaction);
-        }
-      }
-
-      // 2. Bước kết quả (Nếu đã COMPLETED, REJECTED, CANCELLED...)
+      // 2. Bước kết quả (Nếu đã kết thúc)
       const finalStates = ['COMPLETED', 'IN_USE', 'REJECTED', 'CANCELLED'];
       if (finalStates.includes(status)) {
         let actionCode = 'APPROVE';
@@ -1283,129 +1229,75 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
         let fromNode = 'Gateway_0rbwxs6';
         let toNode = 'Gateway_0fkk071';
 
-        if (status === 'REJECTED') {
-          actionCode = 'REJECT';
-          actionLabel = N('Từ chối');
-          toNode = 'Gateway_0rbwxs6';
-        } else if (status === 'CANCELLED') {
-          actionCode = 'CANCEL';
-          actionLabel = N('Hủy phiếu');
-          toNode = 'EndEvent_1';
-        }
+        if (status === 'REJECTED') { actionCode = 'REJECT'; actionLabel = N('Từ chối'); toNode = 'Gateway_0rbwxs6'; }
+        else if (status === 'CANCELLED') { actionCode = 'CANCEL'; actionLabel = N('Hủy phiếu'); toNode = 'EndEvent_1'; }
+
+        logger.info(`[Audit-Passport] [Step: FINAL] Action: ${actionCode}`);
 
         const insertFinalQuery = `
-          IF NOT EXISTS (
-              SELECT 1 FROM ${auditTable}
-              WHERE document_id = @requestId
-                AND action_code = @actionCode
-                AND type_document = @typeDoc
-          )
+          IF NOT EXISTS (SELECT 1 FROM ${auditTable} WHERE document_id = @requestId AND action_code = @actionCode AND origin_id = 'migration_final_result')
           BEGIN
-              INSERT INTO ${auditTable}
-              (
-                document_id, [time], user_id, display_name, [role], action_code,
-                from_node_id, to_node_id, details, origin_id, created_by,
-                receiver, roleProcess, [action], stage_status,
-                curStatusCode, type_document, bpmn_version, created_at, updated_at
-              )
-              VALUES
-              (
-                @requestId, DATEADD(SECOND, 5, SYSUTCDATETIME()), @creatorId, N'Người phê duyệt',
-                'CHI_HUY_DON_VI', @actionCode,
-                @fromNode, @toNode,
-                null, 'migration_origin',
-                @creatorId, @receiverId, 'CHI_HUY_DON_VI',
-                @actionLabel,
-                'DA_XU_LY', @actionCode, @typeDoc, 'QT_MTHC',
-                DATEADD(SECOND, 5, SYSUTCDATETIME()), DATEADD(SECOND, 5, SYSUTCDATETIME())
+              INSERT INTO ${auditTable} (
+                document_id, [time], user_id, display_name, [role], action_code, from_node_id, to_node_id, details, origin_id, created_by,
+                receiver, roleProcess, [action], stage_status, curStatusCode, type_document, bpmn_version, created_at, updated_at
+              ) VALUES (
+                @requestId, DATEADD(SECOND, 10, SYSUTCDATETIME()), @creatorId, N'Kết quả', 'CHI_HUY_DON_VI', @actionCode,
+                @fromNode, @toNode, null, 'migration_final_result', @creatorId, @receiverId, 'CHI_HUY_DON_VI', @actionLabel,
+                'DA_XU_LY', @actionCode, @typeDoc, 'QT_MTHC', DATEADD(SECOND, 10, SYSUTCDATETIME()), DATEADD(SECOND, 10, SYSUTCDATETIME())
               );
           END
         `;
-        await this.queryNewDbTx(insertFinalQuery, {
-          requestId, creatorId, actionLabel, actionCode, fromNode, toNode, typeDoc, receiverId
-        }, transaction);
+        await this.queryNewDbTx(insertFinalQuery, { requestId, creatorId, actionLabel, actionCode, fromNode, toNode, typeDoc, receiverId }, transaction);
       }
 
-      // 3. Xử lý log từ ntext2 nếu có (JSON Array)
+      // 3. Xử lý log từ ntext2 (Mảng JSON lịch sử)
       if (ntext2Str && typeof ntext2Str === 'string' && ntext2Str.trim().startsWith('[')) {
-        try {
-          const auditItems = JSON.parse(ntext2Str);
-          if (Array.isArray(auditItems)) {
-            logger.info(`[StreamPassportMigrationModel] [requestId=${requestId}] Found ${auditItems.length} audit items in ntext2.`);
-            
-            for (let i = 0; i < auditItems.length; i++) {
-              const item = auditItems[i];
-              if (!item?.Created) {
-                logger.info(`[StreamPassportMigrationModel] [requestId=${requestId}] Skipping item ${i}: Missing 'Created' field.`);
-                continue;
-              }
+        const auditItems = JSON.parse(ntext2Str);
+        if (Array.isArray(auditItems)) {
+          logger.info(`[Audit-Passport] Found ${auditItems.length} history items in ntext2. Processing...`);
+          
+          for (let i = 0; i < auditItems.length; i++) {
+            const item = auditItems[i];
+            if (!item?.Created) continue;
 
-              const actor = await this.helper.resolvePassportAuditActor(item, transaction);
-              const auditMeta = this.helper.buildPassportAuditMetaFromNtext2(item);
-              
-              if (!auditMeta.details && !auditMeta.actionLabel) {
-                logger.info(`[StreamPassportMigrationModel] [requestId=${requestId}] Skipping item ${i}: Empty metadata.`);
-                continue;
-              }
+            const itemEmail = item.Email || '';
+            // Gọi resolver để tìm ID theo Email (đã cập nhật ưu tiên Email bên helper)
+            const actor = await this.helper.resolvePassportAuditActor(item, transaction);
+            const auditMeta = this.helper.buildPassportAuditMetaFromNtext2(item);
 
-              const itemTime = parseDate(item.Created) || new Date();
-              const originIdMsg = `migration_ntext2_${i}_${requestId}`;
-              
-              // FALLBACK: Nếu không resolve được actor, dùng VANTHU_USER_ID để tránh lỗi DB
-              const resolvedAuditUserId = actor.id || process.env.VANTHU_USER_ID || 'b23406e3-5c75-41d3-91e0-1654293ae6b2';
-              if (!actor.id) {
-                logger.warn(`[StreamPassportMigrationModel] [requestId=${requestId}] Item ${i}: Not resolved (${item.FullName || item.LoginName}). Using fallback.`);
-              }
+            const itemTime = parseDate(item.Created) || new Date();
+            const originIdMsg = `migration_ntext2_${i}_${requestId}`;
+            const resolvedId = actor.id || process.env.VANTHU_USER_ID || 'b23406e3-5c75-41d3-91e0-1654293ae6b2';
 
-              const insertItemQuery = `
-                IF NOT EXISTS (SELECT 1 FROM ${auditTable} WHERE document_id = @requestId AND origin_id = @originId)
-                BEGIN
-                    INSERT INTO ${auditTable} (
-                      document_id, [time], user_id, display_name, [role], action_code,
-                      from_node_id, to_node_id, details, origin_id, created_by,
-                      receiver, roleProcess, [action], stage_status,
-                      curStatusCode, type_document, bpmn_version, created_at, updated_at,
-                      processed_by
-                    ) VALUES (
-                      @requestId, @itemTime, @auditUserId, @displayName,
-                      @role, @actionCode, @fromNodeId, @toNodeId,
-                      @details, @originId, @auditUserId, @receiverId, @roleProcess,
-                      @itemActionLabel, @stageStatus, @curStatusCode, @typeDoc, 'QT_MTHC',
-                      @itemTime, @itemTime, @auditUserId
-                    );
-                END
-              `;
+            logger.info(`[Audit-Passport] [ntext2 Item ${i}] Email: "${itemEmail}" -> Resolved ID: ${actor.id || ('FALLBACK:' + resolvedId)}`);
 
-              await this.queryNewDbTx(insertItemQuery, {
-                requestId,
-                itemTime,
-                auditUserId: resolvedAuditUserId,
-                displayName: actor.displayName || 'Unknown',
-                role: auditMeta.role,
-                actionCode: auditMeta.actionCode,
-                fromNodeId: auditMeta.fromNodeId,
-                toNodeId: auditMeta.toNodeId,
-                originId: originIdMsg,
-                details: auditMeta.details,
-                roleProcess: auditMeta.roleProcess,
-                itemActionLabel: auditMeta.actionLabel,
-                stageStatus: auditMeta.stageStatus,
-                curStatusCode: auditMeta.curStatusCode,
-                typeDoc,
-                receiverId
-              }, transaction);
-              
-              logger.info(`[StreamPassportMigrationModel] [requestId=${requestId}] Processed item ${i} - Action: ${auditMeta.actionCode} - Resolved: ${actor.matched}`);
-            }
+            const insertItemQuery = `
+              IF NOT EXISTS (SELECT 1 FROM ${auditTable} WHERE document_id = @requestId AND origin_id = @originId)
+              BEGIN
+                  INSERT INTO ${auditTable} (
+                    document_id, [time], user_id, display_name, [role], action_code, from_node_id, to_node_id, details, origin_id, created_by,
+                    receiver, roleProcess, [action], stage_status, curStatusCode, type_document, bpmn_version, created_at, updated_at, processed_by
+                  ) VALUES (
+                    @requestId, @itemTime, @auditUserId, @displayName, @role, @actionCode, @fromNodeId, @toNodeId, @details, @originId, @auditUserId, @receiverId, 
+                    @roleProcess, @itemActionLabel, @stageStatus, @curStatusCode, @typeDoc, 'QT_MTHC', @itemTime, @itemTime, @auditUserId
+                  );
+              END
+            `;
+
+            await this.queryNewDbTx(insertItemQuery, {
+              requestId, itemTime, auditUserId: resolvedId, displayName: actor.displayName || 'Unknown', role: auditMeta.role, actionCode: auditMeta.actionCode,
+              fromNodeId: auditMeta.fromNodeId, toNodeId: auditMeta.toNodeId, originId: originIdMsg, details: auditMeta.details, roleProcess: auditMeta.roleProcess,
+              itemActionLabel: auditMeta.actionLabel, stageStatus: auditMeta.stageStatus, curStatusCode: auditMeta.curStatusCode, typeDoc, receiverId
+            }, transaction);
           }
-        } catch (parseErr) {
-          logger.warn(`[StreamPassportMigrationModel] Failed to parse ntext2 for requestId=${requestId}: ${parseErr.message}`);
         }
       }
+      logger.info(`[Audit-Passport] === FINISHED AUDIT GENERATION FOR: ${requestId} ===`);
     } catch (err) {
-      logger.error(`[StreamPassportMigrationModel] createDefaultAuditForPassport ERROR: ${err.message}`);
+      logger.error(`[Audit-Passport] ERROR: ${err.message}`);
     }
   }
+
 
   /**
    * Lấy danh sách cột hiện có trong bảng (case-insensitive).
