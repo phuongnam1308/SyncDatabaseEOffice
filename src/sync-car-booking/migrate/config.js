@@ -27,6 +27,15 @@ const tableMappings = {
 
     listIds: mapping.listIds,
 
+    // Multi-DB Support: Read from databases.json if exists
+    databaseList: (() => {
+      try {
+        return require('./databases.json');
+      } catch (e) {
+        return null;
+      }
+    })(),
+
     /* ================= NEW DB ================= */
     newTable: mapping.newTable,
     newSchema: mapping.newSchema,
@@ -51,8 +60,18 @@ const tableMappings = {
       status: (r) => r?.status != null ? Number(r.status) : mapping.defaults.STATUS,
       vehicle_state: (r) => r?.vehicle_state || mapping.defaults.VEHICLE_STATE,
       timezone: mapping.defaults.TIMEZONE,
-      departure_time: (r) => r?.StartDate ? new Date(r.StartDate) : (r?.tp_Created ? new Date(r.tp_Created) : new Date()),
-      return_time: (r) => r?.EndDate ? new Date(r.EndDate) : (r?.StartDate ? new Date(r.StartDate) : (r?.tp_Created ? new Date(r.tp_Created) : new Date())),
+      departure_time: (r) => {
+        const val = r?.StartDate || r?.tp_Created;
+        if (!val || String(val).trim() === '') return new Date();
+        const d = new Date(val);
+        return isNaN(d.getTime()) ? new Date() : d;
+      },
+      return_time: (r) => {
+        const val = r?.EndDate || r?.StartDate || r?.tp_Created;
+        if (!val || String(val).trim() === '') return new Date();
+        const d = new Date(val);
+        return isNaN(d.getTime()) ? new Date() : d;
+      },
       destination: (r) => r?.Location || 'Chưa xác định',
       purpose: (r) => r?.Description || r?.Title || 'Công tác (Đồng bộ)',
       contact_person: (r) => r?.Organizer || mapping.defaults.LEADER,
@@ -73,8 +92,18 @@ const tableMappings = {
       priority: 'bt',
 
       created_by: (r) => r?.AuthorAccount || mapping.defaults.USER_ID,
-      created_at: (r) => r?.tp_Created ? new Date(r.tp_Created) : new Date(),
-      updated_at: (r) => r?.tp_Modified ? new Date(r.tp_Modified) : new Date(),
+      created_at: (r) => {
+        const val = r?.tp_Created;
+        if (!val || String(val).trim() === '') return new Date();
+        const d = new Date(val);
+        return isNaN(d.getTime()) ? new Date() : d;
+      },
+      updated_at: (r) => {
+        const val = r?.tp_Modified;
+        if (!val || String(val).trim() === '') return new Date();
+        const d = new Date(val);
+        return isNaN(d.getTime()) ? new Date() : d;
+      },
       id_sp_bak: (r) => r?.ItemID || r?.ID
     },
 

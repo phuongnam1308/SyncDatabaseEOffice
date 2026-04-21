@@ -52,11 +52,19 @@ const tableMappings = {
     /* ================= OLD DB ================= */
     oldTable: 'AllUserData',
     oldSchema: 'dbo',
-    oldDatabase: process.env.OLD_DB_WSS_CONTENT,
+    oldDatabase: 'WSS_Content_eoffice_khkd', 
+
+    // Multi-DB Support: Read from databases.json
+    databaseList: (() => {
+      try {
+        return require('./databases.json');
+      } catch (e) {
+        return null;
+      }
+    })(),
 
     whereClause: `
-      tp_ListId = 'B0F4D2C4-D65B-42AB-A37A-9D45118A2A2C'
-      AND tp_RowOrdinal = 0
+      tp_RowOrdinal = 0
       AND tp_IsCurrentVersion = 1
     `,
 
