@@ -83,7 +83,8 @@ class StreamUserMigrationModel extends BaseModel {
       DepartmentId: safeString(oldRecord.DepartmentId),
       PhongBanID: safeString(oldRecord.PhongBanID),
       IsTCT: oldRecord.IsTCT,
-      table_backups: 'PersonalProfile'
+      table_backups: 'PersonalProfile',
+      tb_bak: 1
     };
   }
 

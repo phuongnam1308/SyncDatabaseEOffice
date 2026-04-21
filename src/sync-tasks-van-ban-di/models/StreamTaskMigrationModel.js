@@ -350,7 +350,8 @@ class StreamTaskMigrationModel extends BaseModel {
     };
     const priority = mapPriority(rawRecord.TrangThai);
 
-    const parentRaw = rawRecord.ParentId ? String(rawRecord.ParentId).trim() : null;
+    const parentCandidate = rawRecord.ParentId ? String(rawRecord.ParentId).trim() : '';
+    const parentRaw = (!parentCandidate || parentCandidate === '0') ? null : parentCandidate;
 
     const docLookup = await this.helper.findDocumentIdByOldId(rawRecord.VBId, 'OutgoingDocument', transaction);
     const docId = docLookup?.document_id || null;

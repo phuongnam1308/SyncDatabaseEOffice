@@ -41,7 +41,7 @@ Tài liệu này mô tả chính xác luồng xử lý hiện tại của module
 
 ### Giai đoạn B - Hút dữ liệu old -> staging (`getList`)
 1. Normalize cursor đầu vào:
-   - Nếu nhận `1970-01-01...` hoặc rỗng, nội bộ đổi về `9999-12-31T23:59:59.999Z`.
+   - Nếu nhận `1970-01-01...` hoặc rỗng, nội bộ đổi về `2999-12-31T23:59:59.999Z`.
    - Luồng này chạy theo hướng **DESC về quá khứ** (`__sync_time < lastSyncTime`).
 2. Filter phân đoạn theo `Created`:
    - `SYNC_START_DATE`, `SYNC_END_DATE` (multi-terminal theo time range).

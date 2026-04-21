@@ -2,6 +2,7 @@ const logger = require('../../utils/logger');
 const SyncHandlerModel = require('./SyncHandlerModel');
 
 const OutGoingDocumentModel = require('../sync-outgoing-document/models/StreamOutgoingIncrementalModel');
+const SyncOutgoingAdapter = require('./SyncOutgoingAdapter'); // NEW: v2 adapter with instance staging tables
 const StreamUserMigrationModel = require('../sync-user-copy/migrate/StreamUserMigrationModel');
 const StreamTaskInIncrementalModel = require('../sync-tasks-van-ban-den/models/StreamTaskInIncrementalModel');
 const StreamTaskOutIncrementalModel = require('../sync-tasks-van-ban-di/models/StreamTaskOutIncrementalModel');
@@ -24,6 +25,12 @@ const MODEL_DEFINITIONS = [
     label: 'Đồng bộ văn bản đi',
     section: 'realtime',
     ModelClass: OutGoingDocumentModel
+  },
+  {
+    key: 'STREAM_OUTGOING_V2',
+    label: 'Đồng bộ văn bản đi v2',
+    section: 'realtime',
+    ModelClass: SyncOutgoingAdapter
   },
   {
     key: 'STREAM_DEPARTMENT_MIGRATION',
@@ -220,20 +227,20 @@ class SyncModelRegistry {
    */
   async _initializeSingle(def, syncManagerService, syncStateRepository) {
     let { key, label, ModelClass } = def;
-    const instanceId = process.env.SYNC_INSTANCE_ID;
-    const isPrimaryInstance = !instanceId || instanceId === '3021';
+    const instanceId = process.env.SYNC_INSTANCE_ID || process.env.INSTANCE_ID;
+    const isPrimaryInstance = !instanceId || instanceId === '3021' || instanceId === '1';
 
     // Các module hỗ trợ chạy song song (đa instance)
     const parallelModules = [
       'STREAM_INCOMING_INCREMENTAL',
       'STREAM_OUTGOING_INCREMENTAL',
       'STREAM_TASK_INCOMING_INCREMENTAL',
-      'STREAM_TASK_OUTGOING_INCREMENTAL'
+      'STREAM_TASK_OUTGOING_INCREMENTAL',
+      'STREAM_OUTGOING_V2'
     ];
     const isParallelModule = parallelModules.includes(key);
 
-    if (instanceId && isParallelModule) {
-      key = `${key}_${instanceId}`;
+    if (instanceId && isParallelModule && instanceId !== '1' && instanceId !== '3021') {
       label = `${label} (${instanceId})`;
     } else if (!isPrimaryInstance && !isParallelModule) {
       // Nếu là cổng phụ (3022, 3023...) và không phải module song song -> Bỏ qua để không chạy trùng
@@ -248,7 +255,7 @@ class SyncModelRegistry {
       await instance.initialize();
 
       const handler = new SyncHandlerModel(instance);
-      
+
       // [QUY TRÌNH SỬA LỖI] Đổi tên key kỹ thuật thành Label Tiếng Việt trong DB nếu tồn tại
       // CHỈ thực hiện rename nếu không phải chạy đa instance (để tránh tranh chấp record)
       if (syncStateRepository && !instanceId) {

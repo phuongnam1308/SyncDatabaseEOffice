@@ -341,14 +341,14 @@ router.use('/incoming', incommingRoutes);
 
 
 module.exports = router;
-const SrcSyncManagerController = require('../src/sync-manager/SyncManagerController');
-router.get('/sync-manager-src/dashboard', SrcSyncManagerController.getDashboard);
-router.post('/sync-manager-src/start', SrcSyncManagerController.startSync);
-router.post('/sync-manager-src/models/:modelName/start', SrcSyncManagerController.startModelSync);
-router.post('/sync-manager-src/jobs/:jobId/pause', SrcSyncManagerController.pauseJobSync);
-router.post('/sync-manager-src/jobs/:jobId/resume', SrcSyncManagerController.resumeJobSync);
-router.get('/sync-manager-src/jobs/:jobId', SrcSyncManagerController.getJobSyncStatus);
-router.get('/sync-manager-src/events', SrcSyncManagerController.sseEvents); // ← THÊM DÒNG NÀY
+const syncCtrl = require('../src/sync-manager/SyncManagerController');
+router.get('/sync-manager-src/dashboard', syncCtrl.getDashboard);
+router.post('/sync-manager-src/start', syncCtrl.startSync);
+router.post('/sync-manager-src/models/:modelName/start', syncCtrl.startModelSync);
+router.post('/sync-manager-src/jobs/:jobId/pause', syncCtrl.pauseJobSync);
+router.post('/sync-manager-src/jobs/:jobId/resume', syncCtrl.resumeJobSync);
+router.get('/sync-manager-src/jobs/:jobId', syncCtrl.getJobSyncStatus);
+router.get('/sync-manager-src/events', syncCtrl.sseEvents);
 
 
 const SyncOutgoingRoutes = require('../src/sync-outgoing-document/route');

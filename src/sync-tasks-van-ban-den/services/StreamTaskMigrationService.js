@@ -1,18 +1,18 @@
 const logger = require('../../../utils/logger');
-const StreamTaskInIncrementalModel = require('../models/StreamTaskInIncrementalModel');
+const SyncTaskIncomingModel = require('../models/SyncTaskIncomingModel');
 
 /** Task sync service */
 class StreamTaskMigrationService {
   constructor() {
     this.model = null;
+    this.instanceId = `pid_${process.pid}`;
   }
 
   /** Initialize service */
   async initialize() {
     try {
       if (!this.model) {
-        this.model = new StreamTaskInIncrementalModel();
-        await this.model.initialize();
+        this.model = new SyncTaskIncomingModel();
       }
       logger.info('[StreamTaskMigrationService] Initialized');
     } catch (error) {
@@ -28,15 +28,18 @@ class StreamTaskMigrationService {
     }
   }
 
+  async ensureModelReady(jobId) {
+    await this.ensureInitialized();
+    await this.model.initialize(this.instanceId, jobId);
+  }
+
   /** Get task list from old DB and stage in new DB */
   async testGetList(jobId) {
     try {
-      await this.ensureInitialized();
+      await this.ensureModelReady(jobId);
+      const result = await this.model.runExtract();
 
-      // Thực hiện fetch + stage
-      const result = await this.model.getList(null, jobId);
-
-      logger.info(`[StreamTaskMigrationService.testGetList] Result:`, result);
+      logger.info('[StreamTaskMigrationService.testGetList] Result:', result);
 
       return {
         success: true,
@@ -49,7 +52,7 @@ class StreamTaskMigrationService {
         success: false,
         jobId,
         message: error.message,
-        error: error
+        error
       };
     }
   }
@@ -57,12 +60,10 @@ class StreamTaskMigrationService {
   /** Process one staged task (transaction: task + users + logs) */
   async testProcessOne(jobId) {
     try {
-      await this.ensureInitialized();
+      await this.ensureModelReady(jobId);
+      const result = await this.model.processOne();
 
-      // Lấy 1 task từ staging và xử lý
-      const result = await this.model.processOne(jobId);
-
-      logger.info(`[StreamTaskMigrationService.testProcessOne] Result:`, result);
+      logger.info('[StreamTaskMigrationService.testProcessOne] Result:', result);
 
       return {
         success: true,
@@ -75,22 +76,19 @@ class StreamTaskMigrationService {
         success: false,
         jobId,
         message: error.message,
-        error: error
+        error
       };
     }
   }
 
-  /** Process all staged tasks: fetch → stage → process with transaction → cleanup */
+  /** Process all staged tasks: fetch -> stage -> process with transaction -> cleanup */
   async processAllAsync(jobId) {
     try {
-      await this.ensureInitialized();
+      await this.ensureModelReady(jobId);
 
       logger.info(`[StreamTaskMigrationService.processAllAsync] Starting job ${jobId}`);
-
-      // Delegate to model
-      const result = await this.model.processAllAsync(jobId);
-
-      logger.info(`[StreamTaskMigrationService.processAllAsync] Completed:`, result);
+      const result = await this.model.run();
+      logger.info('[StreamTaskMigrationService.processAllAsync] Completed:', result);
 
       return {
         success: true,
@@ -103,7 +101,7 @@ class StreamTaskMigrationService {
         success: false,
         jobId,
         message: error.message,
-        error: error
+        error
       };
     }
   }
@@ -111,14 +109,13 @@ class StreamTaskMigrationService {
   /** Get sync stats for job (pending count, status, etc) */
   async getSyncStats(jobId) {
     try {
-      await this.ensureInitialized();
-
-      const state = await this.model.getSyncJobState(jobId);
+      await this.ensureModelReady(jobId);
+      const state = await this.model.getProgress();
 
       return {
         success: true,
         jobId,
-        stats: state
+        stats: state?.stats || state
       };
     } catch (error) {
       logger.error('[StreamTaskMigrationService.getSyncStats]', error);
@@ -126,7 +123,7 @@ class StreamTaskMigrationService {
         success: false,
         jobId,
         message: error.message,
-        error: error
+        error
       };
     }
   }
@@ -134,10 +131,8 @@ class StreamTaskMigrationService {
   /** Reset sync job: cleanup staging & state */
   async resetSync(jobId) {
     try {
-      await this.ensureInitialized();
-
-      // Cleanup staging tables
-      const taskCleanup = await this.model.cleanupStagingTable();
+      await this.ensureModelReady(jobId);
+      const taskCleanup = await this.model.cleanupStaging();
 
       logger.info(`[StreamTaskMigrationService.resetSync] Job ${jobId} reset:`, taskCleanup);
 
@@ -153,7 +148,7 @@ class StreamTaskMigrationService {
         success: false,
         jobId,
         message: error.message,
-        error: error
+        error
       };
     }
   }

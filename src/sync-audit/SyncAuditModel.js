@@ -5,6 +5,7 @@ const MigrationHelper = require("../helpers/MigrationHelper");
 const ReceiverParserService = require("./ReceiverParserService");
 const { getStatusCodeByAction } = require('../config/action-mapping');
 const sql = require("mssql");
+const { isRetryableSqlError } = require("../../utils/dbUtils");
 
 // Định nghĩa các hằng số cho danh mục (Category) của văn bản đi
 const CATEGORY_RELEASE_DV = "Phát hành văn bản ĐV";
@@ -611,7 +612,10 @@ class SyncAuditModel extends BaseModel {
           }
           results.push({ audit, id: auditId });
 
+          /*
           // 5c. Cập nhật status_code cho bảng văn bản tương ứng
+          // NOTE: Tắt ở bước này để tránh Deadlock khi xử lý hàng loạt bước luân chuyển.
+          // Trạng thái sẽ được UpsertHandler cập nhật một lần duy nhất ở cuối.
           if (audit.status_code && audit.document_id) {
             await this._updateDocumentStatusCode(
               audit.document_id,
@@ -620,11 +624,18 @@ class SyncAuditModel extends BaseModel {
               transaction
             );
           }
+          */
         } catch (auditErr) {
+          // BẮT BUỘC: Nếu là lỗi Deadlock hoặc các lỗi có thể retry, phải throw ra ngoài
+          // để withTransactionRetry ở vòng ngoài có thể thực hiện thử lại.
+          if (isRetryableSqlError(auditErr)) {
+            throw auditErr;
+          }
+
           logger.warn(
             `[AuditSyncModel.processSingleRecord] single audit failed table=${this.oldDbTable} ID=${rawRecord?.ID}: ${auditErr.message}`
           );
-          // Không throw lỗi ở đây để các bản ghi audit khác trong cùng văn bản vẫn được xử lý
+          // Không throw lỗi thường ở đây để các bản ghi audit khác trong cùng văn bản vẫn được xử lý
         }
       }
 
@@ -749,7 +760,7 @@ class SyncAuditModel extends BaseModel {
         @action,
         @stage_status,
         @created_at,
-        GETDATE(), -- Tự động lấy ngày giờ hiện tại
+        @updated_at, -- Sử dụng thời điểm sự kiện thay vì GETDATE()
         @type_document,
         @table_backups,
         @status_code,
@@ -785,6 +796,7 @@ class SyncAuditModel extends BaseModel {
         ),
         stage_status: data.stage_status ?? null,
         created_at: data.time ?? new Date(),
+        updated_at: data.time ?? new Date(),
         type_document: data.type_document, // Logic đã được xử lý ở _mapSingleRecord
         table_backups:
           data.table_backups ||
@@ -1141,9 +1153,8 @@ class SyncAuditModel extends BaseModel {
     const tableName = isIncoming ? 'incomming_documents' : 'outgoing_documents';
     const idColumn = 'document_id';
     const query = `
-      UPDATE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${tableName}  WITH (ROWLOCK) 
-      SET status_code = @status_code,
-          updated_at = GETDATE()
+      UPDATE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${tableName} WITH (ROWLOCK, UPDLOCK) 
+      SET status_code = @status_code
       WHERE ${idColumn} = @id
         AND (
           status_code IS NULL

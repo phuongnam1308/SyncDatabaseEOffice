@@ -36,7 +36,7 @@ function detectFileType(buffer) {
   if (b[0] === 0x52 && b[1] === 0x61 && b[2] === 0x72 && b[3] === 0x21) return { mime: 'application/x-rar-compressed', ext: 'rar' };
   return { mime: 'application/octet-stream', ext: 'bin' };
 }
-const DEFAULT_SYNC_TIME = '9999-12-31T23:59:59.999Z';
+const DEFAULT_SYNC_TIME = '2999-12-31T23:59:59.999Z';
 
 // Lọc bản ghi cũ hơn ngưỡng này. Đặt trong .env với key SYNC_MIN_DATE.
 // Để lấy toàn bộ lịch sử, hãy đặt thành: 1753-01-01T00:00:00.000Z
@@ -818,9 +818,16 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
             processing_started_at = NULL,
             processing_heartbeat_at = NULL
         WHERE MigrateFlg = 2
-          AND processing_started_at < DATEADD(MINUTE, -@staleMinutes, SYSUTCDATETIME())
-          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
-          AND (${this.partitionColumn} <= @endDate   OR @endDate IS NULL)
+          AND (
+            ${this.partitionColumn} IS NULL
+            OR (${this.partitionColumn} >= @startDate AND @startDate IS NOT NULL)
+            OR (@startDate IS NULL AND ${this.partitionColumn} IS NOT NULL)
+          )
+          AND (
+            ${this.partitionColumn} IS NULL
+            OR (${this.partitionColumn} <= @endDate AND @endDate IS NOT NULL)
+            OR (@endDate IS NULL AND ${this.partitionColumn} IS NOT NULL)
+          )
       `, {
         staleMinutes,
         startDate: envStartDate,
@@ -1016,6 +1023,9 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         });
       }, HEARTBEAT_INTERVAL_MS);
 
+      // Tải files trước khi mở transaction để tránh giữ lock lâu
+      const preparedFiles = await this.prepareFilesFromSharePoint(rowData);
+
       const result = await dbUtils.withTransactionRetry(this.newPool, async (transaction) => {
         const res = await this.processRowData(rowData, { transaction, preparedFiles });
 
@@ -1156,7 +1166,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       const query = `
       WITH CTE AS (
         SELECT TOP (1) *
-        FROM ${stagingTableRef} WITH (UPDLOCK, ROWLOCK, READPAST)
+        FROM ${stagingTableRef} WITH (UPDLOCK, ROWLOCK)
         WHERE ISNULL(MigrateFlg, 0) = 0
           AND ISNULL(MigrateErrFlg, 0) = 0
           -- ★ Với DATE type đúng: lọc trực tiếp, NULL vẫn được xử lý

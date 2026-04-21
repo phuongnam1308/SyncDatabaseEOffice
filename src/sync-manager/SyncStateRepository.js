@@ -7,6 +7,7 @@ class SyncStateRepository extends BaseModel {
     this.tblModels = 'sync_models';
     this.tblJobs = 'sync_jobs';
     this.tblErrors = 'sync_job_errors';
+    this.tblSettings = 'sync_settings';
   }
 
   /**
@@ -37,6 +38,25 @@ class SyncStateRepository extends BaseModel {
         `;
         await super.queryNewDb(checkQuery);
       }
+
+      // Initialize sync_settings table
+      const checkSettingsQuery = `
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '${this.tblSettings}')
+        BEGIN
+          CREATE TABLE ${this.tblSettings} (
+            setting_key NVARCHAR(100) NOT NULL,
+            instance_id NVARCHAR(50) NOT NULL DEFAULT 'default',
+            setting_value NVARCHAR(500),
+            updated_at DATETIME2 DEFAULT SYSDATETIME(),
+            CONSTRAINT PK_sync_settings PRIMARY KEY (setting_key, instance_id)
+          );
+          
+          -- Bật mặc định: Không skip
+          INSERT INTO ${this.tblSettings} (setting_key, instance_id, setting_value) 
+          VALUES ('SKIP_PULL_FROM_OLD', 'default', 'false');
+        END
+      `;
+      await super.queryNewDb(checkSettingsQuery);
     } catch (err) {
       logger.warn(`[SyncStateRepository] Alter tables failed (non-critical): ${err.message}`);
     }
@@ -90,7 +110,21 @@ class SyncStateRepository extends BaseModel {
       `;
       const errors = await this.queryNewDb(errorsQuery, { instanceId });
 
-      // 4. Format dữ liệu giống cấu trúc JSON cũ để Dashboard HTML hoạt động không cần sửa
+      // 4. Lấy cấu hình Global
+      const settingsQuery = `
+        SELECT setting_key, setting_value 
+        FROM ${this.tblSettings} 
+        WHERE instance_id = @instanceId OR instance_id = 'default'
+      `;
+      const settingsRows = await this.queryNewDb(settingsQuery, { instanceId });
+      const settings = {};
+      if (settingsRows && Array.isArray(settingsRows)) {
+        settingsRows.forEach(row => {
+          settings[row.setting_key] = row.setting_value === 'true';
+        });
+      }
+
+      // 5. Format dữ liệu giống cấu trúc JSON cũ để Dashboard HTML hoạt động không cần sửa
       const entities = {};
       const jobsMap = {};
       const syncLogs = {};  // THÊM: syncLogs giống jobsMap
@@ -156,6 +190,7 @@ class SyncStateRepository extends BaseModel {
             totalSynced: m.total_synced || 0,
             lastRun: m.last_run,
             activeJobId: m.active_job_id,
+            instanceId: m.instance_id,
             error: m.last_error,
             // Các trường tính toán cho dashboard
             currentJobId: currentJob ? currentJob.jobId : null,
@@ -173,7 +208,8 @@ class SyncStateRepository extends BaseModel {
         jobs: jobsMap,
         syncLogs,           // QUAN TRỌNG: thiếu cái này là không hiển thị tiến trình
         isRunning,
-        registeredCount: models?.length || 0
+        registeredCount: models?.length || 0,
+        settings            // Cấu hình Global
       };
 
     } catch (error) {
@@ -184,7 +220,8 @@ class SyncStateRepository extends BaseModel {
         jobs: {},
         syncLogs: {},
         isRunning: false,
-        registeredCount: 0
+        registeredCount: 0,
+        settings: {}
       };
     }
   }
@@ -300,6 +337,54 @@ class SyncStateRepository extends BaseModel {
       logger.info(`[SyncStateRepository] Đã đổi tên model từ "${oldName}" sang "${newName}"`);
     } catch (error) {
       logger.error(`[SyncStateRepository] Lỗi khi đổi tên model ${oldName}:`, error);
+    }
+  }
+
+  /**
+   * Lấy tất cả cài đặt toàn cục
+   */
+  async getSettings(instanceId = 'default') {
+    try {
+      const query = `
+        SELECT setting_key, setting_value 
+        FROM ${this.tblSettings} 
+        WHERE instance_id = @instanceId OR instance_id = 'default'
+      `;
+      const rows = await this.queryNewDb(query, { instanceId });
+      const settings = {};
+      if (rows && Array.isArray(rows)) {
+        rows.forEach(row => {
+          settings[row.setting_key] = row.setting_value === 'true' ? true : (row.setting_value === 'false' ? false : row.setting_value);
+        });
+      }
+      return settings;
+    } catch (error) {
+      logger.error(`[SyncStateRepository] Lỗi khi lấy settings:`, error);
+      return {};
+    }
+  }
+
+  /**
+   * Cập nhật một cài đặt toàn cục
+   */
+  async updateSetting(key, value, instanceId = 'default') {
+    try {
+      const stringValue = String(value);
+      const query = `
+        MERGE ${this.tblSettings} AS target
+        USING (SELECT @key AS setting_key, @instanceId AS instance_id) AS source
+        ON (target.setting_key = source.setting_key AND target.instance_id = source.instance_id)
+        WHEN MATCHED THEN 
+            UPDATE SET setting_value = @value, updated_at = SYSDATETIME()
+        WHEN NOT MATCHED THEN   
+            INSERT (setting_key, instance_id, setting_value, updated_at)
+            VALUES (@key, @instanceId, @value, SYSDATETIME());
+      `;
+      await this.queryNewDb(query, { key, value: stringValue, instanceId });
+      logger.info(`[SyncStateRepository] Đã cập nhật setting ${key} = ${stringValue}`);
+    } catch (error) {
+      logger.error(`[SyncStateRepository] Lỗi khi cập nhật setting ${key}:`, error);
+      throw error;
     }
   }
 

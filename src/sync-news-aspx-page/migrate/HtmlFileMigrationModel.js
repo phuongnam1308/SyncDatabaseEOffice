@@ -469,7 +469,8 @@ class HtmlFileMigrationModel extends BaseModel {
     }
   }
 
-  async parseHtmlFile(filePath) {
+  async parseHtmlFile(filePath, syncJobId = null) {
+    this.syncJobId = syncJobId; // Store for use in findUserIdByNameOnly
     const html = fs.readFileSync(filePath, 'utf-8');
     const $ = cheerio.load(html, { decodeEntities: false });
     const slug = path.basename(filePath, '.aspx');
@@ -639,7 +640,11 @@ class HtmlFileMigrationModel extends BaseModel {
 
       try {
         authorCode = await this.helper.findUserCodeByName(authorName);
-        created_by = await this.helper.findUserIdByName(authorName);
+        // Use non-creating lookup with default fallback
+        created_by = await this.helper.findUserIdByNameOnly(authorName, {
+          syncJobId: this.syncJobId,
+          recordId: slug || authorName
+        });
       } catch (err) {}
     }
 

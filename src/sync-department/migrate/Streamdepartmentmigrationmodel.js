@@ -40,6 +40,8 @@ class StreamDepartmentMigrationModel extends BaseIncrementalSyncInterface {
             ALTER TABLE dbo.organization_units ADD table_backups NVARCHAR(MAX) NULL;
         IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'organization_units' AND COLUMN_NAME = 'Id_backups')
             ALTER TABLE dbo.organization_units ADD Id_backups NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'organization_units' AND COLUMN_NAME = 'tb_bak')
+            ALTER TABLE dbo.organization_units ADD tb_bak INT DEFAULT 0;
       `);
     } catch(e) {
       console.warn('[StreamDepartmentMigrationModel] Failed to auto-alter organization_units schema:', e.message);
@@ -374,7 +376,7 @@ class StreamDepartmentMigrationModel extends BaseIncrementalSyncInterface {
           address, description, display_order, status,
           mpath, parentId,
           created_at, updated_at,
-          Id_backups, table_backups
+          Id_backups, table_backups, tb_bak
         )
         VALUES (
           @id, @name, @code, NULL,
@@ -382,7 +384,7 @@ class StreamDepartmentMigrationModel extends BaseIncrementalSyncInterface {
           NULL, NULL, 0, 1,
           NULL, NULL,
           @created_at, @updated_at,
-          @Id_backups, @table_backups
+          @Id_backups, @table_backups, 1
         );
         SELECT 'inserted' AS action;
       END

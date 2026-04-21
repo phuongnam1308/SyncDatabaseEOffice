@@ -7,7 +7,7 @@ const { v4: uuidv4 } = require('uuid');
 const FileService = require('../../sync-file-copy/Fileuploadservice');
 const { downloadFile: spDownload } = require('../../sync-file-copy/SharePointAuthService');
 
-const DEFAULT_SYNC_TIME = '9999-12-31T23:59:59.999Z';
+const DEFAULT_SYNC_TIME = '2999-12-31T23:59:59.999Z';
 
 // Lọc bản ghi cũ hơn ngưỡng này. Đặt trong .env với key SYNC_MIN_DATE.
 // Ví dụ: SYNC_MIN_DATE=2026-01-01T00:00:00.000Z
@@ -659,8 +659,8 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
           ) AS __sync_id_num
         FROM ${this.oldDbSchema}.${this.oldDbTable}
         WHERE 1=1
-          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
-          AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
+          AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) >= @startDate OR @startDate IS NULL)
+          AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) <= @endDate OR @endDate IS NULL)
       )
       SELECT COUNT(1) AS total
       FROM source_rows
@@ -710,8 +710,8 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
           ) AS _sync_id_val
         FROM ${this.oldDbSchema}.${this.oldDbTable}
         WHERE 1=1
-          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
-          AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
+          AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) >= @startDate OR @startDate IS NULL)
+          AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) <= @endDate OR @endDate IS NULL)
       )
       SELECT * FROM (
         SELECT
@@ -726,14 +726,14 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
           ) AS __page_rn
         FROM source_rows
         WHERE (
-          __sync_time < @lastSyncTime
+          _sync_time_val < @lastSyncTime
           OR (
-            __sync_time = @lastSyncTime
-            AND ISNULL(__sync_id, 9223372036854775807) < @lastSyncId
+            _sync_time_val = @lastSyncTime
+            AND ISNULL(_sync_id_val, 9223372036854775807) < @lastSyncId
           )
         )
         -- Chỉ lấy bản ghi từ năm 2026 trở đi
-        AND __sync_time >= '${SYNC_MIN_DATE}'
+        AND _sync_time_val >= '${SYNC_MIN_DATE}'
       ) AS t
       WHERE __page_rn > @offset
       ${limit ? `AND __page_rn <= (@offset + @limit)` : ''}
@@ -857,8 +857,8 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
         UPDATE ${stagingTableRef}
         SET MigrateFlg = 0, MigrateErrMess = 'Reset from stale processing'
         WHERE MigrateFlg = 2
-          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
-          AND (${this.partitionColumn} <= @endDate   OR @endDate IS NULL)
+          AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) >= @startDate OR @startDate IS NULL)
+          AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) <= @endDate   OR @endDate IS NULL)
       `, {
         startDate: envStartDate,
         endDate: envEndDate
@@ -942,8 +942,8 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
         `SELECT COUNT(1) AS cnt FROM ${stagingTableRef}
          WHERE ISNULL(MigrateFlg, 0) = 0
            AND ISNULL(MigrateErrFlg, 0) = 0
-           AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
-           AND (${this.partitionColumn} <= @endDate   OR @endDate IS NULL)`,
+           AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) >= @startDate OR @startDate IS NULL)
+           AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) <= @endDate   OR @endDate IS NULL)`,
         {
           startDate: process.env.SYNC_START_DATE || null,
           endDate: process.env.SYNC_END_DATE || null
@@ -988,21 +988,23 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
     try {
       const stagingTableRef = this.getStagingTableRef();
       const query = `
-      WITH CTE AS (
-        SELECT TOP (1) *
-        FROM ${stagingTableRef} WITH (UPDLOCK, ROWLOCK)
+      ;WITH pick AS (
+        SELECT TOP (1) ID
+        FROM ${stagingTableRef} WITH (READPAST, UPDLOCK, ROWLOCK)
         WHERE ISNULL(MigrateFlg, 0) = 0
           AND ISNULL(MigrateErrFlg, 0) = 0
           -- Lọc theo cột nghiệp vụ để chia tải giữa các Worker
-          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
-          AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
+          AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) >= @startDate OR @startDate IS NULL)
+          AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) <= @endDate OR @endDate IS NULL)
         ORDER BY TRY_CONVERT(datetime2, Modified) DESC,
                  TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')) DESC
       )
-      UPDATE CTE
-      SET MigrateFlg = 2,
-          MigrateErrMess = 'Processing...'
+      UPDATE s WITH (ROWLOCK)
+      SET s.MigrateFlg = 2,
+          s.MigrateErrMess = 'Processing...'
       OUTPUT inserted.*
+      FROM ${stagingTableRef} s
+      INNER JOIN pick p ON p.ID = s.ID
       `;
 
       const rows = await this.queryNewDb(query, {
