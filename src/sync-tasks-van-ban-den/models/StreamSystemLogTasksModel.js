@@ -167,9 +167,7 @@ class StreamSystemLogTasksModel extends BaseIncrementalSyncInterface {
         TRY_CONVERT(datetime2, ${alias}.NgayTao, 121),
         TRY_CONVERT(datetime2, ${alias}.NgayTao, 103),
         TRY_CONVERT(datetime2, ${alias}.NgayTao, 105),
-        TRY_CONVERT(datetime2, ${alias}.NgayTao),
-        TRY_CONVERT(datetime2, ${alias}.Created),
-        TRY_CONVERT(datetime2, ${alias}.Modified)
+        TRY_CONVERT(datetime2, ${alias}.NgayTao)
       )
     `;
   }

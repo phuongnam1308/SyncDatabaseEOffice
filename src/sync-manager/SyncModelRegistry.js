@@ -227,7 +227,7 @@ class SyncModelRegistry {
    */
   async _initializeSingle(def, syncManagerService, syncStateRepository) {
     let { key, label, ModelClass } = def;
-    const instanceId = process.env.SYNC_INSTANCE_ID;
+    const instanceId = process.env.INSTANCE_ID || process.env.SYNC_INSTANCE_ID;
     const isPrimaryInstance = !instanceId || instanceId === '3021';
 
     // Các module hỗ trợ chạy song song (đa instance)

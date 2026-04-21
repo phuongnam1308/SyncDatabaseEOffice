@@ -60,7 +60,7 @@ const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 const RUNNING_STATUSES = new Set(['RUNNING', 'PAUSE_REQUESTED', 'RESUMING']);
 
 // Parallel processing config
-const SYNC_CONCURRENCY = Number(process.env.SYNC_CONCURRENCY || 3);
+const SYNC_CONCURRENCY = Number(process.env.SYNC_CONCURRENCY || 1);
 const INTERRUPTED_STATUSES = new Set(['RUNNING', 'PAUSE_REQUESTED', 'RESUMING']);
 
 class SyncManagerService {
@@ -71,7 +71,7 @@ class SyncManagerService {
 
     // State được khởi tạo rỗng, sau đó hydrate từ DB qua ensureStateLoaded().
     this.state = this.normalizeState(null);
-    this.instanceId = process.env.SYNC_INSTANCE_ID || 'default';
+    this.instanceId = process.env.INSTANCE_ID || process.env.SYNC_INSTANCE_ID || 'default';
     this._stateLoaded = false;
     this._stateLoadingPromise = null;
 
@@ -1005,14 +1005,22 @@ class SyncManagerService {
         this._dbUpdateJob(job);      // ghi DB (thêm mới)
         this._dbUpdateModel(job.modelName, modelState); // ghi DB model state
 
-        if (job.pauseRequested || jobFinishedEarly) {
+        if (job.pauseRequested) {
           logger.warn(
-            `[SyncManagerService][${job.modelName}] markJobPaused triggered (jobId=${job.jobId}, pauseRequested=${Boolean(job.pauseRequested)}, jobFinishedEarly=${Boolean(jobFinishedEarly)}, batchProcessed=${batchProcessed}, totalProcessed=${job.totalProcessed}, totalToSync=${job.totalToSync == null ? 'null' : Number(job.totalToSync)})`
+            `[SyncManagerService][${job.modelName}] markJobPaused triggered by pauseRequested (jobId=${job.jobId}, batchProcessed=${batchProcessed}, totalProcessed=${job.totalProcessed}, totalToSync=${job.totalToSync == null ? 'null' : Number(job.totalToSync)})`
           );
           this.markJobPaused(job);
           return;
         }
-        if (records.length < job.batchSize || jobFinishedEarly) break;
+
+        if (jobFinishedEarly) {
+          logger.warn(
+            `[SyncManagerService][${job.modelName}] processFn returned done=true; continue next fetch cycle (jobId=${job.jobId}, batchProcessed=${batchProcessed}, totalProcessed=${job.totalProcessed}, totalToSync=${job.totalToSync == null ? 'null' : Number(job.totalToSync)})`
+          );
+          continue;
+        }
+
+        if (records.length < job.batchSize) break;
       }
       this.completeJob(job);
     } catch (error) {
