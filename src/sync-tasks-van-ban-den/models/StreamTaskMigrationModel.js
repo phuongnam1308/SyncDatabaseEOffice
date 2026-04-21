@@ -481,7 +481,8 @@ class StreamTaskMigrationModel extends BaseModel {
     const taskStatus = mapTaskStatus(rawRecord.TrangThai);
     const typeTask = process.env.TASK_IN_TYPE_TASK_DEFAULT || 'form_doc';
     const progress = safeInt(rawRecord.Percent, null);
-    const parentRaw = this.helper.safeString(rawRecord.ParentId).trim() || null;
+    const parentCandidate = this.helper.safeString(rawRecord.ParentId).trim();
+    const parentRaw = (!parentCandidate || parentCandidate === '0') ? null : parentCandidate;
 
     const docLookup = await this.helper.findDocumentIdByOldId(
       rawRecord.VBId,

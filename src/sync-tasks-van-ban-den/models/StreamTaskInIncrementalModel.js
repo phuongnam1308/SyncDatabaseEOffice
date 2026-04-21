@@ -656,6 +656,10 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
    * Lấy danh sách bản ghi kèm phân trang.
    */
   async fetchListFromOldDb(lastSyncTime, lastSyncId = 0, limit = null, offset = 0) {
+    const t0 = Date.now();
+    logger.info(
+      `[StreamTaskIn][fetchList] start offset=${Number(offset || 0)} limit=${limit ? Number(limit) : 'ALL'} lastSyncTime=${lastSyncTime} lastSyncId=${Number(lastSyncId || 0)}`
+    );
     const syncTimeExpr = this.getSyncTimeExpression();
     const query = `
       ;WITH source_rows AS (
@@ -698,7 +702,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       ORDER BY __page_rn
     `;
 
-    return this.queryOldDb(query, {
+    const rows = await this.queryOldDb(query, {
       lastSyncTime,
       lastSyncId: Number(lastSyncId || 0),
       limit: limit ? Number(limit) : null,
@@ -706,6 +710,10 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       startDate: process.env.SYNC_START_DATE || null,
       endDate: process.env.SYNC_END_DATE || null
     });
+    logger.info(
+      `[StreamTaskIn][fetchList] done offset=${Number(offset || 0)} rows=${Array.isArray(rows) ? rows.length : 0} took=${Date.now() - t0}ms`
+    );
+    return rows;
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -737,8 +745,15 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     const nonIdColumns = columns.filter((column) => column !== 'ID');
     const safeNonIdColumns = nonIdColumns.map((column) => this.sanitizeColumnName(column));
     const stagingTableRef = this.getStagingTableRef();
+    const t0 = Date.now();
+    const progressStep = Number(process.env.STAGING_LOG_PROGRESS_EVERY || 100);
+    logger.info(
+      `[StreamTaskIn][syncOldToStaging] start rows=${rows.length} cols=${columns.length} firstId=${rows[0]?.ID ?? 'NA'} lastId=${rows[rows.length - 1]?.ID ?? 'NA'}`
+    );
 
+    let idx = 0;
     for (const row of rows) {
+      idx += 1;
       const rawId = row?.ID;
       if (rawId == null || String(rawId).trim() === '') {
         throw new Error('Row ID is required for staging');
@@ -754,22 +769,67 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
         .join(', ');
 
       const query = `
-        IF EXISTS (SELECT 1 FROM ${stagingTableRef} WHERE ID = @ID)
+        SET LOCK_TIMEOUT 8000;
+        ${nonIdColumns.length > 0
+          ? `
+        UPDATE tgt WITH (UPDLOCK, ROWLOCK)
+        SET ${updateClause}
+        FROM ${stagingTableRef} tgt
+        WHERE tgt.ID = @ID;
+        `
+          : `
+        UPDATE tgt WITH (UPDLOCK, ROWLOCK)
+        SET ID = ID
+        FROM ${stagingTableRef} tgt
+        WHERE tgt.ID = @ID;
+        `}
+
+        IF @@ROWCOUNT = 0
         BEGIN
-          ${nonIdColumns.length > 0
-          ? `UPDATE ${stagingTableRef} SET ${updateClause} WHERE ID = @ID;`
+          BEGIN TRY
+            INSERT INTO ${stagingTableRef} (${safeColumns.join(', ')})
+            VALUES (${columns.map((column) => `@${column}`).join(', ')});
+          END TRY
+          BEGIN CATCH
+            IF ERROR_NUMBER() IN (2601, 2627)
+            BEGIN
+              ${nonIdColumns.length > 0
+          ? `UPDATE tgt WITH (UPDLOCK, ROWLOCK)
+                   SET ${updateClause}
+                   FROM ${stagingTableRef} tgt
+                   WHERE tgt.ID = @ID;`
           : `SELECT 1 AS noop;`}
-        END
-        ELSE
-        BEGIN
-          INSERT INTO ${stagingTableRef} (${safeColumns.join(', ')})
-          VALUES (${columns.map((column) => `@${column}`).join(', ')});
+            END
+            ELSE
+            BEGIN
+              THROW;
+            END
+          END CATCH
         END
       `;
 
-      await this.queryNewDbTx(query, params, transaction);
+      try {
+        await withDeadlockRetry(
+          () => this.queryNewDbTx(query, params, transaction),
+          `syncOldToStaging id=${rawId}`
+        );
+      } catch (error) {
+        logger.error(
+          `[StreamTaskIn][syncOldToStaging] failed at index=${idx}/${rows.length} id=${rawId} err=${error.message}`
+        );
+        throw error;
+      }
+
+      if (idx === 1 || idx === rows.length || (progressStep > 0 && idx % progressStep === 0)) {
+        logger.info(
+          `[StreamTaskIn][syncOldToStaging] progress ${idx}/${rows.length} lastId=${rawId} elapsed=${Date.now() - t0}ms`
+        );
+      }
     }
 
+    logger.info(
+      `[StreamTaskIn][syncOldToStaging] done rows=${rows.length} took=${Date.now() - t0}ms`
+    );
     return { stagedCount: rows.length };
   }
 
@@ -789,28 +849,34 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       throw new Error('syncJobId is required');
     }
 
-    const STAGING_PARALLEL_BATCHES = Number(process.env.STAGING_PARALLEL_BATCHES || 3);
+    const STAGING_PARALLEL_BATCHES = Number(process.env.STAGING_PARALLEL_BATCHES || 1);
     const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
     const normalizedLastSyncId = Number(lastSyncId || 0);
 
-    const batchSize = Number(process.env.STAGING_FETCH_BATCH_SIZE || 2000);
+    const batchSize = Number(process.env.STAGING_FETCH_BATCH_SIZE || 100);
     const stagingTableRef = this.getStagingTableRef();
 
     const envStartDate = process.env.SYNC_START_DATE ? new Date(process.env.SYNC_START_DATE).toISOString() : null;
     const envEndDate = process.env.SYNC_END_DATE ? new Date(process.env.SYNC_END_DATE).toISOString() : null;
 
+    logger.info(
+      `[StreamTaskIn][count-input] lastSyncTime=${normalizedLastSyncTime}, lastSyncId=${normalizedLastSyncId}, startDate=${envStartDate || 'NULL'}, endDate=${envEndDate || 'NULL'}, syncMinDate=${SYNC_MIN_DATE}`
+    );
+
     // Cleanup stale records
     try {
-      await this.queryNewDb(`
-        UPDATE ${stagingTableRef}
-        SET MigrateFlg = 0, MigrateErrMess = 'Reset from stale processing'
-        WHERE MigrateFlg = 2
-          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
-          AND (${this.partitionColumn} <= @endDate   OR @endDate IS NULL)
-      `, {
-        startDate: envStartDate,
-        endDate: envEndDate
-      });
+      await withDeadlockRetry(async () => {
+        await this.queryNewDb(`
+          UPDATE ${stagingTableRef} WITH (READPAST, ROWLOCK)
+          SET MigrateFlg = 0, MigrateErrMess = 'Reset from stale processing'
+          WHERE MigrateFlg = 2
+            AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
+            AND (${this.partitionColumn} <= @endDate   OR @endDate IS NULL)
+        `, {
+          startDate: envStartDate,
+          endDate: envEndDate
+        });
+      }, 'cleanup stale task_sync');
     } catch (cleanupErr) {
       logger.warn(`[StreamTaskIn] Cleanup stale records failed: ${cleanupErr.message}`);
     }
@@ -818,6 +884,30 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     // 1. Đếm tổng và cập nhật Dashboard
     const totalCount = await this.countListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId);
     logger.info(`[StreamTaskIn] Tổng số bản ghi cần sync: ${totalCount} (LastTime: ${normalizedLastSyncTime}, LastId: ${normalizedLastSyncId})`);
+    logger.info(`[StreamTaskIn][count-source] TaskVBDen total_by_cursor=${totalCount}`);
+
+    try {
+      const stagingDiag = await this.queryNewDb(`
+        SELECT
+          COUNT(1) AS total_rows,
+          SUM(CASE WHEN ISNULL(MigrateFlg, 0) = 0 THEN 1 ELSE 0 END) AS pending_0,
+          SUM(CASE WHEN ISNULL(MigrateFlg, 0) = 1 THEN 1 ELSE 0 END) AS done_1,
+          SUM(CASE WHEN ISNULL(MigrateFlg, 0) = 2 THEN 1 ELSE 0 END) AS processing_2,
+          SUM(CASE WHEN ISNULL(MigrateErrFlg, 0) = 1 THEN 1 ELSE 0 END) AS error_rows
+        FROM ${stagingTableRef}
+        WHERE (TRY_CONVERT(datetime2, ${this.partitionColumn}) >= @startDate OR @startDate IS NULL)
+          AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) <= @endDate OR @endDate IS NULL)
+      `, {
+        startDate: envStartDate,
+        endDate: envEndDate
+      });
+      const d = stagingDiag?.[0] || {};
+      logger.info(
+        `[StreamTaskIn][count-staging] total_rows=${Number(d.total_rows || 0)}, pending_0=${Number(d.pending_0 || 0)}, done_1=${Number(d.done_1 || 0)}, processing_2=${Number(d.processing_2 || 0)}, error_rows=${Number(d.error_rows || 0)}`
+      );
+    } catch (diagErr) {
+      logger.warn(`[StreamTaskIn][count-staging] failed: ${diagErr.message}`);
+    }
 
     await this.queryNewDb(`UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`, {
       total: totalCount,
@@ -832,17 +922,24 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     // Helper for parallel fetching
     const fetchAndStage = async (iteration) => {
       const begin = iteration * batchSize;
+      const tBatch = Date.now();
+      logger.info(`[StreamTaskIn][stage-batch] start iter=${iteration + 1}/${numIterations} offset=${begin} batchSize=${batchSize}`);
       const rows = await this.fetchListFromOldDb(
         normalizedLastSyncTime,
         normalizedLastSyncId,
         batchSize,
         begin
       );
-      if (!rows || rows.length === 0) return { rowsCount: 0, stagedCount: 0 };
+      if (!rows || rows.length === 0) {
+        logger.info(`[StreamTaskIn][stage-batch] empty iter=${iteration + 1}/${numIterations} offset=${begin} took=${Date.now() - tBatch}ms`);
+        return { rowsCount: 0, stagedCount: 0 };
+      }
 
-      const stageResult = await dbUtils.withTransactionRetry(this.newPool, async (transaction) => {
-        return await this.syncOldToStaging(rows, { transaction });
-      }, { maxRetries: 5 });
+      // Keep each staging statement short (autocommit) to reduce lock contention.
+      const stageResult = await this.syncOldToStaging(rows);
+      logger.info(
+        `[StreamTaskIn][stage-batch] done iter=${iteration + 1}/${numIterations} rows=${rows.length} staged=${Number(stageResult?.stagedCount || 0)} took=${Date.now() - tBatch}ms`
+      );
 
       return { rowsCount: rows.length, stagedCount: Number(stageResult?.stagedCount || 0), lastRow: rows[rows.length - 1] };
     };
@@ -953,27 +1050,34 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     try {
       const stagingTableRef = this.getStagingTableRef();
       const query = `
-      WITH CTE AS (
-        SELECT TOP (1) *
-        FROM ${stagingTableRef} WITH (UPDLOCK, ROWLOCK)
+      ;WITH pick AS (
+        SELECT TOP (1) ID
+        FROM ${stagingTableRef} WITH (READPAST, UPDLOCK, ROWLOCK)
         WHERE ISNULL(MigrateFlg, 0) = 0
-          -- Lọc theo cột nghiệp vụ để chia tải giữa các Worker
           AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) >= @startDate OR @startDate IS NULL)
           AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) <= @endDate OR @endDate IS NULL)
         ORDER BY TRY_CONVERT(datetime2, Modified) DESC,
                  TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(ID)), '')) DESC
       )
-      UPDATE CTE
-      SET MigrateFlg = 2,
-          MigrateErrMess = 'Processing...'
+      UPDATE s WITH (ROWLOCK)
+      SET s.MigrateFlg = 2,
+          s.MigrateErrMess = 'Processing...'
       OUTPUT inserted.*
+      FROM ${stagingTableRef} s
+      INNER JOIN pick p ON p.ID = s.ID
       `;
 
       const rows = await this.queryNewDb(query, {
         startDate: process.env.SYNC_START_DATE || null,
         endDate: process.env.SYNC_END_DATE || null
       });
-      return rows?.length ? rows[0] : null;
+      if (!rows || rows.length === 0) {
+        logger.info(
+          `[StreamTaskIn.fetchOneFromStaging] No row claimed (MigrateFlg=0 not found/unavailable). range=${process.env.SYNC_START_DATE || 'ALL'}→${process.env.SYNC_END_DATE || 'ALL'}`
+        );
+        return null;
+      }
+      return rows[0];
     } catch (error) {
       logger.error(`[StreamTaskIn.fetchOneFromStaging] Failed: ${error.message}`);
       throw error;
@@ -1342,6 +1446,26 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       taskResult?.createdBy ||
       stagingRow.CreatedBy ||
       null;
+
+    // ── 2b. Workitems (only when process_status = 2: Đang thực hiện) ─────────
+    try {
+      const workitemsResult = await this.syncWorkItemsForInProgressTask(
+        {
+          newTaskId,
+          processStatus: taskResult?.process_status || stagingRow?.TrangThai || null,
+          createdAt
+        },
+        transaction
+      );
+      if (workitemsResult?.success) {
+        totalAffected += Number(workitemsResult.inserted || 0);
+      }
+    } catch (workitemErr) {
+      logger.warn(
+        `[StreamTaskInIncrementalModel] Workitems sync failed (non-critical) task_id=${newTaskId}: ${workitemErr.message}`,
+        { errorStack: workitemErr.stack }
+      );
+    }
     // ── 3. System log ─────────────────────────────────────────────
     try {
       const oldDocumentId = stagingRow?.VBId ? String(stagingRow.VBId).trim() : null;
@@ -1428,6 +1552,131 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       newTaskId,
       affected: Math.max(1, totalAffected)
     };
+  }
+
+  _generateWorkitemId(prefix = 'wi') {
+    const ts = Date.now();
+    const rand = Math.floor(Math.random() * 10000);
+    return `${prefix}_${ts}${rand}`;
+  }
+
+  _isInProgressStatus(value) {
+    if (value === null || value === undefined) return false;
+    const raw = String(value).trim();
+    if (!raw) return false;
+    const numeric = Number(raw);
+    if (!Number.isNaN(numeric) && numeric === 2) return true;
+    const normalized = raw
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/đ/g, 'd')
+      .replace(/Đ/g, 'D')
+      .toLowerCase();
+    return normalized.includes('dang thuc hien');
+  }
+
+  async _insertWorkitemIfMissing(payload, transaction) {
+    const exists = await this.queryNewDbTx(
+      `
+        SELECT TOP 1 id
+        FROM ${this.newDbName}.dbo.workitems WITH (READPAST)
+        WHERE document_id = @documentId
+          AND node_id = @nodeId
+          AND role = @role
+          AND assignee_user_id = @assigneeUserId
+          AND state = 'open'
+      `,
+      {
+        documentId: payload.document_id,
+        nodeId: payload.node_id,
+        role: payload.role,
+        assigneeUserId: payload.assignee_user_id
+      },
+      transaction
+    );
+    if (exists?.length) {
+      return { inserted: 0, id: exists[0].id };
+    }
+
+    await this.queryNewDbTx(
+      `
+        INSERT INTO ${this.newDbName}.dbo.workitems
+        (id, document_id, node_id, role, assignee_user_id, node_type, state, created_at, bpmn_version, action_code)
+        VALUES
+        (@id, @document_id, @node_id, @role, @assignee_user_id, @node_type, @state, @created_at, @bpmn_version, @action_code)
+      `,
+      payload,
+      transaction
+    );
+    return { inserted: 1, id: payload.id };
+  }
+
+  async syncWorkItemsForInProgressTask({ newTaskId, processStatus, createdAt }, transaction) {
+    if (!this._isInProgressStatus(processStatus)) {
+      return { success: true, inserted: 0, skipped: true };
+    }
+
+    const users = await this.queryNewDbTx(
+      `
+        SELECT process_id, role
+        FROM ${this.newDbName}.dbo.task_users WITH (READPAST)
+        WHERE task_id = @taskId
+          AND role IN ('assigner', 'supporter')
+      `,
+      { taskId: Number(newTaskId) },
+      transaction
+    );
+
+    if (!Array.isArray(users) || users.length === 0) {
+      return { success: true, inserted: 0, skipped: true };
+    }
+
+    const owner = users.find((u) => String(u.role || '').toLowerCase() === 'assigner');
+    const supporters = users.filter((u) => String(u.role || '').toLowerCase() === 'supporter');
+    const docId = String(newTaskId);
+    const ts = createdAt || new Date().toISOString();
+
+    let inserted = 0;
+    if (owner?.process_id) {
+      const res = await this._insertWorkitemIfMissing(
+        {
+          id: this._generateWorkitemId('wi'),
+          document_id: docId,
+          node_id: 'Gateway_1ev9iva',
+          role: 'NGUOI_CHU_TRI',
+          assignee_user_id: String(owner.process_id),
+          node_type: 'bpmn:ExclusiveGateway',
+          state: 'open',
+          created_at: ts,
+          bpmn_version: 'TaskDocument',
+          action_code: null
+        },
+        transaction
+      );
+      inserted += Number(res.inserted || 0);
+    }
+
+    for (const supporter of supporters) {
+      if (!supporter?.process_id) continue;
+      const res = await this._insertWorkitemIfMissing(
+        {
+          id: this._generateWorkitemId('wi_sup'),
+          document_id: docId,
+          node_id: 'Activity_0alxes6',
+          role: 'NGUOI_PHOI_HOP',
+          assignee_user_id: String(supporter.process_id),
+          node_type: 'bpmn:UserTask',
+          state: 'open',
+          created_at: ts,
+          bpmn_version: 'TaskDocument',
+          action_code: null
+        },
+        transaction
+      );
+      inserted += Number(res.inserted || 0);
+    }
+
+    return { success: true, inserted };
   }
 }
 

@@ -255,7 +255,7 @@ class SyncModelRegistry {
       await instance.initialize();
 
       const handler = new SyncHandlerModel(instance);
-      
+
       // [QUY TRÌNH SỬA LỖI] Đổi tên key kỹ thuật thành Label Tiếng Việt trong DB nếu tồn tại
       // CHỈ thực hiện rename nếu không phải chạy đa instance (để tránh tranh chấp record)
       if (syncStateRepository && !instanceId) {
