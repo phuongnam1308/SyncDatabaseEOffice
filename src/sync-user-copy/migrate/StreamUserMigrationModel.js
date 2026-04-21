@@ -980,7 +980,8 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
         @existingId = id,
         @existingUpdatedAt = updated_at
       FROM ${tableRef}
-      WHERE username = @username;
+      WHERE (username = @username AND @username IS NOT NULL AND @username <> '')
+         OR (id_user_bak = @id_user_bak AND @id_user_bak IS NOT NULL AND @id_user_bak <> '');
 
       IF @existingId IS NOT NULL
       BEGIN

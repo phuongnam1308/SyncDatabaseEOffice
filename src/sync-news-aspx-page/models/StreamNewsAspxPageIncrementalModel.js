@@ -1176,7 +1176,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
     if (isNewsArticle) {
       logger.info(`[Parser Hook] Bắt đầu phân giải nội dung file: ${localPath}`);
       try {
-        parsedData = await this.htmlParser.parseHtmlFile(localPath);
+        parsedData = await this.htmlParser.parseHtmlFile(localPath, syncJobId);
         if (parsedData) {
           logger.info(
             `[Parser Hook] Phân giải thành công. Tiêu đề: "${parsedData.title}" | Chủ đề: "${parsedData.topic}"`,
