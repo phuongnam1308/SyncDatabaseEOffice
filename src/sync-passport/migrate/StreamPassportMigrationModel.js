@@ -29,6 +29,10 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
     this.newTableSync = 'passport_borrow_request_sync_staging';
     this.helper = new MigrationHelper(this.queryNewDbTx.bind(this), this.queryOldDb.bind(this));
     this.requiredRoles = requiredRoles;
+
+    // Multi-DB List Discovery
+    this.listIdCache = {}; // { dbName: [listId1, listId2] }
+    this.canonicalListTitle = null; 
   }
 
   /**
@@ -135,6 +139,7 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
         { name: 'updated_by',                 type: 'NVARCHAR(100)' },
         { name: 'tb_bak',                     type: 'INT',           default: 0 }, // 0 = Dữ liệu hệ thống mới, 1 = Dữ liệu migrate từ SharePoint
         { name: 'sharepoint_item_id',         type: 'NVARCHAR(255)', default: null },
+        { name: 'source_db',                  type: 'NVARCHAR(255)', default: null },
       ];
 
       for (const col of extraCols) {
@@ -160,10 +165,13 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
         await this.queryNewDb(query);
       }
 
-      // Index cho sharepoint_item_id
+      // Unique Index cho sharepoint_item_id + source_db
+      const dropIdxQuery = `IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_pbr_sharepoint_item_id' AND object_id = OBJECT_ID('${db}.${schema}.passport_borrow_requests')) DROP INDEX IX_pbr_sharepoint_item_id ON ${tableRef};`;
+      await this.queryNewDb(dropIdxQuery);
+
       const idxQuery = `
-      IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_pbr_sharepoint_item_id' AND object_id = OBJECT_ID('${db}.${schema}.passport_borrow_requests'))
-          CREATE INDEX IX_pbr_sharepoint_item_id ON ${tableRef}(sharepoint_item_id);
+      IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_pbr_sharepoint_item_source' AND object_id = OBJECT_ID('${db}.${schema}.passport_borrow_requests'))
+          CREATE UNIQUE INDEX IX_pbr_sharepoint_item_source ON ${tableRef}(sharepoint_item_id, source_db) WHERE sharepoint_item_id IS NOT NULL AND source_db IS NOT NULL;
       `;
       await this.queryNewDb(idxQuery);
       logger.info(`[StreamPassportMigrationModel] [ensurePassportBorrowRequestsColumnsExist] OK`);
@@ -189,9 +197,11 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
               [SY_SyncId] INT IDENTITY(1,1) PRIMARY KEY,
               [__sync_time] DATETIME2 NULL,
               [__sync_id_num] BIGINT NULL,
-              [ID] BIGINT NOT NULL
+              [ID] BIGINT NOT NULL,
+              [source_db] NVARCHAR(255) NULL
           );
-          CREATE UNIQUE INDEX IX_${table}_ID ON ${stagingTableRef}([ID]);
+          -- Note: We use a composite index for multi-DB support
+          CREATE UNIQUE INDEX IX_${table}_ID_Source ON ${stagingTableRef}([ID], [source_db]);
       END
       `;
       await this.queryNewDb(createQuery);
@@ -233,6 +243,7 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
         { name: 'int1',     type: 'INT' },
         { name: 'int2',     type: 'INT' },
         { name: 'tb_bak',   type: 'INT' },  // 1 = đồng bộ từ SharePoint
+        { name: 'source_db', type: 'NVARCHAR(255)' }, // Phân biệt site collection
         // ★ Staging flags — dùng cho cơ chế claim/process chuẩn
         { name: 'MigrateFlg',     type: 'INT',          default: '0' },  // 0=chưa xử lý, 2=đang xử lý, 1=thành công
         { name: 'MigrateErrFlg',  type: 'INT',          default: '0' },  // 1=lỗi xử lý
@@ -248,6 +259,19 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
         `;
         await this.queryNewDb(alterQuery);
       }
+
+      // Đảm bảo index tổng hợp tồn tại (Migration từ bản cũ chỉ có [ID])
+      const indexCheckQuery = `
+      IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${table}_ID' AND object_id = OBJECT_ID('${stagingTableRef}'))
+      BEGIN
+          DROP INDEX IX_${table}_ID ON ${stagingTableRef};
+      END
+      IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${table}_ID_Source' AND object_id = OBJECT_ID('${stagingTableRef}'))
+      BEGIN
+          CREATE UNIQUE INDEX IX_${table}_ID_Source ON ${stagingTableRef}([ID], [source_db]);
+      END
+      `;
+      await this.queryNewDb(indexCheckQuery);
 
       logger.info(`[StreamPassportMigrationModel] [ensureStagingTableExists] OK: ${stagingTableRef} is ready`);
     } catch (err) {
@@ -712,34 +736,139 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
     return Number(aId || 0) > Number(bId || 0);
   }
 
+  /**
+   * Giải quyết List IDs cho một database cụ thể.
+   * Nếu chưa có title mẫu, sẽ lấy từ reference DB (khkd) bằng listId đầu tiên trong mapping.
+   */
+  async resolveListIdsForDb(dbName) {
+    if (this.listIdCache[dbName]) return this.listIdCache[dbName];
+
+    const referenceIds = this.oldConfig.listIds || [];
+
+    // 1. Lấy Title mẫu từ reference DB (khkd) nếu chưa có
+    if (!this.canonicalListTitle) {
+      const refDb = this.oldDbName; // 'WSS_Content_eoffice_khkd'
+      const refId = referenceIds[0];
+      const titleQuery = `SELECT TOP 1 tp_Title FROM [${refDb}].[dbo].[AllLists] WHERE tp_ID = @refId`;
+      try {
+        const rows = await this.queryOldDb(titleQuery, { refId });
+        if (rows?.length) {
+          this.canonicalListTitle = rows[0].tp_Title;
+          logger.info(`[StreamPassportMigrationModel] Canonical List Title discovered from reference DB: "${this.canonicalListTitle}"`);
+        }
+      } catch (err) {
+        logger.error(`[StreamPassportMigrationModel] Failed to discover canonical title from ${refDb}: ${err.message}`);
+      }
+    }
+
+    // 2. Tìm List IDs trong target DB theo Title (ưu tiên Exact Match)
+    let discoveredIds = [];
+    if (this.canonicalListTitle) {
+      const discoveryQuery = `SELECT tp_ID FROM [${dbName}].[dbo].[AllLists] WHERE tp_Title = @title AND tp_DeleteTransactionId = 0x0`;
+      try {
+        const rows = await this.queryOldDb(discoveryQuery, { title: this.canonicalListTitle });
+        discoveredIds = rows.map(r => String(r.tp_ID).toUpperCase());
+      } catch (err) {
+        logger.error(`[StreamPassportMigrationModel] discoveryQuery failed for DB ${dbName}: ${err.message}`);
+      }
+    }
+
+    // 3. Nếu chưa thấy, thử tìm theo từ khóa đặc thù cho Hộ chiếu
+    if (discoveredIds.length === 0) {
+      const keywords = ['Hộ chiếu', 'Quản lý hộ chiếu'];
+      try {
+        const patterns = keywords.map(k => `tp_Title LIKE N'%${k}%'`).join(' OR ');
+        const likeQuery = `
+          SELECT tp_ID, tp_Title 
+          FROM [${dbName}].[dbo].[AllLists] 
+          WHERE (${patterns}) 
+          AND tp_DeleteTransactionId = 0x0
+          AND tp_Title NOT LIKE N'%Đính kèm%'
+          AND tp_Title NOT LIKE N'%Văn bản%'
+          AND tp_Title NOT LIKE N'%Tài liệu%'
+        `;
+        
+        const rows = await this.queryOldDb(likeQuery);
+        if (rows?.length) {
+          discoveredIds = rows.map(r => String(r.tp_ID).toUpperCase());
+          logger.info(`[StreamPassportMigrationModel] [${dbName}] Found potential lists: ${rows.map(r => r.tp_Title).join(', ')}`);
+        }
+      } catch (err) {
+        logger.error(`[StreamPassportMigrationModel] likeQuery failed for DB ${dbName}: ${err.message}`);
+      }
+    }
+
+    // 4. Nếu vẫn chưa thấy, LOG TOÀN BỘ LIST TITLE để debug
+    if (discoveredIds.length === 0) {
+      try {
+        const allListsQuery = `SELECT TOP 20 tp_Title FROM [${dbName}].[dbo].[AllLists] WHERE tp_DeleteTransactionId = 0x0 ORDER BY tp_Title`;
+        const rows = await this.queryOldDb(allListsQuery);
+        const titles = rows.map(r => r.tp_Title).join(', ');
+        logger.warn(`[StreamPassportMigrationModel] [${dbName}] Discovery failed. Sample available lists: ${titles}`);
+      } catch (err) {
+        // ignore
+      }
+    }
+
+    if (discoveredIds.length > 0) {
+      this.listIdCache[dbName] = discoveredIds;
+      logger.info(`[StreamPassportMigrationModel] Final resolved List IDs for [${dbName}]: ${discoveredIds.join(', ')}`);
+      return discoveredIds;
+    }
+
+    // 5. Fallback cuối cùng: Chỉ dùng referenceIds nếu và chỉ nếu dbName chính là reference DB
+    if (dbName === this.oldDbName) {
+      logger.warn(`[StreamPassportMigrationModel] Using hardcoded reference IDs for ${dbName}.`);
+      return referenceIds;
+    }
+
+    logger.error(`[StreamPassportMigrationModel] !!! KHÔNG TÌM THẤY DANH SÁCH PASSPORT TẠI DB: ${dbName} !!! Dữ liệu site này sẽ bị bỏ qua.`);
+    return [];
+  }
+
   async getCount(lastSyncTime, lastSyncId = 0) {
-    const listIds = this.oldConfig.listIds || [];
-    const listIdsStr = listIds.map(id => `'${id}'`).join(',');
-    const query = `
-        SELECT COUNT(*) AS total
-        FROM [${this.oldDbName}].[dbo].[AllUserData] ud
-        WHERE ud.[tp_ListId] IN (${listIdsStr})
-        AND ud.tp_RowOrdinal = 0
-        AND ud.[tp_IsCurrent] = 1
-        AND ud.[tp_DeleteTransactionId] = 0x0
-        AND (
-            ud.[tp_Modified] > @lastSyncTime
-            OR (
-                ud.[tp_Modified] = @lastSyncTime
-                AND ud.[tp_ID] > @lastSyncId
-            )
-        )
-    `;
-    const rows = await this.queryOldDb(query, { lastSyncTime, lastSyncId: Number(lastSyncId || 0) });
-    return Number(rows?.[0]?.total || 0);
+    const dbs = this.oldConfig.databaseList || [this.oldDbName];
+    
+    let total = 0;
+    for (const db of dbs) {
+      const listIds = await this.resolveListIdsForDb(db);
+      if (listIds.length === 0) continue;
+
+      const listIdsStr = listIds.map(id => `'${id}'`).join(',');
+      const query = `
+          SELECT COUNT(*) AS total
+          FROM [${db}].[dbo].[AllUserData] ud
+          WHERE ud.[tp_ListId] IN (${listIdsStr})
+          AND ud.tp_RowOrdinal = 0
+          AND ud.[tp_IsCurrent] = 1
+          AND ud.[tp_DeleteTransactionId] = 0x0
+          AND (
+              ud.[tp_Modified] > @lastSyncTime
+              OR (
+                  ud.[tp_Modified] = @lastSyncTime
+                  AND ud.[tp_ID] > @lastSyncId
+              )
+          )
+      `;
+      try {
+        const rows = await this.queryOldDb(query, { lastSyncTime, lastSyncId: Number(lastSyncId || 0) });
+        const dbCount = Number(rows?.[0]?.total || 0);
+        total += dbCount;
+        logger.info(`[StreamPassportMigrationModel] [getCount] DB: ${db} -> ${dbCount} items (using ${listIds.length} resolved lists)`);
+      } catch (err) {
+        logger.error(`[StreamPassportMigrationModel] [getCount] Failed for DB: ${db}: ${err.message}`);
+      }
+    }
+    return total;
   }
 
   /**
-   * Fetch danh sách phiếu mượn từ old DB theo cursor (tp_Modified, tp_ID).
+   * Fetch danh sách phiếu mượn từ một DB cụ thể theo cursor (tp_Modified, tp_ID).
    */
-  async fetchListFromOldDb(lastSyncTime, lastSyncId = 0, offset = 0, limit = 2000) {
-    const listIds = this.oldConfig.listIds || [];
-    const listIdsStr = listIds.map(id => `'${id}'`).join(',');
+  async fetchListFromOldDb(lastSyncTime, lastSyncId = 0, offset = 0, limit = 2000, dbName = null, listIds = null) {
+    const targetDb = dbName || this.oldDbName;
+    const resolvedListIds = listIds || await this.resolveListIdsForDb(targetDb);
+    const listIdsStr = resolvedListIds.map(id => `'${id}'`).join(',');
 
     const query = `
         SELECT * FROM (
@@ -778,10 +907,10 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
                 ud.[tp_ID]        AS __sync_id_num,
                 ROW_NUMBER() OVER (ORDER BY ud.[tp_Modified] ASC, ud.[tp_ID] ASC) AS __page_rn
 
-            FROM [${this.oldDbName}].[dbo].[AllUserData] ud
-            LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_author
+            FROM [${targetDb}].[dbo].[AllUserData] ud
+            LEFT JOIN [${targetDb}].[dbo].[UserInfo] ui_author
                 ON ud.[tp_Author] = ui_author.[tp_ID]
-            LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_editor
+            LEFT JOIN [${targetDb}].[dbo].[UserInfo] ui_editor
                 ON ud.[tp_Editor] = ui_editor.[tp_ID]
             WHERE ud.[tp_ListId] IN (${listIdsStr})
               AND ud.[tp_IsCurrent] = 1
@@ -805,23 +934,22 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
       offset: Number(offset || 0),
       limit: Number(limit || 2000)
     });
-    console.log(`[StreamPassportMigrationModel] Fetched ${rows.length} rows from old DB`);
     return rows;
   }
 
   /**
    * Lưu dữ liệu từ old DB vào staging table (upsert).
    */
-  async syncOldToStaging(rows, { transaction } = {}) {
+  async syncOldToStaging(rows, { transaction, dbName } = {}) {
     if (!Array.isArray(rows) || rows.length === 0) return { stagedCount: 0 };
-    logger.info(`[StreamPassportMigrationModel] Staging ${rows.length} rows to ${this.newTableSync}...`);
-    const internalColumns = new Set(['__sync_time', '__sync_id_num']);
-    const keyColumn = 'ID';
+    logger.info(`[StreamPassportMigrationModel] Staging ${rows.length} rows from ${dbName} to ${this.newTableSync}...`);
+    const internalColumns = new Set(['__sync_time', '__sync_id_num', 'source_db']);
     const stagingTableRef = this.getStagingTableRef();
 
     for (const row of rows) {
-      // Inject tb_bak = 1 để đánh dấu record đến từ SharePoint
+      // Inject tb_bak = 1 và source_db
       row.tb_bak = 1;
+      row.source_db = dbName || this.oldDbName;
 
       const columns = Object.keys(row || {}).filter(
         (c) => !String(c).startsWith('__') && !internalColumns.has(c)
@@ -832,21 +960,23 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
       }
       params.__sync_time = row.__sync_time;
       params.__sync_id_num = row.__sync_id_num;
-      const updateSet = columns.filter(c => c !== keyColumn).map(c => `[${c}] = @${c}`).join(', ');
+      params.source_db = row.source_db;
+
+      // Update condition based on composite key (ID + source_db)
+      const updateSet = columns.filter(c => c !== 'ID' && c !== 'source_db').map(c => `[${c}] = @${c}`).join(', ');
       const query = `
-      IF EXISTS (SELECT 1 FROM ${stagingTableRef} WHERE [${keyColumn}] = @${keyColumn})
+      IF EXISTS (SELECT 1 FROM ${stagingTableRef} WHERE [ID] = @ID AND [source_db] = @source_db)
       BEGIN
-          UPDATE ${stagingTableRef} SET ${updateSet}, __sync_time = @__sync_time, __sync_id_num = @__sync_id_num, MigrateFlg = 0, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE [${keyColumn}] = @${keyColumn}
+          UPDATE ${stagingTableRef} SET ${updateSet}, __sync_time = @__sync_time, __sync_id_num = @__sync_id_num, MigrateFlg = 0, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE [ID] = @ID AND [source_db] = @source_db
       END
       ELSE
       BEGIN
-          INSERT INTO ${stagingTableRef} (${columns.map(c => `[${c}]`).join(',')}, __sync_time, __sync_id_num, MigrateFlg, MigrateErrFlg)
-          VALUES (${columns.map(c => `@${c}`).join(',')}, @__sync_time, @__sync_id_num, 0, 0)
+          INSERT INTO ${stagingTableRef} (${columns.map(c => `[${c}]`).join(',')}, __sync_time, __sync_id_num, source_db, MigrateFlg, MigrateErrFlg)
+          VALUES (${columns.map(c => `@${c}`).join(',')}, @__sync_time, @__sync_id_num, @source_db, 0, 0)
       END
       `;
       await this.queryNewDbTx(query, params, transaction);
     }
-    logger.info(`[StreamPassportMigrationModel] Staging complete for ${rows.length} rows`);
     return { stagedCount: rows.length };
   }
 
@@ -868,7 +998,7 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
     }
 
     const totalCount = await this.getCount(normalizedLastSyncTime, normalizedLastSyncId);
-    logger.info(`[StreamPassportMigrationModel] Total records to sync: ${totalCount}`);
+    logger.info(`[StreamPassportMigrationModel] Total records across all DBs: ${totalCount}`);
 
     // Cập nhật Dashboard ngay lập tức
     await this.queryNewDb(`UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`, {
@@ -877,35 +1007,78 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
     });
 
     const fetchBatchSize = Number(process.env.STAGING_FETCH_BATCH_SIZE || 2000);
-    const numIterations = Math.ceil(totalCount / fetchBatchSize);
+    const dbs = this.oldConfig.databaseList || [this.oldDbName];
 
     let totalStagedCount = 0;
     let nextSyncTime = normalizedLastSyncTime;
     let nextSyncId = normalizedLastSyncId;
 
-    for (let i = 0; i < numIterations; i++) {
-        const offset = i * fetchBatchSize;
-        logger.info(`[StreamPassportMigrationModel] Fetching batch ${i + 1}/${numIterations} (Offset: ${offset}, Limit: ${fetchBatchSize})`);
-
-        const rows = await this.fetchListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId, offset, fetchBatchSize);
-        if (!rows || rows.length === 0) break;
-
-        const stageResult = await this.syncOldToStaging(rows);
-        totalStagedCount += Number(stageResult?.stagedCount || rows.length || 0);
-
-        // Cập nhật cursor
-        for (const row of rows) {
-            const rowTime = this.extractRowSyncTime(row);
-            const rowId = this.extractRowSyncId(row);
-            if (!rowTime) continue;
-
-            const isAhead = this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId);
-            if (isAhead) {
-                nextSyncTime = rowTime;
-                nextSyncId = rowId;
-            }
+    let dbIdx = 0;
+    for (const db of dbs) {
+      dbIdx++;
+      try {
+        logger.info(`[StreamPassportMigrationModel] [SITE ${dbIdx}/${dbs.length}] Processing database: ${db}`);
+        
+        // Resolve List IDs cho DB này
+        const listIds = await this.resolveListIdsForDb(db);
+        if (listIds.length === 0) {
+          logger.warn(`[StreamPassportMigrationModel] No List IDs resolved for DB ${db}. Skipping.`);
+          continue;
         }
-        logger.info(`🔥 [StreamPassportMigrationModel] Batch ${i + 1}/${numIterations} staged: ${totalStagedCount}/${totalCount}. LastSyncTime: ${nextSyncTime}, LastSyncId: ${nextSyncId}`);
+        const listIdsStr = listIds.map(id => `'${id}'`).join(',');
+
+        // Lấy count riêng cho DB này để chạy phân trang đúng
+        const dbCountQuery = `
+            SELECT COUNT(*) AS total
+            FROM [${db}].[dbo].[AllUserData]
+            WHERE [tp_ListId] IN (${listIdsStr})
+            AND tp_RowOrdinal = 0
+            AND [tp_IsCurrent] = 1
+            AND [tp_DeleteTransactionId] = 0x0
+            AND (
+                [tp_Modified] > @lastSyncTime
+                OR (
+                    [tp_Modified] = @lastSyncTime
+                    AND [tp_ID] > @lastSyncId
+                )
+            )
+        `;
+        const dbCountRes = await this.queryOldDb(dbCountQuery, { lastSyncTime: normalizedLastSyncTime, lastSyncId: normalizedLastSyncId });
+        const dbCount = Number(dbCountRes?.[0]?.total || 0);
+        
+        if (dbCount === 0) {
+          logger.info(`[StreamPassportMigrationModel] No new records in ${db}`);
+          continue;
+        }
+
+        const numIterations = Math.ceil(dbCount / fetchBatchSize);
+        for (let i = 0; i < numIterations; i++) {
+            const offset = i * fetchBatchSize;
+            logger.info(`[StreamPassportMigrationModel] [${db}] Fetching batch ${i + 1}/${numIterations} (Offset: ${offset})`);
+
+            const rows = await this.fetchListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId, offset, fetchBatchSize, db, listIds);
+            if (!rows || rows.length === 0) break;
+
+            const stageResult = await this.syncOldToStaging(rows, { dbName: db });
+            totalStagedCount += Number(stageResult?.stagedCount || rows.length || 0);
+
+            // Cập nhật cursor (Global cursor across all DBs)
+            for (const row of rows) {
+                const rowTime = this.extractRowSyncTime(row);
+                const rowId = this.extractRowSyncId(row);
+                if (!rowTime) continue;
+
+                const isAhead = this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId);
+                if (isAhead) {
+                    nextSyncTime = rowTime;
+                    nextSyncId = rowId;
+                }
+            }
+            logger.info(`[StreamPassportMigrationModel] [${db}] Staged: ${totalStagedCount} so far. Cursor: ${nextSyncTime} / ${nextSyncId}`);
+        }
+      } catch (dbErr) {
+        logger.error(`[StreamPassportMigrationModel] [SKIPPED SITE] Error processing database ${db}: ${dbErr.message}`);
+      }
     }
 
     // ★ Đếm pending thực tế trong staging (chưa xử lý)
@@ -1084,6 +1257,20 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
   }
 
   /**
+   * Trích xuất mnemonic ngắn gọn từ tên database (ví dụ: WSS_Content_eoffice_khkd -> KHKD).
+   */
+  getSourceMnemonic(sourceDb) {
+    if (!sourceDb) return 'MAIN';
+    const parts = sourceDb.split('_');
+    const lastPart = parts[parts.length - 1];
+    
+    // Nếu db là 'WSS_Content_eoffice' thì coi là MAIN
+    if (lastPart.toLowerCase() === 'eoffice') return 'MAIN';
+    
+    return lastPart.toUpperCase();
+  }
+
+  /**
    * Xử lý một row dữ liệu từ old DB và upsert vào bảng passport_borrow_requests.
    */
   async processRowData(rowData, { transaction } = {}) {
@@ -1118,7 +1305,12 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
     rowData.requester_id = requesterId || null;
     rowData.created_by   = requesterId || null;
     rowData.status       = mappedStatus || 'Chờ phê duyệt';
-    rowData.request_code = rowData.nvarchar1 || `HC-SYNC-${recordId}`;
+    
+    // 🔥 Disambiguate request_code cho multi-DB: thêm suffix /MNEMONIC
+    const mnemonic = this.getSourceMnemonic(rowData.source_db);
+    const rawCode = rowData.nvarchar1 || `HC-SYNC-${recordId}`;
+    rowData.request_code = `${rawCode}/${mnemonic}`;
+
     rowData.name_passport_request = rowData.AuthorFullName || rowData.AuthorName || 'Chưa xác định (Sync)';
     rowData.type_request = 'user';
 
@@ -1208,6 +1400,7 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
       created_at:             parseDate(rawData.tp_Created) || new Date(),
       updated_at:             parseDate(rawData.tp_Modified) || new Date(),
       sharepoint_item_id:     externalKeyValue,
+      source_db:              rawData.source_db || null,
       tb_bak:                 1,  // 1 = đồng bộ từ SharePoint
     };
 
@@ -1232,17 +1425,18 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
       }
     }
 
-    params._externalKeyValue = externalKeyValue;
+      params._externalKeyValue = externalKeyValue;
+      params._sourceDb = rawData.source_db;
 
-    const query = `
+      const query = `
       DECLARE @OutputTable TABLE (id NVARCHAR(255));
       DECLARE @affected INT;
 
-      IF EXISTS (SELECT 1 FROM ${tableRef} WHERE [${externalKeyField}] = @_externalKeyValue)
+      IF EXISTS (SELECT 1 FROM ${tableRef} WHERE [${externalKeyField}] = @_externalKeyValue AND [source_db] = @_sourceDb)
       BEGIN
           UPDATE ${tableRef} SET ${updateSet.length ? updateSet.join(', ') : `${externalKeyField} = ${externalKeyField}`}
           OUTPUT INSERTED.id INTO @OutputTable
-          WHERE [${externalKeyField}] = @_externalKeyValue;
+          WHERE [${externalKeyField}] = @_externalKeyValue AND [source_db] = @_sourceDb;
 
           SELECT @affected = @@ROWCOUNT;
           SELECT (SELECT TOP 1 id FROM @OutputTable) AS id, @affected AS affected, 'updated' AS action;
