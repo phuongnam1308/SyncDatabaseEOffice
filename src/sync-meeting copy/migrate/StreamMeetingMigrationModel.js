@@ -1345,20 +1345,20 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
           (
             @meetingId, SYSUTCDATETIME(), @creatorId, N'Người tạo', 'NGUOI_SOAN_LICH', 'CREATE',
             'Activity_1rl80cg', 'Activity_1rl80cg', '{"transferType":"to_person"}', NULL,
-            @creatorId, @creatorId, 'processor', N'Tạo văn bản', 'DA_XU_LY', '1', 'meeting',
+            @creatorId, @creatorId, 'processor', N'Tạo văn bản', 'DA_XU_LY', '1', 'Meetings',
             SYSUTCDATETIME(), SYSUTCDATETIME(), 1
           ),
           (
             @meetingId, SYSUTCDATETIME(), @creatorId, N'Người tạo', 'NGUOI_SOAN_LICH',
             'TRINH_LICH', 'Activity_1rl80cg', 'Gateway_16pjuoq', '{"note":""}', 'migration_origin',
             @creatorId, @quanLyPhongId, 'processor', N'Chuyển Ban quản lý phòng', 'DONG_Y_PHE_DUYET',
-            '2', 'meeting', SYSUTCDATETIME(), SYSUTCDATETIME(), 1
+            '2', 'Meetings', SYSUTCDATETIME(), SYSUTCDATETIME(), 1
           ),
           (
             @meetingId, SYSUTCDATETIME(), @quanLyPhongHopId, N'Quản lý phòng họp', 'BAN_QUAN_LY_PHONG_HOP',
             'PHE_DUYET_LICH', 'Gateway_16pjuoq', 'Activity_18dmg6c', NULL, 'migration_origin',
             @creatorId, @quanLyPhongHopId, 'seat', N'Gán vị trí chỗ ngồi', 'CHUA_XU_LY',
-            '3', 'meeting', SYSUTCDATETIME(), SYSUTCDATETIME(), 1
+            '3', 'Meetings', SYSUTCDATETIME(), SYSUTCDATETIME(), 1
           );
       END
     `;
