@@ -47,7 +47,7 @@ class SyncHandlerModel {
         // Tuy nhiên `listResult.totalCount` là số `pendingCount` thực tế CẦN XỬ LÝ TRONG STAGING ở thời điểm hiện tại.
         // Do đó tổng `totalCount` trong context của preparedJobs phải là (pendingCount + resumeIndex)
         // để đảm bảo `remaining = totalCount - processed = pendingCount`.
-        const pendingCount = Number(listResult?.totalCount || listResult?.stagedCount || 0);
+        const pendingCount = Number(listResult?.totalCount ?? listResult?.stagedCount ?? 0);
 
         preparedJobs.set(jobId, {
           totalCount: pendingCount + resumeIndex,

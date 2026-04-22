@@ -1,4 +1,4 @@
-const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
+﻿const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 const logger = require('../../../utils/logger');
 const dbUtils = require('../../../utils/dbUtils');
 const sql = require('mssql');
@@ -10,17 +10,20 @@ const MigrationHelper = require('../../helpers/MigrationHelper');
 
 const DEFAULT_SYNC_TIME = '9999-12-31T23:59:59.999Z';
 
-// Lọc bản ghi cũ hơn ngưỡng này. Đặt trong .env với key SYNC_MIN_DATE.
-// Ví dụ: SYNC_MIN_DATE=2026-01-01T00:00:00.000Z
-// Để tắt filter (lấy toàn bộ lịch sử), để trống hoặc đặt thành 1753-01-01T00:00:00.000Z
+// Lá»c báº£n ghi cÅ© hÆ¡n ngÆ°á»¡ng nÃ y. Äáº·t trong .env vá»›i key SYNC_MIN_DATE.
+// VÃ­ dá»¥: SYNC_MIN_DATE=2026-01-01T00:00:00.000Z
+// Äá»ƒ táº¯t filter (láº¥y toÃ n bá»™ lá»‹ch sá»­), Ä‘á»ƒ trá»‘ng hoáº·c Ä‘áº·t thÃ nh 1753-01-01T00:00:00.000Z
 const SYNC_MIN_DATE = process.env.SYNC_MIN_DATE || '2026-01-01T00:00:00.000Z';
 
-// ─── Deadlock retry config ────────────────────────────────────────────────────
+// â”€â”€â”€ Deadlock retry config â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const DEADLOCK_MAX_RETRIES = 3;
 const DEADLOCK_BASE_DELAY_MS = 200; // exponential back-off: 200ms, 400ms, 800ms
 const DEADLOCK_ERROR_NUMBER = 1205;
+const LOCK_TIMEOUT_ERROR_NUMBER = 1222;
+const OLD_DB_CONNECT_MAX_RETRIES = Number(process.env.OLD_DB_CONNECT_MAX_RETRIES || 4);
+const OLD_DB_CONNECT_BASE_DELAY_MS = Number(process.env.OLD_DB_CONNECT_BASE_DELAY_MS || 1000);
 
-// ── Reuse detectFileType từ outgoing (copy nguyên, không import cross-module) ──
+// â”€â”€ Reuse detectFileType tá»« outgoing (copy nguyÃªn, khÃ´ng import cross-module) â”€â”€
 function detectFileType(buffer) {
   if (!buffer || buffer.length < 4) return { mime: 'application/octet-stream', ext: 'bin' };
   const b = buffer;
@@ -41,7 +44,7 @@ function detectFileType(buffer) {
   return { mime: 'application/octet-stream', ext: 'bin' };
 }
 
-// ── Comment tables (giống outgoing — dùng chung cấu trúc) ──
+// â”€â”€ Comment tables (giá»‘ng outgoing â€” dÃ¹ng chung cáº¥u trÃºc) â”€â”€
 const COMMENT_TABLES = [
   'Comments',
   'Comments_ATPC', 'Comments_CLL', 'Comments_CNTT', 'Comments_CT',
@@ -81,6 +84,44 @@ function isDeadlockError(err) {
 }
 
 /**
+ * Returns true when the error is a lock-contention transient issue
+ * (deadlock / lock timeout) and should be retried.
+ * @param {Error} err
+ * @returns {boolean}
+ */
+function isRetryableLockError(err) {
+  const msg = String(err?.message || '').toLowerCase();
+  return (
+    isDeadlockError(err) ||
+    err?.number === LOCK_TIMEOUT_ERROR_NUMBER ||
+    err?.originalError?.info?.number === LOCK_TIMEOUT_ERROR_NUMBER ||
+    msg.includes('lock request time out')
+  );
+}
+
+/**
+ * Returns true for transient OLD DB connectivity failures.
+ * @param {Error} err
+ * @returns {boolean}
+ */
+function isTransientOldDbConnectionError(err) {
+  const msg = String(err?.message || '').toLowerCase();
+  const code = String(err?.code || err?.originalError?.code || '').toUpperCase();
+  return (
+    code === 'ESOCKET' ||
+    code === 'ETIMEOUT' ||
+    code === 'ECONNRESET' ||
+    code === 'ECONNREFUSED' ||
+    msg.includes('could not connect') ||
+    msg.includes('failed to connect') ||
+    msg.includes('connectionerror') ||
+    msg.includes('socket hang up') ||
+    msg.includes('connection is closed') ||
+    msg.includes('connection lost')
+  );
+}
+
+/**
  * Executes `fn` and retries automatically on deadlock up to `maxRetries` times.
  * Uses exponential back-off to reduce re-collision probability.
  *
@@ -97,10 +138,10 @@ async function withDeadlockRetry(fn, label = '', maxRetries = DEADLOCK_MAX_RETRI
       return await fn();
     } catch (err) {
       attempt += 1;
-      if (isDeadlockError(err) && attempt <= maxRetries) {
+      if (isRetryableLockError(err) && attempt <= maxRetries) {
         const delay = DEADLOCK_BASE_DELAY_MS * Math.pow(2, attempt - 1);
         logger.warn(
-          `[withDeadlockRetry]${label ? ' ' + label : ''} deadlock detected — retry ${attempt}/${maxRetries} after ${delay}ms`
+          `[withDeadlockRetry]${label ? ' ' + label : ''} lock conflict detected â€” retry ${attempt}/${maxRetries} after ${delay}ms`
         );
         await sleep(delay);
       } else {
@@ -110,7 +151,7 @@ async function withDeadlockRetry(fn, label = '', maxRetries = DEADLOCK_MAX_RETRI
   }
 }
 
-/** Task sync orchestrator (transaction-based: fetch → stage → process with atomic multi-table handling) */
+/** Task sync orchestrator (transaction-based: fetch â†’ stage â†’ process with atomic multi-table handling) */
 class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
   constructor() {
     super({ modelName: 'STREAM_TASK_INCOMING_INCREMENTAL' });
@@ -130,12 +171,12 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
 
     // Guard: prevent concurrent initialize() calls from racing on staging DDL
     this._initializingPromise = null;
-    this.partitionColumn = 'Created'; // Cột nghiệp vụ để chia dải dữ liệu
+    this.partitionColumn = 'Created'; // Cá»™t nghiá»‡p vá»¥ Ä‘á»ƒ chia dáº£i dá»¯ liá»‡u
   }
 
-  // ═══════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   // INITIALIZE
-  // ═══════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   /**
    * Initialize all models and staging tables.
@@ -209,7 +250,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       const baseCommentModel = new SyncCommentModel(COMMENT_TABLES[0]);
       await baseCommentModel.initialize();
 
-      // Đảm bảo 2 cột backup tồn tại trong document_comments
+      // Äáº£m báº£o 2 cá»™t backup tá»“n táº¡i trong document_comments
       await baseCommentModel.queryNewDb(`
         IF NOT EXISTS (
           SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
@@ -240,9 +281,9 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   // CURSOR HELPERS
-  // ═══════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   /**
    * Converts arbitrary datetime input to stable ISO cursor format.
@@ -280,7 +321,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
 
   /**
    * Compares two cursors and returns true when (aTime,aId) is ahead of (bTime,bId).
-   * DESC sync: thời gian nhỏ hơn (cũ hơn) là "đi trước" (tiến về quá khứ).
+   * DESC sync: thá»i gian nhá» hÆ¡n (cÅ© hÆ¡n) lÃ  "Ä‘i trÆ°á»›c" (tiáº¿n vá» quÃ¡ khá»©).
    * @param {string} aTime
    * @param {number} aId
    * @param {string} bTime
@@ -331,16 +372,106 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     return `${this.newDbSchema}.${this.newTableSync}`;
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // STAGING TABLE — task-specific schema
-  // ═══════════════════════════════════════════════════════════════
+  _normalizeQueryForLog(query) {
+    return String(query || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 1200);
+  }
+
+  _safeParamsForLog(params) {
+    try {
+      return JSON.stringify(params || {});
+    } catch (_err) {
+      return '[unserializable params]';
+    }
+  }
+
+  _resolveQueryCaller() {
+    const stack = String(new Error().stack || '').split('\n').map((line) => line.trim());
+    const caller = stack.find((line) =>
+      line.startsWith('at ') &&
+      !line.includes('._resolveQueryCaller') &&
+      !line.includes('._logDetailedQueryError') &&
+      !line.includes('.queryOldDb') &&
+      !line.includes('.queryNewDb') &&
+      !line.includes('.queryNewDbTx')
+    );
+    return caller || 'at <unknown>';
+  }
+
+  _logDetailedQueryError(dbLabel, query, params, error, extra = {}) {
+    const caller = this._resolveQueryCaller();
+    const compactQuery = this._normalizeQueryForLog(query);
+    const compactParams = this._safeParamsForLog(params);
+    logger.error(
+      `[StreamTaskInIncrementalModel][${dbLabel}] Query failed at ${caller}. ` +
+      `Error=${error?.message || 'unknown error'}. Query=${compactQuery}. Params=${compactParams}`,
+      extra
+    );
+  }
+
+  async queryOldDb(query, params = {}) {
+    let attempt = 0;
+    while (true) {
+      try {
+        return await super.queryOldDb(query, params);
+      } catch (error) {
+        attempt += 1;
+        const canRetry = isTransientOldDbConnectionError(error) && attempt <= OLD_DB_CONNECT_MAX_RETRIES;
+        this._logDetailedQueryError('OLD_DB', query, params, error, {
+          retry: {
+            attempt,
+            maxRetries: OLD_DB_CONNECT_MAX_RETRIES,
+            canRetry,
+          }
+        });
+        if (!canRetry) {
+          throw error;
+        }
+        const delay = OLD_DB_CONNECT_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+        logger.warn(
+          `[StreamTaskInIncrementalModel][OLD_DB] transient connection error, retry ${attempt}/${OLD_DB_CONNECT_MAX_RETRIES} after ${delay}ms`,
+        );
+        await sleep(delay);
+      }
+    }
+  }
+
+  async queryNewDb(query, params = {}) {
+    try {
+      return await super.queryNewDb(query, params);
+    } catch (error) {
+      this._logDetailedQueryError('NEW_DB', query, params, error);
+      throw error;
+    }
+  }
+
+  async queryNewDbTx(query, params = {}, transaction = null) {
+    try {
+      return await super.queryNewDbTx(query, params, transaction);
+    } catch (error) {
+      this._logDetailedQueryError('NEW_DB_TX', query, params, error, {
+        txState: {
+          hasTx: Boolean(transaction),
+          aborted: Boolean(transaction?._aborted),
+          acquiredConnection: Boolean(transaction?._acquiredConnection)
+        }
+      });
+      throw error;
+    }
+  }
+
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // STAGING TABLE â€” task-specific schema
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   /**
-   * Tạo bảng staging `task_sync` trong DB mới nếu chưa tồn tại.
+   * Táº¡o báº£ng staging `task_sync` trong DB má»›i náº¿u chÆ°a tá»“n táº¡i.
    *
-   * FIX (deadlock): Thay DROP + CREATE bằng CREATE IF NOT EXISTS để tránh
-   * tranh chấp schema-lock với các transaction khác đang chạy song song.
-   * Khi schema thật sự thay đổi (thêm/bớt cột), gọi rebuildStagingTable().
+   * FIX (deadlock): Thay DROP + CREATE báº±ng CREATE IF NOT EXISTS Ä‘á»ƒ trÃ¡nh
+   * tranh cháº¥p schema-lock vá»›i cÃ¡c transaction khÃ¡c Ä‘ang cháº¡y song song.
+   * Khi schema tháº­t sá»± thay Ä‘á»•i (thÃªm/bá»›t cá»™t), gá»i rebuildStagingTable().
    */
   async ensureStagingTableExists() {
     const table = this.getStagingTableRef();
@@ -348,7 +479,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     const schemaName = this.newDbSchema;
     const dbName = this.newDbName;
 
-    // ── 1. Create table only if it doesn't exist (no DROP → no schema lock race) ──
+    // â”€â”€ 1. Create table only if it doesn't exist (no DROP â†’ no schema lock race) â”€â”€
     const createQuery = `
       IF NOT EXISTS (
         SELECT 1
@@ -412,15 +543,15 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
   }
 
   /**
-   * Đảm bảo tất cả các cột cần thiết tồn tại trong bảng staging.
-   * Nếu thiếu cột (ví dụ: ItemId mới bổ sung), nó sẽ tự động ALTER TABLE ADD.
+   * Äáº£m báº£o táº¥t cáº£ cÃ¡c cá»™t cáº§n thiáº¿t tá»“n táº¡i trong báº£ng staging.
+   * Náº¿u thiáº¿u cá»™t (vÃ­ dá»¥: ItemId má»›i bá»• sung), nÃ³ sáº½ tá»± Ä‘á»™ng ALTER TABLE ADD.
    */
   async ensureStagingTableColumns() {
     const table = this.getStagingTableRef();
     const tableName = this.newTableSync;
     const dbName = this.newDbName;
 
-    // Danh sách các cột cần check (theo schema chuẩn ở ensureStagingTableExists)
+    // Danh sÃ¡ch cÃ¡c cá»™t cáº§n check (theo schema chuáº©n á»Ÿ ensureStagingTableExists)
     const requiredColumns = [
       { name: 'VBId', type: 'NVARCHAR(MAX)' },
       { name: 'DepartmentId', type: 'NVARCHAR(MAX)' },
@@ -481,7 +612,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
 
   /**
    * Force-rebuilds the staging table (DROP + CREATE).
-   * Call this ONLY during maintenance / schema migration — NOT on every startup.
+   * Call this ONLY during maintenance / schema migration â€” NOT on every startup.
    * Wrapped with deadlock retry automatically.
    */
   async rebuildStagingTable() {
@@ -501,7 +632,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
   }
 
   /**
-   * Tải các file đính kèm của Task từ SharePoint về bộ nhớ (NGOÀI Transaction SQL).
+   * Táº£i cÃ¡c file Ä‘Ã­nh kÃ¨m cá»§a Task tá»« SharePoint vá» bá»™ nhá»› (NGOÃ€I Transaction SQL).
    */
   async prepareTaskFilesFromSharePoint(stagingRow) {
     const baseUrl = (process.env.BASE_URL || "").replace(/\/$/, "");
@@ -522,21 +653,21 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       const fileName = relativePath.substring(relativePath.lastIndexOf('/') + 1) || field;
 
       try {
-        logger.info(`[StreamTaskIn][prepareFiles] Đang tải file cho Task ${stagingRow.ID}: ${fileName}`);
-        const buffer = await spDownload(fullUrl, this.newPool); // Truyền Pool để lock đa tiến trình
+        logger.info(`[StreamTaskIn][prepareFiles] Äang táº£i file cho Task ${stagingRow.ID}: ${fileName}`);
+        const buffer = await spDownload(fullUrl, this.newPool); // Truyá»n Pool Ä‘á»ƒ lock Ä‘a tiáº¿n trÃ¬nh
 
         if (buffer && buffer.length > 0) {
           preparedResults.push({ buffer, fileName, relativePath, objectType });
         }
       } catch (err) {
-        logger.error(`[StreamTaskIn][prepareFiles] Lỗi tải file ${fileName}: ${err.message}`);
+        logger.error(`[StreamTaskIn][prepareFiles] Lá»—i táº£i file ${fileName}: ${err.message}`);
       }
     }
     return preparedResults;
   }
 
   /**
-   * Ghi dữ liệu file của Task vào database (TRONG Transaction SQL).
+   * Ghi dá»¯ liá»‡u file cá»§a Task vÃ o database (TRONG Transaction SQL).
    */
   async applyPreparedTaskFiles(preparedFiles, newTaskId, stagingRow, transaction) {
     if (!Array.isArray(preparedFiles) || preparedFiles.length === 0) return true;
@@ -576,31 +707,31 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
         relationRecord,
         folder: 'task',
         localFolder: 'task',
-        transaction    // Dùng chung TX của Task
+        transaction    // DÃ¹ng chung TX cá»§a Task
       });
     }
     return true;
   }
 
   async ThemFileDinhKemTask(stagingRow, newTaskId) {
-    // Để giữ tương thích, nhưng khuyến khích gọi prepare/apply riêng lẻ
+    // Äá»ƒ giá»¯ tÆ°Æ¡ng thÃ­ch, nhÆ°ng khuyáº¿n khÃ­ch gá»i prepare/apply riÃªng láº»
     const prepared = await this.prepareTaskFilesFromSharePoint(stagingRow);
     return await this.applyPreparedTaskFiles(prepared, newTaskId, stagingRow, null);
   }
 
-  // ═══════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   // COUNT
-  // ═══════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   /**
-   * Alias cho getCount để đồng nhất với SyncHandlerModel.
+   * Alias cho getCount Ä‘á»ƒ Ä‘á»“ng nháº¥t vá»›i SyncHandlerModel.
    */
   async getCount(lastSyncTime, lastSyncId = 0) {
     return this.countListFromOldDb(lastSyncTime, lastSyncId);
   }
 
   /**
-   * Đếm tổng số bản ghi cần đồng bộ.
+   * Äáº¿m tá»•ng sá»‘ báº£n ghi cáº§n Ä‘á»“ng bá»™.
    */
   async countListFromOldDb(lastSyncTime, lastSyncId = 0) {
     const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
@@ -629,7 +760,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
           AND ISNULL(__sync_id_num, 9223372036854775807) < @lastSyncId
         )
       )
-      -- Chỉ lấy bản ghi từ năm 2026 trở đi (Nếu SYNC_MIN_DATE được bật)
+      -- Chá»‰ láº¥y báº£n ghi tá»« nÄƒm 2026 trá»Ÿ Ä‘i (Náº¿u SYNC_MIN_DATE Ä‘Æ°á»£c báº­t)
       AND __sync_time >= '${SYNC_MIN_DATE}'
     `;
 
@@ -643,9 +774,9 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     return Number(rows?.[0]?.total || 0);
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // FETCH FROM OLD DB — DESC cursor, OFFSET/TAKE
-  // ═══════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // FETCH FROM OLD DB â€” DESC cursor, OFFSET/TAKE
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   /**
    * @param {string} lastSyncTime
@@ -653,7 +784,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
    * @returns {Promise<object[]>}
    */
   /**
-   * Lấy danh sách bản ghi kèm phân trang.
+   * Láº¥y danh sÃ¡ch báº£n ghi kÃ¨m phÃ¢n trang.
    */
   async fetchListFromOldDb(lastSyncTime, lastSyncId = 0, limit = null, offset = 0) {
     const t0 = Date.now();
@@ -694,7 +825,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
             AND ISNULL(_sync_id_val, 9223372036854775807) < @lastSyncId
           )
         )
-        -- Chỉ lấy bản ghi từ năm 2026 trở đi
+        -- Chá»‰ láº¥y báº£n ghi tá»« nÄƒm 2026 trá»Ÿ Ä‘i
         AND _sync_time_val >= '${SYNC_MIN_DATE}'
       ) AS t
       WHERE __page_rn > @offset
@@ -716,9 +847,9 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     return rows;
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // SYNC TO STAGING — dynamic column upsert
-  // ═══════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // SYNC TO STAGING â€” dynamic column upsert
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   /**
    * Upserts source rows into staging table so process phase can read deterministic snapshots.
@@ -752,6 +883,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     );
 
     let idx = 0;
+    let skippedCount = 0;
     for (const row of rows) {
       idx += 1;
       const rawId = row?.ID;
@@ -814,6 +946,15 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
           `syncOldToStaging id=${rawId}`
         );
       } catch (error) {
+        // Lock contention after max retries: skip current row, continue batch.
+        // Row is not staged now and will be retried in next sync cycle.
+        if (isRetryableLockError(error)) {
+          skippedCount += 1;
+          logger.warn(
+            `[StreamTaskIn][syncOldToStaging] skip row due to lock conflict after retries index=${idx}/${rows.length} id=${rawId} err=${error.message}`
+          );
+          continue;
+        }
         logger.error(
           `[StreamTaskIn][syncOldToStaging] failed at index=${idx}/${rows.length} id=${rawId} err=${error.message}`
         );
@@ -827,15 +968,16 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       }
     }
 
+    const stagedCount = Math.max(0, rows.length - skippedCount);
     logger.info(
-      `[StreamTaskIn][syncOldToStaging] done rows=${rows.length} took=${Date.now() - t0}ms`
+      `[StreamTaskIn][syncOldToStaging] done rows=${rows.length} staged=${stagedCount} skipped=${skippedCount} took=${Date.now() - t0}ms`
     );
-    return { stagedCount: rows.length };
+    return { stagedCount, skippedCount };
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // GET LIST — build staged batch + advance cursor
-  // ═══════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // GET LIST â€” build staged batch + advance cursor
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   /**
    * Builds one staged incremental list for a sync job and returns cursor progression info.
@@ -881,9 +1023,9 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       logger.warn(`[StreamTaskIn] Cleanup stale records failed: ${cleanupErr.message}`);
     }
 
-    // 1. Đếm tổng và cập nhật Dashboard
+    // 1. Äáº¿m tá»•ng vÃ  cáº­p nháº­t Dashboard
     const totalCount = await this.countListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId);
-    logger.info(`[StreamTaskIn] Tổng số bản ghi cần sync: ${totalCount} (LastTime: ${normalizedLastSyncTime}, LastId: ${normalizedLastSyncId})`);
+    logger.info(`[StreamTaskIn] Tá»•ng sá»‘ báº£n ghi cáº§n sync: ${totalCount} (LastTime: ${normalizedLastSyncTime}, LastId: ${normalizedLastSyncId})`);
     logger.info(`[StreamTaskIn][count-source] TaskVBDen total_by_cursor=${totalCount}`);
 
     try {
@@ -919,7 +1061,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     let nextSyncTime = normalizedLastSyncTime;
     let nextSyncId = normalizedLastSyncId;
 
-    // Helper for parallel fetching
+    // Helper for one batch fetch+stage. Return only lightweight metadata to reduce RAM pressure.
     const fetchAndStage = async (iteration) => {
       const begin = iteration * batchSize;
       const tBatch = Date.now();
@@ -941,42 +1083,42 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
         `[StreamTaskIn][stage-batch] done iter=${iteration + 1}/${numIterations} rows=${rows.length} staged=${Number(stageResult?.stagedCount || 0)} took=${Date.now() - tBatch}ms`
       );
 
-      return { rowsCount: rows.length, stagedCount: Number(stageResult?.stagedCount || 0), lastRow: rows[rows.length - 1] };
+      const lastRow = rows[rows.length - 1];
+      const rowTime = this.extractRowSyncTime(lastRow);
+      const rowId = this.extractRowSyncId(lastRow);
+      // release large array reference early
+      return {
+        rowsCount: rows.length,
+        stagedCount: Number(stageResult?.stagedCount || 0),
+        rowTime,
+        rowId
+      };
     };
 
-    // 2. Chạy vòng lặp song song
-    const executing = new Set();
-    const results = [];
-
-    for (let i = 0; i < numIterations; i++) {
-      const task = fetchAndStage(i);
-      results.push(task);
-      executing.add(task);
-      task.finally(() => executing.delete(task));
-
-      if (executing.size >= STAGING_PARALLEL_BATCHES) {
-        await Promise.race(executing);
+    // 2. Run bounded worker pool to avoid accumulating all promises/results in memory.
+    const workerCount = Math.max(1, Number(STAGING_PARALLEL_BATCHES || 1));
+    let nextIteration = 0;
+    const runWorker = async () => {
+      while (true) {
+        const iteration = nextIteration;
+        nextIteration += 1;
+        if (iteration >= numIterations) return;
+        const res = await fetchAndStage(iteration);
+        if (!res || res.rowsCount === 0) continue;
+        totalStaged += res.stagedCount;
+        if (res.rowTime && this.isCursorAhead(res.rowTime, res.rowId, nextSyncTime, nextSyncId)) {
+          nextSyncTime = res.rowTime;
+          nextSyncId = res.rowId;
+        }
       }
-    }
+    };
+    await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
 
-    const batchResults = await Promise.all(results);
-    for (const res of batchResults) {
-      if (!res || res.rowsCount === 0) continue;
-      totalStaged += res.stagedCount;
+    logger.info(`ðŸ”¥ [StreamTaskIn] HoÃ n táº¥t hÃºt dá»¯ liá»‡u vá» Staging. Staged=${totalStaged}/${totalCount}. LastSyncTime: ${nextSyncTime}, LastSyncId: ${nextSyncId}`);
 
-      const rowTime = this.extractRowSyncTime(res.lastRow);
-      const rowId = this.extractRowSyncId(res.lastRow);
-      if (rowTime && this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId)) {
-        nextSyncTime = rowTime;
-        nextSyncId = rowId;
-      }
-    }
-
-    logger.info(`🔥 [StreamTaskIn] Hoàn tất hút dữ liệu về Staging. Staged=${totalStaged}/${totalCount}. LastSyncTime: ${nextSyncTime}, LastSyncId: ${nextSyncId}`);
-
-    // Fix Bug #3: Đếm số bản ghi THỰC TẾ trong staging chưa xử lý
-    // FIX: Phải lọc theo dải ngày của instance này (SYNC_START_DATE/SYNC_END_DATE)
-    // để tránh đếm nhầm records của các terminal khác đang chạy song song.
+    // Fix Bug #3: Äáº¿m sá»‘ báº£n ghi THá»°C Táº¾ trong staging chÆ°a xá»­ lÃ½
+    // FIX: Pháº£i lá»c theo dáº£i ngÃ y cá»§a instance nÃ y (SYNC_START_DATE/SYNC_END_DATE)
+    // Ä‘á»ƒ trÃ¡nh Ä‘áº¿m nháº§m records cá»§a cÃ¡c terminal khÃ¡c Ä‘ang cháº¡y song song.
     let pendingCount = 0;
     try {
       const pendingRes = await this.queryNewDb(`
@@ -990,10 +1132,10 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       });
       pendingCount = Number(pendingRes?.[0]?.cnt || 0);
     } catch (e) {
-      logger.warn(`[StreamTaskIn] Không đếm được pending staging: ${e.message}`);
+      logger.warn(`[StreamTaskIn] KhÃ´ng Ä‘áº¿m Ä‘Æ°á»£c pending staging: ${e.message}`);
       pendingCount = totalStaged;
     }
-    logger.info(`[StreamTaskIn] Pending records trong Staging có thể xử lý: ${pendingCount} (range: ${process.env.SYNC_START_DATE || 'ALL'} → ${process.env.SYNC_END_DATE || 'ALL'})`);
+    logger.info(`[StreamTaskIn] Pending records trong Staging cÃ³ thá»ƒ xá»­ lÃ½: ${pendingCount} (range: ${process.env.SYNC_START_DATE || 'ALL'} â†’ ${process.env.SYNC_END_DATE || 'ALL'})`);
     if (totalStaged > 0 && pendingCount === 0) {
       try {
         const diag = await this.queryNewDb(`
@@ -1019,7 +1161,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     }
 
 
-    // Cập nhật Dashboard lần cuối với tổng số thực tế (bao gồm cả các bản ghi tồn đọng cũ trong staging)
+    // Cáº­p nháº­t Dashboard láº§n cuá»‘i vá»›i tá»•ng sá»‘ thá»±c táº¿ (bao gá»“m cáº£ cÃ¡c báº£n ghi tá»“n Ä‘á»ng cÅ© trong staging)
     await this.queryNewDb(`UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`, {
       total: pendingCount,
       jobId: syncJobId
@@ -1037,9 +1179,9 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     };
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // FETCH ONE FROM STAGING — ROW_NUMBER cursor
-  // ═══════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // FETCH ONE FROM STAGING â€” ROW_NUMBER cursor
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   /**
    * Reads one deterministic row from staging based on source cursor and item index.
@@ -1047,11 +1189,28 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
    * @returns {Promise<object|null>}
    */
   async fetchOneFromStaging() {
+    const queryKey = 'fetchOneFromStaging.claim-next-row';
     try {
       const stagingTableRef = this.getStagingTableRef();
+      const claimLockResource = `${this.newDbName || 'NEW_DB'}.${this.newTableSync}.claim`;
       const query = `
+      DECLARE @lockResult INT;
+      BEGIN TRANSACTION;
+
+      EXEC @lockResult = sp_getapplock
+        @Resource = @claimLockResource,
+        @LockMode = 'Exclusive',
+        @LockOwner = 'Transaction',
+        @LockTimeout = 5000;
+
+      IF (@lockResult < 0)
+      BEGIN
+        ROLLBACK TRANSACTION;
+        THROW 50001, 'Unable to acquire claim lock for task_sync staging.', 1;
+      END
+
       ;WITH pick AS (
-        SELECT TOP (1) ID
+        SELECT TOP (1) *
         FROM ${stagingTableRef} WITH (READPAST, UPDLOCK, ROWLOCK)
         WHERE ISNULL(MigrateFlg, 0) = 0
           AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) >= @startDate OR @startDate IS NULL)
@@ -1059,34 +1218,35 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
         ORDER BY TRY_CONVERT(datetime2, Modified) DESC,
                  TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(ID)), '')) DESC
       )
-      UPDATE s WITH (ROWLOCK)
-      SET s.MigrateFlg = 2,
-          s.MigrateErrMess = 'Processing...'
-      OUTPUT inserted.*
-      FROM ${stagingTableRef} s
-      INNER JOIN pick p ON p.ID = s.ID
+      UPDATE pick
+      SET MigrateFlg = 2,
+          MigrateErrMess = 'Processing...'
+      OUTPUT inserted.*;
+
+      COMMIT TRANSACTION;
       `;
 
       const rows = await this.queryNewDb(query, {
+        claimLockResource,
         startDate: process.env.SYNC_START_DATE || null,
         endDate: process.env.SYNC_END_DATE || null
       });
       if (!rows || rows.length === 0) {
         logger.info(
-          `[StreamTaskIn.fetchOneFromStaging] No row claimed (MigrateFlg=0 not found/unavailable). range=${process.env.SYNC_START_DATE || 'ALL'}→${process.env.SYNC_END_DATE || 'ALL'}`
+          `[StreamTaskIn.fetchOneFromStaging] No row claimed (MigrateFlg=0 not found/unavailable). range=${process.env.SYNC_START_DATE || 'ALL'}â†’${process.env.SYNC_END_DATE || 'ALL'}`
         );
         return null;
       }
       return rows[0];
     } catch (error) {
-      logger.error(`[StreamTaskIn.fetchOneFromStaging] Failed: ${error.message}`);
+      logger.error(`[StreamTaskIn.fetchOneFromStaging] Failed at queryKey=${queryKey}: ${error.message}`);
       throw error;
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   // SYNC JOB STATE
-  // ═══════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   /**
    * Reads persisted sync job state from sync_jobs table.
@@ -1117,9 +1277,9 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     return rows?.[0] || null;
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // PROCESS ONE — with deadlock retry on full transaction
-  // ═══════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // PROCESS ONE â€” with deadlock retry on full transaction
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   /**
    * Processes one staged item for a sync job inside a DB transaction.
@@ -1146,11 +1306,12 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
   }
 
   /**
-   * Single attempt of processOne — extracted so withDeadlockRetry can re-run it cleanly.
+   * Single attempt of processOne â€” extracted so withDeadlockRetry can re-run it cleanly.
    * @private
    */
   async _processOneAttempt(syncJobId, options = {}) {
     let jobState;
+    let step = 'getSyncJobState';
     try {
       jobState = await this.getSyncJobState(syncJobId);
     } catch (error) {
@@ -1163,6 +1324,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     try {
       const stagingTableRef = this.getStagingTableRef();
 
+      step = 'fetchOneFromStaging';
       rowData = await this.fetchOneFromStaging();
 
       if (!rowData) {
@@ -1238,15 +1400,19 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
 
       const rowId = rowData.ID || null;
       const current = Number(jobState?.total_processed || 0) + 1;
-      // --- BƯỚC MỚI: Tải file từ SharePoint (NGOÀI giao dịch SQL) ---
+      // --- BÆ¯á»šC Má»šI: Táº£i file tá»« SharePoint (NGOÃ€I giao dá»‹ch SQL) ---
+      step = 'prepareTaskFilesFromSharePoint';
       const preparedFiles = await this.prepareTaskFilesFromSharePoint(rowData);
 
+      step = 'beginTransaction';
       transaction = new sql.Transaction(this.newPool);
       await transaction.begin();
 
-      const result = await this.processRowData(rowData, { transaction, preparedFiles });
+      step = 'processRowData';
+      const result = await this.processRowData(rowData, { transaction, preparedFiles, syncJobId });
 
       // Update counters in sync_jobs
+      step = 'updateSyncJobsCounter';
       await this.queryNewDbTx(
         `UPDATE sync_jobs
          SET total_processed = ISNULL(total_processed, 0) + 1,
@@ -1257,12 +1423,14 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       );
 
       // Mark staging row as processed successfully
+      step = 'markStagingProcessed';
       await this.queryNewDbTx(
         `UPDATE ${stagingTableRef}  WITH (ROWLOCK)  SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE ID = @ID`,
         { ID: rowId },
         transaction
       );
 
+      step = 'commitTransaction';
       await transaction.commit();
 
       return {
@@ -1281,12 +1449,15 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
 
       if (rowData && rowData.ID) {
         try {
+          step = 'markStagingError';
           const stagingTableRef = this.getStagingTableRef();
           await this.queryNewDb(`UPDATE ${stagingTableRef} SET MigrateErrFlg = 1, MigrateErrMess = @Err WHERE ID = @ID`, { ID: rowData.ID, Err: String(error.message).slice(0, 1000) });
         } catch (updateErr) { }
       }
 
-      logger.error(`[StreamTaskIn._processOneAttempt] Failed row ID=${rowData?.ID}: ${error.message}`);
+      logger.error(
+        `[StreamTaskIn._processOneAttempt] Failed at step=${step}, row ID=${rowData?.ID || 'N/A'}: ${error.message}`
+      );
       throw error;
     }
   }
@@ -1331,16 +1502,16 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
         );
         logger.info(`[StreamTaskIn] Cursor finalized for partition: last_sync_time=${finalTime}, last_sync_id=${finalId}`);
       } else {
-        logger.info(`[StreamTaskIn] finalizeProcessingCursor: không có bản ghi đã xử lý trong phân đoạn, cursor giữ nguyên.`);
+        logger.info(`[StreamTaskIn] finalizeProcessingCursor: khÃ´ng cÃ³ báº£n ghi Ä‘Ã£ xá»­ lÃ½ trong phÃ¢n Ä‘oáº¡n, cursor giá»¯ nguyÃªn.`);
       }
     } catch (err) {
-      logger.warn(`[StreamTaskIn.finalizeProcessingCursor] Lỗi finalize cursor: ${err.message}`);
+      logger.warn(`[StreamTaskIn.finalizeProcessingCursor] Lá»—i finalize cursor: ${err.message}`);
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   // PROCESS ROW DATA
-  // ═══════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   /**
    * Validates and applies one task row into destination aggregates.
@@ -1348,7 +1519,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
    * @param {{transaction?: object}} [context]
    * @returns {Promise<{action:string,idTaskBak:string,affected:number}>}
    */
-  async processRowData(rowData, { transaction, preparedFiles = [] } = {}) {
+  async processRowData(rowData, { transaction, preparedFiles = [], syncJobId = null } = {}) {
     if (!rowData) {
       throw new Error('rowData is required');
     }
@@ -1358,7 +1529,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       throw new Error('Invalid task ID from staging');
     }
 
-    const res = await this.upsertTaskAggregateById(rowData, { transaction, preparedFiles });
+    const res = await this.upsertTaskAggregateById(rowData, { transaction, preparedFiles, syncJobId });
     const affected = Number(res?.affected || 0);
 
     if (affected === 0) {
@@ -1372,9 +1543,9 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     };
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // UPSERT AGGREGATE — task-specific: task + task_users + system_logs
-  // ═══════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // UPSERT AGGREGATE â€” task-specific: task + task_users + system_logs
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   /**
    * Upserts one task and its related task_users + system_log entities.
@@ -1382,7 +1553,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
    * @param {{transaction?: object}} [context]
    * @returns {Promise<{action:string,idTaskBak:string,newTaskId:string,affected:number}>}
    */
-  async upsertTaskAggregateById(stagingRow, { transaction, preparedFiles = [] } = {}) {
+  async upsertTaskAggregateById(stagingRow, { transaction, preparedFiles = [], syncJobId = null } = {}) {
     if (!stagingRow) {
       return { action: 'none', affected: 0 };
     }
@@ -1390,7 +1561,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     const taskId = String(stagingRow.ID || '').trim();
     let totalAffected = 0;
 
-    // ── 1. Upsert task chính ──────────────────────────────────────
+    // â”€â”€ 1. Upsert task chÃ­nh â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const taskResult = await this.taskModel.processSingleRecord(stagingRow, transaction);
 
     if (!taskResult || !taskResult.newTaskId) {
@@ -1399,11 +1570,11 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     }
 
     const newTaskId = taskResult.newTaskId;
-    logger.info(`[SYNC OK] task ID=${taskId} → new_id=${newTaskId} action=${taskResult.action}`);
+    logger.info(`[SYNC OK] task ID=${taskId} â†’ new_id=${newTaskId} action=${taskResult.action}`);
     totalAffected += 1;
 
     const createdAt = taskResult.createdAt || stagingRow.Created || new Date().toISOString();
-    // ── 2. Task users (TaskVBDenPermission) ───────────────────────
+    // â”€â”€ 2. Task users (TaskVBDenPermission) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     let firstUserId = null;
     try {
       const taskUsersRows = await this.queryOldDb(
@@ -1430,6 +1601,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
               `[StreamTaskInIncrementalModel] TaskUser sync failed (non-critical) userId=${userRow.ID}: ${userErr.message}`,
               { errorStack: userErr.stack }
             );
+            await this.logNonCriticalJobError(syncJobId, taskId, `[TaskUser] ${userErr.message}`);
           }
         }
       }
@@ -1439,6 +1611,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
         `[StreamTaskInIncrementalModel] Failed to fetch task users for task_id=${taskId}: ${userError.message}`,
         { errorStack: userError.stack }
       );
+      await this.logNonCriticalJobError(syncJobId, taskId, `[TaskUserFetch] ${userError.message}`);
     }
 
     const createdBy =
@@ -1447,7 +1620,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       stagingRow.CreatedBy ||
       null;
 
-    // ── 2b. Workitems (only when process_status = 2: Đang thực hiện) ─────────
+    // â”€â”€ 2b. Workitems (only when process_status = 2: Äang thá»±c hiá»‡n) â”€â”€â”€â”€â”€â”€â”€â”€â”€
     try {
       const workitemsResult = await this.syncWorkItemsForInProgressTask(
         {
@@ -1465,8 +1638,9 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
         `[StreamTaskInIncrementalModel] Workitems sync failed (non-critical) task_id=${newTaskId}: ${workitemErr.message}`,
         { errorStack: workitemErr.stack }
       );
+      await this.logNonCriticalJobError(syncJobId, taskId, `[Workitems] ${workitemErr.message}`);
     }
-    // ── 3. System log ─────────────────────────────────────────────
+    // â”€â”€ 3. System log â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     try {
       const oldDocumentId = stagingRow?.VBId ? String(stagingRow.VBId).trim() : null;
       const historyResult = oldDocumentId
@@ -1493,6 +1667,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
           logger.warn(`[StreamTaskInIncrementalModel] Log creation returned success=false for task_id=${newTaskId}`, {
             logResult
           });
+          await this.logNonCriticalJobError(syncJobId, taskId, '[SystemLog] createLogForTask returned success=false');
         }
       }
     } catch (logErr) {
@@ -1501,16 +1676,17 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
         `[StreamTaskInIncrementalModel] System log creation failed (non-critical) task_id=${newTaskId}: ${logErr.message}`,
         { errorStack: logErr.stack }
       );
+      await this.logNonCriticalJobError(syncJobId, taskId, `[SystemLog] ${logErr.message}`);
     }
 
-    // ── 4. File + Comment sync via linked incoming document ───────
+    // â”€â”€ 4. File + Comment sync via linked incoming document â”€â”€â”€â”€â”€â”€â”€
     const vbId = stagingRow?.VBId ? String(stagingRow.VBId).trim() : null;
 
     if (vbId) {
-      // ── 4a. File sync ──────────────────────────────────────────
-      // ── 4a. Ghi dữ liệu file đính kèm vào Database ──────────────
+      // â”€â”€ 4a. File sync â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // â”€â”€ 4a. Ghi dá»¯ liá»‡u file Ä‘Ã­nh kÃ¨m vÃ o Database â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       await this.applyPreparedTaskFiles(preparedFiles, newTaskId, stagingRow, transaction);
-      // ── 4b. Comment sync (cấu trúc giữ nguyên từ outgoing) ────
+      // â”€â”€ 4b. Comment sync (cáº¥u trÃºc giá»¯ nguyÃªn tá»« outgoing) â”€â”€â”€â”€
       for (const commentModel of this._syncCommentModel) {
         try {
           const rawComments = await commentModel.fetchByDocumentId(vbId);
@@ -1536,12 +1712,14 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
               logger.warn(
                 `[StreamTaskInIncrementalModel] Comment row sync failed table=${commentModel?.oldDbTable} taskId=${taskId}: ${commentRowErr.message}`
               );
+              await this.logNonCriticalJobError(syncJobId, taskId, `[CommentRow:${commentModel?.oldDbTable}] ${commentRowErr.message}`);
             }
           }
         } catch (commentFetchErr) {
           logger.warn(
             `[StreamTaskInIncrementalModel] Comment fetch failed table=${commentModel?.oldDbTable} taskId=${taskId}: ${commentFetchErr.message}`
           );
+          await this.logNonCriticalJobError(syncJobId, taskId, `[CommentFetch:${commentModel?.oldDbTable}] ${commentFetchErr.message}`);
         }
       }
     }
@@ -1552,6 +1730,32 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       newTaskId,
       affected: Math.max(1, totalAffected)
     };
+  }
+
+  /**
+   * Records non-critical sub-step errors into sync_job_errors without failing the whole row.
+   * @param {string|null} syncJobId
+   * @param {string|number|null} recordId
+   * @param {string} message
+   * @returns {Promise<void>}
+   */
+  async logNonCriticalJobError(syncJobId, recordId, message) {
+    if (!syncJobId || !message) return;
+    try {
+      await this.queryNewDb(
+        `
+        INSERT INTO sync_job_errors (job_id, record_id, error_message)
+        VALUES (@jobId, @recordId, @errorMessage)
+      `,
+        {
+          jobId: String(syncJobId),
+          recordId: recordId == null ? null : String(recordId),
+          errorMessage: String(message).slice(0, 1000)
+        }
+      );
+    } catch (err) {
+      logger.warn(`[StreamTaskInIncrementalModel] Failed to log non-critical job error: ${err.message}`);
+    }
   }
 
   _generateWorkitemId(prefix = 'wi') {
@@ -1569,8 +1773,8 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     const normalized = raw
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
-      .replace(/đ/g, 'd')
-      .replace(/Đ/g, 'D')
+      .replace(/Ä‘/g, 'd')
+      .replace(/Ä/g, 'D')
       .toLowerCase();
     return normalized.includes('dang thuc hien');
   }
@@ -1579,7 +1783,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     const exists = await this.queryNewDbTx(
       `
         SELECT TOP 1 id
-        FROM ${this.newDbName}.dbo.workitems WITH (READPAST)
+        FROM ${this.newDbName}.dbo.work_items WITH (READPAST)
         WHERE document_id = @documentId
           AND node_id = @nodeId
           AND role = @role
@@ -1600,7 +1804,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
 
     await this.queryNewDbTx(
       `
-        INSERT INTO ${this.newDbName}.dbo.workitems
+        INSERT INTO ${this.newDbName}.dbo.work_items
         (id, document_id, node_id, role, assignee_user_id, node_type, state, created_at, bpmn_version, action_code)
         VALUES
         (@id, @document_id, @node_id, @role, @assignee_user_id, @node_type, @state, @created_at, @bpmn_version, @action_code)
