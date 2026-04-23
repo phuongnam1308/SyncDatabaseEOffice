@@ -440,9 +440,9 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
 
         const syncCursorIndexQuery = `
         IF NOT EXISTS (
-            SELECT 1 FROM sys.indexes i 
-            JOIN sys.tables t ON i.object_id = t.object_id 
-            WHERE i.name = 'IX_${table}_job_cursor' 
+            SELECT 1 FROM sys.indexes i
+            JOIN sys.tables t ON i.object_id = t.object_id
+            WHERE i.name = 'IX_${table}_job_cursor'
               AND t.name = '${table}'
         )
         BEGIN
@@ -635,15 +635,6 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
           FROM [${db}].[dbo].[AllUserData] ud
           WHERE ud.[tp_ListId] IN (${listIdsStr})
           AND ud.tp_RowOrdinal = 0
-          AND ud.[tp_IsCurrent] = 1
-          AND ud.[tp_DeleteTransactionId] = 0x0
-          AND (
-              ud.[tp_Modified] > @lastSyncTime
-              OR (
-                  ud.[tp_Modified] = @lastSyncTime
-                  AND ud.[tp_ID] > @lastSyncId
-              )
-          )
       `;
       try {
           const rows = await this.queryOldDb(query, { lastSyncTime, lastSyncId: Number(lastSyncId || 0) });
@@ -734,16 +725,6 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
             ON ud.[tp_ID] = ci.[SPItemId]
         WHERE ud.[tp_ListId] IN (${listIdsStr})
         AND ud.tp_RowOrdinal = 0
-        AND ud.[tp_IsCurrent] = 1
-        AND ud.[tp_DeleteTransactionId] = 0x0
-        AND (
-            @lastSyncTime = '1970-01-01T00:00:00.000Z'
-            OR ud.[tp_Modified] > @lastSyncTime
-            OR (
-                ud.[tp_Modified] = @lastSyncTime
-                AND ud.[tp_ID] > @lastSyncId
-            )
-        )
         ORDER BY ud.[tp_Modified] ASC, ud.[tp_ID] ASC, ud.[tp_ListId] ASC
         OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
     `;
@@ -853,15 +834,6 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
             FROM [${db}].[dbo].[AllUserData]
             WHERE [tp_ListId] IN (${listIdsStr})
             AND tp_RowOrdinal = 0
-            AND [tp_IsCurrent] = 1
-            AND [tp_DeleteTransactionId] = 0x0
-            AND (
-                [tp_Modified] > @lastSyncTime
-                OR (
-                    [tp_Modified] = @lastSyncTime
-                    AND [tp_ID] > @lastSyncId
-                )
-            )
         `;
         const dbCountRes = await this.queryOldDb(dbCountQuery, { lastSyncTime: normalizedLastSyncTime, lastSyncId: normalizedLastSyncId });
         const dbCount = Number(dbCountRes?.[0]?.total || 0);

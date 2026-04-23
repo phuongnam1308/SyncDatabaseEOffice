@@ -61,13 +61,13 @@ const tableMappings = {
       vehicle_state: (r) => r?.vehicle_state || mapping.defaults.VEHICLE_STATE,
       timezone: mapping.defaults.TIMEZONE,
       departure_time: (r) => {
-        const val = r?.StartDate || r?.tp_Created;
+        const val = r?.tp_Created;
         if (!val || String(val).trim() === '') return new Date();
         const d = new Date(val);
         return isNaN(d.getTime()) ? new Date() : d;
       },
       return_time: (r) => {
-        const val = r?.EndDate || r?.StartDate || r?.tp_Created;
+        const val = r?.tp_Modified;
         if (!val || String(val).trim() === '') return new Date();
         const d = new Date(val);
         return isNaN(d.getTime()) ? new Date() : d;

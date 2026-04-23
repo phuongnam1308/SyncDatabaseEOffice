@@ -840,15 +840,6 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
           FROM [${db}].[dbo].[AllUserData] ud
           WHERE ud.[tp_ListId] IN (${listIdsStr})
           AND ud.tp_RowOrdinal = 0
-          AND ud.[tp_IsCurrent] = 1
-          AND ud.[tp_DeleteTransactionId] = 0x0
-          AND (
-              ud.[tp_Modified] > @lastSyncTime
-              OR (
-                  ud.[tp_Modified] = @lastSyncTime
-                  AND ud.[tp_ID] > @lastSyncId
-              )
-          )
       `;
       try {
         const rows = await this.queryOldDb(query, { lastSyncTime, lastSyncId: Number(lastSyncId || 0) });
@@ -913,16 +904,7 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
             LEFT JOIN [${targetDb}].[dbo].[UserInfo] ui_editor
                 ON ud.[tp_Editor] = ui_editor.[tp_ID]
             WHERE ud.[tp_ListId] IN (${listIdsStr})
-              AND ud.[tp_IsCurrent] = 1
-              AND ud.[tp_DeleteTransactionId] = 0x0
-              AND (
-                  @lastSyncTime = '1970-01-01T00:00:00.000Z'
-                  OR ud.[tp_Modified] > @lastSyncTime
-                  OR (
-                      ud.[tp_Modified] = @lastSyncTime
-                      AND ud.[tp_ID] > @lastSyncId
-                  )
-              )
+              AND ud.tp_RowOrdinal = 0
         ) AS t
         WHERE __page_rn > @offset AND __page_rn <= (@offset + @limit)
         ORDER BY __page_rn;
@@ -1033,15 +1015,6 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
             FROM [${db}].[dbo].[AllUserData]
             WHERE [tp_ListId] IN (${listIdsStr})
             AND tp_RowOrdinal = 0
-            AND [tp_IsCurrent] = 1
-            AND [tp_DeleteTransactionId] = 0x0
-            AND (
-                [tp_Modified] > @lastSyncTime
-                OR (
-                    [tp_Modified] = @lastSyncTime
-                    AND [tp_ID] > @lastSyncId
-                )
-            )
         `;
         const dbCountRes = await this.queryOldDb(dbCountQuery, { lastSyncTime: normalizedLastSyncTime, lastSyncId: normalizedLastSyncId });
         const dbCount = Number(dbCountRes?.[0]?.total || 0);

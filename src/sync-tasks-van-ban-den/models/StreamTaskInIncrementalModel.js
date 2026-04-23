@@ -8,7 +8,7 @@ const FileService = require('../../sync-file-copy/Fileuploadservice');
 const { downloadFile: spDownload } = require('../../sync-file-copy/SharePointAuthService');
 const MigrationHelper = require('../../helpers/MigrationHelper');
 
-const DEFAULT_SYNC_TIME = '2999-12-31T23:59:59.999Z';
+const DEFAULT_SYNC_TIME = '9999-12-31T23:59:59.999Z';
 
 // Lá»c báº£n ghi cÅ© hÆ¡n ngÆ°á»¡ng nÃ y. Äáº·t trong .env vá»›i key SYNC_MIN_DATE.
 // VÃ­ dá»¥: SYNC_MIN_DATE=2026-01-01T00:00:00.000Z

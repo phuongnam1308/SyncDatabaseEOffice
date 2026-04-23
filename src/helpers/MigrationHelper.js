@@ -744,8 +744,22 @@ class MigrationHelper {
       const existing = await this.queryNewDbTx(selectQuery, { name: displayName }, transaction);
       if (existing?.length) return existing[0].id;
 
-      // [UPDATE] Không tự động sync hoặc tạo mới user theo yêu cầu
-      logger.warn(`[mapUserName] User "${userIdOrName}" not found in new DB. Returning NULL.`);
+      // [RESTORED] Tìm trong DB cũ nếu không thấy ở DB mới
+      if (this.queryOldDb) {
+        const oldRows = await this.queryOldDb(
+          `SELECT TOP 1 * FROM dbo.PersonalProfile WHERE FullName = @name OR AccountID = @name OR StaffID = @name`,
+          { name: displayName }
+        );
+        if (oldRows?.length > 0) {
+          const migrator = await this._getUserMigrator();
+          if (migrator) {
+            const syncRes = await migrator.upsertUserById(oldRows[0], transaction);
+            if (syncRes?.id) return syncRes.id;
+          }
+        }
+      }
+
+      logger.warn(`[mapUserName] User "${userIdOrName}" not found. Returning NULL.`);
       return null;
     } catch (error) {
       logger.warn(`[mapUserName] Error for "${userIdOrName}":`, error.message);
@@ -775,8 +789,22 @@ class MigrationHelper {
         return existedNew[0].id;
       }
 
-      // [UPDATE] Không tự động sync hoặc tạo mới user theo yêu cầu
-      logger.warn(`[syncAndMapUser] User "${trimmed}" not found in new DB. Returning NULL.`);
+      // [RESTORED] Tìm trong DB cũ nếu không thấy ở DB mới
+      if (this.queryOldDb) {
+        const oldRows = await this.queryOldDb(
+          `SELECT TOP 1 * FROM dbo.PersonalProfile WHERE FullName = @val OR AccountID = @val OR StaffID = @val`,
+          { val: trimmed }
+        );
+        if (oldRows?.length > 0) {
+          const migrator = await this._getUserMigrator();
+          if (migrator) {
+            const syncRes = await migrator.upsertUserById(oldRows[0], transaction);
+            if (syncRes?.id) return syncRes.id;
+          }
+        }
+      }
+
+      logger.warn(`[syncAndMapUser] User "${trimmed}" not found. Returning NULL.`);
       return null;
     } catch (error) {
       logger.error(`[syncAndMapUser] Error: ${error.message}`);
@@ -3305,6 +3333,60 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
     } catch (error) {
       logger.error(`[resolveUserIdByAccountName] Lỗi tìm/tạo ID cho account "${accountString}": ${error.message}`);
       return null; // Rớt về null để caller dùng raw string hoặc null
+    }
+  }
+
+  /**
+   * Giải quyết ID người dùng từ Email.
+   * Nếu không tìm thấy, sẽ tạo mới một bản ghi rác tạm.
+   */
+  async resolveUserIdByEmail(emailString, transaction = null, customRoles = null) {
+    if (!emailString || typeof emailString !== 'string' || !emailString.includes('@')) return null;
+
+    try {
+      const email = emailString.trim().toLowerCase();
+      const prefix = this.extractEmailPrefix(email);
+
+      // 1. Tìm trong bảng users (Tìm theo email_user HOẶC username/code_nd khớp prefix)
+      const findQuery = `SELECT TOP 1 id FROM [${process.env.NEW_DB_NAME || 'app_tancang'}].[dbo].[users] WHERE email_user = @email OR username = @prefix OR code_nd = @prefix OR id_user_bak = @prefix`;
+      const findResult = await this.queryNewDbTx(findQuery, { email, prefix }, transaction);
+      if (findResult && findResult.length > 0) {
+        return findResult[0].id;
+      }
+
+      // 2. Nếu không có, tạo mới
+      const { v4: uuidv4 } = require('uuid');
+      const newId = uuidv4().toUpperCase();
+      const username = prefix || email.split('@')[0];
+
+      if (!this.isCreatableUsername(username)) {
+         return null;
+      }
+
+      let rolesDefault = customRoles || process.env.ROLES_DEFAULT;
+      if (!rolesDefault || rolesDefault.trim() === '') {
+        try {
+          const { ROLES_DEFAULT } = require('../config');
+          rolesDefault = (ROLES_DEFAULT && ROLES_DEFAULT.length > 0) ? JSON.stringify(ROLES_DEFAULT) : '[]';
+        } catch (e) {
+          rolesDefault = '[]';
+        }
+      }
+
+      const insertQuery = `
+        INSERT INTO [${process.env.NEW_DB_NAME || 'app_tancang'}].[dbo].[users]
+        (id, username, code_nd, name, email_user, password, avatar, roles_by_process, status, created_at, updated_at, tb_bak)
+        VALUES (@id, @username, @username, @username, @email, @password, '[]', @roles, 1, GETDATE(), GETDATE(), 1)
+      `;
+      const password = process.env.DEFAULT_USER_PASSWORD || '$10$mH.NYj.Bapxk4auiGaPKhOfCqUnA8jr1JO5fvP3miKbhIfwU3CVRa';
+      await this.ensureUsersTbBakColumnExists(transaction);
+      await this.queryNewDbTx(insertQuery, { id: newId, username, email, password, roles: rolesDefault }, transaction);
+
+      logger.info(`[resolveUserIdByEmail] Đã tự tạo mới tài khoản "${username}" (từ email ${email}) với id=${newId}`);
+      return newId;
+    } catch (error) {
+      logger.error(`[resolveUserIdByEmail] Lỗi tìm/tạo ID cho email "${emailString}": ${error.message}`);
+      return null;
     }
   }
 
