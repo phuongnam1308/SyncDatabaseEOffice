@@ -1124,7 +1124,8 @@ class SyncManagerService {
       registeredCount: this.registry.size,
       sharePointLoginRequired: sharePointLoginState.required,
       sharePointLoginInProgress: sharePointLoginState.inProgress,
-      sharePointLoginMessage: sharePointLoginState.message
+      sharePointLoginMessage: sharePointLoginState.message,
+      sharePointLoginSkipped: global.sharePointLoginSkipped || false
     };
   }
 

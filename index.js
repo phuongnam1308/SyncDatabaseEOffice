@@ -45,6 +45,7 @@ global.sharePointLoginState = {
   inProgress: false,
   message: ''
 };
+global.sharePointLoginSkipped = false;
 global.syncBackgroundServicesStarted = false;
 
 function setSharePointLoginState(required, message = '', inProgress = false) {
@@ -53,6 +54,9 @@ function setSharePointLoginState(required, message = '', inProgress = false) {
     inProgress: Boolean(inProgress),
     message: message || ''
   };
+  if (required) {
+    global.sharePointLoginSkipped = false; // Reset skipped status if new login is required
+  }
 }
 
 function startBackgroundServicesOnce() {

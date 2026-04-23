@@ -19,7 +19,8 @@ class SyncManagerController extends BaseController {
     return global.sharePointLoginState || {
       required: false,
       inProgress: false,
-      message: ''
+      message: '',
+      skipped: global.sharePointLoginSkipped || false
     };
   }
 
@@ -263,6 +264,21 @@ class SyncManagerController extends BaseController {
     }
   });
 
+  /**
+   * Bỏ qua đăng nhập SharePoint.
+   */
+  skipLogin = this.asyncHandler(async (req, res) => {
+    logger.warn('[SyncManagerController] Người dùng yêu cầu bỏ qua đăng nhập SharePoint');
+    global.sharePointLoginSkipped = true;
+    global.sharePointLoginState = {
+      required: false,
+      inProgress: false,
+      message: ''
+    };
+    SyncManagerService._broadcastSSE();
+    return this.success(res, { message: 'Đã bỏ qua đăng nhập SharePoint. Cảnh báo dữ liệu có thể không chính xác.' });
+  });
+
   // ── MỚI: SSE endpoint và Settings endpoint ─────────────────────────────────────
 
   /**
@@ -312,6 +328,7 @@ class SyncManagerController extends BaseController {
     data.sharePointLoginRequired = sharePointLoginState.required;
     data.sharePointLoginInProgress = sharePointLoginState.inProgress;
     data.sharePointLoginMessage = sharePointLoginState.message;
+    data.sharePointLoginSkipped = global.sharePointLoginSkipped || false;
     const registeredLabels = this.modelRegistry.getRegisteredLabels();
     
     // ĐÃ KHÔI PHỤC: Lọc bỏ những đối tượng máy này không phụ trách
@@ -784,9 +801,150 @@ class SyncManagerController extends BaseController {
     input:checked + .slider:before {
       transform: translateX(18px);
     }
+
+    /* ── SharePoint Notification Banner ── */
+    .alert-banner {
+      margin: 10px 20px 0;
+      padding: 12px 20px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 15px;
+      animation: slideDown 0.3s ease-out;
+    }
+    .alert-banner-warning {
+      background: rgba(217,119,6,0.1);
+      border: 1px solid rgba(217,119,6,0.2);
+      color: #b45309;
+    }
+    .alert-banner-error {
+      background: rgba(220,38,38,0.1);
+      border: 1px solid rgba(220,38,38,0.2);
+      color: #b91c1c;
+    }
+    .alert-banner-content {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 0.85rem;
+      font-weight: 500;
+    }
+    .alert-banner-actions {
+      display: flex;
+      gap: 8px;
+    }
+    .btn-banner {
+      padding: 5px 12px;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: all 0.2s;
+    }
+    .btn-banner-primary {
+      background: #2563eb;
+      color: #fff;
+    }
+    .btn-banner-primary:hover { background: #1d4ed8; }
+    .btn-banner-secondary {
+      background: rgba(0,0,0,0.05);
+      color: inherit;
+      border-color: currentColor;
+    }
+    .btn-banner-secondary:hover { background: rgba(0,0,0,0.1); }
+
+    /* ── SharePoint Modal Overlay ── */
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.75);
+      backdrop-filter: blur(4px);
+      z-index: 9999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .modal-content {
+      background: var(--bg-card);
+      border-radius: var(--radius-md);
+      width: 100%;
+      max-width: 450px;
+      padding: 30px;
+      text-align: center;
+      box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+      border: 1px solid var(--border-color);
+      animation: modalFadeIn 0.3s ease-out;
+    }
+    .spinner-box {
+      margin-bottom: 20px;
+    }
+    .spinner {
+      width: 50px;
+      height: 50px;
+      border: 5px solid rgba(37,99,235,0.2);
+      border-top-color: #2563eb;
+      border-radius: 50%;
+      display: inline-block;
+      animation: spin 1s linear infinite;
+    }
+    .modal-title {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: var(--text-primary);
+      margin-bottom: 12px;
+    }
+    .modal-desc {
+      font-size: 0.9rem;
+      color: var(--text-sub);
+      margin-bottom: 25px;
+      line-height: 1.5;
+    }
+    .modal-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .btn-modal {
+      padding: 12px;
+      border-radius: 8px;
+      font-weight: 700;
+      font-size: 0.95rem;
+      cursor: pointer;
+      transition: all 0.2s;
+      border: none;
+    }
+    .btn-modal-primary {
+      background: #2563eb;
+      color: #fff;
+    }
+    .btn-modal-primary:hover { background: #1d4ed8; transform: translateY(-1px); }
+    .btn-modal-secondary {
+      background: rgba(255,255,255,0.05);
+      color: var(--text-primary);
+      border: 1px solid var(--border-color);
+    }
+    .btn-modal-secondary:hover { background: rgba(255,255,255,0.1); }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes modalFadeIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+
+    @keyframes slideDown {
+      from { opacity: 0; transform: translateY(-10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Blur background when modal is active */
+    body.has-modal .page-wrapper {
+      filter: blur(5px);
+      pointer-events: none;
+      user-select: none;
+    }
   </style>
 </head>
-<body>
+<body class="${data.sharePointLoginRequired && !data.sharePointLoginSkipped ? 'has-modal' : ''}">
   <div class="page-wrapper">
     <div class="dash-card">
 
@@ -834,6 +992,21 @@ class SyncManagerController extends BaseController {
 
       </div>
 
+      <!-- Notification Area -->
+      <div id="notification-area">
+        ${!data.sharePointLoginRequired && data.sharePointLoginSkipped ? `
+          <div class="alert-banner alert-banner-warning">
+            <div class="alert-banner-content">
+              <i class="bi bi-info-circle-fill"></i>
+              <span><b>Cảnh báo dữ liệu:</b> Bạn đang bỏ qua đăng nhập SharePoint. Dữ liệu liên quan đến Tệp tin & Tin tức sẽ bị sai lệch hoặc thiếu.</span>
+            </div>
+            <div class="alert-banner-actions">
+              <button class="btn-banner btn-banner-secondary" onclick="triggerLogin()">Thử đăng nhập lại</button>
+            </div>
+          </div>
+        ` : ''}
+      </div>
+
       <!-- Table -->
       <div class="table-wrapper">
         ${tableContent}
@@ -847,13 +1020,35 @@ class SyncManagerController extends BaseController {
     </div>
   </div>
 
+  <!-- Modal Area (Nằm ngoài để không bị mờ) -->
+  <div id="modal-area">
+    ${data.sharePointLoginRequired && !data.sharePointLoginSkipped ? `
+      <div class="modal-overlay">
+        <div class="modal-content">
+          <div class="spinner-box">
+            <div class="spinner"></div>
+          </div>
+          <div class="modal-title">Yêu cầu đăng nhập SharePoint</div>
+          <div class="modal-desc">
+            ${data.sharePointLoginMessage || 'Hệ thống cần kết nối với SharePoint để đồng bộ Tin tức & Tệp tin. Vui lòng thực hiện đăng nhập.'}
+          </div>
+          <div class="modal-actions">
+            <button class="btn-modal btn-modal-primary" onclick="triggerLogin()">Đăng nhập ngay</button>
+            <button class="btn-modal btn-modal-secondary" onclick="triggerSkipLoginUI()">Bỏ qua không đăng nhập</button>
+          </div>
+        </div>
+      </div>
+    ` : ''}
+  </div>
+
   <script>
     // ── SSE: nhận update realtime từ server ──────────────────
     let _es = null;
     let retryCount = 0;
     const maxRetries = 2; // Giới hạn số lần thử lại trước khi báo sự cố
-    let sharePointLoginAlertActive = false;
+    let sharePointLoginActive = false;
     let sharePointLoginRequestActive = false;
+    window.__sharePointSkipConfirmActive = false;
     window.__sharePointLoginRequired = ${data.sharePointLoginRequired ? 'true' : 'false'};
     window.__sharePointLoginInProgress = ${data.sharePointLoginInProgress ? 'true' : 'false'};
     window.__sharePointLoginMessage = ${JSON.stringify(data.sharePointLoginMessage || '')};
@@ -862,11 +1057,144 @@ class SyncManagerController extends BaseController {
       window.__sharePointLoginRequired = Boolean(data.sharePointLoginRequired);
       window.__sharePointLoginInProgress = Boolean(data.sharePointLoginInProgress);
       window.__sharePointLoginMessage = data.sharePointLoginMessage || '';
+      window.__sharePointLoginSkipped = Boolean(data.sharePointLoginSkipped);
 
-      if (window.__sharePointLoginRequired && !window.__sharePointLoginInProgress && !sharePointLoginAlertActive) {
-        setTimeout(() => {
-          ensureSharePointLoginUntilSuccess();
-        }, 0);
+      const area = document.getElementById('notification-area');
+      const modalArea = document.getElementById('modal-area');
+      
+      // TRƯỜNG HỢP 1: ĐANG TRONG QUÁ TRÌNH ĐĂNG NHẬP (Hiện màn hình tối + Spinner + LOG + Nút Bỏ qua thẳng)
+      if (window.__sharePointLoginInProgress) {
+        document.body.classList.add('has-modal');
+        modalArea.innerHTML = \`
+          <div class="modal-overlay">
+            <div class="modal-content">
+              <div class="spinner-box">
+                <div class="spinner"></div>
+              </div>
+              <div class="modal-title">Đang kết nối SharePoint</div>
+              <div class="modal-desc">Vui lòng đợi trong giây lát...</div>
+              
+              <!-- Hiển thị log đăng nhập -->
+              <div style="background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; margin-bottom: 20px; font-family: monospace; font-size: 0.8rem; color: #60a5fa; text-align: left; border: 1px solid rgba(255,255,255,0.1);">
+                <i class="bi bi-terminal me-2"></i> Trạng thái: \${window.__sharePointLoginMessage || 'Khởi tạo kết nối...'}
+              </div>
+
+              <div class="modal-actions">
+                <button class="btn-modal btn-modal-secondary" onclick="confirmSkipLogin()">Bỏ qua và vào Dashboard</button>
+              </div>
+            </div>
+          </div>
+        \`;
+        area.innerHTML = '';
+        return;
+      } 
+      // TRƯỜNG HỢP 4: THÀNH CÔNG (Hiện thông báo xanh trong 2 giây)
+      else if (window.__sharePointLoginSuccessActive) {
+        document.body.classList.add('has-modal');
+        modalArea.innerHTML = \`
+          <div class="modal-overlay">
+            <div class="modal-content" style="border-color: #10b981;">
+              <div class="spinner-box">
+                <i class="bi bi-check-circle-fill" style="font-size: 3.5rem; color: #10b981; animation: modalFadeIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);"></i>
+              </div>
+              <div class="modal-title" style="color: #10b981;">Đăng nhập thành công</div>
+              <div class="modal-desc">Kết nối SharePoint đã được thiết lập. Hệ thống đang sẵn sàng đồng bộ.</div>
+            </div>
+          </div>
+        \`;
+      }
+      // TRƯỜNG HỢP 2: YÊU CẦU ĐĂNG NHẬP (Hiện màn hình tối + Các nút lựa chọn)
+      else if (window.__sharePointLoginRequired) {
+        document.body.classList.add('has-modal');
+        if (window.__sharePointSkipConfirmActive) {
+          // Giai đoạn 2: Xác nhận bỏ qua (vẫn trong màn hình tối)
+          modalArea.innerHTML = \`
+            <div class="modal-overlay">
+              <div class="modal-content" style="border-color: #b45309;">
+                <div class="spinner-box">
+                  <i class="bi bi-exclamation-triangle" style="font-size: 3rem; color: #d97706;"></i>
+                </div>
+                <div class="modal-title" style="color: #d97706;">Xác nhận bỏ qua</div>
+                <div class="modal-desc">
+                  <b>Cảnh báo:</b> Nếu bỏ qua, dữ liệu Tin tức và Tệp tin sẽ <b>không được đồng bộ chính xác</b> hoặc bị thiếu sót. Bạn có chắc chắn muốn tiếp tục?
+                </div>
+                <div class="modal-actions">
+                  <button class="btn-modal btn-modal-primary" style="background:#d97706" onclick="confirmSkipLogin()">Tôi đã hiểu, tiếp tục bỏ qua</button>
+                  <button class="btn-modal btn-modal-secondary" onclick="cancelSkipLogin()">Quay lại đăng nhập</button>
+                </div>
+              </div>
+            </div>
+          \`;
+        } else {
+          // Giai đoạn 1: Yêu cầu đăng nhập (xoay xoay)
+          modalArea.innerHTML = \`
+            <div class="modal-overlay">
+              <div class="modal-content">
+                <div class="spinner-box">
+                  <div class="spinner"></div>
+                </div>
+                <div class="modal-title">Yêu cầu đăng nhập SharePoint</div>
+                <div class="modal-desc">
+                  \${window.__sharePointLoginMessage || 'Hệ thống cần kết nối với SharePoint để đồng bộ Tin tức & Tệp tin. Vui lòng thực hiện đăng nhập.'}
+                </div>
+                <div class="modal-actions">
+                  <button class="btn-modal btn-modal-primary" onclick="triggerLogin()">Đăng nhập ngay</button>
+                  <button class="btn-modal btn-modal-secondary" onclick="triggerSkipLoginUI()">Bỏ qua không đăng nhập</button>
+                </div>
+              </div>
+            </div>
+          \`;
+        }
+        area.innerHTML = ''; // Ẩn banner nếu đang hiện modal
+      } else {
+        document.body.classList.remove('has-modal');
+        modalArea.innerHTML = '';
+        
+        // Xử lý Banner Cảnh báo (Bỏ qua)
+        if (window.__sharePointLoginSkipped) {
+          area.innerHTML = \`
+            <div class="alert-banner alert-banner-warning">
+              <div class="alert-banner-content">
+                <i class="bi bi-info-circle-fill"></i>
+                <span><b>Cảnh báo dữ liệu:</b> Bạn đang bỏ qua đăng nhập SharePoint. Dữ liệu liên quan đến Tệp tin & Tin tức sẽ bị sai lệch hoặc thiếu.</span>
+              </div>
+              <div class="alert-banner-actions">
+                <button class="btn-banner btn-banner-secondary" onclick="triggerLogin()">Thử đăng nhập lại</button>
+              </div>
+            </div>
+          \`;
+        } else {
+          area.innerHTML = '';
+        }
+      }
+    }
+
+    function triggerSkipLoginUI() {
+      window.__sharePointSkipConfirmActive = true;
+      handleSharePointLoginRequirement({
+        sharePointLoginRequired: window.__sharePointLoginRequired,
+        sharePointLoginInProgress: window.__sharePointLoginInProgress,
+        sharePointLoginMessage: window.__sharePointLoginMessage,
+        sharePointLoginSkipped: window.__sharePointLoginSkipped
+      });
+    }
+
+    function cancelSkipLogin() {
+      window.__sharePointSkipConfirmActive = false;
+      handleSharePointLoginRequirement({
+        sharePointLoginRequired: window.__sharePointLoginRequired,
+        sharePointLoginInProgress: window.__sharePointLoginInProgress,
+        sharePointLoginMessage: window.__sharePointLoginMessage,
+        sharePointLoginSkipped: window.__sharePointLoginSkipped
+      });
+    }
+
+    async function confirmSkipLogin() {
+      window.__sharePointSkipConfirmActive = false;
+      try {
+        await fetch('/api/sync-manager-src/skip-login', { method: 'POST' });
+      } catch (e) {
+        alert('Lỗi: ' + e.message);
       }
     }
 
@@ -880,6 +1208,7 @@ class SyncManagerController extends BaseController {
           window.__sharePointLoginRequired = false;
           window.__sharePointLoginInProgress = false;
           window.__sharePointLoginMessage = '';
+          window.__sharePointLoginSkipped = false;
           return true;
         }
 
@@ -897,20 +1226,7 @@ class SyncManagerController extends BaseController {
       }
     }
 
-    async function ensureSharePointLoginUntilSuccess() {
-      if (sharePointLoginAlertActive) return;
-      sharePointLoginAlertActive = true;
-      try {
-        while (window.__sharePointLoginRequired) {
-          const msg = window.__sharePointLoginMessage || 'Đăng nhập SharePoint không thành công.';
-          alert(msg + '\\n\\nNhấn OK để thử đăng nhập lại SharePoint.');
-          const ok = await retrySharePointLoginFromDashboard();
-          if (ok) break;
-        }
-      } finally {
-        sharePointLoginAlertActive = false;
-      }
-    }
+
 
     function connectSSE() {
       _es = new EventSource('/api/sync-manager-src/events');
@@ -1093,9 +1409,21 @@ class SyncManagerController extends BaseController {
     async function triggerLogin() {
       const ok = await retrySharePointLoginFromDashboard();
       if (ok) {
-        alert('Đăng nhập SharePoint thành công.');
-      } else {
-        ensureSharePointLoginUntilSuccess();
+        window.__sharePointLoginSuccessActive = true;
+        handleSharePointLoginRequirement({
+          sharePointLoginRequired: false,
+          sharePointLoginInProgress: false
+        });
+        
+        // Tự động đóng sau 2 giây
+        setTimeout(() => {
+          window.__sharePointLoginSuccessActive = false;
+          handleSharePointLoginRequirement({
+            sharePointLoginRequired: false,
+            sharePointLoginInProgress: false,
+            sharePointLoginSkipped: window.__sharePointLoginSkipped
+          });
+        }, 2000);
       }
     }
 
@@ -1126,7 +1454,8 @@ class SyncManagerController extends BaseController {
     handleSharePointLoginRequirement({
       sharePointLoginRequired: window.__sharePointLoginRequired,
       sharePointLoginInProgress: window.__sharePointLoginInProgress,
-      sharePointLoginMessage: window.__sharePointLoginMessage
+      sharePointLoginMessage: window.__sharePointLoginMessage,
+      sharePointLoginSkipped: ${data.sharePointLoginSkipped ? 'true' : 'false'}
     });
   </script>
 </body>
