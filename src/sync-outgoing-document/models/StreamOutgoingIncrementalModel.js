@@ -13,6 +13,14 @@ const {
   CATEGORY_RELEASE_TCT,
   CATEGORY_OUTGOING
 } = require('../../sync-audit/SyncAuditModel');
+const {
+  claimNextStagingRow,
+  ensureTrackingColumns,
+  markRowFailed,
+  markRowSuccess,
+  startHeartbeatLoop,
+  updateHeartbeat,
+} = require('../../helpers/StagingQueueHelper');
 
 /**
  * Phát hiện MIME type từ magic bytes — thay thế package file-type (ESM-only)
@@ -151,6 +159,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
     this.oldDbTable = 'VanBanBanHanh';
     this.newDbSchema = 'dbo';
     this.newTableSync = 'outgoing_documents_sync';
+    this.heartbeatIntervalMs = Number(process.env.HEARTBEAT_INTERVAL_MS || 30000);
 
     this._syncAuditModel = [];
     this._syncCommentModel = [];
@@ -522,6 +531,13 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
       `;
 
     await this.queryNewDb(query);
+    await ensureTrackingColumns(this, {
+      tableRef: table,
+      tableName: this.newTableSync,
+      schemaName: this.newDbSchema,
+      dbName: this.newDbName,
+      label: this.modelName,
+    });
   }
 
   /**
@@ -991,6 +1007,7 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
 
     let rowData = null;
     let transaction = null;
+    let stopHeartbeat = null;
 
     try {
       const stagingTableRef = this.getStagingTableRef();
@@ -1012,16 +1029,11 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
 
       const rowId = rowData.ID || null;
       const current = Number(jobState?.total_processed || 0) + 1;
-      logger.info(`[OutGoingDoc] Process ${current}: record ID=${rowId}`);
-
-      // Heartbeat timer — keeps the row from being reaped as stale while we work.
-      // Runs OUTSIDE the transaction so it survives across retries.
-      const HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
-      const heartbeatTimer = setInterval(() => {
-        this.updateHeartbeat(rowId).catch(err => {
-          logger.warn(`[OutGoingDoc] Heartbeat failed for ID=${rowId}: ${err.message}`);
-        });
-      }, HEARTBEAT_INTERVAL_MS);
+      logger.info(`[${this.modelName}] [START] Processing started: ID=${rowId}, nextProcessedCounter=${current}`);
+      stopHeartbeat = startHeartbeatLoop(
+        () => this.updateHeartbeat(rowId),
+        this.heartbeatIntervalMs,
+      );
 
       // Tải files trước khi mở transaction để tránh giữ lock lâu
       const preparedFiles = await this.prepareFilesFromSharePoint(rowData);
@@ -1040,17 +1052,21 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         );
 
         // Mark staging row as processed successfully
-        await this.queryNewDbTx(
-          `UPDATE ${stagingTableRef} WITH (ROWLOCK)
-           SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL,
-               processing_owner = NULL, processing_started_at = NULL, processing_heartbeat_at = NULL
-           WHERE ID = @ID`,
-          { ID: rowId },
+        await markRowSuccess(this, {
+          tableRef: stagingTableRef,
+          keyWhere: 'ID = @ID',
+          params: { ID: rowId },
           transaction,
-        );
+          rowToken: `ID=${rowId}`,
+          label: this.modelName,
+        });
 
         return res;
       }, { maxRetries: 5 });
+      if (stopHeartbeat) {
+        stopHeartbeat();
+        stopHeartbeat = null;
+      }
 
       return {
         syncJobId,
@@ -1060,17 +1076,21 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         result
       };
     } catch (error) {
-      if (heartbeatTimer) {
-        clearInterval(heartbeatTimer);
-        heartbeatTimer = null;
+      if (stopHeartbeat) {
+        stopHeartbeat();
+        stopHeartbeat = null;
       }
       if (rowData && rowData.ID) {
         try {
           const stagingTableRef = this.getStagingTableRef();
-          await this.queryNewDb(`UPDATE ${stagingTableRef} WITH (ROWLOCK)
-            SET MigrateFlg = 0, MigrateErrFlg = 1, MigrateErrMess = @Err,
-                processing_owner = NULL, processing_started_at = NULL, processing_heartbeat_at = NULL
-            WHERE ID = @ID`, { ID: rowData.ID, Err: String(error.message).slice(0, 1000) });
+          await markRowFailed(this, {
+            tableRef: stagingTableRef,
+            keyWhere: 'ID = @ID',
+            params: { ID: rowData.ID },
+            rowToken: `ID=${rowData.ID}`,
+            errorMessage: error.message,
+            label: this.modelName,
+          });
         } catch (updateErr) { }
       }
 
@@ -1163,14 +1183,10 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
         return null;
       }
 
-      const query = `
-      WITH CTE AS (
-        SELECT TOP (1) *
-        FROM ${stagingTableRef} WITH (UPDLOCK, ROWLOCK)
-        WHERE ISNULL(MigrateFlg, 0) = 0
-          AND ISNULL(MigrateErrFlg, 0) = 0
-          -- ★ Với DATE type đúng: lọc trực tiếp, NULL vẫn được xử lý
-          AND (
+      const row = await claimNextStagingRow(this, {
+        tableRef: stagingTableRef,
+        extraWhere: `
+          (
             ${this.partitionColumn} IS NULL
             OR (${this.partitionColumn} >= @startDate AND @startDate IS NOT NULL)
             OR (@startDate IS NULL AND ${this.partitionColumn} IS NOT NULL)
@@ -1180,24 +1196,19 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
             OR (${this.partitionColumn} <= @endDate AND @endDate IS NOT NULL)
             OR (@endDate IS NULL AND ${this.partitionColumn} IS NOT NULL)
           )
-        ORDER BY Modified DESC,
-                 ID DESC
-      )
-      UPDATE CTE
-      SET MigrateFlg = 2,
-          MigrateErrMess = 'Processing...',
-          processing_owner = @owner,
-          processing_started_at = SYSUTCDATETIME(),
-          processing_heartbeat_at = SYSUTCDATETIME()
-      OUTPUT inserted.*
-      `;
-
-      const rows = await this.queryNewDb(query, {
-        startDate: process.env.SYNC_START_DATE || null,
-        endDate: process.env.SYNC_END_DATE || null,
+        `,
+        params: {
+          startDate: process.env.SYNC_START_DATE || null,
+          endDate: process.env.SYNC_END_DATE || null,
+        },
         owner: this._instanceId || `pid_${process.pid}`,
+        orderBy: 'Modified DESC, ID DESC',
+        label: this.modelName,
       });
-      return rows?.length ? rows[0] : null;
+      if (row) {
+        logger.info(`[${this.modelName}] [START] Processing started: ID=${row.ID}`);
+      }
+      return row;
     } catch (error) {
       logger.error(`[OutGoingDoc.fetchOneFromStaging] Failed to fetch: ${error.message}`);
       throw error;
@@ -1213,12 +1224,14 @@ class OutGoingDocumentModel extends BaseIncrementalSyncInterface {
   async updateHeartbeat(rowId, transaction = null) {
     if (!rowId) return;
     const stagingTableRef = this.getStagingTableRef();
-    const q = `UPDATE ${stagingTableRef} WITH (ROWLOCK) SET processing_heartbeat_at = SYSUTCDATETIME() WHERE ID = @ID AND MigrateFlg = 2`;
-    if (transaction) {
-      await this.queryNewDbTx(q, { ID: rowId }, transaction);
-    } else {
-      await this.queryNewDb(q, { ID: rowId });
-    }
+    return updateHeartbeat(this, {
+      tableRef: stagingTableRef,
+      keyWhere: 'ID = @ID',
+      params: { ID: rowId },
+      transaction,
+      rowToken: `ID=${rowId}`,
+      label: this.modelName,
+    });
   }
 
   /**

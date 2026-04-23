@@ -33,12 +33,40 @@ const routes = require('./routes');
 const logger = require('./utils/logger');
 const MigrationService = require('./services/MigrationOrganizationUnitsService');
 const CronSyncScheduler = require('./src/sync-manager/CronSyncScheduler');
-const loginFlow = require('./auth/login_playwright');
 const { startSessionRefresher } = require('./auth/session-refresher');
+const { refreshAuth } = require('./src/sync-file-copy/SharePointAuthService');
 
 const isProduction = process.env.NODE_ENV === 'production' || isPkg || isSea;
 const externalDir = exeDir;
 const internalDir = __dirname;
+
+global.sharePointLoginState = {
+  required: false,
+  inProgress: false,
+  message: ''
+};
+global.syncBackgroundServicesStarted = false;
+
+function setSharePointLoginState(required, message = '', inProgress = false) {
+  global.sharePointLoginState = {
+    required: Boolean(required),
+    inProgress: Boolean(inProgress),
+    message: message || ''
+  };
+}
+
+function startBackgroundServicesOnce() {
+  if (global.syncBackgroundServicesStarted) return;
+  global.syncBackgroundServicesStarted = true;
+
+  CronSyncScheduler.start().catch((error) => {
+    logger.error('[index] Không thể khởi động Lịch Đồng Bộ:', error);
+  });
+
+  startSessionRefresher();
+}
+
+global.startBackgroundServicesOnce = startBackgroundServicesOnce;
 
 /**
  * TỰ ĐỘNG TẠO SHORTCUT RA DESKTOP KHI MỞ ỨNG DỤNG
@@ -187,6 +215,31 @@ app.get('/health', (req, res) => {
   res.json({ status: 'OK' });
 });
 
+async function bootstrapAfterServerStart(url) {
+  // Chủ động đăng nhập SharePoint ngay khi ứng dụng khởi động.
+  // Chỉ sau khi login xong mới bật scheduler và session refresher để tránh race.
+  if (process.env.SHAREPOINT_LOGIN_ON_START !== 'false') {
+    logger.info('🔑 Đang khởi động đăng nhập SharePoint ngay từ lúc start...');
+    setSharePointLoginState(false, '', true);
+    try {
+      await refreshAuth();
+      setSharePointLoginState(false, '', false);
+      logger.info('✅ Đăng nhập SharePoint hoàn tất. Bắt đầu khởi động các tác vụ nền.');
+    } catch (loginErr) {
+      setSharePointLoginState(
+        true,
+        loginErr?.message || 'Đăng nhập SharePoint khi khởi động không thành công.',
+        false
+      );
+      logger.error('❌ Không thể đăng nhập SharePoint khi khởi động:', loginErr);
+      logger.warn('⏸️ Tạm hoãn khởi động CronSyncScheduler và SessionRefresher vì login chưa thành công.');
+      return;
+    }
+  }
+
+  startBackgroundServicesOnce();
+}
+
 /**
  * KHOI DONG SERVER
  */
@@ -197,14 +250,6 @@ app.listen(PORT, () => {
   logger.info(`⚓ MÁY CHỦ ĐỒNG BỘ SNP ĐANG CHẠY TẠI CỔNG ${PORT}`);
   logger.info(`🌐 Bảng điều khiển: ${url}`);
   logger.info('------------------------------------------------------');
-
-  // Tự động chạy Login Flow (Playwright) nếu là bản đóng gói
-  if (isSea || isPkg) {
-    logger.info('🔑 Đang khởi động quy trình đăng nhập tự động...');
-    loginFlow().catch((loginErr) => {
-      logger.error('❌ Lỗi trong quá trình đăng nhập tự động:', loginErr);
-    });
-  }
 
   // Tự động mở Dashboard khi khởi chạy bản đóng gói (.exe) - Ưu tiên Chrome
   if (process.env.NODE_ENV === 'production' || isPkg || isSea) {
@@ -284,13 +329,9 @@ app.listen(PORT, () => {
     }
   }
 
-  // Khởi động Lịch Đồng Bộ (Cron)
-  CronSyncScheduler.start().catch((error) => {
-    logger.error('[index] Không thể khởi động Lịch Đồng Bộ:', error);
+  bootstrapAfterServerStart(url).catch((error) => {
+    logger.error('[index] Lỗi bootstrap sau khi server khởi động:', error);
   });
-
-  // Khởi động trình làm mới Session (mỗi 10 phút kiểm tra token SharePoint)
-  startSessionRefresher();
 });
 
 /**

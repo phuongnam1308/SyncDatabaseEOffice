@@ -5,6 +5,15 @@ const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 const FileService = require('../../sync-file-copy/Fileuploadservice');
 const { downloadFile: spDownload } = require('../../sync-file-copy/SharePointAuthService');
+const {
+  claimNextStagingRow,
+  ensureTrackingColumns,
+  markRowFailed,
+  markRowSuccess,
+  releaseStaleClaims,
+  startHeartbeatLoop,
+  updateHeartbeat,
+} = require('../../helpers/StagingQueueHelper');
 /**
  * Phát hiện MIME type từ magic bytes — thay thế package file-type (ESM-only)
  */
@@ -188,6 +197,7 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
     this._IncomingMigrationModels = null;
     this._fileService = null;
     this.partitionColumn = 'NgayDen'; // Cột nghiệp vụ để chia dải dữ liệu
+    this.heartbeatIntervalMs = Number(process.env.HEARTBEAT_INTERVAL_MS || 30000);
   }
 
   /**
@@ -309,6 +319,13 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
         `;
 
       await this.queryNewDb(createQuery);
+      await ensureTrackingColumns(this, {
+        tableRef: stagingTableRef,
+        tableName: this.newTableSync,
+        schemaName: this.newDbSchema,
+        dbName: this.newDbName,
+        label: this.modelName,
+      });
 
       logger.info(`[IncomingDocumentModel] Staging table ready`);
     } catch (err) {
@@ -731,19 +748,18 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
 
       // Cleanup stale records (MigrateFlg = 2 but too old)
       try {
-        const cleanupRes = await this.queryNewDb(`
-          UPDATE ${stagingTableRef}
-          SET MigrateFlg = 0, MigrateErrMess = 'Reset from stale processing'
-          WHERE MigrateFlg = 2
-            AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
+        await releaseStaleClaims(this, {
+          tableRef: stagingTableRef,
+          extraWhere: `
+            (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
             AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
-        `, {
-          startDate: envStartDate,
-          endDate: envEndDate
+          `,
+          params: {
+            startDate: envStartDate,
+            endDate: envEndDate,
+          },
+          label: this.modelName,
         });
-        if (cleanupRes?.rowsAffected?.[0] > 0) {
-          logger.info(`[IncomingDocumentModel] Đã reset ${cleanupRes.rowsAffected[0]} bản ghi bị kẹt (MigrateFlg=2) trong phân đoạn.`);
-        }
       } catch (cleanupErr) {
         logger.warn(`[IncomingDocumentModel] Cleanup stale records failed: ${cleanupErr.message}`);
       }
@@ -896,6 +912,7 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
 
     let rowData = null;
     let transaction = null;
+    let stopHeartbeat = null;
 
     try {
       const stagingTableRef = this.getStagingTableRef();
@@ -918,7 +935,11 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
 
       const rowId = rowData.ID || null;
       const current = Number(jobState?.total_processed || 0) + 1;
-      logger.info(`[IncomingDocumentModel] Process ${current}: record ID=${rowId}`);
+      logger.info(`[${this.modelName}] [START] Processing started: ID=${rowId}, nextProcessedCounter=${current}`);
+      stopHeartbeat = startHeartbeatLoop(
+        () => this.updateHeartbeat(rowId),
+        this.heartbeatIntervalMs,
+      );
 
       // --- BƯỚC MỚI: Chuẩn bị dữ liệu file NGOÀI Transaction để tránh giữ lock lâu ---
       let preparedFiles = [];
@@ -943,14 +964,21 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
         );
 
         // Mark staging row as processed successfully
-        await this.queryNewDbTx(
-          `UPDATE ${stagingTableRef}  WITH (ROWLOCK)  SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE ID = @ID`,
-          { ID: rowId },
+        await markRowSuccess(this, {
+          tableRef: stagingTableRef,
+          keyWhere: 'ID = @ID',
+          params: { ID: rowId },
           transaction,
-        );
+          rowToken: `ID=${rowId}`,
+          label: this.modelName,
+        });
 
         return res;
       }, { maxRetries: 5 });
+      if (stopHeartbeat) {
+        stopHeartbeat();
+        stopHeartbeat = null;
+      }
 
       return {
         syncJobId,
@@ -960,13 +988,24 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
         result
       };
     } catch (error) {
+      if (stopHeartbeat) {
+        stopHeartbeat();
+        stopHeartbeat = null;
+      }
       // If failed, mark as error in staging so we skip it next time!
       // RESET MigrateFlg path: if it failed permanently, we set MigrateErrFlg=1.
       // But we set MigrateFlg=0 so it might be picked up again if we want to retry it manually or automatically after fix.
       if (rowData && rowData.ID) {
         try {
           const stagingTableRef = this.getStagingTableRef();
-          await this.queryNewDb(`UPDATE ${stagingTableRef} SET MigrateFlg = 0, MigrateErrFlg = 1, MigrateErrMess = @Err WHERE ID = @ID`, { ID: rowData.ID, Err: String(error.message).slice(0, 1000) });
+          await markRowFailed(this, {
+            tableRef: stagingTableRef,
+            keyWhere: 'ID = @ID',
+            params: { ID: rowData.ID },
+            rowToken: `ID=${rowData.ID}`,
+            errorMessage: error.message,
+            label: this.modelName,
+          });
         } catch (updateErr) { }
       }
 
@@ -1025,38 +1064,43 @@ class StreamIncomingIncrementalModel extends BaseIncrementalSyncInterface {
   async fetchOneFromStaging() {
     try {
       const stagingTableRef = this.getStagingTableRef();
-      // Atomic UPDATE TOP (1) ... OUTPUT:
-      // 1. Tìm bản ghi pending (MigrateFlg=0)
-      // 2. Đánh dấu ngay lập tức là 'đang xử lý' (MigrateFlg=2)
-      // 3. Trả về bản ghi đó (OUTPUT inserted.*)
-      // Giúp ngăn chặn race condition khi nhiều worker cùng lấy 1 record.
-      const query = `
-      WITH CTE AS (
-        SELECT TOP (1) *
-        FROM ${stagingTableRef} WITH (UPDLOCK, ROWLOCK)
-        WHERE ISNULL(MigrateFlg, 0) = 0
-          AND ISNULL(MigrateErrFlg, 0) = 0
-          -- Phân đoạn dữ liệu theo cột nghiệp vụ để Worker không nhặt nhầm dải của nhau
-          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
+      const row = await claimNextStagingRow(this, {
+        tableRef: stagingTableRef,
+        extraWhere: `
+          (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
           AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
-        ORDER BY TRY_CONVERT(datetime2, Modified) DESC,
-                 TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(ID)), '')) DESC
-      )
-      UPDATE CTE
-      SET MigrateFlg = 2,
-          MigrateErrMess = 'Processing...'
-      OUTPUT inserted.*
-      `;
-
-      const rows = await this.queryNewDb(query, {
-        startDate: SYNC_START_DATE || null,
-        endDate: SYNC_END_DATE || null
+        `,
+        params: {
+          startDate: SYNC_START_DATE || null,
+          endDate: SYNC_END_DATE || null
+        },
+        owner: `pid_${process.pid}`,
+        orderBy: `
+          TRY_CONVERT(datetime2, Modified) DESC,
+          TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(ID)), '')) DESC
+        `,
+        label: this.modelName,
       });
-      return rows?.length ? rows[0] : null;
+      if (row) {
+        logger.info(`[${this.modelName}] [START] Processing started: ID=${row.ID}`);
+      }
+      return row;
     } catch (error) {
       logger.error(`[IncomingDocumentModel.fetchOneFromStaging] Failed to fetch: ${error.message}`);
       throw error;
     }
+  }
+
+  async updateHeartbeat(rowId, transaction = null) {
+    if (!rowId) return 0;
+    return updateHeartbeat(this, {
+      tableRef: this.getStagingTableRef(),
+      keyWhere: 'ID = @ID',
+      params: { ID: rowId },
+      transaction,
+      rowToken: `ID=${rowId}`,
+      label: this.modelName,
+    });
   }
 
   /**

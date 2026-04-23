@@ -3,6 +3,7 @@ const SyncManagerService = require('./SyncManagerService');
 const SyncStateRepository = require('./SyncStateRepository');
 const logger = require('../../utils/logger');
 const SyncModelRegistry = require('./SyncModelRegistry');
+const { refreshAuth } = require('../sync-file-copy/SharePointAuthService');
 
 class SyncManagerController extends BaseController {
   /**
@@ -12,6 +13,14 @@ class SyncManagerController extends BaseController {
     super();
     this.initialized = false;
     this.modelRegistry = new SyncModelRegistry();
+  }
+
+  _getSharePointLoginState() {
+    return global.sharePointLoginState || {
+      required: false,
+      inProgress: false,
+      message: ''
+    };
   }
 
   /**
@@ -209,16 +218,49 @@ class SyncManagerController extends BaseController {
    */
   login = this.asyncHandler(async (req, res) => {
     logger.info('[SyncManagerController] Kích hoạt đăng nhập từ Bảng điều khiển');
-    
-    // Chạy file auth/login_playwright.js
-    const loginFlow = require('../../auth/login_playwright');
-    loginFlow({ forceHeaded: true }).catch(err => {
-      logger.error('[SyncManagerController] Lỗi quy trình đăng nhập:', err);
-    });
 
-    return this.success(res, { 
-      message: 'Đã khởi động quy trình đăng nhập (Chrome). Vui lòng kiểm tra cửa sổ trình duyệt mới.'
-    });
+    global.sharePointLoginState = {
+      required: false,
+      inProgress: true,
+      message: ''
+    };
+    SyncManagerService._broadcastSSE();
+
+    try {
+      await refreshAuth();
+
+      global.sharePointLoginState = {
+        required: false,
+        inProgress: false,
+        message: ''
+      };
+
+      if (typeof global.startBackgroundServicesOnce === 'function') {
+        global.startBackgroundServicesOnce();
+      }
+
+      SyncManagerService._broadcastSSE();
+      return this.success(res, {
+        loginRequired: false,
+        message: 'Đăng nhập SharePoint thành công.'
+      }, 'Đăng nhập SharePoint thành công.');
+    } catch (err) {
+      logger.error('[SyncManagerController] Lỗi quy trình đăng nhập:', err);
+
+      global.sharePointLoginState = {
+        required: true,
+        inProgress: false,
+        message: err?.message || 'Đăng nhập SharePoint thất bại.'
+      };
+      SyncManagerService._broadcastSSE();
+
+      return this.error(
+        res,
+        `Đăng nhập SharePoint thất bại: ${err?.message || 'Không rõ nguyên nhân'}`,
+        500,
+        err
+      );
+    }
   });
 
   // ── MỚI: SSE endpoint và Settings endpoint ─────────────────────────────────────
@@ -266,6 +308,10 @@ class SyncManagerController extends BaseController {
 
     const instanceId = process.env.SYNC_INSTANCE_ID || process.env.INSTANCE_ID || 'default';
     const data = await SyncStateRepository.getDashboardData(instanceId);
+    const sharePointLoginState = this._getSharePointLoginState();
+    data.sharePointLoginRequired = sharePointLoginState.required;
+    data.sharePointLoginInProgress = sharePointLoginState.inProgress;
+    data.sharePointLoginMessage = sharePointLoginState.message;
     const registeredLabels = this.modelRegistry.getRegisteredLabels();
     
     // ĐÃ KHÔI PHỤC: Lọc bỏ những đối tượng máy này không phụ trách
@@ -806,6 +852,65 @@ class SyncManagerController extends BaseController {
     let _es = null;
     let retryCount = 0;
     const maxRetries = 2; // Giới hạn số lần thử lại trước khi báo sự cố
+    let sharePointLoginAlertActive = false;
+    let sharePointLoginRequestActive = false;
+    window.__sharePointLoginRequired = ${data.sharePointLoginRequired ? 'true' : 'false'};
+    window.__sharePointLoginInProgress = ${data.sharePointLoginInProgress ? 'true' : 'false'};
+    window.__sharePointLoginMessage = ${JSON.stringify(data.sharePointLoginMessage || '')};
+
+    function handleSharePointLoginRequirement(data = {}) {
+      window.__sharePointLoginRequired = Boolean(data.sharePointLoginRequired);
+      window.__sharePointLoginInProgress = Boolean(data.sharePointLoginInProgress);
+      window.__sharePointLoginMessage = data.sharePointLoginMessage || '';
+
+      if (window.__sharePointLoginRequired && !window.__sharePointLoginInProgress && !sharePointLoginAlertActive) {
+        setTimeout(() => {
+          ensureSharePointLoginUntilSuccess();
+        }, 0);
+      }
+    }
+
+    async function retrySharePointLoginFromDashboard() {
+      if (sharePointLoginRequestActive) return false;
+      sharePointLoginRequestActive = true;
+      try {
+        const r = await fetch('/api/sync-manager-src/login', { method: 'POST' });
+        const j = await r.json().catch(() => ({}));
+        if (r.ok && j.success !== false) {
+          window.__sharePointLoginRequired = false;
+          window.__sharePointLoginInProgress = false;
+          window.__sharePointLoginMessage = '';
+          return true;
+        }
+
+        window.__sharePointLoginRequired = true;
+        window.__sharePointLoginInProgress = false;
+        window.__sharePointLoginMessage = j.message || j.error || 'Đăng nhập SharePoint thất bại.';
+        return false;
+      } catch (e) {
+        window.__sharePointLoginRequired = true;
+        window.__sharePointLoginInProgress = false;
+        window.__sharePointLoginMessage = e.message || 'Đăng nhập SharePoint thất bại.';
+        return false;
+      } finally {
+        sharePointLoginRequestActive = false;
+      }
+    }
+
+    async function ensureSharePointLoginUntilSuccess() {
+      if (sharePointLoginAlertActive) return;
+      sharePointLoginAlertActive = true;
+      try {
+        while (window.__sharePointLoginRequired) {
+          const msg = window.__sharePointLoginMessage || 'Đăng nhập SharePoint không thành công.';
+          alert(msg + '\\n\\nNhấn OK để thử đăng nhập lại SharePoint.');
+          const ok = await retrySharePointLoginFromDashboard();
+          if (ok) break;
+        }
+      } finally {
+        sharePointLoginAlertActive = false;
+      }
+    }
 
     function connectSSE() {
       _es = new EventSource('/api/sync-manager-src/events');
@@ -840,6 +945,7 @@ class SyncManagerController extends BaseController {
     }
 
     function renderDashboard(data) {
+      handleSharePointLoginRequirement(data);
       const badge = document.getElementById('running-badge');
       badge.textContent = data.isRunning ? '⟳ Đang đồng bộ...' : '✓ Sẵn sàng';
       badge.className   = data.isRunning ? 'syncing' : 'ready';
@@ -985,12 +1091,12 @@ class SyncManagerController extends BaseController {
     }
 
     async function triggerLogin() {
-      if (!confirm('Hệ thống sẽ mở trình duyệt để đăng nhập EOffice (npm run login). Tiếp tục?')) return;
-      try {
-        const r = await fetch('/api/sync-manager-src/login', { method: 'POST' });
-        const j = await r.json();
-        alert(j.message);
-      } catch (e) { alert('Lỗi: ' + e.message); }
+      const ok = await retrySharePointLoginFromDashboard();
+      if (ok) {
+        alert('Đăng nhập SharePoint thành công.');
+      } else {
+        ensureSharePointLoginUntilSuccess();
+      }
     }
 
     async function toggleSkipPull(checkbox) {
@@ -1017,6 +1123,11 @@ class SyncManagerController extends BaseController {
     }
 
     connectSSE(); // khởi động SSE khi trang load
+    handleSharePointLoginRequirement({
+      sharePointLoginRequired: window.__sharePointLoginRequired,
+      sharePointLoginInProgress: window.__sharePointLoginInProgress,
+      sharePointLoginMessage: window.__sharePointLoginMessage
+    });
   </script>
 </body>
 </html>`;

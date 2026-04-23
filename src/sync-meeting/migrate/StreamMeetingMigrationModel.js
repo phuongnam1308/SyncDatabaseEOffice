@@ -2,6 +2,14 @@ const MigrationHelper = require('../../helpers/MigrationHelper');
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 const { tableMappings } = require('./config');
 const logger = require('../../../utils/logger');
+const {
+  claimNextStagingRow,
+  ensureTrackingColumns,
+  markRowFailed,
+  markRowSuccess,
+  startHeartbeatLoop,
+  updateHeartbeat,
+} = require('../../helpers/StagingQueueHelper');
 
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 
@@ -29,6 +37,7 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     // Multi-DB List Discovery
     this.listIdCache = {}; // { dbName: [listId1, listId2] }
     this.canonicalListTitle = null;
+    this.heartbeatIntervalMs = Number(process.env.HEARTBEAT_INTERVAL_MS || 30000);
   }
 
   /**
@@ -98,6 +107,13 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
         `;
 
         await this.queryNewDb(query);
+        await ensureTrackingColumns(this, {
+          tableRef: stagingTableRef,
+          tableName: table,
+          schemaName: schema,
+          dbName: this.newDbName,
+          label: this.modelName,
+        });
 
         console.log(`[ensureStagingTableExists] OK: ${stagingTableRef}`);
 
@@ -467,52 +483,80 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     return rows?.[0] || null;
   }
 
-  async claimNextFromStaging() {
+  async fetchOneFromStaging() {
     const stagingTableRef = this.getStagingTableRef();
-    const query = `
-      WITH CTE AS (
-        SELECT TOP 1 *
-        FROM ${stagingTableRef} WITH (UPDLOCK, ROWLOCK, READPAST)
-        WHERE ISNULL(MigrateFlg, 0) = 0 AND ISNULL(MigrateErrFlg, 0) = 0
-        ORDER BY __sync_time ASC, __sync_id_num ASC
-      )
-      UPDATE CTE SET MigrateFlg = 2 OUTPUT inserted.*;
-    `;
-    const rows = await this.queryNewDb(query);
-    return rows?.[0] || null;
+    const row = await claimNextStagingRow(this, {
+      tableRef: stagingTableRef,
+      orderBy: '__sync_time ASC, __sync_id_num ASC',
+      owner: `pid_${process.pid}`,
+      label: this.modelName,
+    });
+    if (row) {
+      logger.info(`[${this.modelName}] [START] Processing started: ID=${row.ID}, source_db=${row.source_db}`);
+    }
+    return row;
+  }
+
+  async claimNextFromStaging() {
+    return this.fetchOneFromStaging();
+  }
+
+  async updateHeartbeat(rowData, transaction = null) {
+    if (!rowData?.ID) return 0;
+    return updateHeartbeat(this, {
+      tableRef: this.getStagingTableRef(),
+      keyWhere: 'ID = @recordId AND source_db = @sourceDb',
+      params: { recordId: String(rowData.ID), sourceDb: rowData.source_db },
+      transaction,
+      rowToken: `ID=${rowData.ID}, source_db=${rowData.source_db}`,
+      label: this.modelName,
+    });
   }
 
   async processOne(syncJobId) {
     if (!syncJobId) throw new Error('syncJobId is required');
 
-    const rowData = await this.claimNextFromStaging();
+    const rowData = await this.fetchOneFromStaging();
     if (!rowData) {
       return { syncJobId, processed: false, done: true };
     }
 
     const recordId = String(rowData.ID);
     const sourceDb = rowData.source_db;
+    const stopHeartbeat = startHeartbeatLoop(
+      () => this.updateHeartbeat(rowData),
+      this.heartbeatIntervalMs,
+    );
 
     try {
       const result = await this.processRowData(rowData);
 
-      await this.queryNewDb(
-        `UPDATE ${this.getStagingTableRef()} SET MigrateFlg = 1 WHERE ID = @recordId AND source_db = @sourceDb`,
-        { recordId, sourceDb }
-      );
+      await markRowSuccess(this, {
+        tableRef: this.getStagingTableRef(),
+        keyWhere: 'ID = @recordId AND source_db = @sourceDb',
+        params: { recordId, sourceDb },
+        rowToken: `ID=${recordId}, source_db=${sourceDb}`,
+        label: this.modelName,
+      });
 
       await this.queryNewDb(
         `UPDATE sync_jobs SET total_processed = ISNULL(total_processed,0) + 1, total_success = ISNULL(total_success,0) + 1 WHERE job_id = @syncJobId`,
         { syncJobId }
       );
+      stopHeartbeat();
 
       return { syncJobId, processed: true, done: false };
     } catch (err) {
+      stopHeartbeat();
       logger.error(`[StreamMeetingMigrationModel] Error processing record ID=${recordId} from ${sourceDb}: ${err.message}`);
-      await this.queryNewDb(
-        `UPDATE ${this.getStagingTableRef()} SET MigrateFlg = 3, MigrateErrFlg = 1 WHERE ID = @recordId AND source_db = @sourceDb`,
-        { recordId, sourceDb }
-      );
+      await markRowFailed(this, {
+        tableRef: this.getStagingTableRef(),
+        keyWhere: 'ID = @recordId AND source_db = @sourceDb',
+        params: { recordId, sourceDb },
+        rowToken: `ID=${recordId}, source_db=${sourceDb}`,
+        errorMessage: err.message,
+        label: this.modelName,
+      });
       await this.queryNewDb(
         `UPDATE sync_jobs SET total_processed = ISNULL(total_processed,0) + 1, total_errors = ISNULL(total_errors,0) + 1 WHERE job_id = @syncJobId`,
         { syncJobId }

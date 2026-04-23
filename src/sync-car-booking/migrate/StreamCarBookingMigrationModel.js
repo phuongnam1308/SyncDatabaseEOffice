@@ -2,6 +2,14 @@ const logger = require('../../../utils/logger');
 const MigrationHelper = require('../../helpers/MigrationHelper');
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 const { tableMappings } = require('./config');
+const {
+  claimNextStagingRow,
+  ensureTrackingColumns,
+  markRowFailed,
+  markRowSuccess,
+  startHeartbeatLoop,
+  updateHeartbeat,
+} = require('../../helpers/StagingQueueHelper');
 
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 
@@ -22,6 +30,7 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         codeItem: new Set(),
         hasUserInfo: false
     };
+    this.heartbeatIntervalMs = Number(process.env.HEARTBEAT_INTERVAL_MS || 30000);
 
     // Multi-DB List Discovery
     this.listIdCache = {}; // { dbName: [listId1, listId2] }
@@ -247,6 +256,13 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
       END
       `;
       await this.queryNewDb(createQuery);
+      await ensureTrackingColumns(this, {
+        tableRef: stagingTableRef,
+        tableName: table,
+        schemaName: schema,
+        dbName: this.newDbName,
+        label: this.modelName,
+      });
 
       // 2. Danh sách các cột cần đảm bảo (Đã chuyển sang tiếng Anh cho đồng bộ)
       const columnsToAdd = [
@@ -874,26 +890,38 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
     return rows?.[0] || null;
   }
 
+  async fetchOneFromStaging() {
+    const stagingTableRef = this.getStagingTableRef();
+    const row = await claimNextStagingRow(this, {
+      tableRef: stagingTableRef,
+      orderBy: 'SY_SyncId ASC',
+      owner: `pid_${process.pid}`,
+      label: this.modelName,
+    });
+    if (row) {
+      logger.info(`[${this.modelName}] [START] Processing started: SY_SyncId=${row.SY_SyncId}, ID=${row.ID}`);
+    }
+    return row;
+  }
+
+  async updateHeartbeat(rowData, transaction = null) {
+    if (!rowData?.SY_SyncId) return 0;
+    return updateHeartbeat(this, {
+      tableRef: this.getStagingTableRef(),
+      keyWhere: 'SY_SyncId = @syncId',
+      params: { syncId: rowData.SY_SyncId },
+      transaction,
+      rowToken: `SY_SyncId=${rowData.SY_SyncId}`,
+      label: this.modelName,
+    });
+  }
+
   async processOne(syncJobId) {
     const stagingTableRef = this.getStagingTableRef();
     let rowData = null;
 
-    // Atomic claim: Lấy 1 bản ghi chưa xử lý và khóa nó lại (MigrateFlg=2)
-    const claimQuery = `
-      WITH CTE AS (
-        SELECT TOP 1 *
-        FROM ${stagingTableRef} WITH (ROWLOCK, UPDLOCK, READPAST)
-        WHERE ISNULL(MigrateFlg, 0) = 0
-          AND ISNULL(MigrateErrFlg, 0) = 0
-        ORDER BY SY_SyncId ASC
-      )
-      UPDATE CTE SET MigrateFlg = 2
-      OUTPUT INSERTED.*;
-    `;
-
     try {
-      const result = await this.queryNewDb(claimQuery);
-      rowData = result?.[0];
+      rowData = await this.fetchOneFromStaging();
     } catch (e) {
       logger.error(`[StreamCarBookingMigrationModel] Error claiming row from staging: ${e.message}`);
       return { syncJobId, processed: false, done: false };
@@ -908,27 +936,43 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
     const dbSource = rowData.source_db || this.oldDbName;
     rowData.source_db = dbSource; // Ensure it's set for processRowData
     logger.info(`[StreamCarBookingMigrationModel] processOne: Processing row ID ${recordId} from ${dbSource}`);
+    const stopHeartbeat = startHeartbeatLoop(
+      () => this.updateHeartbeat(rowData),
+      this.heartbeatIntervalMs,
+    );
 
     try {
       await this.processRowData(rowData);
 
       // Mark success
-      await this.queryNewDb(`UPDATE ${stagingTableRef} SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE SY_SyncId = @syncId`, { syncId: rowData.SY_SyncId });
+      await markRowSuccess(this, {
+        tableRef: stagingTableRef,
+        keyWhere: 'SY_SyncId = @syncId',
+        params: { syncId: rowData.SY_SyncId },
+        rowToken: `SY_SyncId=${rowData.SY_SyncId}`,
+        label: this.modelName,
+      });
 
       // Update Dashboard
       await this.queryNewDb(
         `UPDATE sync_jobs SET total_processed = ISNULL(total_processed,0) + 1, total_success = ISNULL(total_success,0) + 1 WHERE job_id = @syncJobId`,
         { syncJobId }
       );
+      stopHeartbeat();
 
       return { syncJobId, processed: true, done: false };
     } catch (err) {
+      stopHeartbeat();
       logger.error(`[StreamCarBookingMigrationModel] processOne: Error ID ${recordId}: ${err.message}`);
 
       // Mark error
-      await this.queryNewDb(`UPDATE ${stagingTableRef} SET MigrateFlg = 0, MigrateErrFlg = 1, MigrateErrMess = @msg WHERE SY_SyncId = @syncId`, {
-        syncId: rowData.SY_SyncId,
-        msg: err.message.substring(0, 500)
+      await markRowFailed(this, {
+        tableRef: stagingTableRef,
+        keyWhere: 'SY_SyncId = @syncId',
+        params: { syncId: rowData.SY_SyncId },
+        rowToken: `SY_SyncId=${rowData.SY_SyncId}`,
+        errorMessage: err.message,
+        label: this.modelName,
       });
 
       await this.queryNewDb(

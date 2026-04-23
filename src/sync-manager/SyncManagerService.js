@@ -1091,6 +1091,12 @@ class SyncManagerService {
    * @returns {Promise<object>}
    */
   async getDashboardData() {
+    const sharePointLoginState = global.sharePointLoginState || {
+      required: false,
+      inProgress: false,
+      message: ''
+    };
+
     const entities = {};
     for (const [modelName, modelState] of Object.entries(this.state.models)) {
       const currentJob = modelState.activeJobId
@@ -1115,7 +1121,10 @@ class SyncManagerService {
     return {
       isRunning: this.isRunning, entities,
       jobs: this.state.jobs, syncLogs: this.state.syncLogs,
-      registeredCount: this.registry.size
+      registeredCount: this.registry.size,
+      sharePointLoginRequired: sharePointLoginState.required,
+      sharePointLoginInProgress: sharePointLoginState.inProgress,
+      sharePointLoginMessage: sharePointLoginState.message
     };
   }
 

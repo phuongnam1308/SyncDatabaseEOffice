@@ -7,6 +7,14 @@ const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncremental
 const { tableMappings, mapStatus, parseDate } = require('./config');
 const mapping = require('./mapping.json');
 const requiredRoles = require('./required_process_roles.json');
+const {
+  claimNextStagingRow,
+  ensureTrackingColumns,
+  markRowFailed,
+  markRowSuccess,
+  startHeartbeatLoop,
+  updateHeartbeat,
+} = require('../../helpers/StagingQueueHelper');
 
 
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
@@ -29,6 +37,7 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
     this.newTableSync = 'passport_borrow_request_sync_staging';
     this.helper = new MigrationHelper(this.queryNewDbTx.bind(this), this.queryOldDb.bind(this));
     this.requiredRoles = requiredRoles;
+    this.heartbeatIntervalMs = Number(process.env.HEARTBEAT_INTERVAL_MS || 30000);
 
     // Multi-DB List Discovery
     this.listIdCache = {}; // { dbName: [listId1, listId2] }
@@ -272,6 +281,13 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
       END
       `;
       await this.queryNewDb(indexCheckQuery);
+      await ensureTrackingColumns(this, {
+        tableRef: stagingTableRef,
+        tableName: table,
+        schemaName: schema,
+        dbName: this.newDbName,
+        label: this.modelName,
+      });
 
       logger.info(`[StreamPassportMigrationModel] [ensureStagingTableExists] OK: ${stagingTableRef} is ready`);
     } catch (err) {
@@ -1102,27 +1118,32 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
 
       if (availableCount === 0) return null;
 
-      // ★ Atomic claim pattern: CTE + UPDLOCK, ROWLOCK
-      const query = `
-      WITH CTE AS (
-        SELECT TOP (1) *
-        FROM ${tableRef} WITH (UPDLOCK, ROWLOCK)
-        WHERE ISNULL(MigrateFlg, 0) = 0
-          AND ISNULL(MigrateErrFlg, 0) = 0
-        ORDER BY [__sync_time] DESC, [ID] DESC
-      )
-      UPDATE CTE
-      SET MigrateFlg = 2,
-          MigrateErrMess = 'Processing...'
-      OUTPUT inserted.*
-      `;
-
-      const rows = await this.queryNewDb(query);
-      return rows?.length ? rows[0] : null;
+      const row = await claimNextStagingRow(this, {
+        tableRef,
+        orderBy: '[__sync_time] DESC, [ID] DESC',
+        owner: `pid_${process.pid}`,
+        label: this.modelName,
+      });
+      if (row) {
+        logger.info(`[${this.modelName}] [START] Processing started: ID=${row.ID}`);
+      }
+      return row;
     } catch (error) {
       logger.error(`[StreamPassportMigrationModel.fetchOneFromStaging] Failed: ${error.message}`);
       throw error;
     }
+  }
+
+  async updateHeartbeat(rowId, transaction = null) {
+    if (!rowId) return 0;
+    return updateHeartbeat(this, {
+      tableRef: this.getStagingTableRef(),
+      keyWhere: 'ID = @ID',
+      params: { ID: rowId },
+      transaction,
+      rowToken: `ID=${rowId}`,
+      label: this.modelName,
+    });
   }
 
   /**
@@ -1135,6 +1156,7 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
     const jobState = await this.getSyncJobState(syncJobId);
     const stagingTableRef = this.getStagingTableRef();
     let rowData = null;
+    let stopHeartbeat = null;
 
     try {
       // ★ Claim 1 record bằng atomic fetch (MigrateFlg=0→2)
@@ -1149,6 +1171,10 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
       const rowId = rowData.ID || null;
       const current = Number(jobState?.total_processed || 0) + 1;
       logger.info(`[StreamPassportMigrationModel] Process ${current}: record ID=${rowId}`);
+      stopHeartbeat = startHeartbeatLoop(
+        () => this.updateHeartbeat(rowId),
+        this.heartbeatIntervalMs,
+      );
 
       // ★ Wrap trong transaction với retry
       const result = await dbUtils.withTransactionRetry(this.newPool, async (transaction) => {
@@ -1165,14 +1191,21 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
         );
 
         // ★ Đánh dấu staging row thành công: MigrateFlg=1
-        await this.queryNewDbTx(
-          `UPDATE ${stagingTableRef} WITH (ROWLOCK) SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE ID = @ID`,
-          { ID: rowId },
-          transaction
-        );
+        await markRowSuccess(this, {
+          tableRef: stagingTableRef,
+          keyWhere: 'ID = @ID',
+          params: { ID: rowId },
+          transaction,
+          rowToken: `ID=${rowId}`,
+          label: this.modelName,
+        });
 
         return res;
       }, { maxRetries: 5 });
+      if (stopHeartbeat) {
+        stopHeartbeat();
+        stopHeartbeat = null;
+      }
 
       return {
         syncJobId,
@@ -1182,13 +1215,21 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
         result
       };
     } catch (error) {
+      if (stopHeartbeat) {
+        stopHeartbeat();
+        stopHeartbeat = null;
+      }
       // ★ Rollback staging: MigrateFlg=0, MigrateErrFlg=1, lưu lỗi
       if (rowData && rowData.ID) {
         try {
-          await this.queryNewDb(
-            `UPDATE ${stagingTableRef} SET MigrateFlg = 0, MigrateErrFlg = 1, MigrateErrMess = @Err WHERE ID = @ID`,
-            { ID: rowData.ID, Err: String(error.message).slice(0, 1000) }
-          );
+          await markRowFailed(this, {
+            tableRef: stagingTableRef,
+            keyWhere: 'ID = @ID',
+            params: { ID: rowData.ID },
+            rowToken: `ID=${rowData.ID}`,
+            errorMessage: error.message,
+            label: this.modelName,
+          });
         } catch (updateErr) { /* ignore */ }
       }
 
