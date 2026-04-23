@@ -22,12 +22,12 @@ const StreamCarBookingMigrationModel = require('../sync-car-booking/migrate/Stre
 const StreamPassportMigrationModel = require('../sync-passport/migrate/StreamPassportMigrationModel');
 
 const MODEL_DEFINITIONS = [
-  {
-    key: 'STREAM_OUTGOING_INCREMENTAL',
-    label: 'Đồng bộ văn bản đi',
-    section: 'realtime',
-    ModelClass: OutGoingDocumentModel
-  },
+  // {
+  //   key: 'STREAM_OUTGOING_INCREMENTAL',
+  //   label: 'Đồng bộ văn bản đi',
+  //   section: 'realtime',
+  //   ModelClass: OutGoingDocumentModel
+  // },
   {
     key: 'STREAM_OUTGOING_V2',
     label: 'Đồng bộ văn bản đi v2',
@@ -82,24 +82,24 @@ const MODEL_DEFINITIONS = [
     section: 'realtime',
     ModelClass: StreamMeetingCopyMigrationModel,
   },
-  {
-    key: 'STREAM_EVENT_MIGRATION',
-    label: 'Đồng bộ lịch sự kiện',
-    section: 'realtime',
-    ModelClass: StreamEventMigrationModel,
-  },
-  {
-    key: 'STREAM_TGD_SCHEDULE_MIGRATION',
-    label: 'Đồng bộ lịch trực ban TGĐ',
-    section: 'realtime',
-    ModelClass: StreamTgdScheduleMigrationModel,
-  },
-  {
-    key: 'STREAM_MISSION_MIGRATION',
-    label: 'Đồng bộ lịch công tác',
-    section: 'realtime',
-    ModelClass: StreamMissionMigrationModel,
-  },
+  // {
+  //   key: 'STREAM_EVENT_MIGRATION',
+  //   label: 'Đồng bộ lịch sự kiện',
+  //   section: 'realtime',
+  //   ModelClass: StreamEventMigrationModel,
+  // },
+  // {
+  //   key: 'STREAM_TGD_SCHEDULE_MIGRATION',
+  //   label: 'Đồng bộ lịch trực ban TGĐ',
+  //   section: 'realtime',
+  //   ModelClass: StreamTgdScheduleMigrationModel,
+  // },
+  // {
+  //   key: 'STREAM_MISSION_MIGRATION',
+  //   label: 'Đồng bộ lịch công tác',
+  //   section: 'realtime',
+  //   ModelClass: StreamMissionMigrationModel,
+  // },
   {
     key: 'STREAM_CAR_BOOKING_MIGRATION',
     label: 'Đồng bộ lịch đặt xe',

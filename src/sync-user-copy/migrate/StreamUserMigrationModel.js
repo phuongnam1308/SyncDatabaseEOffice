@@ -328,12 +328,6 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
     const lowerPos = position.normalize('NFC').toLowerCase();
     const noAccent = this.normalizeVietnamese(position);
 
-    // // DEBUG: log để xem giá trị thực tế từ DB
-    // console.log('[mapPositionToRoles] position raw    :', JSON.stringify(position));
-    // console.log('[mapPositionToRoles] position lowerPos:', JSON.stringify(lowerPos));
-    // console.log('[mapPositionToRoles] position noAccent:', JSON.stringify(noAccent));
-    // console.log('[mapPositionToRoles] codepoints:', [...position].map(c => c.codePointAt(0).toString(16)).join(' '));
-
     for (const { keywords, roles } of roleMapping) {
       if (!Array.isArray(roles) || !roles.length) continue;
 
@@ -354,7 +348,6 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
 
   async processAvatar(imageHtml, username) {
     if (!imageHtml) {
-      // logger.debug(`[StreamUserMigrationModel][Avatar] processAvatar: imageHtml trống cho user ${username}`);
       return '[]';
     }
 
@@ -551,10 +544,9 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
   }
 
   /**
-   * @param {string} lastSyncTime - ISO datetime hoặc giá trị mặc định để lấy từ thời điểm đó về sau
-   * @returns {Promise<number>} tổng số bản ghi từ CSDL cũ
+   * countListFromOldDb - Đếm tổng số bản ghi từ CSDL cũ
    */
-  async getCount(lastSyncTime, lastSyncId = 0) {
+  async countListFromOldDb(lastSyncTime, lastSyncId = 0) {
     const query = `
       ;WITH source_rows AS (
         SELECT
@@ -588,14 +580,28 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
   }
 
   /**
-   * Lấy danh sách user từ CSDL cũ sau `lastSyncTime`.
-   * Trả về mảng bản ghi (ID, AccountName, FullName, Modified, NgayTao) đã sắp xếp theo thời gian sửa/tao.
-   * @param {string} lastSyncTime - ISO datetime hoặc giá trị mặc định để lấy từ thời điểm đó về sau
-   * @param {number} lastSyncId - ID cuối cùng đã đồng bộ
-   * @param {number} limit - Số lượng bản ghi cần lấy
-   * @param {number} offset - Vị trí bắt đầu lấy
-   * @returns {Promise<Array>} danh sách bản ghi từ CSDL cũ
+   * getCount - Đếm số bản ghi đang chờ xử lý trong Staging (Hỗ trợ Skip Pull)
    */
+  async getCount(lastSyncTime, lastSyncId = 0) {
+    const tableRef = this.getStagingTableRef();
+    const query = `
+      SELECT COUNT(1) AS total
+      FROM ${tableRef}
+      WHERE ISNULL(MigrateFlg, 0) = 0
+        AND ISNULL(MigrateErrFlg, 0) = 0
+    `;
+
+    try {
+      const rows = await this.queryNewDb(query);
+      const count = Number(rows?.[0]?.total || 0);
+      logger.debug(`[StreamUserMigrationModel] getCount from staging: ${count}`);
+      return count;
+    } catch (error) {
+      logger.error(`[StreamUserMigrationModel] getCount staging error: ${error.message}`);
+      return 0;
+    }
+  }
+
   async fetchListFromOldDb(lastSyncTime, lastSyncId = 0, limit = null, offset = null) {
     const query = `
       ;WITH source_rows AS (
@@ -713,7 +719,7 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
     const batchSize = Number(process.env.STAGING_FETCH_BATCH_SIZE || 2000);
 
     // 1. Đếm tổng và cập nhật Dashboard
-    const totalCount = await this.getCount(normalizedLastSyncTime, normalizedLastSyncId);
+    const totalCount = await this.countListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId);
     logger.info(`[StreamUserMigration] Tổng số bản ghi (User) cần hút về Staging: ${totalCount}`);
 
     await this.queryNewDb(`UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`, {
@@ -973,10 +979,6 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
         // ① Chuẩn hoá tên phòng ban qua processSenderUnit
         const normalizedDept = this.migrationHelper.processSenderUnit(rowData.Department);
 
-        // console.log(
-        //   `[upsertUserById] user.id=${mapped.id} | Department raw="${rowData.Department}" → processSenderUnit="${normalizedDept}"`
-        // );
-
         let parentId = null;
         if (normalizedDept) {
           // ② Tìm id trong organization_units theo tên đã chuẩn hoá
@@ -992,10 +994,6 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
         }
         // ③ Gán vào parent
         mapped.parent = parentId;
-
-        // console.log(
-        //   `[upsertUserById] user.id=${mapped.id} | Department="${normalizedDept}" → parent=${parentId ?? 'NULL (không tìm thấy)'}`
-        // );
       } catch (err) {
         console.warn(`[upsertUserById] Lỗi resolve parent cho user.id=${mapped.id}:`, err.message);
         mapped.parent = null;
@@ -1111,7 +1109,6 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
     `;
 
     const oldModifiedStr = rowData.__sync_time || rowData.Modified || rowData.NgayTao;
-    // ensure parsing logic handles empty cases correctly, JS new Date() does not error on empty but gives Invalid Date, so do it right:
     const old_modified =
       oldModifiedStr && !Number.isNaN(new Date(oldModifiedStr).getTime())
         ? new Date(oldModifiedStr)

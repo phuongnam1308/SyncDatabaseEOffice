@@ -107,6 +107,7 @@ const COMMENT_TABLES = [
   'Comments_TCTT',
   'Comments_TTDDC',
   'Comments_TTDTC',
+  'Comments_TTDTC',
   'Comments_VP',
   'Comments_VPMB',
   'Comments_VPTNB',
@@ -686,14 +687,30 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
   // ═══════════════════════════════════════════════════════════════
 
   /**
-   * Alias cho getCount để đồng nhất với SyncHandlerModel.
+   * getCount - Đếm số bản ghi đang chờ xử lý trong Staging (Hỗ trợ Skip Pull)
    */
   async getCount(lastSyncTime, lastSyncId = 0) {
-    return this.countListFromOldDb(lastSyncTime, lastSyncId);
+    const tableRef = this.getStagingTableRef();
+    const query = `
+      SELECT COUNT(1) AS total
+      FROM ${tableRef}
+      WHERE ISNULL(MigrateFlg, 0) = 0
+        AND ISNULL(MigrateErrFlg, 0) = 0
+    `;
+
+    try {
+      const rows = await this.queryNewDb(query);
+      const count = Number(rows?.[0]?.total || 0);
+      logger.debug(`[StreamTaskOutIncrementalModel] getCount from staging: ${count}`);
+      return count;
+    } catch (error) {
+      logger.error(`[StreamTaskOutIncrementalModel] getCount staging error: ${error.message}`);
+      return 0;
+    }
   }
 
   /**
-   * Đếm tổng số bản ghi cần đồng bộ.
+   * countListFromOldDb - Đếm tổng số bản ghi từ CSDL cũ
    */
   async countListFromOldDb(lastSyncTime, lastSyncId = 0) {
     const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);

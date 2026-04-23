@@ -42,7 +42,7 @@ class SyncOutgoingAdapter {
 
   /**
    * Implement BaseIncrementalSyncInterface.getCount()
-   * Đếm số bản ghi cần sync
+   * Đếm số bản ghi đang chờ xử lý trong staging (phục vụ Skip Pull)
    */
   async getCount(lastTime, lastSyncId = 0) {
     const stagingTable = `outgoing_documents_sync_${this._instanceId}`;
@@ -68,6 +68,14 @@ class SyncOutgoingAdapter {
       logger.error(`[SyncOutgoingAdapter] getCount error on ${stagingTable}: ${error.message}`);
       return 0;
     }
+  }
+
+  /**
+   * Implement countListFromOldDb - required for dashboard in Full Sync mode
+   */
+  async countListFromOldDb(lastSyncTime, lastSyncId = 0) {
+    if (!this._model || !this._model.extractor) return 0;
+    return this._model.extractor.countListFromOldDb(lastSyncTime, lastSyncId);
   }
 
   /**

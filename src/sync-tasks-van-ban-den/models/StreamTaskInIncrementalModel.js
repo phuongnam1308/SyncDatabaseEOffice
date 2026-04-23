@@ -1,4 +1,4 @@
-﻿const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
+const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 const logger = require('../../../utils/logger');
 const dbUtils = require('../../../utils/dbUtils');
 const sql = require('mssql');
@@ -752,7 +752,23 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
    * Alias cho getCount Ä‘á»ƒ Ä‘á»“ng nháº¥t vá»›i SyncHandlerModel.
    */
   async getCount(lastSyncTime, lastSyncId = 0) {
-    return this.countListFromOldDb(lastSyncTime, lastSyncId);
+    const tableRef = this.getStagingTableRef();
+    const query = `
+      SELECT COUNT(1) AS total
+      FROM ${tableRef}
+      WHERE ISNULL(MigrateFlg, 0) = 0
+        AND ISNULL(MigrateErrFlg, 0) = 0
+    `;
+
+    try {
+      const rows = await this.queryNewDb(query);
+      const count = Number(rows?.[0]?.total || 0);
+      logger.debug(`[StreamTaskInIncrementalModel] getCount from staging: ${count}`);
+      return count;
+    } catch (error) {
+      logger.error(`[StreamTaskInIncrementalModel] getCount staging error: ${error.message}`);
+      return 0;
+    }
   }
 
   /**

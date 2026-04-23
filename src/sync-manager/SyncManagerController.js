@@ -982,7 +982,7 @@ class SyncManagerController extends BaseController {
         
         <div class="toggle-wrapper">
           <label class="toggle-label" for="skipPullToggle">
-            <i class="bi bi-fast-forward-btn me-1"></i> Bỏ qua hút DB cũ (Skip Pull)
+            <i class="bi bi-fast-forward-btn me-1"></i> Bỏ qua chuẩn bị dữ liệu từ các bảng (Người dùng, Văn bản đến/đi, Công việc...)
           </label>
           <label class="switch">
             <input type="checkbox" id="skipPullToggle" onchange="toggleSkipPull(this)" ${data.settings && data.settings.SKIP_PULL_FROM_OLD ? 'checked' : ''} ${data.isRunning ? 'disabled' : ''}>
@@ -1062,6 +1062,17 @@ class SyncManagerController extends BaseController {
       const area = document.getElementById('notification-area');
       const modalArea = document.getElementById('modal-area');
       
+      const newModalState = JSON.stringify({
+        req: window.__sharePointLoginRequired,
+        prog: window.__sharePointLoginInProgress,
+        msg: window.__sharePointLoginMessage,
+        skip: window.__sharePointLoginSkipped,
+        conf: window.__sharePointSkipConfirmActive,
+        succ: window.__sharePointLoginSuccessActive
+      });
+
+      if (window.__lastModalState === newModalState) return;
+      window.__lastModalState = newModalState;
       // TRƯỜNG HỢP 1: ĐANG TRONG QUÁ TRÌNH ĐĂNG NHẬP (Hiện màn hình tối + Spinner + LOG + Nút Bỏ qua thẳng)
       if (window.__sharePointLoginInProgress) {
         document.body.classList.add('has-modal');
@@ -1232,9 +1243,8 @@ class SyncManagerController extends BaseController {
       _es = new EventSource('/api/sync-manager-src/events');
       _es.onopen    = () => {
         document.getElementById('sse-dot').textContent = '🟢';
-        retryCount = 0; // Reset bộ đếm khi kết nối thành công
+        retryCount = 0;
       };
-      _es.onopen    = () => { document.getElementById('sse-dot').textContent = '🟢'; };
       _es.onerror   = () => {
         document.getElementById('sse-dot').textContent = '🔴';
         _es.close();
@@ -1267,6 +1277,14 @@ class SyncManagerController extends BaseController {
       badge.className   = data.isRunning ? 'syncing' : 'ready';
       document.getElementById('btn-all').disabled   = data.isRunning;
       document.getElementById('btn-reset').disabled = data.isRunning;
+
+      const skipToggle = document.getElementById('skipPullToggle');
+      if (skipToggle) {
+        skipToggle.disabled = data.isRunning;
+        if (data.settings && !window.__skipPullLock) {
+          skipToggle.checked = !!data.settings.SKIP_PULL_FROM_OLD;
+        }
+      }
 
       // Lọc dữ liệu hiển thị (giống logic server-side)
       const registeredLabels = [${this.modelRegistry.getRegisteredLabels().map(l => `'${l}'`).join(',')}];
@@ -1429,7 +1447,8 @@ class SyncManagerController extends BaseController {
 
     async function toggleSkipPull(checkbox) {
       const isChecked = checkbox.checked;
-      checkbox.disabled = true; // Khóa lại trong khi gửi request
+      window.__skipPullLock = true; // Khóa không cho SSE ghi đè khi đang gạt
+      checkbox.disabled = true;
       document.body.style.cursor = 'wait';
       try {
         const r = await fetch('/api/sync-manager-src/settings', {
@@ -1438,13 +1457,12 @@ class SyncManagerController extends BaseController {
           body: JSON.stringify({ key: 'SKIP_PULL_FROM_OLD', value: isChecked })
         });
         const j = await r.json();
-        if (!r.ok) {
-          throw new Error(j.message || 'Lỗi cập nhật cấu hình');
-        }
+        if (!r.ok) throw new Error(j.message || 'Lỗi cập nhật cấu hình');
       } catch (e) {
         alert('Lỗi: ' + e.message);
-        checkbox.checked = !isChecked; // Phục hồi trạng thái nếu lỗi
+        checkbox.checked = !isChecked;
       } finally {
+        window.__skipPullLock = false;
         checkbox.disabled = false;
         document.body.style.cursor = 'default';
       }

@@ -16,10 +16,26 @@ class SyncHandlerModel {
    */
   createCountFnIncremental() {
     return async (lastTime, lastSyncId = 0) => {
-      // Nếu model có hàm getCount riêng thì ưu tiên dùng (tối ưu hơn)
-      if (typeof this.syncModel.getCount === 'function') {
-        return this.syncModel.getCount(lastTime, lastSyncId);
+      // Lấy singleton instance của SyncManagerService để kiểm tra settings
+      const syncManager = require('./SyncManagerService');
+      const skipPull = syncManager.state && syncManager.state.settings && syncManager.state.settings.SKIP_PULL_FROM_OLD === true;
+
+      // Nếu SKIP_PULL_FROM_OLD = OFF (mặc định), ta muốn đếm từ DB cũ để biết tổng số sẽ hút
+      if (!skipPull) {
+        if (typeof this.syncModel.countListFromOldDb === 'function') {
+          return this.syncModel.countListFromOldDb(lastTime, lastSyncId);
+        }
+        // Fallback cho các model cũ chưa tách countListFromOldDb
+        if (typeof this.syncModel.getCount === 'function') {
+          return this.syncModel.getCount(lastTime, lastSyncId);
+        }
+      } else {
+        // Nếu SKIP_PULL_FROM_OLD = ON, ta chỉ quan tâm những gì đang có trong staging
+        if (typeof this.syncModel.getCount === 'function') {
+          return this.syncModel.getCount(lastTime, lastSyncId);
+        }
       }
+
       const records = await this.syncModel.fetchListFromOldDb(lastTime, lastSyncId);
       return Array.isArray(records) ? records.length : 0;
     };
@@ -40,7 +56,23 @@ class SyncHandlerModel {
       }
 
       if (!preparedJobs.has(jobId)) {
-        const listResult = await this.syncModel.getList(lastTime, jobId, lastSyncId);
+        // Lấy singleton instance của SyncManagerService để kiểm tra settings
+        const syncManager = require('./SyncManagerService');
+        const skipPull = syncManager.state && syncManager.state.settings && syncManager.state.settings.SKIP_PULL_FROM_OLD === true;
+
+        let listResult = null;
+        if (skipPull) {
+          logger.info(`[SyncHandlerModel][${this.syncModel.getName ? this.syncModel.getName() : 'Unknown'}] SKIP_PULL_FROM_OLD is ON. Skipping extraction, using existing staging data.`);
+          const stagedCount = await this.syncModel.getCount(lastTime, lastSyncId);
+          listResult = {
+            totalCount: stagedCount,
+            lastSyncTime: lastTime,
+            lastSyncId: lastSyncId
+          };
+        } else {
+          listResult = await this.syncModel.getList(lastTime, jobId, lastSyncId);
+        }
+
         const resumeIndex = Number(cursor.totalProcessed || 0);
 
         // Khi Resume sau server restart, `nextIndex` bắt đầu từ số records đã xử lý (resumeIndex).

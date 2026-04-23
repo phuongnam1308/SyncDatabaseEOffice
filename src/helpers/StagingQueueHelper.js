@@ -45,6 +45,8 @@ async function ensureTrackingColumns(model, options = {}) {
     { name: 'processing_owner', type: 'NVARCHAR(255)' },
     { name: 'processing_started_at', type: 'DATETIME2' },
     { name: 'processing_heartbeat_at', type: 'DATETIME2' },
+    { name: '__sync_time', type: 'DATETIME2' },
+    { name: '__sync_id', type: 'BIGINT' },
     ...extraColumns,
   ];
 

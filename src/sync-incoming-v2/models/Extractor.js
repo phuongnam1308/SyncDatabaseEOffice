@@ -180,6 +180,63 @@ class Extractor extends BaseExtractor {
     }
   }
 
+  /**
+   * countListFromOldDb - Đếm tổng số bản ghi từ CSDL cũ (VanBanDen)
+   */
+  async countListFromOldDb(lastSyncTime, lastSyncId = 0) {
+    const syncTimeExpr = this.getSyncTimeExpression();
+    const isValidTime = lastSyncTime &&
+      lastSyncTime !== '2100-01-01T00:00:00.000Z' &&
+      !Number.isNaN(new Date(lastSyncTime).getTime()) &&
+      new Date(lastSyncTime).getFullYear() > 1000;
+
+    const effectiveSyncTime = isValidTime ? lastSyncTime : this._defaultSyncTime;
+    const syncMinDate = this._syncMinDate;
+    const startDate = process.env.SYNC_START_DATE || null;
+    const endDate = process.env.SYNC_END_DATE || '2100-01-01T00:00:00.000Z';
+
+    const query = `
+      ;WITH source_rows AS (
+        SELECT
+          ${syncTimeExpr} AS __sync_time,
+          TRY_CONVERT(
+            BIGINT,
+            NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
+          ) AS __sync_id_num
+        FROM ${this.oldDbSchema}.${this.oldDbTable}
+        WHERE 1=1
+          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
+          AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
+      )
+      SELECT COUNT(1) AS total
+      FROM source_rows
+      WHERE (
+        @lastSyncTime = '1753-01-01T00:00:00.000Z'
+        OR __sync_time > @lastSyncTime
+        OR (
+          __sync_time = @lastSyncTime
+          AND ISNULL(__sync_id_num, 0) > @lastSyncId
+        )
+      )
+      AND __sync_time >= @syncMinDate
+    `;
+
+    try {
+      const results = await this.oldPool.request()
+        .input('lastSyncTime', sql.DateTime2, effectiveSyncTime)
+        .input('lastSyncId', sql.BigInt, Number(lastSyncId || 0))
+        .input('startDate', sql.DateTime2, startDate)
+        .input('endDate', sql.DateTime2, endDate)
+        .input('syncMinDate', sql.DateTime2, syncMinDate)
+        .query(query);
+
+      return Number(results.recordset?.[0]?.total || 0);
+    } catch (error) {
+      logger.error(`[${this.modelName}] countListFromOldDb failed: ${error.message}`);
+      return 0;
+    }
+  }
+
   // ──────────────────────────────────────────────
   // Ensure staging table exists (incomming_documents_sync schema)
   // ──────────────────────────────────────────────
@@ -256,7 +313,37 @@ class Extractor extends BaseExtractor {
     `;
 
     await this.newPool.request().query(query);
-    logger.info(`[${this.modelName}] Staging table ${stagingTable} ensured`);
+    await this._ensureStagingColumns(stagingTable);
+    logger.info(`[${this.modelName}] Staging table ${stagingTable} ensured and schema verified`);
+  }
+
+  /**
+   * Tự động thêm các cột phục vụ điều phối và đồng bộ nếu chưa có
+   */
+  async _ensureStagingColumns(tableName) {
+    try {
+      const sql = `
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${tableName}' AND COLUMN_NAME = 'processing_owner')
+          ALTER TABLE ${tableName} ADD processing_owner NVARCHAR(255) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${tableName}' AND COLUMN_NAME = 'processing_started_at')
+          ALTER TABLE ${tableName} ADD processing_started_at DATETIME2 NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${tableName}' AND COLUMN_NAME = 'processing_heartbeat_at')
+          ALTER TABLE ${tableName} ADD processing_heartbeat_at DATETIME2 NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${tableName}' AND COLUMN_NAME = 'MigrateFlg')
+          ALTER TABLE ${tableName} ADD MigrateFlg INT DEFAULT 0;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${tableName}' AND COLUMN_NAME = 'MigrateErrFlg')
+          ALTER TABLE ${tableName} ADD MigrateErrFlg INT DEFAULT 0;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${tableName}' AND COLUMN_NAME = 'MigrateErrMess')
+          ALTER TABLE ${tableName} ADD MigrateErrMess NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${tableName}' AND COLUMN_NAME = '__sync_time')
+          ALTER TABLE ${tableName} ADD __sync_time DATETIME2 NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${tableName}' AND COLUMN_NAME = '__sync_id')
+          ALTER TABLE ${tableName} ADD __sync_id BIGINT NULL;
+      `;
+      await this.newPool.request().query(sql);
+    } catch (err) {
+      logger.warn(`[${this.modelName}] _ensureStagingColumns for ${tableName} failed: ${err.message}`);
+    }
   }
 
   // ──────────────────────────────────────────────
