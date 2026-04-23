@@ -139,6 +139,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
                 copy_to_internal NVARCHAR(MAX) NULL,
                 resolution_deadline DATETIME2 NULL,
                 copy_count INT NULL,
+                SoBan INT NULL,
                 page_count INT NULL,
                 view_group varchar(100) NULL,
                 directive_comment NVARCHAR(MAX) NULL,
@@ -210,6 +211,9 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
 
             IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'stage_status')
                 ALTER TABLE ${mainTableRef} ADD stage_status NVARCHAR(50) NULL;
+
+            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'SoBan')
+                ALTER TABLE ${mainTableRef} ADD SoBan INT NULL;
 
             /*
             IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newDbTable}' AND COLUMN_NAME = 'curStatusCode')
@@ -977,7 +981,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         private_level, urgency_level, document_type, document_field,
         signer, to_book_code, fileids, status, isStar,
         parent_doc, type_process_doc, bpmn_version, copy_to_internal,
-        resolution_deadline, copy_count, page_count, view_group, directive_comment,
+        resolution_deadline, copy_count, SoBan, page_count, view_group, directive_comment,
         id_incoming_bak, to_book_text_symbols,
         /*
         CoQuanGui2, CoQuanGuiText,
@@ -999,7 +1003,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         @private_level, @urgency_level, @document_type, @document_field,
         @signer, @to_book_code, @fileids, @status, @isStar,
         @parent_doc, @type_process_doc, @bpmn_version, @copy_to_internal,
-        @resolution_deadline, @copy_count, @page_count, @view_group, @directive_comment,
+        @resolution_deadline, @copy_count, @SoBan, @page_count, @view_group, @directive_comment,
         @id_incoming_bak, @to_book_text_symbols,
         /*
         @CoQuanGui2, @CoQuanGuiText,
@@ -1056,6 +1060,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
         copy_to_internal = @copy_to_internal,
         resolution_deadline = @resolution_deadline,
         copy_count = @copy_count,
+        SoBan = @SoBan,
         page_count = @page_count,
         view_group = @view_group,
         directive_comment = @directive_comment,
@@ -1247,7 +1252,8 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
       bpmn_version: bpmnVersion,
       copy_to_internal: null,
       resolution_deadline: null,
-      copy_count: null,
+      copy_count: soBan,
+      SoBan: soBan,
       page_count: pageCount,
       view_group: null,
       directive_comment: null,
@@ -1340,6 +1346,7 @@ class SyncIncomingDocumentModel extends BaseIncrementalSyncInterface {
       copy_to_internal: record.copy_to_internal ?? null,
       resolution_deadline: record.resolution_deadline ?? null,
       copy_count: record.copy_count ?? null,
+      SoBan: record.SoBan ?? null,
       page_count: record.page_count ?? null,
       view_group: record.view_group ?? null,
       directive_comment: record.directive_comment ?? null,

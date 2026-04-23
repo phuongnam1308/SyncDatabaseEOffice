@@ -69,6 +69,22 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
         await this.queryNewDb(alterQuery, {});
         logger.info('Added id_user_bak column to task_users table');
       }
+
+      // Performance: speed up lookup/update by id_user_bak to reduce lock duration.
+      const ensureIndexQuery = `
+        IF NOT EXISTS (
+          SELECT 1
+          FROM ${this.newDbName}.sys.indexes
+          WHERE name = 'IX_task_users_id_user_bak'
+            AND object_id = OBJECT_ID('${targetTable}')
+        )
+        BEGIN
+          CREATE NONCLUSTERED INDEX IX_task_users_id_user_bak
+          ON ${targetTable}(id_user_bak)
+          INCLUDE (task_id, process_id, update_at);
+        END
+      `;
+      await this.queryNewDb(ensureIndexQuery, {});
     } catch (err) {
       logger.error('ensureTaskUsersTableColumns failed:', err.message);
       throw err;
@@ -213,7 +229,9 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
     const modifiedAtParsed = safeDateParse(rawRecord.Modified, 'Modified');
 
     return {
-      id_user_bak: processId ? String(processId) : userBackupId,
+      // IMPORTANT: must be stable per source permission row.
+      // Using processId causes collisions across many tasks and lock contention.
+      id_user_bak: userBackupId,
       task_id: rawRecord.newTaskId ? parseInt(rawRecord.newTaskId, 10) : null,
       process_id: processId,
       process_name: processName,
