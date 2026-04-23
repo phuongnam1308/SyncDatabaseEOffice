@@ -4,7 +4,6 @@ const SyncHandlerModel = require('./SyncHandlerModel');
 const OutGoingDocumentModel = require('../sync-outgoing-document/models/StreamOutgoingIncrementalModel');
 const SyncOutgoingAdapter = require('./SyncOutgoingAdapter'); // v2 adapter with instance staging tables
 const SyncIncomingAdapter = require('./SyncIncomingAdapter'); // NEW: v2 adapter for incoming documents
-const SyncOutgoingAdapter = require('./SyncOutgoingAdapter'); // NEW: v2 adapter with instance staging tables
 const SyncDraftDocumentAdapter = require('./SyncDraftDocumentAdapter'); // NEW: draft document adapter
 const StreamUserMigrationModel = require('../sync-user-copy/migrate/StreamUserMigrationModel');
 const StreamTaskInIncrementalModel = require('../sync-tasks-van-ban-den/models/StreamTaskInIncrementalModel');
