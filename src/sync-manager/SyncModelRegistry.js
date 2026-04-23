@@ -4,6 +4,8 @@ const SyncHandlerModel = require('./SyncHandlerModel');
 const OutGoingDocumentModel = require('../sync-outgoing-document/models/StreamOutgoingIncrementalModel');
 const SyncOutgoingAdapter = require('./SyncOutgoingAdapter'); // v2 adapter with instance staging tables
 const SyncIncomingAdapter = require('./SyncIncomingAdapter'); // NEW: v2 adapter for incoming documents
+const SyncOutgoingAdapter = require('./SyncOutgoingAdapter'); // NEW: v2 adapter with instance staging tables
+const SyncDraftDocumentAdapter = require('./SyncDraftDocumentAdapter'); // NEW: draft document adapter
 const StreamUserMigrationModel = require('../sync-user-copy/migrate/StreamUserMigrationModel');
 const StreamTaskInIncrementalModel = require('../sync-tasks-van-ban-den/models/StreamTaskInIncrementalModel');
 const StreamTaskOutIncrementalModel = require('../sync-tasks-van-ban-di/models/StreamTaskOutIncrementalModel');
@@ -32,6 +34,12 @@ const MODEL_DEFINITIONS = [
     label: 'Đồng bộ văn bản đi v2',
     section: 'realtime',
     ModelClass: SyncOutgoingAdapter
+  },
+  {
+    key: 'STREAM_DRAFT_DOCUMENT',
+    label: 'Đồng bộ văn bản dự thảo',
+    section: 'realtime',
+    ModelClass: SyncDraftDocumentAdapter
   },
   {
     key: 'STREAM_DEPARTMENT_MIGRATION',
@@ -237,7 +245,8 @@ class SyncModelRegistry {
       'STREAM_OUTGOING_INCREMENTAL',
       'STREAM_TASK_INCOMING_INCREMENTAL',
       'STREAM_TASK_OUTGOING_INCREMENTAL',
-      'STREAM_OUTGOING_V2'
+      'STREAM_OUTGOING_V2',
+      'STREAM_DRAFT_DOCUMENT'
     ];
     const isParallelModule = parallelModules.includes(key);
 

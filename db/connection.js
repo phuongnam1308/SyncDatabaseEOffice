@@ -51,7 +51,7 @@ class DatabaseConnection {
       await this.connectOldDb().catch(err => {
         logger.error('⚠️ [DatabaseConnection] Không thể kết nối DB CŨ (Nguồn). Các task lấy dữ liệu từ đây sẽ bị lỗi.', err.message);
       });
-      
+
       await this.connectNewDb().catch(err => {
         logger.error('❌ [DatabaseConnection] Không thể kết nối DB MỚI (Đích). Đây là lỗi nghiêm trọng!', err.message);
       });

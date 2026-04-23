@@ -1,27 +1,28 @@
 const logger = require('../../../utils/logger');
 const dbConnection = require('../../../db/connection');
 const BaseSyncModel = require('../../sync-base/BaseSyncModel');
-const Extractor = require('./Extractor');
-const Loader = require('./Loader');
+const DraftDocumentExtractor = require('./DraftDocumentExtractor');
+const DraftDocumentUpsertHandler = require('./DraftDocumentUpsertHandler');
 
 /**
- * Sync model for outgoing documents.
+ * Sync model for Draft Documents (Văn bản dự thảo).
  * Coordinates Extract → Load phases with multi-instance support.
+ * Source: SNP.CodeItem (same DB as VanBanBanHanh, different schema)
+ * Target: outgoing_documents table (same as VanBanBanHanh)
  */
-class SyncOutgoingModel extends BaseSyncModel {
+class SyncDraftDocumentModel extends BaseSyncModel {
   constructor() {
-    const extractor = new Extractor();
-    const loader = null; // Will be created after we have pools
+    const extractor = new DraftDocumentExtractor();
 
     super({
-      modelName: 'SYNC_OUTGOING',
+      modelName: 'SYNC_DRAFT_DOCUMENT',
       extractor,
-      loader
+      loader: null
     });
 
     this.oldPool = null;
     this.newPool = null;
-    this.loader = null;
+    this.upsertHandler = null;
     this.instanceId = null;
     this.isRunning = false;
     this.shouldStop = false;
@@ -40,36 +41,33 @@ class SyncOutgoingModel extends BaseSyncModel {
   async initialize(instanceId) {
     this.instanceId = instanceId;
 
-    // Initialize database pools via dbConnection
+    // Initialize database pools (old DB chứa cả VanBanBanHanh và SNP.CodeItem)
     await dbConnection.connectAll();
+
     this.oldPool = dbConnection.getOldPool();
     this.newPool = dbConnection.getNewPool();
 
-    // Set pools on extractor (skip its initialize to avoid double-connect)
+    // Set pools on extractor
     this.extractor.oldPool = this.oldPool;
     this.extractor.newPool = this.newPool;
 
     // Ensure staging table exists
     await this.extractor.ensureStagingTableExists(instanceId);
 
-    // Initialize loader with pools
-    this.loader = new Loader(this.newPool, this.oldPool);
-    await this.loader.initialize();
-
-    // Cleanup: Reset records stuck in 'Processing' from previous runs
-    await this.loader.resetProcessingRecords(instanceId);
+    // Initialize upsert handler with pools
+    this.upsertHandler = new DraftDocumentUpsertHandler(this.newPool, this.oldPool);
 
     logger.info(`[${this.modelName}] Initialized with instanceId=${instanceId}`);
   }
 
   /**
-   * Run the extract phase (OLD DB → Staging)
+   * Run the extract phase (SNP.CodeItem → Staging)
    * @returns {Promise<{extractedCount: number}>}
    */
   async runExtract() {
     logger.info(`[${this.modelName}] Starting extract phase...`);
     let totalExtracted = 0;
-    let lastSyncTime = '2999-12-31T23:59:59.999Z'; // Start from max time for DESC ordering
+    let lastSyncTime = '2999-12-31T23:59:59.999Z';
     let lastSyncId = 0;
     let hasMore = true;
 
@@ -105,7 +103,7 @@ class SyncOutgoingModel extends BaseSyncModel {
   }
 
   /**
-   * Run the load phase (Staging → Main Table)
+   * Run the load phase (Staging → Main Table via UpsertHandler)
    * @returns {Promise<{processedCount: number, successCount: number, failedCount: number}>}
    */
   async runLoad() {
@@ -114,67 +112,124 @@ class SyncOutgoingModel extends BaseSyncModel {
     let totalSuccess = 0;
     let totalFailed = 0;
 
-    // Start heartbeat timer
-    let heartbeatTimer = null;
-    let currentRowId = null;
-
-    const startHeartbeat = (rowId) => {
-      currentRowId = rowId;
-      heartbeatTimer = setInterval(async () => {
-        if (currentRowId) {
-          await this.loader.updateHeartbeat(this.instanceId, currentRowId);
-        }
-      }, this.heartbeatIntervalMs);
-    };
-
-    const stopHeartbeat = () => {
-      if (heartbeatTimer) {
-        clearInterval(heartbeatTimer);
-        heartbeatTimer = null;
-      }
-      currentRowId = null;
-    };
+    const stagingTable = this.extractor.getStagingTableName(this.instanceId);
 
     try {
       while (!this.shouldStop) {
-        const row = await this.loader.fetchOneFromStaging(this.instanceId);
+        // Fetch one pending record from staging
+        const row = await this.fetchOneFromStaging(stagingTable);
 
         if (!row) {
           break;
         }
 
         totalProcessed++;
-        startHeartbeat(row.ID);
 
         try {
-          const result = await this.loader.processRecord(row);
+          const result = await this.upsertHandler.processRecord(row);
 
           if (result.success) {
-            await this.loader.markSuccess(this.instanceId, row.ID);
+            await this.markSuccess(stagingTable, row.ID);
             totalSuccess++;
           } else {
-            await this.loader.markFailed(this.instanceId, row.ID, result.error);
+            await this.markFailed(stagingTable, row.ID, result.error);
             totalFailed++;
           }
         } catch (error) {
-          await this.loader.markFailed(this.instanceId, row.ID, error.message);
+          await this.markFailed(stagingTable, row.ID, error.message);
           totalFailed++;
           logger.error(`[${this.modelName}] Failed to process row ID=${row.ID}: ${error.message}`);
         }
 
-        stopHeartbeat();
-
         if (totalProcessed % 100 === 0) {
-          const stats = await this.loader.getStats(this.instanceId);
-          logger.info(`[${this.modelName}] Progress: ${totalProcessed} processed, ${stats.pending} pending, ${stats.success} success, ${stats.failed} failed`);
+          logger.info(`[${this.modelName}] Progress: ${totalProcessed} processed, ${totalSuccess} success, ${totalFailed} failed`);
         }
       }
-    } finally {
-      stopHeartbeat();
+    } catch (error) {
+      logger.error(`[${this.modelName}] Load phase error: ${error.message}`);
     }
 
     logger.info(`[${this.modelName}] Load phase complete. Total: ${totalProcessed}, Success: ${totalSuccess}, Failed: ${totalFailed}`);
     return { processedCount: totalProcessed, successCount: totalSuccess, failedCount: totalFailed };
+  }
+
+  /**
+   * Fetch one pending record from staging table
+   */
+  async fetchOneFromStaging(stagingTable) {
+    try {
+      const selectQuery = `
+        SELECT TOP (1) *
+        FROM ${stagingTable}
+        WHERE ISNULL(MigrateFlg, 0) = 0
+          AND ISNULL(MigrateErrFlg, 0) = 0
+        ORDER BY Modified DESC, ID DESC
+      `;
+
+      const rows = await this.newPool.request().query(selectQuery);
+      if (!rows.recordset?.length) {
+        return null;
+      }
+
+      const row = rows.recordset[0];
+
+      // Mark as processing
+      const updateQuery = `
+        UPDATE ${stagingTable} WITH (ROWLOCK)
+        SET MigrateFlg = 2,
+            MigrateErrMess = 'Processing...',
+            processing_owner = @owner,
+            processing_started_at = SYSUTCDATETIME(),
+            processing_heartbeat_at = SYSUTCDATETIME()
+        WHERE ID = @ID AND ISNULL(MigrateFlg, 0) = 0
+      `;
+
+      const updateResult = await this.newPool.request()
+        .input('ID', row.ID)
+        .input('owner', `pid_${process.pid}_${this.instanceId}`)
+        .query(updateQuery);
+
+      if (updateResult.rowsAffected[0] === 0) {
+        return this.fetchOneFromStaging(stagingTable);
+      }
+
+      logger.info(`[${this.modelName}] Fetched staging row ID=${row.ID}`);
+      return row;
+    } catch (error) {
+      logger.error(`[${this.modelName}] Failed to fetch from staging: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Mark record as success
+   */
+  async markSuccess(stagingTable, id) {
+    const query = `
+      UPDATE ${stagingTable} WITH (ROWLOCK)
+      SET MigrateFlg = 1,
+          MigrateErrFlg = 0,
+          MigrateErrMess = NULL
+      WHERE ID = @ID
+    `;
+    await this.newPool.request().input('ID', id).query(query);
+  }
+
+  /**
+   * Mark record as failed
+   */
+  async markFailed(stagingTable, id, errorMessage) {
+    const query = `
+      UPDATE ${stagingTable} WITH (ROWLOCK)
+      SET MigrateFlg = 3,
+          MigrateErrFlg = 1,
+          MigrateErrMess = @errorMessage
+      WHERE ID = @ID
+    `;
+    await this.newPool.request()
+      .input('ID', id)
+      .input('errorMessage', errorMessage)
+      .query(query);
   }
 
   /**
@@ -214,17 +269,11 @@ class SyncOutgoingModel extends BaseSyncModel {
    * Get current progress
    */
   async getProgress() {
-    if (!this.loader) {
-      return { isRunning: this.isRunning, instanceId: this.instanceId };
-    }
-
-    const stats = await this.loader.getStats(this.instanceId);
     return {
       isRunning: this.isRunning,
-      instanceId: this.instanceId,
-      ...stats
+      instanceId: this.instanceId
     };
   }
 }
 
-module.exports = SyncOutgoingModel;
+module.exports = SyncDraftDocumentModel;
