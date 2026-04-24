@@ -71,7 +71,7 @@ class SyncManagerService {
 
     // State được khởi tạo rỗng, sau đó hydrate từ DB qua ensureStateLoaded().
     this.state = this.normalizeState(null);
-    this.instanceId = process.env.SYNC_INSTANCE_ID || 'default';
+    this.instanceId = process.env.SYNC_INSTANCE_ID || process.env.INSTANCE_ID || 'default';
     this._stateLoaded = false;
     this._stateLoadingPromise = null;
 

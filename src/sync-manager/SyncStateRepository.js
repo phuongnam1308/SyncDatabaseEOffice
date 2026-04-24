@@ -46,18 +46,38 @@ class SyncStateRepository extends BaseModel {
    * Đảm bảo Model đã tồn tại trong bảng sync_models
    */
   async ensureModel(modelName, instanceId = 'default') {
-    try {
-      const query = `
-        IF NOT EXISTS (SELECT 1 FROM ${this.tblModels} 
+    const query = `
+      BEGIN TRY
+        IF NOT EXISTS (SELECT 1 FROM ${this.tblModels} WITH (UPDLOCK, HOLDLOCK)
                        WHERE model_name = @modelName AND instance_id = @instanceId)
         BEGIN
             INSERT INTO ${this.tblModels} (model_name, instance_id, status, created_at, updated_at)
             VALUES (@modelName, @instanceId, 'IDLE', SYSDATETIME(), SYSDATETIME())
         END
-      `;
+      END TRY
+      BEGIN CATCH
+        -- Ignore duplicate key error (2627: Unique constraint, 2601: Duplicate key index)
+        IF ERROR_NUMBER() NOT IN (2627, 2601)
+        BEGIN
+            THROW;
+        END
+      END CATCH
+    `;
+
+    try {
       await this.queryNewDb(query, { modelName, instanceId });
     } catch (error) {
-      logger.error(`[SyncStateRepository] Failed to ensure model ${modelName} (host=${instanceId}):`, error);
+      // Ignore duplicate key error (2627: Unique constraint, 2601: Duplicate key index)
+      if (error.number === 2627 || error.number === 2601) {
+        logger.debug(`[SyncStateRepository] Model ${modelName} already exists (instance=${instanceId}), skipping`);
+        return;
+      }
+      // Handle string truncation - model name too long
+      if (error.number === 2628) {
+        logger.warn(`[SyncStateRepository] Model name truncated for ${modelName}, skipping insert`);
+        return;
+      }
+      logger.error(`[SyncStateRepository] Failed to ensure model ${modelName} (host=${instanceId}):`, error.message);
     }
   }
 

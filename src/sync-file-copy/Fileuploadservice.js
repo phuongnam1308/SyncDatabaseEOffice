@@ -417,7 +417,7 @@ class FileUploadService {
         objectId: relationRecord.object_id
       });
 
-      if (apiResponse && apiResponse.id) {
+      if (apiResponse && (apiResponse.id || apiResponse.public_id)) {
         storagePath = apiResponse.file_path;
         logger.info(`[FileUploadService] THANH CONG: Da upload qua API hệ thống mới. storagePath: ${storagePath}`);
       } else {

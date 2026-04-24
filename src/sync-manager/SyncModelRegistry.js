@@ -4,6 +4,7 @@ const SyncHandlerModel = require('./SyncHandlerModel');
 const OutGoingDocumentModel = require('../sync-outgoing-document/models/StreamOutgoingIncrementalModel');
 const SyncOutgoingAdapter = require('./SyncOutgoingAdapter'); // NEW: v2 adapter with instance staging tables
 const SyncDraftDocumentAdapter = require('./SyncDraftDocumentAdapter'); // NEW: draft document adapter
+const SyncUnitDraftAdapter = require('./SyncUnitDraftAdapter'); // Unit draft from SharePoint List
 const StreamUserMigrationModel = require('../sync-user-copy/migrate/StreamUserMigrationModel');
 const StreamTaskInIncrementalModel = require('../sync-tasks-van-ban-den/models/StreamTaskInIncrementalModel');
 const StreamTaskOutIncrementalModel = require('../sync-tasks-van-ban-di/models/StreamTaskOutIncrementalModel');
@@ -38,6 +39,12 @@ const MODEL_DEFINITIONS = [
     label: 'Đồng bộ văn bản dự thảo',
     section: 'realtime',
     ModelClass: SyncDraftDocumentAdapter
+  },
+  {
+    key: 'STREAM_UNIT_DRAFT',
+    label: 'Đồng bộ văn bản đi đơn vị (SharePoint)',
+    section: 'realtime',
+    ModelClass: SyncUnitDraftAdapter
   },
   {
     key: 'STREAM_DEPARTMENT_MIGRATION',
@@ -244,16 +251,19 @@ class SyncModelRegistry {
       'STREAM_TASK_INCOMING_INCREMENTAL',
       'STREAM_TASK_OUTGOING_INCREMENTAL',
       'STREAM_OUTGOING_V2',
-      'STREAM_DRAFT_DOCUMENT'
+      'STREAM_DRAFT_DOCUMENT',
+      'STREAM_UNIT_DRAFT'
     ];
     const isParallelModule = parallelModules.includes(key);
 
     if (instanceId && isParallelModule && instanceId !== '1' && instanceId !== '3021') {
       label = `${label} (${instanceId})`;
-    } else if (!isPrimaryInstance && !isParallelModule) {
-      // Nếu là cổng phụ (3022, 3023...) và không phải module song song -> Bỏ qua để không chạy trùng
-      logger.info(`[SyncModelRegistry] Skip register "${key}" on secondary instance ${instanceId}`);
-      return;
+    }
+    
+    // Always register to display on Dashboard, even on secondary instances.
+    // The execution safety (not running same non-parallel job twice) is handled by the Job Manager or manual start.
+    if (!isPrimaryInstance && !isParallelModule) {
+      logger.info(`[SyncModelRegistry] Registering "${key}" on secondary instance ${instanceId} for monitoring.`);
     }
 
     try {
