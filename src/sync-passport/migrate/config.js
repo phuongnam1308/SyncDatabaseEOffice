@@ -11,13 +11,13 @@ const parseDate = (v) => {
 };
 
 const mapStatus = (oldStatus) => {
-  if (!oldStatus) return statusMapping.DEFAULT || 'Chờ phê duyệt';
+  if (!oldStatus) return statusMapping.DEFAULT || 'PENDING';
   const s = String(oldStatus).trim();
   if (statusMapping.MAPPING?.[s]) return statusMapping.MAPPING[s];
   for (const [key, val] of Object.entries(statusMapping.MAPPING || {})) {
     if (s.includes(key) || key.includes(s)) return val;
   }
-  return statusMapping.DEFAULT || 'Chờ phê duyệt';
+  return statusMapping.DEFAULT || 'PENDING';
 };
 
 /* ===================== TABLE MAPPING ===================== */

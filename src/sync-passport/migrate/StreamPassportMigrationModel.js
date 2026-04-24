@@ -1318,7 +1318,7 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
     // 3. Chuẩn bị dữ liệu - nếu không có requesterId, để null
     rowData.requester_id = requesterId || null;
     rowData.created_by   = requesterId || null;
-    rowData.status       = mappedStatus || 'Chờ phê duyệt';
+    rowData.status       = mappedStatus || 'PENDING';
     
     // 🔥 Disambiguate request_code cho multi-DB: thêm suffix /MNEMONIC
     const mnemonic = this.getSourceMnemonic(rowData.source_db);
