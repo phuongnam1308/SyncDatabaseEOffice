@@ -387,12 +387,12 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         cols.hasUserInfo ? `ui_author.[tp_Email]    AS AuthorEmail` : `NULL AS AuthorEmail`,
         cols.hasUserInfo ? `ui_editor.[tp_Title]    AS EditorName` : `NULL AS EditorName`,
         cols.hasUserInfo ? `ui_editor.[tp_Login]    AS EditorAccount` : `NULL AS EditorAccount`,
-        cols.allUserData.has('nvarchar1') ? `ud.[nvarchar1] AS Title` : `NULL AS Title`,
+        cols.allUserData.has('nvarchar1') ? `CAST(ud.[nvarchar1] AS NVARCHAR(MAX)) AS Title` : `NULL AS Title`,
         cols.allUserData.has('datetime1') ? `ud.[datetime1] AS StartDate` : `NULL AS StartDate`,
         cols.allUserData.has('datetime2') ? `ud.[datetime2] AS EndDate` : `NULL AS EndDate`,
-        cols.allUserData.has('nvarchar2') ? `ud.[nvarchar2] AS Location` : `NULL AS Location`,
-        cols.allUserData.has('nvarchar3') ? `ud.[nvarchar3] AS Description` : `NULL AS Description`,
-        cols.allUserData.has('nvarchar4') ? `ud.[nvarchar4] AS Organizer` : `NULL AS Organizer`
+        cols.allUserData.has('nvarchar2') ? `CAST(ud.[nvarchar2] AS NVARCHAR(MAX)) AS Location` : `NULL AS Location`,
+        cols.allUserData.has('nvarchar3') ? `CAST(ud.[nvarchar3] AS NVARCHAR(MAX)) AS Description` : `NULL AS Description`,
+        cols.allUserData.has('nvarchar4') ? `CAST(ud.[nvarchar4] AS NVARCHAR(MAX)) AS Organizer` : `NULL AS Organizer`
     ];
 
     const ciColumns = [
@@ -615,12 +615,12 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         cols.hasUserInfo ? `ui_author.[tp_Email]    AS AuthorEmail` : `NULL AS AuthorEmail`,
         cols.hasUserInfo ? `ui_editor.[tp_Title]    AS EditorName` : `NULL AS EditorName`,
         cols.hasUserInfo ? `ui_editor.[tp_Login]    AS EditorAccount` : `NULL AS EditorAccount`,
-        cols.allUserData.has('nvarchar1') ? `ud.[nvarchar1] AS Title` : `NULL AS Title`,
+        cols.allUserData.has('nvarchar1') ? `CAST(ud.[nvarchar1] AS NVARCHAR(MAX)) AS Title` : `NULL AS Title`,
         cols.allUserData.has('datetime1') ? `ud.[datetime1] AS StartDate` : `NULL AS StartDate`,
         cols.allUserData.has('datetime2') ? `ud.[datetime2] AS EndDate` : `NULL AS EndDate`,
-        cols.allUserData.has('nvarchar2') ? `ud.[nvarchar2] AS Location` : `NULL AS Location`,
-        cols.allUserData.has('nvarchar3') ? `ud.[nvarchar3] AS Description` : `NULL AS Description`,
-        cols.allUserData.has('nvarchar4') ? `ud.[nvarchar4] AS Organizer` : `NULL AS Organizer`,
+        cols.allUserData.has('nvarchar2') ? `CAST(ud.[nvarchar2] AS NVARCHAR(MAX)) AS Location` : `NULL AS Location`,
+        cols.allUserData.has('nvarchar3') ? `CAST(ud.[nvarchar3] AS NVARCHAR(MAX)) AS Description` : `NULL AS Description`,
+        cols.allUserData.has('nvarchar4') ? `CAST(ud.[nvarchar4] AS NVARCHAR(MAX)) AS Organizer` : `NULL AS Organizer`,
         `ud.[tp_Modified] AS __sync_time`,
         `ud.[tp_ID] AS __sync_id_num`
     ];

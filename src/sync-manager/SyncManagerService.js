@@ -960,7 +960,7 @@ class SyncManagerService {
             batchSuccess += 1;
             const recordTime = this.extractRecordTime(res.record);
             const recordId = this.extractRecordId(res.record);
-            if (recordTime && this.compareCursor(recordTime, recordId, cursorTime, cursorId) > 0) {
+            if (recordTime && this.compareCursor(recordTime, recordId, cursorTime, cursorId) !== 0) {
               cursorTime = recordTime;
               cursorId = recordId;
             }
