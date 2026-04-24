@@ -55,7 +55,7 @@ class StreamMeetingMigrationService {
         return {
             syncJobId: jobId,
             lastSyncTime: listResult.lastSyncTime,
-            oldCount: listResult.totalCount,
+            oldCount: Number(listResult.sourceTotalCount || listResult.totalCount || 0),
             stagedCount: Number(listResult.stagedCount || listResult.totalCount || 0),
             totalCount: Number(jobState?.total_to_sync || listResult.totalCount || 0),
             processingItem: Number(jobState?.total_processed || 0)

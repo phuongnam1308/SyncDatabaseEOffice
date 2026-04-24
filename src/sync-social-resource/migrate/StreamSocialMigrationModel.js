@@ -1,6 +1,15 @@
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 const { tableMappings } = require('./config');
 const { v4: uuidv4 } = require('uuid');
+const logger = require('../../../utils/logger');
+const {
+    claimNextStagingRow,
+    ensureTrackingColumns,
+    markRowFailed,
+    markRowSuccess,
+    startHeartbeatLoop,
+    updateHeartbeat,
+} = require('../../helpers/StagingQueueHelper');
 
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 
@@ -26,6 +35,7 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
             0,
             Number(process.env.STREAM_SOCIAL_SYNC_LIMIT || process.env.SOCIAL_SYNC_LIMIT || 0)
         );
+        this.heartbeatIntervalMs = Number(process.env.HEARTBEAT_INTERVAL_MS || 30000);
     }
 
     async initialize() {
@@ -108,6 +118,13 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
             `;
 
             await this.queryNewDb(query);
+            await ensureTrackingColumns(this, {
+                tableRef: stagingTableRef,
+                tableName: table,
+                schemaName: schema,
+                dbName: this.newDbName,
+                label: this.modelName,
+            });
 
             console.log(`[ensureStagingTableExists] OK: ${stagingTableRef}`);
 
@@ -392,26 +409,22 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
     }
 
     async fetchOneFromStaging({ lastSyncTime, lastSyncId = 0, itemIndex, transaction } = {}) {
-        const rowNumber = Number(itemIndex || 0) + 1;
         const stagingTableRef = this.getStagingTableRef();
-        const query = `
-      ;WITH staged AS (
-        SELECT *, ROW_NUMBER() OVER (
-            ORDER BY __sync_time ASC, ISNULL(__sync_id_num, -2147483648) ASC, ID ASC
-        ) AS rn
-        FROM ${stagingTableRef}
-        WHERE (__sync_time > @lastSyncTime OR (__sync_time = @lastSyncTime AND ISNULL(__sync_id_num, -2147483648) > @lastSyncId))
-      )
-      SELECT TOP 1 * FROM staged WHERE rn = @rowNumber
-    `;
-
-        const rows = await this.queryNewDbTx(query, {
-            lastSyncTime, lastSyncId: Number(lastSyncId || 0), rowNumber
-        }, transaction);
-
-        if (!rows?.length) return null;
-        const row = { ...rows[0] };
-        delete row.rn;
+        const row = await claimNextStagingRow(this, {
+            tableRef: stagingTableRef,
+            extraWhere: '(__sync_time > @lastSyncTime OR (__sync_time = @lastSyncTime AND ISNULL(__sync_id_num, -2147483648) > @lastSyncId))',
+            params: {
+                lastSyncTime,
+                lastSyncId: Number(lastSyncId || 0),
+            },
+            owner: `pid_${process.pid}`,
+            orderBy: '__sync_time ASC, ISNULL(__sync_id_num, -2147483648) ASC, ID ASC',
+            transaction,
+            label: this.modelName,
+        });
+        if (row) {
+            logger.info(`[${this.modelName}] [START] Processing started: ID=${row.ID}`);
+        }
         return row;
     }
 
@@ -433,12 +446,51 @@ class StreamSocialMigrationModel extends BaseIncrementalSyncInterface {
             return { syncJobId, itemIndex, processed: false, done: true };
         }
 
-        const result = await this.processRowData(rowData);
-        return {
-            syncJobId, itemIndex, processed: true, done: false,
-            rowId: rowData.ID || null,
-            result
-        };
+        const rowId = rowData.ID || null;
+        const stopHeartbeat = startHeartbeatLoop(
+            () => this.updateHeartbeat(rowId),
+            this.heartbeatIntervalMs,
+        );
+
+        try {
+            const result = await this.processRowData(rowData);
+            await markRowSuccess(this, {
+                tableRef: this.getStagingTableRef(),
+                keyWhere: 'ID = @ID',
+                params: { ID: rowId },
+                rowToken: `ID=${rowId}`,
+                label: this.modelName,
+            });
+            stopHeartbeat();
+            return {
+                syncJobId, itemIndex, processed: true, done: false,
+                rowId,
+                result
+            };
+        } catch (error) {
+            stopHeartbeat();
+            await markRowFailed(this, {
+                tableRef: this.getStagingTableRef(),
+                keyWhere: 'ID = @ID',
+                params: { ID: rowId },
+                rowToken: `ID=${rowId}`,
+                errorMessage: error.message,
+                label: this.modelName,
+            });
+            throw error;
+        }
+    }
+
+    async updateHeartbeat(rowId, transaction = null) {
+        if (!rowId) return 0;
+        return updateHeartbeat(this, {
+            tableRef: this.getStagingTableRef(),
+            keyWhere: 'ID = @ID',
+            params: { ID: rowId },
+            transaction,
+            rowToken: `ID=${rowId}`,
+            label: this.modelName,
+        });
     }
 
     /**

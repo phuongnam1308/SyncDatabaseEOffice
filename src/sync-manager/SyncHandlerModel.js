@@ -16,10 +16,26 @@ class SyncHandlerModel {
    */
   createCountFnIncremental() {
     return async (lastTime, lastSyncId = 0) => {
-      // Nếu model có hàm getCount riêng thì ưu tiên dùng (tối ưu hơn)
-      if (typeof this.syncModel.getCount === 'function') {
-        return this.syncModel.getCount(lastTime, lastSyncId);
+      // Lấy singleton instance của SyncManagerService để kiểm tra settings
+      const syncManager = require('./SyncManagerService');
+      const skipPull = syncManager.state && syncManager.state.settings && syncManager.state.settings.SKIP_PULL_FROM_OLD === true;
+
+      // Nếu SKIP_PULL_FROM_OLD = OFF (mặc định), ta muốn đếm từ DB cũ để biết tổng số sẽ hút
+      if (!skipPull) {
+        if (typeof this.syncModel.countListFromOldDb === 'function') {
+          return this.syncModel.countListFromOldDb(lastTime, lastSyncId);
+        }
+        // Fallback cho các model cũ chưa tách countListFromOldDb
+        if (typeof this.syncModel.getCount === 'function') {
+          return this.syncModel.getCount(lastTime, lastSyncId);
+        }
+      } else {
+        // Nếu SKIP_PULL_FROM_OLD = ON, ta chỉ quan tâm những gì đang có trong staging
+        if (typeof this.syncModel.getCount === 'function') {
+          return this.syncModel.getCount(lastTime, lastSyncId);
+        }
       }
+
       const records = await this.syncModel.fetchListFromOldDb(lastTime, lastSyncId);
       return Array.isArray(records) ? records.length : 0;
     };
@@ -40,26 +56,40 @@ class SyncHandlerModel {
       }
 
       if (!preparedJobs.has(jobId)) {
-        const listResult = await this.syncModel.getList(lastTime, jobId, lastSyncId);
-        // Khi Resume sau server restart, `nextIndex` phải bắt đầu từ số records đã xử lý trước đó
-        // (context.totalProcessed) chứ không phải 0, để SyncManagerService không emit lại từ đầu.
+        // Lấy singleton instance của SyncManagerService để kiểm tra settings
+        const syncManager = require('./SyncManagerService');
+        const skipPull = syncManager.state && syncManager.state.settings && syncManager.state.settings.SKIP_PULL_FROM_OLD === true;
+
+        let listResult = null;
+        if (skipPull) {
+          logger.info(`[SyncHandlerModel][${this.syncModel.getName ? this.syncModel.getName() : 'Unknown'}] SKIP_PULL_FROM_OLD is ON. Skipping extraction, using existing staging data.`);
+          const stagedCount = await this.syncModel.getCount(lastTime, lastSyncId);
+          listResult = {
+            totalCount: stagedCount,
+            lastSyncTime: lastTime,
+            lastSyncId: lastSyncId
+          };
+        } else {
+          listResult = await this.syncModel.getList(lastTime, jobId, lastSyncId);
+        }
+
         const resumeIndex = Number(cursor.totalProcessed || 0);
 
-        // ★ DÙNG stagedCount thay vì totalCount (pendingCount sau getList = 0)
-        // vì getList sau khi xong → tất cả đã staged, pending = 0
-        // stagedCount = tổng records đã đẩy vào staging, dùng để loop processOne()
-        const stagedCount = Number(listResult?.stagedCount || 0)
-          || Number(listResult?.totalCount || 0);
+        // Khi Resume sau server restart, `nextIndex` bắt đầu từ số records đã xử lý (resumeIndex).
+        // Tuy nhiên `listResult.totalCount` là số `pendingCount` thực tế CẦN XỬ LÝ TRONG STAGING ở thời điểm hiện tại.
+        // Do đó tổng `totalCount` trong context của preparedJobs phải là (pendingCount + resumeIndex)
+        // để đảm bảo `remaining = totalCount - processed = pendingCount`.
+        const pendingCount = Number(listResult?.totalCount ?? listResult?.stagedCount ?? 0);
 
         preparedJobs.set(jobId, {
-          totalCount: stagedCount,
+          totalCount: pendingCount + resumeIndex,
           syncTime: listResult?.lastSyncTime || lastTime,
           syncId: Number(listResult?.lastSyncId || lastSyncId || 0),
           sourceTime: listResult?.sourceLastSyncTime || lastTime,
           sourceId: Number(listResult?.sourceLastSyncId || lastSyncId || 0),
           nextIndex: resumeIndex
         });
-        logger.info(`[SyncHandlerModel] getList() → stagedCount=${stagedCount}, jobId=${jobId}`);
+        logger.info(`[SyncHandlerModel] getList() → pendingCount=${pendingCount}, jobId=${jobId}`);
         if (resumeIndex > 0) {
           logger.info(`[SyncHandlerModel] Resuming jobId=${jobId}: nextIndex restored to ${resumeIndex}`);
         }

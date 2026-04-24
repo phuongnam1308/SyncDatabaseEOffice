@@ -2,7 +2,8 @@ const logger = require('../../utils/logger');
 const SyncHandlerModel = require('./SyncHandlerModel');
 
 const OutGoingDocumentModel = require('../sync-outgoing-document/models/StreamOutgoingIncrementalModel');
-const SyncOutgoingAdapter = require('./SyncOutgoingAdapter'); // NEW: v2 adapter with instance staging tables
+const SyncOutgoingAdapter = require('./SyncOutgoingAdapter'); // v2 adapter with instance staging tables
+const SyncIncomingAdapter = require('./SyncIncomingAdapter'); // NEW: v2 adapter for incoming documents
 const SyncDraftDocumentAdapter = require('./SyncDraftDocumentAdapter'); // NEW: draft document adapter
 const SyncUnitDraftAdapter = require('./SyncUnitDraftAdapter'); // Unit draft from SharePoint List
 const StreamUserMigrationModel = require('../sync-user-copy/migrate/StreamUserMigrationModel');
@@ -22,12 +23,12 @@ const StreamCarBookingMigrationModel = require('../sync-car-booking/migrate/Stre
 const StreamPassportMigrationModel = require('../sync-passport/migrate/StreamPassportMigrationModel');
 
 const MODEL_DEFINITIONS = [
-  {
-    key: 'STREAM_OUTGOING_INCREMENTAL',
-    label: 'Đồng bộ văn bản đi',
-    section: 'realtime',
-    ModelClass: OutGoingDocumentModel
-  },
+  // {
+  //   key: 'STREAM_OUTGOING_INCREMENTAL',
+  //   label: 'Đồng bộ văn bản đi',
+  //   section: 'realtime',
+  //   ModelClass: OutGoingDocumentModel
+  // },
   {
     key: 'STREAM_OUTGOING_V2',
     label: 'Đồng bộ văn bản đi v2',
@@ -78,9 +79,9 @@ const MODEL_DEFINITIONS = [
   },
   {
     key: 'STREAM_INCOMING_INCREMENTAL',
-    label: 'Đồng bộ văn bản đến',
+    label: 'Đồng bộ văn bản đến v2',
     section: 'realtime',
-    ModelClass: IncomingDocumentModel,
+    ModelClass: SyncIncomingAdapter,
   },
   {
     key: 'STREAM_MEETING_COPY_MIGRATION',
@@ -88,24 +89,24 @@ const MODEL_DEFINITIONS = [
     section: 'realtime',
     ModelClass: StreamMeetingCopyMigrationModel,
   },
-  {
-    key: 'STREAM_EVENT_MIGRATION',
-    label: 'Đồng bộ lịch sự kiện',
-    section: 'realtime',
-    ModelClass: StreamEventMigrationModel,
-  },
-  {
-    key: 'STREAM_TGD_SCHEDULE_MIGRATION',
-    label: 'Đồng bộ lịch trực ban TGĐ',
-    section: 'realtime',
-    ModelClass: StreamTgdScheduleMigrationModel,
-  },
-  {
-    key: 'STREAM_MISSION_MIGRATION',
-    label: 'Đồng bộ lịch công tác',
-    section: 'realtime',
-    ModelClass: StreamMissionMigrationModel,
-  },
+  // {
+  //   key: 'STREAM_EVENT_MIGRATION',
+  //   label: 'Đồng bộ lịch sự kiện',
+  //   section: 'realtime',
+  //   ModelClass: StreamEventMigrationModel,
+  // },
+  // {
+  //   key: 'STREAM_TGD_SCHEDULE_MIGRATION',
+  //   label: 'Đồng bộ lịch trực ban TGĐ',
+  //   section: 'realtime',
+  //   ModelClass: StreamTgdScheduleMigrationModel,
+  // },
+  // {
+  //   key: 'STREAM_MISSION_MIGRATION',
+  //   label: 'Đồng bộ lịch công tác',
+  //   section: 'realtime',
+  //   ModelClass: StreamMissionMigrationModel,
+  // },
   {
     key: 'STREAM_CAR_BOOKING_MIGRATION',
     label: 'Đồng bộ lịch đặt xe',
@@ -273,7 +274,7 @@ class SyncModelRegistry {
       await instance.initialize();
 
       const handler = new SyncHandlerModel(instance);
-      
+
       // [QUY TRÌNH SỬA LỖI] Đổi tên key kỹ thuật thành Label Tiếng Việt trong DB nếu tồn tại
       // CHỈ thực hiện rename nếu không phải chạy đa instance (để tránh tranh chấp record)
       if (syncStateRepository && !instanceId) {

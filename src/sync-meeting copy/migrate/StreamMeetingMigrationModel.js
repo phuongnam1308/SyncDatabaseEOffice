@@ -25,6 +25,15 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     this.newDbSchema = this.oldConfig.newSchema;
     this.newTableSync = 'meeting_sync_staging';
     this.helper = new MigrationHelper(this.queryNewDbTx.bind(this), this.queryOldDb.bind(this));
+
+    // Multi-site support
+    this.listIdCache = {};
+    this.canonicalListTitle = null;
+    try {
+      this.databases = require('./databases.json');
+    } catch (e) {
+      this.databases = [this.oldDbName];
+    }
   }
 
   /**
@@ -35,6 +44,7 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     await super.initialize();
     await this.ensureStagingTableExists();
     await this.ensureMeetingsColumnsExist();
+    await this.ensureMeetingParticipantsTableExists();
     await this.ensureDefaultRoomExists();
     await this.ensureAuditTableExists();
     console.log(`[StreamMeetingMigrationModel] Initialization complete.`);
@@ -203,6 +213,151 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     }
   }
 
+  async ensureMeetingParticipantsTableExists() {
+    try {
+      const db = this.newDbName || 'app_tancang';
+      const schema = this.newDbSchema || 'dbo';
+      const participantsTable = `[${db}].[${schema}].[meeting_participants]`;
+      const unitsTable = `[${db}].[${schema}].[meeting_units]`;
+
+      console.log(`[StreamMeetingMigrationModel] Checking/Creating meeting_participants table...`);
+
+      const createQuery = `
+      IF NOT EXISTS (SELECT 1 FROM [${db}].INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '${schema}' AND TABLE_NAME = 'meeting_participants')
+      BEGIN
+          CREATE TABLE ${participantsTable} (
+              id uniqueidentifier DEFAULT newid() NOT NULL,
+              meeting_unit_id uniqueidentifier NULL,
+              user_id nvarchar(100) COLLATE SQL_Latin1_General_CP1_CI_AS NOT NULL,
+              seat_number nvarchar(50) COLLATE SQL_Latin1_General_CP1_CI_AS NULL,
+              room_id nvarchar(100) COLLATE SQL_Latin1_General_CP1_CI_AS NULL,
+              participant_role varchar(100) COLLATE SQL_Latin1_General_CP1_CI_AS NULL,
+              participant_state varchar(30) COLLATE SQL_Latin1_General_CP1_CI_AS DEFAULT 'PENDING' NOT NULL,
+              delegated_to_user_id nvarchar(100) COLLATE SQL_Latin1_General_CP1_CI_AS NULL,
+              delegated_from_user_id nvarchar(100) COLLATE SQL_Latin1_General_CP1_CI_AS NULL,
+              delegated_at datetime2 NULL,
+              attendance_state varchar(30) COLLATE SQL_Latin1_General_CP1_CI_AS DEFAULT 'RECEIVED' NOT NULL,
+              attendance_at datetime2 NULL,
+              not_check bit DEFAULT 0 NULL,
+              assignment_type varchar(30) COLLATE SQL_Latin1_General_CP1_CI_AS DEFAULT 'INITIAL' NULL,
+              accept_join bit DEFAULT 0 NOT NULL,
+              prepare_documents bit DEFAULT 0 NOT NULL,
+              delegation_state varchar(30) COLLATE SQL_Latin1_General_CP1_CI_AS DEFAULT 'NONE' NOT NULL,
+              reject_reason nvarchar(1000) COLLATE SQL_Latin1_General_CP1_CI_AS NULL,
+              unit_id nvarchar(100) COLLATE SQL_Latin1_General_CP1_CI_AS NULL,
+              user_type varchar(10) COLLATE SQL_Latin1_General_CP1_CI_AS NULL,
+              CONSTRAINT PK_meeting_participants PRIMARY KEY (id)
+          );
+      END
+      `;
+      await this.queryNewDb(createQuery);
+
+      const addForeignKeyQuery = `
+      IF NOT EXISTS (
+          SELECT 1
+          FROM sys.foreign_keys
+          WHERE name = 'fk_participant_unit'
+            AND parent_object_id = OBJECT_ID('${db}.${schema}.meeting_participants')
+      )
+      BEGIN
+          ALTER TABLE ${participantsTable}
+          WITH CHECK ADD CONSTRAINT fk_participant_unit
+          FOREIGN KEY (meeting_unit_id) REFERENCES ${unitsTable}(id) ON DELETE CASCADE;
+      END
+      `;
+      await this.queryNewDb(addForeignKeyQuery);
+
+      const unitIndexQuery = `
+      IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_participant_unit' AND object_id = OBJECT_ID('${db}.${schema}.meeting_participants'))
+      BEGIN
+          CREATE NONCLUSTERED INDEX idx_participant_unit ON ${participantsTable}(meeting_unit_id);
+      END
+      `;
+      await this.queryNewDb(unitIndexQuery);
+
+      const unitIdIndexQuery = `
+      IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_participant_unit_id' AND object_id = OBJECT_ID('${db}.${schema}.meeting_participants'))
+      BEGIN
+          CREATE NONCLUSTERED INDEX idx_participant_unit_id ON ${participantsTable}(unit_id);
+      END
+      `;
+      await this.queryNewDb(unitIdIndexQuery);
+
+      console.log(`[StreamMeetingMigrationModel] [ensureMeetingParticipantsTableExists] OK`);
+    } catch (err) {
+      console.error(`[StreamMeetingMigrationModel] [ensureMeetingParticipantsTableExists] ERROR: ${err.message}`);
+      throw err;
+    }
+  }
+
+  getStagingColumnDefinitions() {
+    return [
+      { name: 'ID', type: 'BIGINT' },
+      { name: 'stg_job_id', type: 'NVARCHAR(255)' },
+      { name: 'ListName', type: 'NVARCHAR(500)' },
+      { name: 'tp_Created', type: 'DATETIME2' },
+      { name: 'tp_Modified', type: 'DATETIME2' },
+      { name: 'AuthorName', type: 'NVARCHAR(500)' },
+      { name: 'AuthorFullName', type: 'NVARCHAR(500)' },
+      { name: 'AuthorAccount', type: 'NVARCHAR(500)' },
+      { name: 'AuthorEmail', type: 'NVARCHAR(500)' },
+      { name: 'EditorName', type: 'NVARCHAR(500)' },
+      { name: 'EditorAccount', type: 'NVARCHAR(500)' },
+      { name: 'Title', type: 'NVARCHAR(MAX)' },
+      { name: 'TieuDe', type: 'NVARCHAR(MAX)' },
+      { name: 'StartDate', type: 'DATETIME2' },
+      { name: 'BatDau', type: 'DATETIME2' },
+      { name: 'EndDate', type: 'DATETIME2' },
+      { name: 'KetThuc', type: 'DATETIME2' },
+      { name: 'Location', type: 'NVARCHAR(MAX)' },
+      { name: 'DiaDiem', type: 'NVARCHAR(MAX)' },
+      { name: 'Description', type: 'NVARCHAR(MAX)' },
+      { name: 'NoiDung', type: 'NVARCHAR(MAX)' },
+      { name: 'LoaiHop', type: 'NVARCHAR(MAX)' },
+      { name: 'ChuTri', type: 'NVARCHAR(MAX)' },
+      { name: 'ThuKy', type: 'NVARCHAR(MAX)' },
+      { name: 'CreatedDate', type: 'DATETIME2' },
+      { name: 'ModifiedDate', type: 'DATETIME2' },
+      { name: 'nvarchar4', type: 'NVARCHAR(MAX)' },
+      { name: 'priority', type: 'NVARCHAR(MAX)' },
+      { name: 'nvarchar6', type: 'NVARCHAR(MAX)' },
+      { name: 'nvarchar7', type: 'NVARCHAR(MAX)' },
+      { name: 'nvarchar8', type: 'NVARCHAR(MAX)' },
+      { name: 'nvarchar9', type: 'NVARCHAR(MAX)' },
+      { name: 'nvarchar10', type: 'NVARCHAR(MAX)' },
+      { name: 'nvarchar11', type: 'NVARCHAR(MAX)' },
+      { name: 'nvarchar12', type: 'NVARCHAR(MAX)' },
+      { name: 'nvarchar13', type: 'NVARCHAR(MAX)' },
+      { name: 'nvarchar14', type: 'NVARCHAR(MAX)' },
+      { name: 'nvarchar15', type: 'NVARCHAR(MAX)' },
+      { name: 'datetime1', type: 'DATETIME2' },
+      { name: 'datetime2', type: 'DATETIME2' },
+      { name: 'datetime3', type: 'DATETIME2' },
+      { name: 'datetime4', type: 'DATETIME2' },
+      { name: 'datetime5', type: 'DATETIME2' },
+      { name: 'int1', type: 'INT' },
+      { name: 'int2', type: 'INT' },
+      { name: 'int3', type: 'INT' },
+      { name: 'int4', type: 'INT' },
+      { name: 'bit1', type: 'BIT' },
+      { name: 'bit2', type: 'BIT' },
+      { name: 'tp_Author', type: 'INT' },
+      { name: 'tp_Editor', type: 'INT' },
+      { name: 'tp_Version', type: 'INT' },
+      { name: 'tp_IsCurrent', type: 'BIT' },
+      { name: 'tp_ListId', type: 'NVARCHAR(255)' },
+      { name: 'float1', type: 'FLOAT' },
+      { name: 'float2', type: 'FLOAT' },
+      { name: 'DocumentTitle', type: 'NVARCHAR(MAX)' }
+    ];
+  }
+
+  getStagingDataColumns() {
+    return this.getStagingColumnDefinitions()
+      .map((column) => column.name)
+      .filter((column) => column !== 'stg_job_id');
+  }
+
 
   /**
    * Tự động tạo bảng staging `meeting_sync_staging` trong DB mới nếu chưa tồn tại.
@@ -211,83 +366,35 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
       try {
         const stagingTableRef = this.getStagingTableRef();
         console.log(`[StreamMeetingMigrationModel] Checking/Creating staging table: ${stagingTableRef}`);
+        const db = this.newDbName || 'app_tancang';
         const schema = this.newDbSchema || 'dbo';
         const table = this.newTableSync;
 
         const createQuery = `
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '${schema}' AND TABLE_NAME = '${table}')
+        IF NOT EXISTS (SELECT 1 FROM [${db}].INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '${schema}' AND TABLE_NAME = '${table}')
         BEGIN
             CREATE TABLE ${stagingTableRef} (
                 [SY_SyncId] INT IDENTITY(1,1) PRIMARY KEY,
-                [sync_job_id] NVARCHAR(255) NULL,
-                [source_record_key] NVARCHAR(400) NULL,
                 [__sync_time] DATETIME2 NULL,
-                [__sync_id_num] BIGINT NULL,
-                [ID] BIGINT NOT NULL
+                [__sync_id_num] BIGINT NULL
             );
         END
         `;
         await this.queryNewDb(createQuery);
 
-        // 2. Danh sách các cột cần đảm bảo (Tự động thêm nếu thiếu)
-        const columnsToAdd = [
-            { name: 'sync_job_id', type: 'NVARCHAR(255)' },
-            { name: 'source_record_key', type: 'NVARCHAR(400)' },
-            { name: 'ListName', type: 'NVARCHAR(500)' },
-            { name: 'CreatedDate', type: 'NVARCHAR(500)' },
-            { name: 'ModifiedDate', type: 'NVARCHAR(500)' },
-            { name: 'tp_Created', type: 'NVARCHAR(500)' },
-            { name: 'tp_Modified', type: 'NVARCHAR(500)' },
-            { name: 'Title', type: 'NVARCHAR(MAX)' },
-            { name: 'StartDate', type: 'NVARCHAR(500)' },
-            { name: 'EndDate', type: 'NVARCHAR(500)' },
-            { name: 'Location', type: 'NVARCHAR(MAX)' },
-            { name: 'Description', type: 'NVARCHAR(MAX)' },
-            { name: 'Organizer', type: 'NVARCHAR(500)' },
-            { name: 'AuthorName', type: 'NVARCHAR(500)' },
-            { name: 'AuthorFullName', type: 'NVARCHAR(500)' },
-            { name: 'AuthorAccount', type: 'NVARCHAR(500)' },
-            { name: 'AuthorEmail', type: 'NVARCHAR(500)' },
-            { name: 'EditorName', type: 'NVARCHAR(500)' },
-            { name: 'EditorAccount', type: 'NVARCHAR(500)' },
-            { name: 'nvarchar4', type: 'NVARCHAR(MAX)' },
-            { name: 'nvarchar6', type: 'NVARCHAR(MAX)' },
-            { name: 'nvarchar7', type: 'NVARCHAR(MAX)' },
-            { name: 'nvarchar8', type: 'NVARCHAR(MAX)' },
-            { name: 'nvarchar9', type: 'NVARCHAR(MAX)' },
-            { name: 'nvarchar10', type: 'NVARCHAR(MAX)' },
-            { name: 'nvarchar11', type: 'NVARCHAR(MAX)' },
-            { name: 'nvarchar12', type: 'NVARCHAR(MAX)' },
-            { name: 'nvarchar13', type: 'NVARCHAR(MAX)' },
-            { name: 'nvarchar14', type: 'NVARCHAR(MAX)' },
-            { name: 'nvarchar15', type: 'NVARCHAR(MAX)' },
-            { name: 'priority', type: 'NVARCHAR(MAX)' },
-            { name: 'ThoiLuongGiay', type: 'INT' },
-            { name: 'DocumentTitle', type: 'NVARCHAR(MAX)' },
-            { name: 'tp_Author', type: 'INT' },
-            { name: 'tp_Editor', type: 'INT' },
-            { name: 'tp_Version', type: 'INT' },
-            { name: 'tp_IsCurrent', type: 'BIT' },
-            { name: 'tp_ListId', type: 'NVARCHAR(255)' },
-            { name: 'datetime1', type: 'DATETIME2' },
-            { name: 'datetime2', type: 'DATETIME2' },
-            { name: 'datetime3', type: 'DATETIME2' },
-            { name: 'datetime4', type: 'DATETIME2' },
-            { name: 'datetime5', type: 'DATETIME2' },
-            { name: 'int1', type: 'INT' },
-            { name: 'int2', type: 'INT' },
-            { name: 'int3', type: 'INT' },
-            { name: 'int4', type: 'INT' },
-            { name: 'float1', type: 'FLOAT' },
-            { name: 'float2', type: 'FLOAT' },
-            { name: 'bit1', type: 'BIT' },
-            { name: 'bit2', type: 'BIT' }
-        ];
-
+        const columnsToAdd = this.getStagingColumnDefinitions();
+        // Thêm cột source_db cho đa site
+        if (!columnsToAdd.some(c => c.name === 'source_db')) {
+          columnsToAdd.push({ name: 'source_db', type: 'NVARCHAR(255)' });
+        }
 
         for (const col of columnsToAdd) {
             const alterQuery = `
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${table}' AND TABLE_SCHEMA = '${schema}' AND COLUMN_NAME = '${col.name}')
+            IF NOT EXISTS (
+                SELECT 1
+                FROM [${db}].INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_NAME = '${table}' AND TABLE_SCHEMA = '${schema}' AND COLUMN_NAME = '${col.name}'
+            )
             BEGIN
                 ALTER TABLE ${stagingTableRef} ADD [${col.name}] ${col.type} NULL;
             END
@@ -295,31 +402,54 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
             await this.queryNewDb(alterQuery);
         }
 
-        await this.queryNewDb(`
-        IF EXISTS (
-            SELECT 1
-            FROM sys.indexes
-            WHERE name = 'IX_${table}_ID'
-              AND object_id = OBJECT_ID('${stagingTableRef}')
-        )
-        BEGIN
-            DROP INDEX IX_${table}_ID ON ${stagingTableRef};
-        END
-        `);
+        // Flags chuẩn cho sync-manager
+        const flags = [
+          { name: 'MigrateFlg', type: 'INT' },
+          { name: 'MigrateErrFlg', type: 'INT' },
+          { name: 'MigrateErrMess', type: 'NVARCHAR(MAX)' }
+        ];
+        for (const flag of flags) {
+          await this.queryNewDb(`IF NOT EXISTS (SELECT 1 FROM [${db}].INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${table}' AND TABLE_SCHEMA = '${schema}' AND COLUMN_NAME = '${flag.name}') ALTER TABLE ${stagingTableRef} ADD [${flag.name}] ${flag.type} NULL;`);
+        }
 
-        await this.queryNewDb(`
+        const dropLegacyIndexQuery = `
+        IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${table}_ID' AND object_id = OBJECT_ID('${stagingTableRef}'))
+            DROP INDEX IX_${table}_ID ON ${stagingTableRef};
+        IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${table}_job_ID' AND object_id = OBJECT_ID('${stagingTableRef}'))
+            DROP INDEX IX_${table}_job_ID ON ${stagingTableRef};
+        IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${table}_job_list_ID' AND object_id = OBJECT_ID('${stagingTableRef}'))
+            DROP INDEX IX_${table}_job_list_ID ON ${stagingTableRef};
+        `;
+        await this.queryNewDb(dropLegacyIndexQuery);
+
+        const indexQuery = `
+        IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${table}_job_list_ID_source' AND object_id = OBJECT_ID('${stagingTableRef}'))
+        BEGIN
+            CREATE UNIQUE INDEX IX_${table}_job_list_ID_source ON ${stagingTableRef}(stg_job_id, source_db, tp_ListId, ID);
+        END
+        `;
+        await this.queryNewDb(indexQuery);
+
+        const dropOldCursorIndexQuery = `
+        IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${table}_job_cursor' AND object_id = OBJECT_ID('${stagingTableRef}'))
+        BEGIN
+            DROP INDEX IX_${table}_job_cursor ON ${stagingTableRef};
+        END
+        `;
+        await this.queryNewDb(dropOldCursorIndexQuery);
+
+        const syncCursorIndexQuery = `
         IF NOT EXISTS (
-            SELECT 1
-            FROM sys.indexes
-            WHERE name = 'IX_${table}_job_source_record_key'
-              AND object_id = OBJECT_ID('${stagingTableRef}')
+            SELECT 1 FROM sys.indexes i
+            JOIN sys.tables t ON i.object_id = t.object_id
+            WHERE i.name = 'IX_${table}_job_cursor'
+              AND t.name = '${table}'
         )
         BEGIN
-            CREATE UNIQUE INDEX IX_${table}_job_source_record_key
-            ON ${stagingTableRef}([sync_job_id], [source_record_key])
-            WHERE [sync_job_id] IS NOT NULL AND [source_record_key] IS NOT NULL;
+            CREATE INDEX IX_${table}_job_cursor ON ${stagingTableRef}(stg_job_id, __sync_time, __sync_id_num, tp_ListId, SY_SyncId);
         END
-        `);
+        `;
+        await this.queryNewDb(syncCursorIndexQuery);
 
         console.log(`[StreamMeetingMigrationModel] [ensureStagingTableExists] OK: ${stagingTableRef} is ready`);
 
@@ -427,30 +557,98 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     return Number(aId || 0) > Number(bId || 0);
   }
 
-  async getCount(lastSyncTime, lastSyncId = 0) {
-    const listIds = this.oldConfig.listIds || [];
-    const listIdsStr = listIds.map(id => `'${id}'`).join(',');
-    const query = `
-        SELECT COUNT(*) AS total
-        FROM [${this.oldDbName}].[dbo].[AllUserData] ud
-        WHERE ud.[tp_ListId] IN (${listIdsStr})
-        AND ud.tp_RowOrdinal = 0
-        AND ud.[tp_IsCurrent] = 1
-        AND ud.[tp_DeleteTransactionId] = 0x0
-        AND (
-            ud.[tp_Modified] > @lastSyncTime
-            OR (
-                ud.[tp_Modified] = @lastSyncTime
-                AND ud.[tp_ID] > @lastSyncId
-            )
-        )
-    `;
-    const rows = await this.queryOldDb(query, { lastSyncTime, lastSyncId: Number(lastSyncId || 0) });
-    return Number(rows?.[0]?.total || 0);
+  /**
+   * Tự động tìm kiếm List IDs của Đăng ký họp trong một Content DB nhất định.
+   */
+  async resolveListIdsForDb(dbName) {
+    if (this.listIdCache[dbName]) return this.listIdCache[dbName];
+
+    const referenceIds = this.oldConfig.listIds || [];
+
+    // 1. Tìm Title mẫu từ DB tham chiếu
+    if (!this.canonicalListTitle) {
+      const refDb = this.oldDbName;
+      const refId = referenceIds[0];
+      const titleQuery = `SELECT TOP 1 tp_Title FROM [${refDb}].[dbo].[AllLists] WHERE tp_ID = @refId`;
+      try {
+        const rows = await this.queryOldDb(titleQuery, { refId });
+        if (rows?.length) {
+          this.canonicalListTitle = rows[0].tp_Title;
+          console.log(`[StreamMeetingMigrationModel] Canonical List Title discovered: "${this.canonicalListTitle}"`);
+        }
+      } catch (err) {
+        console.error(`[StreamMeetingMigrationModel] Failed to discover canonical title: ${err.message}`);
+      }
+    }
+
+    // 2. Exact Match theo Title
+    let discoveredIds = [];
+    if (this.canonicalListTitle) {
+      const query = `SELECT tp_ID FROM [${dbName}].[dbo].[AllLists] WHERE tp_Title = @title AND tp_DeleteTransactionId = 0x0`;
+      try {
+        const rows = await this.queryOldDb(query, { title: this.canonicalListTitle });
+        discoveredIds = rows.map(r => String(r.tp_ID).toUpperCase());
+      } catch (e) {}
+    }
+
+    // 3. Keyword Match (H hardened)
+    if (discoveredIds.length === 0) {
+      const keywords = ['Lịch họp', 'Đăng ký họp'];
+      const patterns = keywords.map(k => `tp_Title LIKE N'%${k}%'`).join(' OR ');
+      const query = `
+          SELECT tp_ID, tp_Title
+          FROM [${dbName}].[dbo].[AllLists]
+          WHERE (${patterns})
+          AND tp_DeleteTransactionId = 0x0
+          AND tp_Title NOT LIKE N'%Đính kèm%'
+          AND tp_Title NOT LIKE N'%Văn bản%'
+          AND tp_Title NOT LIKE N'%Tài liệu%'
+      `;
+      try {
+        const rows = await this.queryOldDb(query);
+        if (rows?.length) {
+          discoveredIds = rows.map(r => String(r.tp_ID).toUpperCase());
+          console.log(`[StreamMeetingMigrationModel] [${dbName}] Found potential lists: ${rows.map(r => r.tp_Title).join(', ')}`);
+        }
+      } catch (e) {}
+    }
+
+    if (discoveredIds.length > 0) {
+      this.listIdCache[dbName] = discoveredIds;
+      return discoveredIds;
+    }
+
+    if (dbName === this.oldDbName) return referenceIds;
+    console.error(`[StreamMeetingMigrationModel] !!! KHÔNG TÌM THẤY DANH SÁCH HỌP TẠI DB: ${dbName} !!!`);
+    return [];
   }
 
-  async fetchListFromOldDb(lastSyncTime, lastSyncId = 0, offset = 0, limit = 2000) {
-    const listIds = this.oldConfig.listIds || [];
+  async getCount(lastSyncTime, lastSyncId = 0) {
+    const dbs = this.databases || [this.oldDbName];
+    let total = 0;
+    for (const db of dbs) {
+      const listIds = await this.resolveListIdsForDb(db);
+      if (!listIds?.length) continue;
+      const listIdsStr = listIds.map(id => `'${id}'`).join(',');
+      const query = `
+          SELECT COUNT(*) AS total
+          FROM [${db}].[dbo].[AllUserData] ud
+          WHERE ud.[tp_ListId] IN (${listIdsStr})
+          AND ud.tp_RowOrdinal = 0
+      `;
+      try {
+          const rows = await this.queryOldDb(query, { lastSyncTime, lastSyncId: Number(lastSyncId || 0) });
+          total += Number(rows?.[0]?.total || 0);
+      } catch (e) {
+          console.error(`[StreamMeetingMigrationModel] getCount failed for DB ${db}: ${e.message}`);
+      }
+    }
+    return total;
+  }
+
+  async fetchListFromOldDb(lastSyncTime, lastSyncId = 0, offset = 0, limit = 2000, dbName = null) {
+    const targetDb = dbName || this.oldDbName;
+    const listIds = await this.resolveListIdsForDb(targetDb);
     const listIdsStr = listIds.map(id => `'${id}'`).join(',');
 
     const query = `
@@ -516,7 +714,7 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
             ud.[tp_Modified] AS __sync_time,
             ud.[tp_ID] AS __sync_id_num
 
-        FROM [${this.oldDbName}].[dbo].[AllUserData] ud
+        FROM [${targetDb}].[dbo].[AllUserData] ud
         INNER JOIN [${this.oldDbName}].[dbo].[AllLists] l
             ON ud.[tp_ListId] = l.[tp_ID]
         LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_author
@@ -526,22 +724,13 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
         LEFT JOIN [DataEOfficeSNP].[SNP].[CodeItem] ci
             ON ud.[tp_ID] = ci.[SPItemId]
         WHERE ud.[tp_ListId] IN (${listIdsStr})
-        AND ud.[tp_IsCurrent] = 1
-        AND ud.[tp_DeleteTransactionId] = 0x0
-        AND (
-            @lastSyncTime = '1970-01-01T00:00:00.000Z'
-            OR ud.[tp_Modified] > @lastSyncTime
-            OR (
-                ud.[tp_Modified] = @lastSyncTime
-                AND ud.[tp_ID] > @lastSyncId
-            )
-        )
-        ORDER BY ud.[tp_Modified] ASC, ud.[tp_ID] ASC
+        AND ud.tp_RowOrdinal = 0
+        ORDER BY ud.[tp_Modified] ASC, ud.[tp_ID] ASC, ud.[tp_ListId] ASC
         OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
     `;
 
-    const rows = await this.queryOldDb(query, { 
-      lastSyncTime, 
+    const rows = await this.queryOldDb(query, {
+      lastSyncTime,
       lastSyncId: Number(lastSyncId || 0),
       offset: Number(offset || 0),
       limit: Number(limit || 2000)
@@ -550,111 +739,45 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     return rows;
   }
 
-  async clearStagingForJob(syncJobId, transaction = null) {
-    if (!syncJobId) return;
-    await this.queryNewDbTx(
-      `DELETE FROM ${this.getStagingTableRef()} WHERE [sync_job_id] = @syncJobId`,
-      { syncJobId },
-      transaction
-    );
-  }
-
-  async getStagingSnapshotMeta(syncJobId) {
-    if (!syncJobId) {
-      return { totalCount: 0, lastSyncTime: DEFAULT_SYNC_TIME, lastSyncId: 0 };
-    }
-
-    const tableRef = this.getStagingTableRef();
-    const rows = await this.queryNewDb(
-      `
-      WITH ordered AS (
-        SELECT
-          [__sync_time],
-          [__sync_id_num],
-          ROW_NUMBER() OVER (
-            ORDER BY [__sync_time] DESC, [__sync_id_num] DESC, [source_record_key] DESC
-          ) AS rn
-        FROM ${tableRef}
-        WHERE [sync_job_id] = @syncJobId
-      )
-      SELECT
-        (SELECT COUNT(1) FROM ${tableRef} WHERE [sync_job_id] = @syncJobId) AS totalCount,
-        [__sync_time] AS lastSyncTime,
-        [__sync_id_num] AS lastSyncId
-      FROM ordered
-      WHERE rn = 1
-      `,
-      { syncJobId }
-    );
-
-    const row = rows?.[0] || {};
-    return {
-      totalCount: Number(row.totalCount || 0),
-      lastSyncTime: this.normalizeSyncTime(row.lastSyncTime || DEFAULT_SYNC_TIME),
-      lastSyncId: Number(row.lastSyncId || 0)
-    };
-  }
-
-  async syncOldToStaging(rows, { transaction, syncJobId } = {}) {
+  async syncOldToStaging(rows, { transaction, syncJobId, dbName } = {}) {
     if (!Array.isArray(rows) || rows.length === 0) return { stagedCount: 0 };
-    if (!syncJobId) throw new Error('syncJobId is required for staging meeting snapshot');
-    console.log(`[StreamMeetingMigrationModel] Staging ${rows.length} rows to ${this.newTableSync}...`);
-    const internalColumns = new Set(['__sync_time', '__sync_id_num']);
-    const columns = Object.keys(rows[0] || {}).filter(
-      (c) => !String(c).startsWith('__') && !internalColumns.has(c)
-    );
-    const keyColumn = 'source_record_key';
+    if (!syncJobId) throw new Error('syncJobId is required for staging');
+    const targetDb = dbName || this.oldDbName;
+    console.log(`[StreamMeetingMigrationModel] Staging ${rows.length} rows from ${targetDb} to ${this.newTableSync}...`);
+    const columns = this.getStagingDataColumns();
     const stagingTableRef = this.getStagingTableRef();
 
     for (const row of rows) {
       const params = {};
       for (const column of columns) {
-        // Không ép kiểu String() bừa bãi để tránh lỗi convert Date/Time trong SQL
         params[column] = row[column] !== undefined ? row[column] : null;
       }
-      params.sync_job_id = syncJobId;
-      params.source_record_key = this.buildSourceRecordKey(row);
+      params.stg_job_id = syncJobId;
+      params.source_db = targetDb;
       params.__sync_time = row.__sync_time;
       params.__sync_id_num = row.__sync_id_num;
-      const updateSet = [
-        ...columns.map(c => `[${c}] = @${c}`),
-        `[__sync_time] = @__sync_time`,
-        `[__sync_id_num] = @__sync_id_num`
-      ].join(', ');
+      params.MigrateFlg = 0;
+      params.MigrateErrFlg = 0;
+
+      const updateSet = columns.filter(c => c !== 'ID' && c !== 'tp_ListId' && c !== 'source_db').map(c => `[${c}] = @${c}`).join(', ');
       const query = `
       IF EXISTS (
-          SELECT 1
-          FROM ${stagingTableRef}
-          WHERE [sync_job_id] = @sync_job_id
-            AND [${keyColumn}] = @${keyColumn}
+          SELECT 1 FROM ${stagingTableRef}
+          WHERE [stg_job_id] = @stg_job_id AND [source_db] = @source_db AND [tp_ListId] = @tp_ListId AND [ID] = @ID
       )
       BEGIN
           UPDATE ${stagingTableRef}
-          SET ${updateSet}
-          WHERE [sync_job_id] = @sync_job_id
-            AND [${keyColumn}] = @${keyColumn}
+          SET ${updateSet}, __sync_time = @__sync_time, __sync_id_num = @__sync_id_num, MigrateFlg = @MigrateFlg, MigrateErrFlg = @MigrateErrFlg, MigrateErrMess = NULL
+          WHERE [stg_job_id] = @stg_job_id AND [source_db] = @source_db AND [tp_ListId] = @tp_ListId AND [ID] = @ID
       END
       ELSE
       BEGIN
-          INSERT INTO ${stagingTableRef} (
-            [sync_job_id],
-            [source_record_key],
-            ${columns.map(c => `[${c}]`).join(',')},
-            __sync_time,
-            __sync_id_num
-          )
-          VALUES (
-            @sync_job_id,
-            @source_record_key,
-            ${columns.map(c => `@${c}`).join(',')},
-            @__sync_time,
-            @__sync_id_num
-          )
+          INSERT INTO ${stagingTableRef} ([stg_job_id], [source_db], ${columns.map(c => `[${c}]`).join(',')}, __sync_time, __sync_id_num, MigrateFlg, MigrateErrFlg)
+          VALUES (@stg_job_id, @source_db, ${columns.map(c => `@${c}`).join(',')}, @__sync_time, @__sync_id_num, @MigrateFlg, @MigrateErrFlg)
       END
       `;
       await this.queryNewDbTx(query, params, transaction);
     }
-    console.log(`[StreamMeetingMigrationModel] Staging complete for ${rows.length} rows`);
     return { stagedCount: rows.length };
   }
 
@@ -662,75 +785,106 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     if (!syncJobId) throw new Error('syncJobId is required');
     const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
     const normalizedLastSyncId = Number(lastSyncId || 0);
-
-    const stagedSnapshot = await this.getStagingSnapshotMeta(syncJobId);
-    if (stagedSnapshot.totalCount > 0) {
-      console.log(`[StreamMeetingMigrationModel] Reusing staged snapshot for job ${syncJobId}: ${stagedSnapshot.totalCount} rows`);
-      await this.queryNewDb(`UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`, {
-        total: stagedSnapshot.totalCount,
-        jobId: syncJobId
-      });
-
-      return {
-        syncJobId,
-        rows: [],
-        totalCount: stagedSnapshot.totalCount,
-        stagedCount: stagedSnapshot.totalCount,
-        sourceLastSyncTime: normalizedLastSyncTime,
-        sourceLastSyncId: normalizedLastSyncId,
-        lastSyncTime: stagedSnapshot.lastSyncTime,
-        lastSyncId: stagedSnapshot.lastSyncId
-      };
-    }
+    const stagingTableRef = this.getStagingTableRef();
 
     const totalCount = await this.getCount(normalizedLastSyncTime, normalizedLastSyncId);
     console.log(`[StreamMeetingMigrationModel] Total records to sync: ${totalCount}`);
 
-    // Cập nhật Dashboard ngay lập tức
-    await this.queryNewDb(`UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`, {
-      total: totalCount,
-      jobId: syncJobId
-    });
+    await this.queryNewDb(
+      `
+      UPDATE sync_jobs
+      SET total_to_sync = 0,
+          total_processed = 0,
+          total_success = 0,
+          total_errors = 0,
+          last_sync_time = @lastSyncTime,
+          last_sync_id = @lastSyncId
+      WHERE job_id = @jobId
+      `,
+      {
+        lastSyncTime: normalizedLastSyncTime,
+        lastSyncId: normalizedLastSyncId,
+        jobId: syncJobId
+      }
+    );
 
+    await this.queryNewDb(
+      `DELETE FROM ${stagingTableRef} WHERE stg_job_id = @syncJobId`,
+      { syncJobId }
+    );
+
+    const dbs = this.databases || [this.oldDbName];
     const fetchBatchSize = Number(process.env.STAGING_FETCH_BATCH_SIZE || 2000);
-    const numIterations = Math.ceil(totalCount / fetchBatchSize);
-
     let totalStagedCount = 0;
     let nextSyncTime = normalizedLastSyncTime;
     let nextSyncId = normalizedLastSyncId;
 
-    await this.clearStagingForJob(syncJobId);
+    let dbCounted = 0;
+    for (const db of dbs) {
+      dbCounted++;
+      try {
+        console.log(`[StreamMeetingMigrationModel] [SITE ${dbCounted}/${dbs.length}] Processing database: ${db}`);
 
-    for (let i = 0; i < numIterations; i++) {
-        const offset = i * fetchBatchSize;
-        console.log(`[StreamMeetingMigrationModel] Fetching batch ${i + 1}/${numIterations} (Offset: ${offset}, Limit: ${fetchBatchSize})`);
-        
-        const rows = await this.fetchListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId, offset, fetchBatchSize);
-        if (!rows || rows.length === 0) break;
+        const listIds = await this.resolveListIdsForDb(db);
+        if (!listIds?.length) continue;
+        const listIdsStr = listIds.map(id => `'${id}'`).join(',');
 
-        const stageResult = await this.syncOldToStaging(rows, { syncJobId });
-        totalStagedCount += Number(stageResult?.stagedCount || rows.length || 0);
+        const dbCountQuery = `
+            SELECT COUNT(*) AS total
+            FROM [${db}].[dbo].[AllUserData]
+            WHERE [tp_ListId] IN (${listIdsStr})
+            AND tp_RowOrdinal = 0
+        `;
+        const dbCountRes = await this.queryOldDb(dbCountQuery, { lastSyncTime: normalizedLastSyncTime, lastSyncId: normalizedLastSyncId });
+        const dbCount = Number(dbCountRes?.[0]?.total || 0);
 
-        for (const row of rows) {
-            const rowTime = this.extractRowSyncTime(row);
-            const rowId = this.extractRowSyncId(row);
-            if (rowTime && this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId)) {
-                nextSyncTime = rowTime;
-                nextSyncId = rowId;
-            }
+        if (dbCount === 0) {
+          console.log(`[StreamMeetingMigrationModel] [${db}] No new records.`);
+          continue;
         }
-        console.log(`[StreamMeetingMigrationModel] Staged progressive: ${totalStagedCount}/${totalCount}`);
+
+        const numIterations = Math.ceil(dbCount / fetchBatchSize);
+        for (let i = 0; i < numIterations; i++) {
+          const offset = i * fetchBatchSize;
+          console.log(`[StreamMeetingMigrationModel] [${db}] Fetching batch ${i + 1}/${numIterations} (Offset: ${offset})`);
+
+          const rows = await this.fetchListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId, offset, fetchBatchSize, db);
+          if (!rows || rows.length === 0) break;
+
+          const stageResult = await this.syncOldToStaging(rows, { syncJobId, dbName: db });
+          totalStagedCount += Number(stageResult?.stagedCount || rows.length || 0);
+
+          for (const row of rows) {
+              const rowTime = this.extractRowSyncTime(row);
+              const rowId = this.extractRowSyncId(row);
+              if (rowTime && this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId)) {
+                  nextSyncTime = rowTime;
+                  nextSyncId = rowId;
+              }
+          }
+          console.log(`[StreamMeetingMigrationModel] [${db}] Staged progressive: ${totalStagedCount}/${totalCount}`);
+        }
+      } catch (err) {
+        console.error(`[StreamMeetingMigrationModel] [SKIPPED SITE] Error processing DB ${db}: ${err.message}`);
+      }
     }
 
-    return { 
-        syncJobId, 
-        rows: [], 
-        totalCount: totalCount, 
+    await this.queryNewDb(
+      `UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`,
+      {
+        total: totalStagedCount,
+        jobId: syncJobId
+      }
+    );
+
+    return {
+        syncJobId,
+        rows: [],
+        sourceTotalCount: totalCount,
+        totalCount: totalStagedCount,
         stagedCount: totalStagedCount,
-        sourceLastSyncTime: normalizedLastSyncTime,
-        sourceLastSyncId: normalizedLastSyncId,
-        lastSyncTime: nextSyncTime, 
-        lastSyncId: nextSyncId 
+        lastSyncTime: nextSyncTime,
+        lastSyncId: nextSyncId
     };
   }
 
@@ -739,44 +893,63 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     return rows?.[0] || null;
   }
 
-  async fetchOneFromStaging({ syncJobId, itemIndex = 0 }) {
+  async fetchOneFromStaging(syncJobId, { processedCount = 0, transaction } = {}) {
     if (!syncJobId) throw new Error('syncJobId is required');
 
-    const rowNumber = Number(itemIndex || 0) + 1;
-    const rows = await this.queryNewDb(
-      `
-      WITH ordered AS (
+    const stagingTableRef = this.getStagingTableRef();
+    const query = `
+      ;WITH staged AS (
         SELECT
           *,
-          ROW_NUMBER() OVER (
-            ORDER BY [__sync_time] ASC, [__sync_id_num] ASC, [source_record_key] ASC
-          ) AS rn
-        FROM ${this.getStagingTableRef()}
-        WHERE [sync_job_id] = @syncJobId
+          COALESCE(TRY_CONVERT(datetime2, __sync_time), TRY_CONVERT(datetime2, tp_Modified), TRY_CONVERT(datetime2, tp_Created)) AS __cursor_time,
+          TRY_CONVERT(BIGINT, COALESCE(__sync_id_num, ID)) AS __cursor_id
+        FROM ${stagingTableRef}
+        WHERE stg_job_id = @syncJobId
       )
       SELECT *
-      FROM ordered
-      WHERE rn = @rowNumber
-      `,
-      { syncJobId, rowNumber }
+      FROM staged
+      ORDER BY
+        __cursor_time ASC,
+        ISNULL(__cursor_id, -9223372036854775808) ASC,
+        ISNULL(tp_ListId, '') ASC,
+        ID ASC,
+        SY_SyncId ASC
+      OFFSET @processedCount ROWS FETCH NEXT 1 ROWS ONLY
+    `;
+
+    const rows = await this.queryNewDbTx(
+      query,
+      {
+        syncJobId,
+        processedCount: Number(processedCount || 0)
+      },
+      transaction
     );
-    return rows?.[0] || null;
+
+    if (!rows?.length) return null;
+
+    const row = { ...rows[0] };
+    delete row.__cursor_time;
+    delete row.__cursor_id;
+    return row;
   }
 
   async processOne(syncJobId, options = {}) {
     console.log(`[StreamMeetingMigrationModel] processOne: Starting job ${syncJobId}`);
     const jobState = await this.getSyncJobState(syncJobId);
     if (!jobState) throw new Error(`Job state not found: ${syncJobId}`);
+    const processedCount = Number(jobState.total_processed || 0);
 
-    const itemIndex = Number(options?.itemIndex || 0);
-    const rowData = await this.fetchOneFromStaging({ syncJobId, itemIndex });
+    const rowData = await this.fetchOneFromStaging(syncJobId, {
+      processedCount
+    });
 
     if (!rowData) {
         console.log(`[StreamMeetingMigrationModel] processOne: No more data for job ${syncJobId}`);
         return { syncJobId, processed: false, done: true };
     }
 
-    console.log(`[StreamMeetingMigrationModel] processOne: Processing row ID ${rowData.ID}`);
+    console.log(`[StreamMeetingMigrationModel] processOne: Processing staged row #${processedCount + 1}, source ID ${rowData.ID}`);
     await this.processRowData(rowData);
 
     await this.queryNewDb(
@@ -876,7 +1049,7 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
 
     // Mapping Secretary (Thư ký) from nvarchar14
     if (rowData.nvarchar14) {
-        rowData.secretary_id = await this.helper.mapUserName(rowData.nvarchar14, transaction);
+        rowData.secretary_id = await this.resolveExistingUserIdNoCreate(rowData.nvarchar14, transaction);
     }
 
     // Mapping Direct Command and Conclusion
@@ -972,8 +1145,9 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
         // Recurrence helper (Standard behavior)
         await this.helper.createRecurrenceKhong(meetingId, rowData.StartDate, transaction);
 
-        // NEW: Create meeting_units entry for the room/unit
-        await this.ensureMeetingUnitExists(meetingId, rowData, transaction);
+        // NEW: Create meeting_units entry for the room/unit, then attach participants to that unit.
+        const meetingUnit = await this.ensureMeetingUnitExists(meetingId, rowData, transaction);
+        await this.ensureMeetingParticipantsExist(meetingUnit, rowData, transaction);
     }
 
     return {
@@ -995,27 +1169,224 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
 
       console.log(`[StreamMeetingMigrationModel] Ensuring meeting_units entry for meetingId=${meetingId}, roomId=${roomId}`);
 
-      const query = `
-      IF NOT EXISTS (SELECT 1 FROM ${unitsTable} WHERE meeting_id = @meetingId AND unit_id = @unitId)
-      BEGIN
+      const existingRows = await this.queryNewDbTx(
+        `
+        SELECT TOP 1
+          id,
+          unit_id,
+          seat_number,
+          room_id,
+          unit_state,
+          accept_join,
+          prepare_documents
+        FROM ${unitsTable}
+        WHERE meeting_id = @meetingId AND unit_id = @unitId
+        `,
+        {
+          meetingId,
+          unitId
+        },
+        transaction
+      );
+
+      let meetingUnit = existingRows?.[0] || null;
+
+      if (!meetingUnit?.id) {
+        const insertRows = await this.queryNewDbTx(
+          `
           INSERT INTO ${unitsTable} (
               id, id_bak, meeting_id, unit_id, room_id, unit_state,
               accept_join, assign_participants, seat_participants, prepare_documents, is_room_selected
-          ) VALUES (
+          )
+          OUTPUT
+            INSERTED.id,
+            INSERTED.unit_id,
+            INSERTED.seat_number,
+            INSERTED.room_id,
+            INSERTED.unit_state,
+            INSERTED.accept_join,
+            INSERTED.prepare_documents
+          VALUES (
               NEWID(), @idBak, @meetingId, @unitId, @roomId, 'CONFIRMED',
               1, 1, 1, 1, 1
           );
-      END
-      `;
-      await this.queryNewDbTx(query, {
-          meetingId,
-          unitId,
-          roomId,
-          idBak
-      }, transaction);
+          `,
+          {
+            meetingId,
+            unitId,
+            roomId,
+            idBak
+          },
+          transaction
+        );
+
+        meetingUnit = insertRows?.[0] || null;
+      }
+
+      return {
+        id: meetingUnit?.id || null,
+        unitId: meetingUnit?.unit_id || unitId,
+        roomId: meetingUnit?.room_id || roomId,
+        seatNumber: meetingUnit?.seat_number || null,
+        unitState: meetingUnit?.unit_state || null,
+        acceptJoin: Number(meetingUnit?.accept_join || 0),
+        prepareDocuments: Number(meetingUnit?.prepare_documents || 0)
+      };
 
     } catch (err) {
       console.error(`[StreamMeetingMigrationModel] ensureMeetingUnitExists ERROR: ${err.message}`);
+      return null;
+    }
+  }
+
+  buildMeetingParticipantSeeds(rowData, meetingUnit) {
+    if (!meetingUnit?.id) return [];
+
+    const seen = new Set();
+    const seeds = [
+      {
+        userId: rowData?.chairman_id || null,
+        participantRole: 'CHAIRMAN'
+      },
+      {
+        userId: rowData?.secretary_id || null,
+        participantRole: 'SECRETARY'
+      }
+    ];
+
+    return seeds.filter((seed) => {
+      if (!seed.userId) return false;
+      const dedupeKey = `${seed.userId}::${seed.participantRole}`;
+      if (seen.has(dedupeKey)) return false;
+      seen.add(dedupeKey);
+      return true;
+    });
+  }
+
+  async resolveExistingUserIdNoCreate(userIdOrName, transaction = null) {
+    try {
+      if (!userIdOrName) return null;
+
+      const raw = String(userIdOrName).trim();
+      if (!raw) return null;
+
+      const candidateSet = new Set();
+      const pushCandidate = (value) => {
+        if (!value) return;
+        const normalized = String(value).trim();
+        if (!normalized) return;
+        candidateSet.add(normalized);
+      };
+
+      pushCandidate(raw);
+      pushCandidate(this.helper.extractAccountOnly(raw));
+      pushCandidate(this.helper.extractDisplayName(raw));
+      pushCandidate(this.helper.extractCoreName(raw));
+
+      for (const candidate of candidateSet) {
+        const exactRows = await this.queryNewDbTx(
+          `
+          SELECT TOP 1 id
+          FROM [${this.newDbName}].[${this.newDbSchema}].[users]
+          WHERE id = @candidate
+             OR id_user_bak = @candidate
+             OR username = @candidate
+             OR code_nd = @candidate
+             OR name = @candidate
+          `,
+          { candidate },
+          transaction
+        );
+
+        if (exactRows?.length) {
+          return exactRows[0].id;
+        }
+      }
+
+      const likeCandidate = this.helper.extractCoreName(raw) || this.helper.extractDisplayName(raw) || raw;
+      if (!likeCandidate) return null;
+
+      const likeRows = await this.queryNewDbTx(
+        `
+        SELECT TOP 1 id
+        FROM [${this.newDbName}].[${this.newDbSchema}].[users]
+        WHERE name LIKE '%' + @candidate + '%'
+        ORDER BY LEN(name) ASC
+        `,
+        { candidate: likeCandidate },
+        transaction
+      );
+
+      return likeRows?.[0]?.id || null;
+    } catch (err) {
+      console.error(`[StreamMeetingMigrationModel] resolveExistingUserIdNoCreate ERROR: ${err.message}`);
+      return null;
+    }
+  }
+
+  async ensureMeetingParticipantsExist(meetingUnit, rowData, transaction = null) {
+    try {
+      if (!meetingUnit?.id) return;
+
+      const db = this.newDbName || 'app_tancang';
+      const schema = this.newDbSchema || 'dbo';
+      const participantsTable = `[${db}].[${schema}].[meeting_participants]`;
+      const participantSeeds = this.buildMeetingParticipantSeeds(rowData, meetingUnit);
+
+      if (participantSeeds.length === 0) return;
+
+      for (const participant of participantSeeds) {
+        await this.queryNewDbTx(
+          `
+          IF NOT EXISTS (
+              SELECT 1
+              FROM ${participantsTable}
+              WHERE meeting_unit_id = @meetingUnitId
+                AND user_id = @userId
+                AND participant_role = @participantRole
+          )
+          BEGIN
+              INSERT INTO ${participantsTable} (
+                  meeting_unit_id,
+                  user_id,
+                  seat_number,
+                  room_id,
+                  participant_role,
+                  accept_join,
+                  prepare_documents,
+                  unit_id
+              )
+              VALUES (
+                  @meetingUnitId,
+                  @userId,
+                  @seatNumber,
+                  @roomId,
+                  @participantRole,
+                  @acceptJoin,
+                  @prepareDocuments,
+                  @unitId
+              );
+          END
+          `,
+          {
+            meetingUnitId: meetingUnit.id,
+            userId: participant.userId,
+            seatNumber: meetingUnit.seatNumber,
+            roomId: meetingUnit.roomId,
+            participantRole: participant.participantRole,
+            acceptJoin: meetingUnit.acceptJoin,
+            prepareDocuments: meetingUnit.prepareDocuments,
+            unitId: meetingUnit.unitId
+          },
+          transaction
+        );
+      }
+
+      console.log(
+        `[StreamMeetingMigrationModel] Ensured ${participantSeeds.length} meeting_participants for meetingUnitId=${meetingUnit.id}`
+      );
+    } catch (err) {
+      console.error(`[StreamMeetingMigrationModel] ensureMeetingParticipantsExist ERROR: ${err.message}`);
     }
   }
 
@@ -1053,8 +1424,8 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
 
     // 1. Resolve IDs for specialized roles
     console.log(`[StreamMeetingMigrationModel] Resolving Audit Roles for ID ${meetingId}...`);
-    const quanLyPhongId = await this.helper.syncAndMapUser('Quản lý phòng', transaction) || creatorId;
-    const quanLyPhongHopId = await this.helper.syncAndMapUser('Quản lý phòng họp', transaction) || finalChairmanId;
+    const quanLyPhongId = await this.resolveExistingUserIdNoCreate('Quản lý phòng', transaction) || creatorId;
+    const quanLyPhongHopId = await this.resolveExistingUserIdNoCreate('Quản lý phòng họp', transaction) || finalChairmanId;
 
     const query = `
         IF NOT EXISTS (SELECT 1 FROM ${auditTable} WHERE document_id = @meetingId AND action_code = 'CREATE')
@@ -1069,20 +1440,20 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
           (
             @meetingId, SYSUTCDATETIME(), @creatorId, N'Người tạo', 'NGUOI_SOAN_LICH', 'CREATE',
             'Activity_1rl80cg', 'Activity_1rl80cg', '{"transferType":"to_person"}', NULL,
-            @creatorId, @creatorId, 'processor', N'Tạo văn bản', 'DA_XU_LY', '1', 'meeting',
+            @creatorId, @creatorId, 'processor', N'Tạo văn bản', 'DA_XU_LY', '1', 'Meetings',
             SYSUTCDATETIME(), SYSUTCDATETIME(), 1
           ),
           (
             @meetingId, SYSUTCDATETIME(), @creatorId, N'Người tạo', 'NGUOI_SOAN_LICH',
             'TRINH_LICH', 'Activity_1rl80cg', 'Gateway_16pjuoq', '{"note":""}', 'migration_origin',
             @creatorId, @quanLyPhongId, 'processor', N'Chuyển Ban quản lý phòng', 'DONG_Y_PHE_DUYET',
-            '2', 'meeting', SYSUTCDATETIME(), SYSUTCDATETIME(), 1
+            '2', 'Meetings', SYSUTCDATETIME(), SYSUTCDATETIME(), 1
           ),
           (
             @meetingId, SYSUTCDATETIME(), @quanLyPhongHopId, N'Quản lý phòng họp', 'BAN_QUAN_LY_PHONG_HOP',
             'PHE_DUYET_LICH', 'Gateway_16pjuoq', 'Activity_18dmg6c', NULL, 'migration_origin',
             @creatorId, @quanLyPhongHopId, 'seat', N'Gán vị trí chỗ ngồi', 'CHUA_XU_LY',
-            '3', 'meeting', SYSUTCDATETIME(), SYSUTCDATETIME(), 1
+            '3', 'Meetings', SYSUTCDATETIME(), SYSUTCDATETIME(), 1
           );
       END
     `;
@@ -1169,7 +1540,7 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
       if (!existingCols.has(newField.toLowerCase())) continue;
       const value = rawData[oldField];
       if (value === undefined || value === null) continue;
-      
+
       const safeValue = applySafeCast(newField, value);
       params[newField] = safeValue;
       addInsertColumn(newField);

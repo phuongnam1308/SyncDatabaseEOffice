@@ -184,27 +184,74 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
       if (isNaN(typeValue)) typeValue = null;
     }
     
-    const processId = await this.helper.mapUserName(rawRecord.UserId) || null;
+    const processId = await this.helper.mapUserName(this.helper.safeString(rawRecord.UserId)) || null;
     const processName = await this.helper.getUserDisplayName(processId) || null;
     const roleRaw = await this.helper.getUserFieldName(rawRecord.UserFieldId) || null;
+    // Map UserField.Name (old) -> role (new)
     const mapPriority = (val) => {
       const key = String(val || '').trim();
-      return ({
-        'AssignedTo': 'director',
-        'NguoiPhanViec': 'director',
-        'Xem': 'viewer',
-        'NguoiDanhGia': 'director',
-        'ToChucThucHien': 'director',
-        'NguoiSoanThao': 'assigner',
-        'NguoiNhanDeBiet': 'viewer',
-        'NguoiNhanDeBaoCao': 'director',
-        'NguoiNhan': 'director',
-        'NguoiDuocYKien': 'director',
-        'NguoiDanhGia': 'director',
-        'Attendees': 'supporter',
-      }[key] || 'assigner');
+      if (!key) return 'participant';
+
+      const assignerSet = new Set([
+        'NguoiGiao',
+        'NguoiGiaoViec',
+        'NguoiPhanViec',
+        'UyQuyenNguoiGiao',
+        'NguoiSoanThao'
+      ]);
+
+      const directorSet = new Set([
+        'ToChucThucHien',
+        'AssignedTo',
+        'NguoiNhan',
+        'NguoiDanhGia',
+        'DelegateAssignee',
+        'GroupAssignment',
+        'GroupBanLanhDao',
+        'GroupBanLanhDaoPrevious',
+        'GroupLanhDaoDaXuLy',
+        'GroupLanhDaoTCT',
+        'GroupLanhDaoVPDN',
+        'GroupThayTheBanLanhDao',
+        'GroupThayTheBanLanhDaoPrevious',
+        'GroupThayTheLanhDaoTCT',
+        'GroupThayTheLanhDaoVPDN',
+        'GroupUyQuyenBanLanhDao',
+        'GroupUyQuyenBanLanhDaoPrevious',
+        'GroupUyQuyenLanhDaoTCT',
+        'GroupUyQuyenLanhDaoVPDN',
+        'UyQuyen',
+        'VanThu'
+      ]);
+
+      const supporterSet = new Set([
+        'UserShared',
+        'NguoiNhanDeBaoCao',
+        'NguoiDuocYKien',
+        'Attendees',
+        'AttendeesOfHSDT',
+        'ThayThe'
+      ]);
+
+      const viewerSet = new Set([
+        'Xem',
+        'NguoiNhanDeBiet',
+        'UserCBNVXem',
+        'GroupLanhDaoTCTDeBiet',
+        'Permission',
+        'UserCBNV'
+      ]);
+
+      if (assignerSet.has(key)) return 'assigner';
+      if (directorSet.has(key)) return 'director';
+      if (supporterSet.has(key)) return 'supporter';
+      if (viewerSet.has(key)) return 'viewer';
+      return 'participant';
     };
-    const role = mapPriority(roleRaw);
+    const role = mapPriority(this.helper.safeString(roleRaw));
+    logger.info(
+      `[StreamTaskUsersModel][role-map] TaskId=${rawRecord?.TaskId || rawRecord?.taskId || 'N/A'} UserId=${rawRecord?.UserId || 'N/A'} UserFieldId=${rawRecord?.UserFieldId || 'N/A'} UserFieldName="${roleRaw || ''}" -> role="${role}"`
+    );
     // Use provided override or try to extract from rawRecord, fallback to generated ID
     const userBackupId = userBackupIdOverride || String(rawRecord.ID || '').trim() || this._generateUUID();
 
@@ -213,7 +260,7 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
     const modifiedAtParsed = safeDateParse(rawRecord.Modified, 'Modified');
 
     return {
-      id_user_bak: processId ? String(processId) : userBackupId,
+      id_user_bak: userBackupId,
       task_id: rawRecord.newTaskId ? parseInt(rawRecord.newTaskId, 10) : null,
       process_id: processId,
       process_name: processName,

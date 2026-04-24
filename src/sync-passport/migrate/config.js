@@ -34,6 +34,15 @@ const tableMappings = {
 
     listIds: mapping.listIds || [],
 
+    // Multi-DB Support: Read from databases.json if exists
+    databaseList: (() => {
+      try {
+        return require('./databases.json');
+      } catch (e) {
+        return null;
+      }
+    })(),
+
     // ============ TARGET (camunda / app_tancang) ============
     newTable:  mapping.newTable  || 'passport_borrow_requests',
     newSchema: mapping.newSchema || 'dbo',

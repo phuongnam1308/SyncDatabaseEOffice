@@ -2,6 +2,7 @@ const MigrationHelper = require('../../helpers/MigrationHelper');
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 const { tableMappings } = require('./config');
 const { v4: uuidv4 } = require('uuid');
+const { ensureTrackingColumns } = require('../../helpers/StagingQueueHelper');
 
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 
@@ -404,6 +405,14 @@ class StreamTgdScheduleMigrationModel extends BaseIncrementalSyncInterface {
       END
       `;
       await this.queryNewDb(fixIdQuery);
+
+      await ensureTrackingColumns(this, {
+        tableRef: stagingTableRef,
+        tableName: table,
+        schemaName: schema,
+        dbName: this.newDbName,
+        label: this.modelName,
+      });
 
       console.log(`[StreamTgdScheduleMigrationModel] [ensureStagingTableExists] OK: ${stagingTableRef} is ready`);
     } catch (err) {

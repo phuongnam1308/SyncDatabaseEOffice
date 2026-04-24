@@ -60,7 +60,7 @@ const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 const RUNNING_STATUSES = new Set(['RUNNING', 'PAUSE_REQUESTED', 'RESUMING']);
 
 // Parallel processing config
-const SYNC_CONCURRENCY = Number(process.env.SYNC_CONCURRENCY || 3);
+const SYNC_CONCURRENCY = Number(process.env.SYNC_CONCURRENCY || 1);
 const INTERRUPTED_STATUSES = new Set(['RUNNING', 'PAUSE_REQUESTED', 'RESUMING']);
 
 class SyncManagerService {
@@ -71,7 +71,7 @@ class SyncManagerService {
 
     // State được khởi tạo rỗng, sau đó hydrate từ DB qua ensureStateLoaded().
     this.state = this.normalizeState(null);
-    this.instanceId = process.env.SYNC_INSTANCE_ID || process.env.INSTANCE_ID || 'default';
+    this.instanceId = process.env.INSTANCE_ID || process.env.SYNC_INSTANCE_ID || 'default';
     this._stateLoaded = false;
     this._stateLoadingPromise = null;
 
@@ -160,7 +160,7 @@ class SyncManagerService {
    */
   async loadRawState() {
     try {
-      const [models, jobs] = await Promise.all([
+      const [models, jobs, settings] = await Promise.all([
         SyncStateRepository.queryNewDb(
           `
           SELECT
@@ -184,10 +184,11 @@ class SyncManagerService {
           WHERE instance_id = @instanceId
           `,
           { instanceId: this.instanceId }
-        )
+        ),
+        SyncStateRepository.getSettings(this.instanceId)
       ]);
 
-      const state = { models: {}, jobs: {}, syncLogs: {} };
+      const state = { models: {}, jobs: {}, syncLogs: {}, settings: settings || {} };
 
       for (const modelRow of (models || [])) {
         const modelName = modelRow?.model_name;
@@ -249,20 +250,21 @@ class SyncManagerService {
   /**
    * Normalizes raw state from DB/legacy format into canonical structure.
    * @param {object|null} raw
-   * @returns {{models:object,jobs:object,syncLogs:object}}
+   * @returns {{models:object,jobs:object,syncLogs:object,settings:object}}
    */
   normalizeState(raw) {
-    const base = { models: {}, jobs: {}, syncLogs: {} };
+    const base = { models: {}, jobs: {}, syncLogs: {}, settings: {} };
     if (!raw) return base;
-    if (raw.models || raw.jobs || raw.syncLogs) {
+    if (raw.models || raw.jobs || raw.syncLogs || raw.settings) {
       return {
         models: raw.models || {},
         jobs: raw.jobs || {},
-        syncLogs: raw.syncLogs || {}
+        syncLogs: raw.syncLogs || {},
+        settings: raw.settings || {}
       };
     }
     // Backward compat: shape cũ { [modelName]: modelState }
-    return { models: raw, jobs: {}, syncLogs: {} };
+    return { models: raw, jobs: {}, syncLogs: {}, settings: {} };
   }
 
   /**
@@ -276,6 +278,21 @@ class SyncManagerService {
     this._persistStateToDb().catch((err) =>
       logger.warn('[SyncManagerService] Persist state to DB failed:', err && err.message ? err.message : err)
     );
+  }
+
+  /**
+   * Cập nhật Local memory và DB settings
+   */
+  async updateSetting(key, value) {
+    try {
+      this.state.settings[key] = value;
+      await SyncStateRepository.updateSetting(key, value, this.instanceId);
+      this._broadcastSSE();
+      return true;
+    } catch (err) {
+      logger.error(`[SyncManagerService] Lỗi khi update setting ${key}: ${err.message}`);
+      return false;
+    }
   }
 
   /**
@@ -904,14 +921,14 @@ class SyncManagerService {
         this.saveState();
 
         const fetchTimer = logger.startTimer(`SYNC_FETCH | ${job.modelName}`);
-        // handlers.fetchFn(cursorTime, batchSize, offset, context)
         const records = await handlers.fetchFn(cursorTime, job.batchSize, offset, {
           modelName: job.modelName,
           jobId: job.jobId,
           lastSyncTime: cursorTime,
           lastSyncId: cursorId,
           // Cần thiết để SyncHandlerModel phục hồi nextIndex đúng sau server restart (Resume)
-          totalProcessed: job.totalProcessed || 0
+          totalProcessed: job.totalProcessed || 0,
+          settings: this.state.settings
         });
         fetchTimer.stop(records?.length);
 
@@ -934,7 +951,12 @@ class SyncManagerService {
             const task = (async (r) => {
               try {
                 const resProc = await handlers.processFn(r, { modelName: job.modelName, jobId: job.jobId });
-                if (resProc && resProc.done) jobFinishedEarly = true;
+                if (resProc && resProc.done) {
+                  jobFinishedEarly = true;
+                  logger.warn(
+                    `[SyncManagerService][${job.modelName}] processFn returned done=true (jobId=${job.jobId}, itemIndex=${Number(r?.__item_index ?? -1)}, pauseRequested=${Boolean(job.pauseRequested)}, processed=${Number(job.totalProcessed || 0)}, totalToSync=${job.totalToSync == null ? 'null' : Number(job.totalToSync)})`
+                  );
+                }
                 return { success: true, record: r, result: resProc };
               } catch (err) {
                 return { success: false, record: r, error: err };
@@ -989,8 +1011,22 @@ class SyncManagerService {
         this._dbUpdateJob(job);      // ghi DB (thêm mới)
         this._dbUpdateModel(job.modelName, modelState); // ghi DB model state
 
-        if (job.pauseRequested || jobFinishedEarly) { this.markJobPaused(job); return; }
-        if (records.length < job.batchSize || jobFinishedEarly) break;
+        if (job.pauseRequested) {
+          logger.warn(
+            `[SyncManagerService][${job.modelName}] markJobPaused triggered by pauseRequested (jobId=${job.jobId}, batchProcessed=${batchProcessed}, totalProcessed=${job.totalProcessed}, totalToSync=${job.totalToSync == null ? 'null' : Number(job.totalToSync)})`
+          );
+          this.markJobPaused(job);
+          return;
+        }
+
+        if (jobFinishedEarly) {
+          logger.warn(
+            `[SyncManagerService][${job.modelName}] processFn returned done=true; continue next fetch cycle (jobId=${job.jobId}, batchProcessed=${batchProcessed}, totalProcessed=${job.totalProcessed}, totalToSync=${job.totalToSync == null ? 'null' : Number(job.totalToSync)})`
+          );
+          continue;
+        }
+
+        if (records.length < job.batchSize) break;
       }
       this.completeJob(job);
     } catch (error) {
@@ -1055,6 +1091,12 @@ class SyncManagerService {
    * @returns {Promise<object>}
    */
   async getDashboardData() {
+    const sharePointLoginState = global.sharePointLoginState || {
+      required: false,
+      inProgress: false,
+      message: ''
+    };
+
     const entities = {};
     for (const [modelName, modelState] of Object.entries(this.state.models)) {
       const currentJob = modelState.activeJobId
@@ -1079,7 +1121,11 @@ class SyncManagerService {
     return {
       isRunning: this.isRunning, entities,
       jobs: this.state.jobs, syncLogs: this.state.syncLogs,
-      registeredCount: this.registry.size
+      registeredCount: this.registry.size,
+      sharePointLoginRequired: sharePointLoginState.required,
+      sharePointLoginInProgress: sharePointLoginState.inProgress,
+      sharePointLoginMessage: sharePointLoginState.message,
+      sharePointLoginSkipped: global.sharePointLoginSkipped || false
     };
   }
 

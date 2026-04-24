@@ -349,6 +349,10 @@ router.post('/sync-manager-src/jobs/:jobId/pause', syncCtrl.pauseJobSync);
 router.post('/sync-manager-src/jobs/:jobId/resume', syncCtrl.resumeJobSync);
 router.get('/sync-manager-src/jobs/:jobId', syncCtrl.getJobSyncStatus);
 router.get('/sync-manager-src/events', syncCtrl.sseEvents);
+router.post('/sync-manager-src/login', syncCtrl.login);
+router.post('/sync-manager-src/settings', syncCtrl.updateSettings);
+router.post('/sync-manager-src/shutdown', syncCtrl.shutdown);
+router.post('/sync-manager-src/skip-login', syncCtrl.skipLogin);
 
 
 const SyncOutgoingRoutes = require('../src/sync-outgoing-document/route');

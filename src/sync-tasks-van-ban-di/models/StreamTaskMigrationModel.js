@@ -6,17 +6,77 @@ const logger = require('../../../utils/logger');
  * Safely parse dates, treating 'NULL' string as null
  */
 function safeDateParse(dateValue, fieldName = '') {
-  if (!dateValue) return null;
-  if (typeof dateValue === 'string' && dateValue.toUpperCase() === 'NULL') return null;
-  
+  if (dateValue === undefined || dateValue === null) return null;
+  const raw = String(dateValue).trim();
+  if (!raw || raw.toUpperCase() === 'NULL') return null;
+
   try {
-    if (typeof dateValue.getTime === 'function' && !isNaN(dateValue.getTime())) {
+    if (typeof dateValue?.getTime === 'function' && !Number.isNaN(dateValue.getTime())) {
       return dateValue.toISOString();
     }
   } catch (e) {
     if (fieldName) logger.warn(`[safeDateParse] Failed to convert ${fieldName}: ${e.message}`);
   }
+
+  const sqlLike = raw.match(
+    /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?(?:\.(\d{1,3}))?)?$/
+  );
+  if (sqlLike) {
+    const [, y, mo, d, hh = '00', mi = '00', ss = '00', ms = '000'] = sqlLike;
+    return `${y}-${mo}-${d}T${hh}:${mi}:${ss}.${String(ms).padEnd(3, '0').slice(0, 3)}Z`;
+  }
+
+  const compact = raw.replace(/\s+/g, ' ').replace(/(\d)(AM|PM)$/i, '$1 $2');
+  const textLike = compact.match(
+    /^([A-Za-z]{3,9})\s+(\d{1,2})\s+(\d{4})\s+(\d{1,2}):(\d{2})\s*(AM|PM)$/i
+  );
+  if (textLike) {
+    const monthMap = {
+      jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
+      jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12'
+    };
+    const mon = monthMap[textLike[1].slice(0, 3).toLowerCase()];
+    if (mon) {
+      const day = String(Number(textLike[2])).padStart(2, '0');
+      const year = textLike[3];
+      let hour = Number(textLike[4]);
+      const minute = textLike[5];
+      const ap = textLike[6].toUpperCase();
+      if (ap === 'AM') {
+        if (hour === 12) hour = 0;
+      } else if (hour < 12) {
+        hour += 12;
+      }
+      return `${year}-${mon}-${day}T${String(hour).padStart(2, '0')}:${minute}:00.000Z`;
+    }
+  }
+
+  const fallback = new Date(raw);
+  if (!Number.isNaN(fallback.getTime())) {
+    return fallback.toISOString();
+  }
+
+  if (fieldName) logger.warn(`[safeDateParse] Invalid ${fieldName}: ${raw}`);
   return null;
+}
+
+const TX_RETRY_MAX = 3;
+const TX_RETRY_BASE_DELAY_MS = 250;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableTxError(err) {
+  const msg = String(err?.message || '').toLowerCase();
+  return (
+    err?.number === 1205 || // deadlock
+    err?.number === 1222 || // lock timeout
+    err?.code === 'ETIMEOUT' ||
+    msg.includes('deadlock') ||
+    msg.includes('lock request time out') ||
+    msg.includes('timeout')
+  );
 }
 
 /** Maps TaskVBDen → task (35 columns with id_task_bak) */
@@ -38,6 +98,7 @@ class StreamTaskMigrationModel extends BaseModel {
   async initialize() {
     await super.initialize();
     await this.ensureTaskTableColumns();
+    await this.ensureTaskTableIndexes();
     logger.info('[StreamTaskMigrationModel] Initialized');
   }
 
@@ -109,6 +170,55 @@ class StreamTaskMigrationModel extends BaseModel {
     }
   }
 
+  async ensureTaskTableIndexes() {
+    try {
+      const targetTable = `${this.newDbName}.${this.newDbSchema}.${this.newDbTable}`;
+      const dbName = this.newDbName;
+      const indexName = 'IX_task_id_task_bak';
+
+      const sqlEnsureIndex = `
+        IF NOT EXISTS (
+          SELECT 1
+          FROM ${dbName}.sys.indexes
+          WHERE name = '${indexName}'
+            AND object_id = OBJECT_ID('${targetTable}')
+        )
+        BEGIN
+          CREATE NONCLUSTERED INDEX ${indexName}
+          ON ${targetTable} (id_task_bak)
+          WHERE id_task_bak IS NOT NULL;
+        END
+      `;
+      await this.queryNewDb(sqlEnsureIndex);
+      logger.info(`[StreamTaskMigrationModel] Verified index ${indexName} on ${targetTable}`);
+    } catch (err) {
+      logger.warn(`[StreamTaskMigrationModel] ensureTaskTableIndexes failed: ${err.message}`);
+    }
+  }
+
+  async runTxWithRetry(fn, label = '', options = {}) {
+    let attempt = 0;
+    const tx = options?.transaction || null;
+    while (true) {
+      try {
+        return await fn();
+      } catch (err) {
+        attempt += 1;
+        const txValid = !tx || (tx._acquiredConnection && !tx._aborted);
+        if (!txValid) {
+          throw err;
+        }
+        if (isRetryableTxError(err) && attempt <= TX_RETRY_MAX) {
+          const delay = TX_RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+          logger.warn(`[StreamTaskMigrationModel] Retry ${attempt}/${TX_RETRY_MAX} for ${label} after ${delay}ms: ${err.message}`);
+          await sleep(delay);
+          continue;
+        }
+        throw err;
+      }
+    }
+  }
+
   /** Process single task: map & insert/update all 35 columns */
   async processSingleRecord(stagingRow, transaction = null) {
     try {
@@ -131,9 +241,11 @@ class StreamTaskMigrationModel extends BaseModel {
         WHERE id_task_bak = @idTaskBak
       `;
       
-      const existing = await this.queryNewDbTx(existQuery, {
-        idTaskBak: backupId
-      }, transaction);
+      const existing = await this.runTxWithRetry(
+        () => this.queryNewDbTx(existQuery, { idTaskBak: backupId }, transaction),
+        `check-existing id_task_bak=${backupId}`,
+        { transaction }
+      );
       
       if (Array.isArray(existing) && existing.length > 0) {
         // 3a. Update existing - WITH ALL COLUMNS
@@ -175,7 +287,7 @@ class StreamTaskMigrationModel extends BaseModel {
           WHERE id_task_bak = @idTaskBak
         `;
         
-        const result = await this.queryNewDbTx(updateQuery, {
+        const updateParams = {
           code: mapped.code,
           name: mapped.name,
           startDate: mapped.start_date,
@@ -209,7 +321,13 @@ class StreamTaskMigrationModel extends BaseModel {
           dependentTaskId: mapped.dependent_task_id,
           isConfidential: mapped.is_confidential,
           idTaskBak: backupId
-        }, transaction);
+        };
+
+        await this.runTxWithRetry(
+          () => this.queryNewDbTx(updateQuery, updateParams, transaction),
+          `update-task id_task_bak=${backupId}`,
+          { transaction }
+        );
         
         logger.info(`[StreamTaskMigrationModel.processSingleRecord] Updated task ${backupId}`);
         return { action: 'updated', idTaskBak: backupId, newTaskId: existing[0].id };
@@ -235,7 +353,7 @@ class StreamTaskMigrationModel extends BaseModel {
         
         let result;
         try {
-          result = await this.queryNewDbTx(insertQuery, {
+          result = await this.runTxWithRetry(() => this.queryNewDbTx(insertQuery, {
             code: mapped.code,
             name: mapped.name,
             startDate: mapped.start_date,
@@ -269,7 +387,7 @@ class StreamTaskMigrationModel extends BaseModel {
             dependentTaskId: mapped.dependent_task_id,
             isConfidential: mapped.is_confidential,
             idTaskBak: backupId
-          }, transaction);
+          }, transaction), `insert-task id_task_bak=${backupId}`, { transaction });
         } catch (insertErr) {
           logger.error(`[StreamTaskMigrationModel] INSERT FAILED for ID=${backupId}: ${insertErr.message}`, insertErr);
           throw insertErr;
@@ -298,15 +416,24 @@ class StreamTaskMigrationModel extends BaseModel {
       throw new Error('rawRecord is required');
     }
 
-    const createdBy = await this.helper.mapUserName(rawRecord.CreatedBy) || null;
-    const modifiedBy = await this.helper.mapUserName(rawRecord.ModifiedBy) || null;
+    // TEMP: force creator/updater để đồng nhất với luồng CV đến.
+    // TODO (logic chuẩn): bật lại map user từ dữ liệu cũ:
+    // const createdBy = await this.helper.mapUserName(rawRecord.CreatedBy) || null;
+    // const modifiedBy = await this.helper.mapUserName(rawRecord.ModifiedBy) || null;
+    const forcedActorId =
+      process.env.TASK_TEMP_CREATED_BY_ID ||
+      process.env.VANTHU_USER_ID ||
+      'b23406e3-5c75-41d3-91e0-1654293ae6b2';
+    const createdBy = forcedActorId;
+    const modifiedBy = forcedActorId;
 
-    // Parse dates from helper, then apply safeDateParse
-    const startDateRaw = this.helper.parseDate(rawRecord.StartDate);
-    const endDateRaw = this.helper.parseDate(rawRecord.DueDate);
-    const completedDateRaw = this.helper.parseDate(rawRecord.CompletedDate);
-    const createdAtRaw = this.helper.parseDate(rawRecord.Created);
-    const updatedAtRaw = this.helper.parseDate(rawRecord.Modified);
+    // CV đi: dùng raw staging values để giữ nguyên format legacy kiểu "Nov 28 2024  8:46AM".
+    // Không dùng helper.parseDate ở đây vì có thể làm mất format trước khi safeDateParse xử lý.
+    const startDateRaw = rawRecord.StartDate;
+    const endDateRaw = rawRecord.DueDate;
+    const completedDateRaw = rawRecord.CompletedDate;
+    const createdAtRaw = rawRecord.Created;
+    const updatedAtRaw = rawRecord.Modified;
 
     // Multiple layers of safety: convert to ISO string or null
     const startDate = safeDateParse(startDateRaw, 'StartDate');
@@ -317,11 +444,15 @@ class StreamTaskMigrationModel extends BaseModel {
 
     // log debug data bẩn
     if (!startDate && rawRecord.StartDate) {
-      logger.warn(`[mapSingleRecord] Invalid StartDate: ${rawRecord.StartDate} ID=${rawRecord.ID}`);
+      logger.warn(
+        `[mapSingleRecord] Invalid StartDate: raw="${rawRecord.StartDate}" parsed="${startDate}" ID=${rawRecord.ID}`
+      );
     }
 
     if (!endDate && rawRecord.DueDate) {
-      logger.warn(`[mapSingleRecord] Invalid DueDate: ${rawRecord.DueDate} ID=${rawRecord.ID}`);
+      logger.warn(
+        `[mapSingleRecord] Invalid DueDate: raw="${rawRecord.DueDate}" parsed="${endDate}" ID=${rawRecord.ID}`
+      );
     }
     const typeTask = 'form_doc';
     const progress = rawRecord.Percent ? parseInt(rawRecord.Percent, 10) : null;
@@ -350,7 +481,8 @@ class StreamTaskMigrationModel extends BaseModel {
     };
     const priority = mapPriority(rawRecord.TrangThai);
 
-    const parentRaw = rawRecord.ParentId ? String(rawRecord.ParentId).trim() : null;
+    const parentCandidate = rawRecord.ParentId ? String(rawRecord.ParentId).trim() : '';
+    const parentRaw = (!parentCandidate || parentCandidate === '0') ? null : parentCandidate;
 
     const docLookup = await this.helper.findDocumentIdByOldId(rawRecord.VBId, 'OutgoingDocument', transaction);
     const docId = docLookup?.document_id || null;

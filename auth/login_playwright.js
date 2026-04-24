@@ -51,8 +51,7 @@ async function login(options = {}) {
   // Nap thu vien truoc khi dung
   const chrom = getPlaywright();
   if (!chrom) {
-    console.error('❌ KHONG THE NAP PLAYWRIGHT. Vui long kiem tra node_modules!');
-    return;
+    throw new Error('KHONG THE NAP PLAYWRIGHT. Vui long kiem tra node_modules!');
   }
   const baseUrl = process.env.BASE_URL || 'https://eoffice.saigonnewport.com.vn';
   const startUrl = process.env.AUTH_URL || `${baseUrl}/tintuc/Pages/default.aspx`;
@@ -88,8 +87,7 @@ async function login(options = {}) {
   if (executablePath) {
     console.log(`Using Browser at: ${executablePath}`);
   } else {
-    console.error('❌ KHÔNG TÌM THẤY TRÌNH DUYỆT (CHROME/EDGE) TRÊN HỆ THỐNG!');
-    return;
+    throw new Error('KHONG TIM THAY TRINH DUYET (CHROME/EDGE) TREN HE THONG!');
   }
 
   let browser;
@@ -201,6 +199,7 @@ async function login(options = {}) {
       await page.screenshot({ path: 'auth/login_error_capture.png' });
       console.log('Error screenshot saved to auth/login_error_capture.png');
     }
+    throw error;
   } finally {
     if (browser) {
       console.log('Closing browser...');

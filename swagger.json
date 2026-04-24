@@ -7,10 +7,10 @@
   },
   "servers": [
     {
-      "url": "http://localhost:3021/api"
+      "url": "http://localhost:3012/api"
     },
     {
-      "url": "http://SNP-DongBoDuLieu:3021/api"
+      "url": "http://SNP-DongBoDuLieu:3012/api"
     }
   ],
   "paths": {

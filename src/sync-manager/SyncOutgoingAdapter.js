@@ -76,6 +76,14 @@ class SyncOutgoingAdapter {
   }
 
   /**
+   * Implement countListFromOldDb - required for dashboard in Full Sync mode
+   */
+  async countListFromOldDb(lastSyncTime, lastSyncId = 0) {
+    if (!this._model || !this._model.extractor) return 0;
+    return this._model.extractor.countListFromOldDb(lastSyncTime, lastSyncId);
+  }
+
+  /**
    * Implement BaseIncrementalSyncInterface.getList()
    * Fetch batch từ OLD DB và push vào staging
    */

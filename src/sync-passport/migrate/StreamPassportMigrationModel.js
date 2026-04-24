@@ -1,10 +1,20 @@
 const { v4: uuidv4 } = require('uuid');
 const MigrationHelper = require('../../helpers/MigrationHelper');
+const logger = require('../../../utils/logger');
+const dbUtils = require('../../../utils/dbUtils');
 
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 const { tableMappings, mapStatus, parseDate } = require('./config');
 const mapping = require('./mapping.json');
 const requiredRoles = require('./required_process_roles.json');
+const {
+  claimNextStagingRow,
+  ensureTrackingColumns,
+  markRowFailed,
+  markRowSuccess,
+  startHeartbeatLoop,
+  updateHeartbeat,
+} = require('../../helpers/StagingQueueHelper');
 
 
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
@@ -27,19 +37,33 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
     this.newTableSync = 'passport_borrow_request_sync_staging';
     this.helper = new MigrationHelper(this.queryNewDbTx.bind(this), this.queryOldDb.bind(this));
     this.requiredRoles = requiredRoles;
+    this.heartbeatIntervalMs = Number(process.env.HEARTBEAT_INTERVAL_MS || 30000);
+
+    // Multi-DB List Discovery
+    this.listIdCache = {}; // { dbName: [listId1, listId2] }
+    this.canonicalListTitle = null; 
   }
 
   /**
    * Override initialize: kết nối DB xong tự động tạo bảng staging + ensure columns.
    */
   async initialize() {
-    console.log(`[StreamPassportMigrationModel] Initializing...`);
+    logger.info(`[StreamPassportMigrationModel] Initializing...`);
     await super.initialize();
     await this.ensureStagingTableExists();
     await this.ensurePassportsColumnsExist();
     await this.ensurePassportBorrowRequestsColumnsExist();
+    await this.ensurePassportVouchersTableExists();
+    await this.ensurePassportVoucherItemsTableExists();
     await this.ensureAuditTableExists();
-    console.log(`[StreamPassportMigrationModel] Initialization complete.`);
+    await this.ensurePassportHistoriesTableExists();
+
+    // Seed dữ liệu mẫu cho test
+    await this.seedPassportMockData();
+    await this.seedAuditMockData();
+    await this.seedPassportHistoriesMockData();
+
+    logger.info(`[StreamPassportMigrationModel] Initialization complete.`);
   }
 
   /**
@@ -52,7 +76,7 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
       const schema = this.newDbSchema || 'dbo';
       const tableRef = `[${db}].[${schema}].[passports]`;
 
-      console.log(`[StreamPassportMigrationModel] Ensuring passports columns...`);
+      logger.info(`[StreamPassportMigrationModel] Ensuring passports columns...`);
 
       const extraCols = [
         { name: 'tb_bak',            type: 'INT',           default: 0    }, // 0 = Dữ liệu hệ thống mới, 1 = Dữ liệu migrate từ SharePoint
@@ -75,7 +99,7 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
                 EXEC sp_rename '${db}.${schema}.passports.table_bak', 'tb_bak', 'COLUMN';
             ELSE
             ` : ''}
-            
+
             -- 2. Thêm cột mới
             IF NOT EXISTS (SELECT 1 FROM ${db}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'passports' AND COLUMN_NAME = '${col.name}')
             BEGIN
@@ -86,9 +110,9 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
         `;
         await this.queryNewDb(query);
       }
-      console.log(`[StreamPassportMigrationModel] [ensurePassportsColumnsExist] OK`);
+      logger.info(`[StreamPassportMigrationModel] [ensurePassportsColumnsExist] OK`);
     } catch (err) {
-      console.error(`[StreamPassportMigrationModel] [ensurePassportsColumnsExist] ERROR: ${err.message}`);
+      logger.error(`[StreamPassportMigrationModel] [ensurePassportsColumnsExist] ERROR: ${err.message}`);
     }
   }
 
@@ -102,7 +126,7 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
       const schema = this.newDbSchema || 'dbo';
       const tableRef = `[${db}].[${schema}].[passport_borrow_requests]`;
 
-      console.log(`[StreamPassportMigrationModel] Ensuring passport_borrow_requests columns...`);
+      logger.info(`[StreamPassportMigrationModel] Ensuring passport_borrow_requests columns...`);
 
       const extraCols = [
         { name: 'request_code',               type: 'NVARCHAR(255)' },
@@ -124,6 +148,7 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
         { name: 'updated_by',                 type: 'NVARCHAR(100)' },
         { name: 'tb_bak',                     type: 'INT',           default: 0 }, // 0 = Dữ liệu hệ thống mới, 1 = Dữ liệu migrate từ SharePoint
         { name: 'sharepoint_item_id',         type: 'NVARCHAR(255)', default: null },
+        { name: 'source_db',                  type: 'NVARCHAR(255)', default: null },
       ];
 
       for (const col of extraCols) {
@@ -137,7 +162,7 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
                 EXEC sp_rename '${db}.${schema}.passport_borrow_requests.table_bak', 'tb_bak', 'COLUMN';
             ELSE
             ` : ''}
-            
+
             -- 2. Thêm cột mới
             IF NOT EXISTS (SELECT 1 FROM ${db}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'passport_borrow_requests' AND COLUMN_NAME = '${col.name}')
             BEGIN
@@ -149,15 +174,18 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
         await this.queryNewDb(query);
       }
 
-      // Index cho sharepoint_item_id
+      // Unique Index cho sharepoint_item_id + source_db
+      const dropIdxQuery = `IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_pbr_sharepoint_item_id' AND object_id = OBJECT_ID('${db}.${schema}.passport_borrow_requests')) DROP INDEX IX_pbr_sharepoint_item_id ON ${tableRef};`;
+      await this.queryNewDb(dropIdxQuery);
+
       const idxQuery = `
-      IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_pbr_sharepoint_item_id' AND object_id = OBJECT_ID('${db}.${schema}.passport_borrow_requests'))
-          CREATE INDEX IX_pbr_sharepoint_item_id ON ${tableRef}(sharepoint_item_id);
+      IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_pbr_sharepoint_item_source' AND object_id = OBJECT_ID('${db}.${schema}.passport_borrow_requests'))
+          CREATE UNIQUE INDEX IX_pbr_sharepoint_item_source ON ${tableRef}(sharepoint_item_id, source_db) WHERE sharepoint_item_id IS NOT NULL AND source_db IS NOT NULL;
       `;
       await this.queryNewDb(idxQuery);
-      console.log(`[StreamPassportMigrationModel] [ensurePassportBorrowRequestsColumnsExist] OK`);
+      logger.info(`[StreamPassportMigrationModel] [ensurePassportBorrowRequestsColumnsExist] OK`);
     } catch (err) {
-      console.error(`[StreamPassportMigrationModel] [ensurePassportBorrowRequestsColumnsExist] ERROR: ${err.message}`);
+      logger.error(`[StreamPassportMigrationModel] [ensurePassportBorrowRequestsColumnsExist] ERROR: ${err.message}`);
     }
   }
 
@@ -167,7 +195,7 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
   async ensureStagingTableExists() {
     try {
       const stagingTableRef = this.getStagingTableRef();
-      console.log(`[StreamPassportMigrationModel] Checking/Creating staging table: ${stagingTableRef}`);
+      logger.info(`[StreamPassportMigrationModel] Checking/Creating staging table: ${stagingTableRef}`);
       const schema = this.newDbSchema || 'dbo';
       const table = this.newTableSync;
 
@@ -178,9 +206,11 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
               [SY_SyncId] INT IDENTITY(1,1) PRIMARY KEY,
               [__sync_time] DATETIME2 NULL,
               [__sync_id_num] BIGINT NULL,
-              [ID] BIGINT NOT NULL
+              [ID] BIGINT NOT NULL,
+              [source_db] NVARCHAR(255) NULL
           );
-          CREATE UNIQUE INDEX IX_${table}_ID ON ${stagingTableRef}([ID]);
+          -- Note: We use a composite index for multi-DB support
+          CREATE UNIQUE INDEX IX_${table}_ID_Source ON ${stagingTableRef}([ID], [source_db]);
       END
       `;
       await this.queryNewDb(createQuery);
@@ -194,6 +224,7 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
         { name: 'tp_Editor', type: 'INT' },
         { name: 'tp_IsCurrent', type: 'BIT' },
         { name: 'tp_ListId', type: 'NVARCHAR(255)' },
+        { name: 'tp_Title', type: 'NVARCHAR(MAX)' },
         // User info
         { name: 'AuthorName', type: 'NVARCHAR(500)' },
         { name: 'AuthorFullName', type: 'NVARCHAR(500)' },
@@ -217,9 +248,15 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
         { name: 'ntext2',    type: 'NVARCHAR(MAX)' },
         { name: 'float1',   type: 'FLOAT' },
         { name: 'float2',   type: 'FLOAT' },
+        { name: 'float3',   type: 'FLOAT' },
         { name: 'int1',     type: 'INT' },
         { name: 'int2',     type: 'INT' },
         { name: 'tb_bak',   type: 'INT' },  // 1 = đồng bộ từ SharePoint
+        { name: 'source_db', type: 'NVARCHAR(255)' }, // Phân biệt site collection
+        // ★ Staging flags — dùng cho cơ chế claim/process chuẩn
+        { name: 'MigrateFlg',     type: 'INT',          default: '0' },  // 0=chưa xử lý, 2=đang xử lý, 1=thành công
+        { name: 'MigrateErrFlg',  type: 'INT',          default: '0' },  // 1=lỗi xử lý
+        { name: 'MigrateErrMess', type: 'NVARCHAR(MAX)' },               // message lỗi
       ];
 
       for (const col of columnsToAdd) {
@@ -232,20 +269,278 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
         await this.queryNewDb(alterQuery);
       }
 
-      console.log(`[StreamPassportMigrationModel] [ensureStagingTableExists] OK: ${stagingTableRef} is ready`);
+      // Đảm bảo index tổng hợp tồn tại (Migration từ bản cũ chỉ có [ID])
+      const indexCheckQuery = `
+      IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${table}_ID' AND object_id = OBJECT_ID('${stagingTableRef}'))
+      BEGIN
+          DROP INDEX IX_${table}_ID ON ${stagingTableRef};
+      END
+      IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${table}_ID_Source' AND object_id = OBJECT_ID('${stagingTableRef}'))
+      BEGIN
+          CREATE UNIQUE INDEX IX_${table}_ID_Source ON ${stagingTableRef}([ID], [source_db]);
+      END
+      `;
+      await this.queryNewDb(indexCheckQuery);
+      await ensureTrackingColumns(this, {
+        tableRef: stagingTableRef,
+        tableName: table,
+        schemaName: schema,
+        dbName: this.newDbName,
+        label: this.modelName,
+      });
+
+      logger.info(`[StreamPassportMigrationModel] [ensureStagingTableExists] OK: ${stagingTableRef} is ready`);
     } catch (err) {
-      console.error(`[StreamPassportMigrationModel] [ensureStagingTableExists] ERROR: ${err.message}`);
+      logger.error(`[StreamPassportMigrationModel] [ensureStagingTableExists] ERROR: ${err.message}`);
       throw err;
     }
   }
 
+  /**
+   * Tạo bảng passport_vouchers nếu chưa tồn tại.
+   * Bảng này lưu phiếu giao/nhận hộ chiếu.
+   */
+  async ensurePassportVouchersTableExists() {
+    try {
+      const db = this.newDbName || process.env.NEW_DB_NAME;
+      const schema = this.newDbSchema || 'dbo';
+      const table = 'passport_vouchers';
+      const tableRef = `[${db}].[${schema}].[${table}]`;
+
+      logger.info(`[StreamPassportMigrationModel] Checking/Creating table: ${table}`);
+
+      const createQuery = `
+      IF NOT EXISTS (SELECT 1 FROM [${db}].INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '${table}' AND TABLE_SCHEMA = '${schema}')
+      BEGIN
+          CREATE TABLE ${tableRef} (
+              [id] UNIQUEIDENTIFIER DEFAULT NEWID() NOT NULL PRIMARY KEY,
+              [voucher_code] NVARCHAR(100) NULL,
+              [voucher_type] NVARCHAR(50) NULL,
+              [status] NVARCHAR(50) NULL,
+              [request_id] NVARCHAR(100) NULL,
+              [handover_user_id] NVARCHAR(100) NULL,
+              [receiver_user_id] NVARCHAR(100) NULL,
+              [handover_date] DATETIME2 NULL,
+              [note] NVARCHAR(MAX) NULL,
+              [created_by] NVARCHAR(100) NULL,
+              [updated_by] NVARCHAR(100) NULL,
+              [created_at] DATETIME2 DEFAULT SYSUTCDATETIME(),
+              [updated_at] DATETIME2 DEFAULT SYSUTCDATETIME(),
+              [is_deleted] BIT DEFAULT 0,
+              [tb_bak] INT DEFAULT 0,
+              [sharepoint_item_id] NVARCHAR(255) NULL
+          );
+      END
+      `;
+      await this.queryNewDb(createQuery);
+
+      // Ensure extra columns nếu bảng đã tồn tại nhưng thiếu cột
+      const extraCols = [
+        { name: 'voucher_code',      type: 'NVARCHAR(100)' },
+        { name: 'voucher_type',      type: 'NVARCHAR(50)' },
+        { name: 'status',            type: 'NVARCHAR(50)' },
+        { name: 'request_id',        type: 'NVARCHAR(100)' },
+        { name: 'handover_user_id',  type: 'NVARCHAR(100)' },
+        { name: 'receiver_user_id',  type: 'NVARCHAR(100)' },
+        { name: 'handover_date',     type: 'DATETIME2' },
+        { name: 'note',              type: 'NVARCHAR(MAX)' },
+        { name: 'created_by',        type: 'NVARCHAR(100)' },
+        { name: 'updated_by',        type: 'NVARCHAR(100)' },
+        { name: 'created_at',        type: 'DATETIME2' },
+        { name: 'updated_at',        type: 'DATETIME2' },
+        { name: 'is_deleted',        type: 'BIT',           default: 0 },
+        { name: 'tb_bak',            type: 'INT',           default: 0 },
+        { name: 'sharepoint_item_id', type: 'NVARCHAR(255)' },
+      ];
+
+      for (const col of extraCols) {
+        const defaultClause = col.default !== undefined ? `DEFAULT ${col.default}` : '';
+        const checkQuery = `SELECT 1 AS cnt FROM [${db}].INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${table}' AND COLUMN_NAME = '${col.name}'`;
+        const colExists = await this.queryNewDb(checkQuery);
+        if (!colExists || colExists.length === 0 || colExists[0].cnt === 0) {
+          const query = `ALTER TABLE ${tableRef} ADD [${col.name}] ${col.type} ${defaultClause} NULL;`;
+          await this.queryNewDb(query);
+        }
+      }
+
+      logger.info(`[StreamPassportMigrationModel] [ensurePassportVouchersTableExists] OK`);
+    } catch (err) {
+      logger.error(`[StreamPassportMigrationModel] [ensurePassportVouchersTableExists] ERROR: ${err.message}`);
+    }
+  }
+
+  /**
+   * Tạo bảng passport_voucher_items nếu chưa tồn tại.
+   * Bảng chi tiết hộ chiếu trong từng phiếu giao/nhận.
+   */
+  async ensurePassportVoucherItemsTableExists() {
+    try {
+      const db = this.newDbName || process.env.NEW_DB_NAME;
+      const schema = this.newDbSchema || 'dbo';
+      const table = 'passport_voucher_items';
+      const tableRef = `[${db}].[${schema}].[${table}]`;
+
+      logger.info(`[StreamPassportMigrationModel] Checking/Creating table: ${table}`);
+
+      // Tạo bảng BẢN VỚI FK references
+      const createQuery = `
+      IF NOT EXISTS (SELECT 1 FROM [${db}].INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '${table}' AND TABLE_SCHEMA = '${schema}')
+      BEGIN
+          CREATE TABLE ${tableRef} (
+              [id] UNIQUEIDENTIFIER DEFAULT NEWID() NOT NULL PRIMARY KEY,
+              [voucher_id] UNIQUEIDENTIFIER NOT NULL,
+              [request_id] NVARCHAR(100) NULL,
+              [passport_id] NVARCHAR(100) NOT NULL,
+              [full_name] NVARCHAR(255) NULL,
+              [passport_number] NVARCHAR(20) NULL,
+              [passport_type] NVARCHAR(50) NULL,
+              [expiry_date] DATE NULL,
+              [item_condition] NVARCHAR(MAX) NULL,
+              [note] NVARCHAR(255) NULL
+          );
+
+          -- Index on voucher_id for faster lookups
+          CREATE NONCLUSTERED INDEX IX_PassportVoucherItem_VoucherId
+            ON ${tableRef} ([voucher_id] ASC);
+      END
+      `;
+      await this.queryNewDb(createQuery);
+
+      // Ensure extra columns nếu bảng đã tồn tại nhưng thiếu cột
+      const extraCols = [
+        { name: 'voucher_id',      type: 'UNIQUEIDENTIFIER' },
+        { name: 'request_id',      type: 'NVARCHAR(100)' },
+        { name: 'passport_id',     type: 'NVARCHAR(100)' },
+        { name: 'full_name',       type: 'NVARCHAR(255)' },
+        { name: 'passport_number', type: 'NVARCHAR(20)' },
+        { name: 'passport_type',   type: 'NVARCHAR(50)' },
+        { name: 'expiry_date',     type: 'DATE' },
+        { name: 'item_condition',  type: 'NVARCHAR(MAX)' },
+        { name: 'note',            type: 'NVARCHAR(255)' },
+      ];
+
+      for (const col of extraCols) {
+        const query = `
+        IF NOT EXISTS (SELECT 1 FROM [${db}].INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${table}' AND COLUMN_NAME = '${col.name}')
+        BEGIN
+            ALTER TABLE ${tableRef} ADD [${col.name}] ${col.type} NULL;
+        END
+        `;
+        await this.queryNewDb(query);
+      }
+
+      // Thêm FK nếu chưa có (bọc try-catch để không crash nếu FK đã tồn tại)
+      try {
+        await this.queryNewDb(`
+          IF NOT EXISTS (SELECT 1 FROM [${db}].sys.foreign_keys WHERE name = 'FK_VoucherItem_Voucher')
+          BEGIN
+              ALTER TABLE ${tableRef}
+              ADD CONSTRAINT FK_VoucherItem_Voucher
+              FOREIGN KEY ([voucher_id]) REFERENCES [${db}].[${schema}].[passport_vouchers]([id]);
+          END
+        `);
+        await this.queryNewDb(`
+          IF NOT EXISTS (SELECT 1 FROM [${db}].sys.foreign_keys WHERE name = 'FK_VoucherItem_Passport')
+          BEGIN
+              ALTER TABLE ${tableRef}
+              ADD CONSTRAINT FK_VoucherItem_Passport
+              FOREIGN KEY ([passport_id]) REFERENCES [${db}].[${schema}].[passports]([id]);
+          END
+        `);
+        await this.queryNewDb(`
+          IF NOT EXISTS (SELECT 1 FROM [${db}].sys.foreign_keys WHERE name = 'FK_VoucherItem_Request')
+          BEGIN
+              ALTER TABLE ${tableRef}
+              ADD CONSTRAINT FK_VoucherItem_Request
+              FOREIGN KEY ([request_id]) REFERENCES [${db}].[${schema}].[passport_borrow_requests]([id]);
+          END
+        `);
+      } catch (fkErr) {
+        logger.warn(`[StreamPassportMigrationModel] FK constraint creation skipped: ${fkErr.message}`);
+      }
+
+      logger.info(`[StreamPassportMigrationModel] [ensurePassportVoucherItemsTableExists] OK`);
+    } catch (err) {
+      logger.error(`[StreamPassportMigrationModel] [ensurePassportVoucherItemsTableExists] ERROR: ${err.message}`);
+    }
+  }
+
+  /**
+   * Seed dữ liệu mẫu cho bản passport_voucher_items theo yêu cầu test.
+   */
+  async seedPassportMockData() {
+    try {
+      const db = this.newDbName || process.env.NEW_DB_NAME;
+      const schema = this.newDbSchema || 'dbo';
+      const itemTableRef = `[${db}].[${schema}].[passport_voucher_items]`;
+
+      const checkEmpty = await this.queryNewDb(`SELECT COUNT(1) AS cnt FROM ${itemTableRef}`);
+      if (checkEmpty?.[0]?.cnt > 0) return; // Đã có dữ liệu thì không seed
+
+      logger.info(`[StreamPassportMigrationModel] Seeding mock passport_voucher_items data...`);
+
+      const insertQuery = `
+      -- Tạm tắt check FK constrain để có thể insert dữ liệu mẫu mà chưa có bản ghi cha
+      ALTER TABLE ${itemTableRef} NOCHECK CONSTRAINT ALL;
+
+      INSERT INTO ${itemTableRef} (
+          id, voucher_id, request_id, passport_id, full_name, passport_number, passport_type, expiry_date, item_condition, note
+      ) VALUES
+      ('BAF76B69-5273-46CC-8BE3-00C0694C5FAF', '4FF397C7-CDA7-412A-B822-96F0DEB1E714', '12167205-723a-446e-8a69-cc809c0f0a92', 'e3938fb7-dab4-4cac-b419-38c6eed46cca', N'Đặng Minh Hùng', N'B12345', N'OFFICIAL', '2026-03-30', N'Tốt', NULL),
+      ('817BFD74-C169-44D2-8F01-026EA56CBDCC', '6E32D9F8-5371-40E8-87C7-0A60C5F45FD0', '7ae7dd7e-884d-4540-b6c6-4f50d014f431', '39bfcf07-c9a6-4188-b412-e0f2dfcbd6d2', N'Ngô Ngọc Mai', N'B375375798', N'SERVICE', '2026-03-08', N'Tốt', N'Hộ chiếu còn tốt'),
+      ('33353791-8CD7-4464-8142-02A6C2C51F72', '2A220225-8EB9-42EC-A68F-9D2B90879358', '08c7bb34-2935-43d8-93a3-11c5c7c8b13b', 'eb11934c-8f44-4626-9fcc-42792b6486ca', N'Ngô Ngọc Mai', N'A112233445589', N'ORDINARY', '2026-02-28', N'Tốt', NULL);
+
+      -- Khôi phục check FK constrain
+      ALTER TABLE ${itemTableRef} CHECK CONSTRAINT ALL;
+      `;
+
+      await this.queryNewDb(insertQuery);
+      logger.info(`[StreamPassportMigrationModel] [seedPassportMockData] Data seeded OK`);
+    } catch (err) {
+      logger.warn(`[StreamPassportMigrationModel] [seedPassportMockData] Skip or Error: ${err.message}`);
+    }
+  }
+  /**
+   * Seed dữ liệu mẫu cho bản audit theo yêu cầu test.
+   */
+  async seedAuditMockData() {
+    try {
+      const db = this.newDbName || process.env.NEW_DB_NAME;
+      const schema = this.newDbSchema || 'dbo';
+      const itemTableRef = `[${db}].[${schema}].[audit]`;
+
+      const checkEmpty = await this.queryNewDb(`SELECT COUNT(1) AS cnt FROM ${itemTableRef} WHERE type_document = 'PASSPORT_REQUEST'`);
+      if (checkEmpty?.[0]?.cnt > 0) return; // Đã có dữ liệu thì không seed
+
+      logger.info(`[StreamPassportMigrationModel] Seeding mock audit data...`);
+
+      const insertQuery = `
+      SET IDENTITY_INSERT ${itemTableRef} ON;
+
+      INSERT INTO ${itemTableRef} (
+          id, document_id, [time], user_id, display_name, [role], action_code, from_node_id, to_node_id, details, origin_id, created_by, receiver, receiver_unit, group_, roleProcess, [action], deadline, stage_status, curStatusCode, created_at, updated_at, type_document, processed_by, table_backups, acting_as, status_code, bpmn_version, type_of_process, table_bak
+      ) VALUES
+      (66721, 'e0b55b9f-b923-4dfa-a81d-38b36acda419', '2026-04-03 03:57:03.677', '9a7b7d77-4eb9-4fc1-ac0f-9e4e783f39b7', N'Người phê duyệt', 'CHI_HUY_DON_VI', 'APPROVE', 'Gateway_0rbwxs6', 'Gateway_0fkk071', NULL, 'migration_origin', '9a7b7d77-4eb9-4fc1-ac0f-9e4e783f39b7', '9a7b7d77-4eb9-4fc1-ac0f-9e4e783f39b7', NULL, NULL, 'approver', N'Phê duyệt', NULL, 'DA_XU_LY', 'APPROVE', '2026-04-03 03:57:03.677', '2026-04-03 03:57:03.677', 'PASSPORT_REQUEST', NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+      (66727, 'db466dce-11ca-4201-8b21-45d1c6b81827', '2026-04-03 03:57:04.053', '81ceae11-f9ec-4ce7-ad9a-f4274ec256c9', N'Người phê duyệt', 'CHI_HUY_DON_VI', 'APPROVE', 'Gateway_0rbwxs6', 'Gateway_0fkk071', NULL, 'migration_origin', '81ceae11-f9ec-4ce7-ad9a-f4274ec256c9', '81ceae11-f9ec-4ce7-ad9a-f4274ec256c9', NULL, NULL, 'approver', N'Phê duyệt', NULL, 'DA_XU_LY', 'APPROVE', '2026-04-03 03:57:04.053', '2026-04-03 03:57:04.053', 'PASSPORT_REQUEST', NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+      (66729, 'f42003a9-d15c-4157-bee0-be2609086c82', '2026-04-03 03:57:04.157', '33decba6-7ea1-4d17-9b1a-ef4577ff1955', N'Người phê duyệt', 'CHI_HUY_DON_VI', 'APPROVE', 'Gateway_0rbwxs6', 'Gateway_0fkk071', NULL, 'migration_origin', '33decba6-7ea1-4d17-9b1a-ef4577ff1955', '33decba6-7ea1-4d17-9b1a-ef4577ff1955', NULL, NULL, 'approver', N'Phê duyệt', NULL, 'DA_XU_LY', 'APPROVE', '2026-04-03 03:57:04.157', '2026-04-03 03:57:04.157', 'PASSPORT_REQUEST', NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+
+      SET IDENTITY_INSERT ${itemTableRef} OFF;
+      `;
+
+      await this.queryNewDb(insertQuery);
+      logger.info(`[StreamPassportMigrationModel] [seedAuditMockData] Data seeded OK`);
+    } catch (err) {
+      logger.warn(`[StreamPassportMigrationModel] [seedAuditMockData] Skip or Error: ${err.message}`);
+    }
+  }
+
   async ensureAuditTableExists() {
-    const db = this.newDbName || 'app_tancang';
+    const db = this.newDbName || process.env.NEW_DB_NAME;
     const schema = 'dbo';
     const table = 'audit';
     const tableRef = `[${db}].[${schema}].[${table}]`;
 
-    console.log(`[StreamPassportMigrationModel] Checking/Creating Audit table: ${table}`);
+    logger.info(`[StreamPassportMigrationModel] Checking/Creating Audit table: ${table}`);
     const createAuditTable = `
     IF NOT EXISTS (SELECT 1 FROM ${db}.INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '${table}' AND TABLE_SCHEMA = '${schema}')
     BEGIN
@@ -280,19 +575,147 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
       { name: 'processed_by', type: 'varchar(100)' },
       { name: 'acting_as', type: 'varchar(100)' },
       { name: 'table_backups', type: 'nvarchar(255)' },
-      { name: 'bpmn_version', type: 'nvarchar(100)' },
+      { name: 'acting_as', type: 'varchar(100)' },
+      { name: 'status_code', type: 'varchar(50)' },
+      { name: 'bpmn_version', type: 'varchar(100)' },
+      { name: 'type_of_process', type: 'varchar(100)' },
+      { name: 'table_bak', type: 'int' }
     ];
 
     for (const col of auditCols) {
-      const query = `
-      IF NOT EXISTS (SELECT 1 FROM ${db}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${table}' AND COLUMN_NAME = '${col.name}')
+      const checkQuery = `SELECT 1 AS cnt FROM ${db}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${table}' AND COLUMN_NAME = '${col.name}'`;
+      const colExists = await this.queryNewDb(checkQuery);
+      if (!colExists || colExists.length === 0 || colExists[0].cnt === 0) {
+        const query = `ALTER TABLE ${tableRef} ADD [${col.name}] ${col.type} ${col.nullable || 'NULL'};`;
+        await this.queryNewDb(query);
+      }
+    }
+
+    // Tạo 11 Nonclustered Indexes cho Audit (bao bọc try-catch để tránh crash định kỳ nếu db đã tồn tại)
+    try {
+      const idxQueries = [
+        `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_audit_doc_receiverunit_id_desc' AND object_id = OBJECT_ID('${tableRef}'))
+         CREATE NONCLUSTERED INDEX IX_audit_doc_receiverunit_id_desc ON ${tableRef} (document_id ASC, receiver_unit ASC, id DESC) INCLUDE (action_code, created_at, deadline, receiver, roleProcess, stage_status);`,
+
+        `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_audit_doc_role_receiver_id_desc' AND object_id = OBJECT_ID('${tableRef}'))
+         CREATE NONCLUSTERED INDEX IX_audit_doc_role_receiver_id_desc ON ${tableRef} (document_id ASC, roleProcess ASC, receiver ASC, id DESC) INCLUDE (action_code, created_at, deadline, processed_by, receiver_unit, stage_status);`,
+
+        `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_audit_doc_stage_id_desc' AND object_id = OBJECT_ID('${tableRef}'))
+         CREATE NONCLUSTERED INDEX IX_audit_doc_stage_id_desc ON ${tableRef} (document_id ASC, stage_status ASC, id DESC) INCLUDE (created_at, created_by, processed_by, receiver, receiver_unit, roleProcess, user_id);`,
+
+        `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_audit_doc_time_created_getdetails' AND object_id = OBJECT_ID('${tableRef}'))
+         CREATE NONCLUSTERED INDEX IX_audit_doc_time_created_getdetails ON ${tableRef} (document_id ASC, time ASC, created_at ASC) INCLUDE (action, action_code, created_by, display_name, from_node_id, receiver, role, roleProcess, stage_status, to_node_id, type_document, updated_at, user_id);`,
+
+        `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_audit_latest' AND object_id = OBJECT_ID('${tableRef}'))
+         CREATE NONCLUSTERED INDEX IX_audit_latest ON ${tableRef} (document_id ASC, type_document ASC, id DESC) INCLUDE (created_by, receiver, receiver_unit, stage_status);`,
+
+        `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_audit_pick_receive' AND object_id = OBJECT_ID('${tableRef}'))
+         CREATE NONCLUSTERED INDEX IX_audit_pick_receive ON ${tableRef} (document_id ASC, receiver ASC, receiver_unit ASC, id DESC) INCLUDE (action_code, roleProcess, stage_status);`,
+
+        `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_audit_receiver' AND object_id = OBJECT_ID('${tableRef}'))
+         CREATE NONCLUSTERED INDEX IX_audit_receiver ON ${tableRef} (receiver ASC, document_id ASC, id DESC) INCLUDE (stage_status);`,
+
+        `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_audit_receiver_doc_id_desc' AND object_id = OBJECT_ID('${tableRef}'))
+         CREATE NONCLUSTERED INDEX IX_audit_receiver_doc_id_desc ON ${tableRef} (receiver ASC, document_id ASC, id DESC) INCLUDE (action_code, created_by, processed_by, receiver_unit, roleProcess, stage_status, user_id);`,
+
+        `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_audit_receiver_unit' AND object_id = OBJECT_ID('${tableRef}'))
+         CREATE NONCLUSTERED INDEX IX_audit_receiver_unit ON ${tableRef} (receiver_unit ASC, document_id ASC, id DESC) INCLUDE (stage_status);`,
+
+        `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_audit_stage' AND object_id = OBJECT_ID('${tableRef}'))
+         CREATE NONCLUSTERED INDEX IX_audit_stage ON ${tableRef} (document_id ASC, stage_status ASC);`,
+
+        `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_audit_submited_processed' AND object_id = OBJECT_ID('${tableRef}'))
+         CREATE NONCLUSTERED INDEX IX_audit_submited_processed ON ${tableRef} (document_id ASC, processed_by ASC, id DESC) INCLUDE (action_code, deadline, receiver, receiver_unit, roleProcess) WHERE ([stage_status]='DA_XU_LY');`,
+
+        `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_audit_doc_stage_role' AND object_id = OBJECT_ID('${tableRef}'))
+         CREATE NONCLUSTERED INDEX idx_audit_doc_stage_role ON ${tableRef} (document_id ASC, stage_status ASC, roleProcess ASC, receiver ASC) INCLUDE (action_code, details);`
+      ];
+
+      for (const q of idxQueries) {
+        await this.queryNewDb(q);
+      }
+    } catch (err) {
+      logger.warn(`[StreamPassportMigrationModel] [ensureAuditTableExists] Index Creation Skip or Error: ${err.message}`);
+    }
+
+    logger.info(`[StreamPassportMigrationModel] [ensureAuditTableExists] OK`);
+  }
+
+  async ensurePassportHistoriesTableExists() {
+    try {
+      const db = this.newDbName || process.env.NEW_DB_NAME;
+      const schema = this.newDbSchema || 'dbo';
+      const table = 'passport_histories';
+      const tableRef = `[${db}].[${schema}].[${table}]`;
+
+      logger.info(`[StreamPassportMigrationModel] Checking/Creating Passport Histories table: ${table}`);
+
+      const createTableQuery = `
+      IF NOT EXISTS (SELECT 1 FROM [${db}].INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '${table}' AND TABLE_SCHEMA = '${schema}')
       BEGIN
-          ALTER TABLE ${tableRef} ADD [${col.name}] ${col.type} ${col.nullable || 'NULL'};
+          CREATE TABLE ${tableRef} (
+              id uniqueidentifier DEFAULT newid() NOT NULL,
+              request_id nvarchar(100) NOT NULL,
+              [action] nvarchar(255) NOT NULL,
+              note nvarchar(MAX) NULL,
+              performer_id nvarchar(100) NULL,
+              performed_at datetime2 DEFAULT getdate() NULL,
+              CONSTRAINT PK_passport_histories PRIMARY KEY (id)
+          );
+          
+          CREATE NONCLUSTERED INDEX IX_PassportHistory_RequestId ON ${tableRef} (request_id);
       END
       `;
-      await this.queryNewDb(query);
+      await this.queryNewDb(createTableQuery);
+
+      // Add FK constraints separately to avoid errors if parent tables don't exist yet or columns different
+      try {
+        await this.queryNewDb(`
+          IF NOT EXISTS (SELECT 1 FROM [${db}].sys.foreign_keys WHERE name = 'FK_PassportHistory_Performer')
+          BEGIN
+              ALTER TABLE ${tableRef}
+              ADD CONSTRAINT FK_PassportHistory_Performer
+              FOREIGN KEY ([performer_id]) REFERENCES [${db}].[${schema}].[users]([id]);
+          END
+        `);
+        await this.queryNewDb(`
+          IF NOT EXISTS (SELECT 1 FROM [${db}].sys.foreign_keys WHERE name = 'FK_PassportHistory_Request')
+          BEGIN
+              ALTER TABLE ${tableRef}
+              ADD CONSTRAINT FK_PassportHistory_Request
+              FOREIGN KEY ([request_id]) REFERENCES [${db}].[${schema}].[passport_borrow_requests]([id]);
+          END
+        `);
+      } catch (fkErr) {
+        logger.warn(`[StreamPassportMigrationModel] [passport_histories] FK constraint skip: ${fkErr.message}`);
+      }
+
+      logger.info(`[StreamPassportMigrationModel] [ensurePassportHistoriesTableExists] OK`);
+    } catch (err) {
+      logger.error(`[StreamPassportMigrationModel] [ensurePassportHistoriesTableExists] ERROR: ${err.message}`);
     }
-    console.log(`[StreamPassportMigrationModel] [ensureAuditTableExists] OK`);
+  }
+
+  async seedPassportHistoriesMockData() {
+    try {
+      const db = this.newDbName || process.env.NEW_DB_NAME;
+      const schema = this.newDbSchema || 'dbo';
+      const tableRef = `[${db}].[${schema}].[passport_histories]`;
+
+      const checkExisted = await this.queryNewDb(`SELECT COUNT(1) AS cnt FROM ${tableRef} WHERE id = '8DB1D95E-77F4-45EA-8FEB-01FF678520FC'`);
+      if (checkExisted?.[0]?.cnt > 0) return;
+
+      logger.info(`[StreamPassportMigrationModel] Seeding mock passport_histories data...`);
+
+      const insertQuery = `
+      INSERT INTO ${tableRef} (id, request_id, [action], note, performer_id, performed_at)
+      VALUES ('8DB1D95E-77F4-45EA-8FEB-01FF678520FC', '8636318f-4f96-459b-83e2-9c41168d1029', 'FORWARD', N'Chỉ huy chuyển tiếp cho: phogiamdoctc', '2916a5f3-2dd9-4f82-8741-ef957454f904', '2026-03-17 23:14:12.0300000');
+      `;
+      await this.queryNewDb(insertQuery);
+      logger.info(`[StreamPassportMigrationModel] [seedPassportHistoriesMockData] OK`);
+    } catch (err) {
+      logger.warn(`[StreamPassportMigrationModel] [seedPassportHistoriesMockData] Error: ${err.message}`);
+    }
   }
 
   getStagingTableRef() {
@@ -329,34 +752,130 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
     return Number(aId || 0) > Number(bId || 0);
   }
 
+  /**
+   * Giải quyết List IDs cho một database cụ thể.
+   * Nếu chưa có title mẫu, sẽ lấy từ reference DB (khkd) bằng listId đầu tiên trong mapping.
+   */
+  async resolveListIdsForDb(dbName) {
+    if (this.listIdCache[dbName]) return this.listIdCache[dbName];
+
+    const referenceIds = this.oldConfig.listIds || [];
+
+    // 1. Lấy Title mẫu từ reference DB (khkd) nếu chưa có
+    if (!this.canonicalListTitle) {
+      const refDb = this.oldDbName; // 'WSS_Content_eoffice_khkd'
+      const refId = referenceIds[0];
+      const titleQuery = `SELECT TOP 1 tp_Title FROM [${refDb}].[dbo].[AllLists] WHERE tp_ID = @refId`;
+      try {
+        const rows = await this.queryOldDb(titleQuery, { refId });
+        if (rows?.length) {
+          this.canonicalListTitle = rows[0].tp_Title;
+          logger.info(`[StreamPassportMigrationModel] Canonical List Title discovered from reference DB: "${this.canonicalListTitle}"`);
+        }
+      } catch (err) {
+        logger.error(`[StreamPassportMigrationModel] Failed to discover canonical title from ${refDb}: ${err.message}`);
+      }
+    }
+
+    // 2. Tìm List IDs trong target DB theo Title (ưu tiên Exact Match)
+    let discoveredIds = [];
+    if (this.canonicalListTitle) {
+      const discoveryQuery = `SELECT tp_ID FROM [${dbName}].[dbo].[AllLists] WHERE tp_Title = @title AND tp_DeleteTransactionId = 0x0`;
+      try {
+        const rows = await this.queryOldDb(discoveryQuery, { title: this.canonicalListTitle });
+        discoveredIds = rows.map(r => String(r.tp_ID).toUpperCase());
+      } catch (err) {
+        logger.error(`[StreamPassportMigrationModel] discoveryQuery failed for DB ${dbName}: ${err.message}`);
+      }
+    }
+
+    // 3. Nếu chưa thấy, thử tìm theo từ khóa đặc thù cho Hộ chiếu
+    if (discoveredIds.length === 0) {
+      const keywords = ['Hộ chiếu', 'Quản lý hộ chiếu'];
+      try {
+        const patterns = keywords.map(k => `tp_Title LIKE N'%${k}%'`).join(' OR ');
+        const likeQuery = `
+          SELECT tp_ID, tp_Title 
+          FROM [${dbName}].[dbo].[AllLists] 
+          WHERE (${patterns}) 
+          AND tp_DeleteTransactionId = 0x0
+          AND tp_Title NOT LIKE N'%Đính kèm%'
+          AND tp_Title NOT LIKE N'%Văn bản%'
+          AND tp_Title NOT LIKE N'%Tài liệu%'
+        `;
+        
+        const rows = await this.queryOldDb(likeQuery);
+        if (rows?.length) {
+          discoveredIds = rows.map(r => String(r.tp_ID).toUpperCase());
+          logger.info(`[StreamPassportMigrationModel] [${dbName}] Found potential lists: ${rows.map(r => r.tp_Title).join(', ')}`);
+        }
+      } catch (err) {
+        logger.error(`[StreamPassportMigrationModel] likeQuery failed for DB ${dbName}: ${err.message}`);
+      }
+    }
+
+    // 4. Nếu vẫn chưa thấy, LOG TOÀN BỘ LIST TITLE để debug
+    if (discoveredIds.length === 0) {
+      try {
+        const allListsQuery = `SELECT TOP 20 tp_Title FROM [${dbName}].[dbo].[AllLists] WHERE tp_DeleteTransactionId = 0x0 ORDER BY tp_Title`;
+        const rows = await this.queryOldDb(allListsQuery);
+        const titles = rows.map(r => r.tp_Title).join(', ');
+        logger.warn(`[StreamPassportMigrationModel] [${dbName}] Discovery failed. Sample available lists: ${titles}`);
+      } catch (err) {
+        // ignore
+      }
+    }
+
+    if (discoveredIds.length > 0) {
+      this.listIdCache[dbName] = discoveredIds;
+      logger.info(`[StreamPassportMigrationModel] Final resolved List IDs for [${dbName}]: ${discoveredIds.join(', ')}`);
+      return discoveredIds;
+    }
+
+    // 5. Fallback cuối cùng: Chỉ dùng referenceIds nếu và chỉ nếu dbName chính là reference DB
+    if (dbName === this.oldDbName) {
+      logger.warn(`[StreamPassportMigrationModel] Using hardcoded reference IDs for ${dbName}.`);
+      return referenceIds;
+    }
+
+    logger.error(`[StreamPassportMigrationModel] !!! KHÔNG TÌM THẤY DANH SÁCH PASSPORT TẠI DB: ${dbName} !!! Dữ liệu site này sẽ bị bỏ qua.`);
+    return [];
+  }
+
   async getCount(lastSyncTime, lastSyncId = 0) {
-    const listIds = this.oldConfig.listIds || [];
-    const listIdsStr = listIds.map(id => `'${id}'`).join(',');
-    const query = `
-        SELECT COUNT(*) AS total
-        FROM [${this.oldDbName}].[dbo].[AllUserData] ud
-        WHERE ud.[tp_ListId] IN (${listIdsStr})
-        AND ud.tp_RowOrdinal = 0
-        AND ud.[tp_IsCurrent] = 1
-        AND ud.[tp_DeleteTransactionId] = 0x0
-        AND (
-            ud.[tp_Modified] > @lastSyncTime
-            OR (
-                ud.[tp_Modified] = @lastSyncTime
-                AND ud.[tp_ID] > @lastSyncId
-            )
-        )
-    `;
-    const rows = await this.queryOldDb(query, { lastSyncTime, lastSyncId: Number(lastSyncId || 0) });
-    return Number(rows?.[0]?.total || 0);
+    const dbs = this.oldConfig.databaseList || [this.oldDbName];
+    
+    let total = 0;
+    for (const db of dbs) {
+      const listIds = await this.resolveListIdsForDb(db);
+      if (listIds.length === 0) continue;
+
+      const listIdsStr = listIds.map(id => `'${id}'`).join(',');
+      const query = `
+          SELECT COUNT(*) AS total
+          FROM [${db}].[dbo].[AllUserData] ud
+          WHERE ud.[tp_ListId] IN (${listIdsStr})
+          AND ud.tp_RowOrdinal = 0
+      `;
+      try {
+        const rows = await this.queryOldDb(query, { lastSyncTime, lastSyncId: Number(lastSyncId || 0) });
+        const dbCount = Number(rows?.[0]?.total || 0);
+        total += dbCount;
+        logger.info(`[StreamPassportMigrationModel] [getCount] DB: ${db} -> ${dbCount} items (using ${listIds.length} resolved lists)`);
+      } catch (err) {
+        logger.error(`[StreamPassportMigrationModel] [getCount] Failed for DB: ${db}: ${err.message}`);
+      }
+    }
+    return total;
   }
 
   /**
-   * Fetch danh sách phiếu mượn từ old DB theo cursor (tp_Modified, tp_ID).
+   * Fetch danh sách phiếu mượn từ một DB cụ thể theo cursor (tp_Modified, tp_ID).
    */
-  async fetchListFromOldDb(lastSyncTime, lastSyncId = 0, offset = 0, limit = 2000) {
-    const listIds = this.oldConfig.listIds || [];
-    const listIdsStr = listIds.map(id => `'${id}'`).join(',');
+  async fetchListFromOldDb(lastSyncTime, lastSyncId = 0, offset = 0, limit = 2000, dbName = null, listIds = null) {
+    const targetDb = dbName || this.oldDbName;
+    const resolvedListIds = listIds || await this.resolveListIdsForDb(targetDb);
+    const listIdsStr = resolvedListIds.map(id => `'${id}'`).join(',');
 
     const query = `
         SELECT * FROM (
@@ -382,6 +901,7 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
                 ud.[tp_Editor]    AS tp_Editor,
                 ud.[tp_IsCurrent] AS tp_IsCurrent,
                 ud.[tp_ListId]    AS tp_ListId,
+                ud.[nvarchar1]    AS tp_Title,
                 ui_author.[tp_Title] AS AuthorName,
                 ui_author.[tp_Title] AS AuthorFullName,
                 ui_author.[tp_Login] AS AuthorAccount,
@@ -394,50 +914,40 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
                 ud.[tp_ID]        AS __sync_id_num,
                 ROW_NUMBER() OVER (ORDER BY ud.[tp_Modified] ASC, ud.[tp_ID] ASC) AS __page_rn
 
-            FROM [${this.oldDbName}].[dbo].[AllUserData] ud
-            LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_author
+            FROM [${targetDb}].[dbo].[AllUserData] ud
+            LEFT JOIN [${targetDb}].[dbo].[UserInfo] ui_author
                 ON ud.[tp_Author] = ui_author.[tp_ID]
-            LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_editor
+            LEFT JOIN [${targetDb}].[dbo].[UserInfo] ui_editor
                 ON ud.[tp_Editor] = ui_editor.[tp_ID]
             WHERE ud.[tp_ListId] IN (${listIdsStr})
-              AND ud.[tp_IsCurrent] = 1
-              AND ud.[tp_DeleteTransactionId] = 0x0
-              AND (
-                  @lastSyncTime = '1970-01-01T00:00:00.000Z'
-                  OR ud.[tp_Modified] > @lastSyncTime
-                  OR (
-                      ud.[tp_Modified] = @lastSyncTime
-                      AND ud.[tp_ID] > @lastSyncId
-                  )
-              )
+              AND ud.tp_RowOrdinal = 0
         ) AS t
         WHERE __page_rn > @offset AND __page_rn <= (@offset + @limit)
         ORDER BY __page_rn;
     `;
 
-    const rows = await this.queryOldDb(query, { 
-      lastSyncTime, 
+    const rows = await this.queryOldDb(query, {
+      lastSyncTime,
       lastSyncId: Number(lastSyncId || 0),
       offset: Number(offset || 0),
       limit: Number(limit || 2000)
     });
-    console.log(`[StreamPassportMigrationModel] Fetched ${rows.length} rows from old DB`);
     return rows;
   }
 
   /**
    * Lưu dữ liệu từ old DB vào staging table (upsert).
    */
-  async syncOldToStaging(rows, { transaction } = {}) {
+  async syncOldToStaging(rows, { transaction, dbName } = {}) {
     if (!Array.isArray(rows) || rows.length === 0) return { stagedCount: 0 };
-    console.log(`[StreamPassportMigrationModel] Staging ${rows.length} rows to ${this.newTableSync}...`);
-    const internalColumns = new Set(['__sync_time', '__sync_id_num']);
-    const keyColumn = 'ID';
+    logger.info(`[StreamPassportMigrationModel] Staging ${rows.length} rows from ${dbName} to ${this.newTableSync}...`);
+    const internalColumns = new Set(['__sync_time', '__sync_id_num', 'source_db']);
     const stagingTableRef = this.getStagingTableRef();
 
     for (const row of rows) {
-      // Inject tb_bak = 1 để đánh dấu record đến từ SharePoint
+      // Inject tb_bak = 1 và source_db
       row.tb_bak = 1;
+      row.source_db = dbName || this.oldDbName;
 
       const columns = Object.keys(row || {}).filter(
         (c) => !String(c).startsWith('__') && !internalColumns.has(c)
@@ -448,21 +958,23 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
       }
       params.__sync_time = row.__sync_time;
       params.__sync_id_num = row.__sync_id_num;
-      const updateSet = columns.filter(c => c !== keyColumn).map(c => `[${c}] = @${c}`).join(', ');
+      params.source_db = row.source_db;
+
+      // Update condition based on composite key (ID + source_db)
+      const updateSet = columns.filter(c => c !== 'ID' && c !== 'source_db').map(c => `[${c}] = @${c}`).join(', ');
       const query = `
-      IF EXISTS (SELECT 1 FROM ${stagingTableRef} WHERE [${keyColumn}] = @${keyColumn})
+      IF EXISTS (SELECT 1 FROM ${stagingTableRef} WHERE [ID] = @ID AND [source_db] = @source_db)
       BEGIN
-          UPDATE ${stagingTableRef} SET ${updateSet}, __sync_time = @__sync_time, __sync_id_num = @__sync_id_num WHERE [${keyColumn}] = @${keyColumn}
+          UPDATE ${stagingTableRef} SET ${updateSet}, __sync_time = @__sync_time, __sync_id_num = @__sync_id_num, MigrateFlg = 0, MigrateErrFlg = 0, MigrateErrMess = NULL WHERE [ID] = @ID AND [source_db] = @source_db
       END
       ELSE
       BEGIN
-          INSERT INTO ${stagingTableRef} (${columns.map(c => `[${c}]`).join(',')}, __sync_time, __sync_id_num)
-          VALUES (${columns.map(c => `@${c}`).join(',')}, @__sync_time, @__sync_id_num)
+          INSERT INTO ${stagingTableRef} (${columns.map(c => `[${c}]`).join(',')}, __sync_time, __sync_id_num, source_db, MigrateFlg, MigrateErrFlg)
+          VALUES (${columns.map(c => `@${c}`).join(',')}, @__sync_time, @__sync_id_num, @source_db, 0, 0)
       END
       `;
       await this.queryNewDbTx(query, params, transaction);
     }
-    console.log(`[StreamPassportMigrationModel] Staging complete for ${rows.length} rows`);
     return { stagedCount: rows.length };
   }
 
@@ -470,9 +982,21 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
     if (!syncJobId) throw new Error('syncJobId is required');
     const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
     const normalizedLastSyncId = Number(lastSyncId || 0);
+    const stagingTableRef = this.getStagingTableRef();
+
+    // ★ Cleanup stale records (MigrateFlg=2) trước khi hút mới
+    try {
+      await this.queryNewDb(`
+        UPDATE ${stagingTableRef}
+        SET MigrateFlg = 0, MigrateErrMess = 'Reset from stale processing'
+        WHERE MigrateFlg = 2
+      `);
+    } catch (cleanupErr) {
+      logger.warn(`[StreamPassportMigrationModel] Cleanup stale records failed: ${cleanupErr.message}`);
+    }
 
     const totalCount = await this.getCount(normalizedLastSyncTime, normalizedLastSyncId);
-    console.log(`[StreamPassportMigrationModel] Total records to sync: ${totalCount}`);
+    logger.info(`[StreamPassportMigrationModel] Total records across all DBs: ${totalCount}`);
 
     // Cập nhật Dashboard ngay lập tức
     await this.queryNewDb(`UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`, {
@@ -481,46 +1005,92 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
     });
 
     const fetchBatchSize = Number(process.env.STAGING_FETCH_BATCH_SIZE || 2000);
-    const numIterations = Math.ceil(totalCount / fetchBatchSize);
+    const dbs = this.oldConfig.databaseList || [this.oldDbName];
 
     let totalStagedCount = 0;
     let nextSyncTime = normalizedLastSyncTime;
     let nextSyncId = normalizedLastSyncId;
 
-    for (let i = 0; i < numIterations; i++) {
-        const offset = i * fetchBatchSize;
-        logger.info(`[StreamPassportMigrationModel] Fetching batch ${i + 1}/${numIterations} (Offset: ${offset}, Limit: ${fetchBatchSize})`);
+    let dbIdx = 0;
+    for (const db of dbs) {
+      dbIdx++;
+      try {
+        logger.info(`[StreamPassportMigrationModel] [SITE ${dbIdx}/${dbs.length}] Processing database: ${db}`);
         
-        const rows = await this.fetchListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId, offset, fetchBatchSize);
-        if (!rows || rows.length === 0) break;
-
-        const stageResult = await this.syncOldToStaging(rows);
-        totalStagedCount += Number(stageResult?.stagedCount || rows.length || 0);
-
-        // Cập nhật cursor và LOG chi tiết từng bản ghi
-        for (const row of rows) {
-            const rowTime = this.extractRowSyncTime(row);
-            const rowId = this.extractRowSyncId(row);
-            if (!rowTime) continue;
-
-            const isAhead = this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId);
-            logger.info(`  └─ [Compare] rowID: ${row.ID} | T: ${rowTime} ID: ${rowId} vs Cursor(T: ${nextSyncTime} ID: ${nextSyncId}) -> Ahead: ${isAhead}`);
-
-            if (isAhead) {
-                nextSyncTime = rowTime;
-                nextSyncId = rowId;
-            }
+        // Resolve List IDs cho DB này
+        const listIds = await this.resolveListIdsForDb(db);
+        if (listIds.length === 0) {
+          logger.warn(`[StreamPassportMigrationModel] No List IDs resolved for DB ${db}. Skipping.`);
+          continue;
         }
-        logger.info(`🔥 [StreamPassportMigrationModel] Batch ${i + 1}/${numIterations} staged: ${totalStagedCount}/${totalCount}. LastSyncTime: ${nextSyncTime}, LastSyncId: ${nextSyncId}`);
+        const listIdsStr = listIds.map(id => `'${id}'`).join(',');
+
+        // Lấy count riêng cho DB này để chạy phân trang đúng
+        const dbCountQuery = `
+            SELECT COUNT(*) AS total
+            FROM [${db}].[dbo].[AllUserData]
+            WHERE [tp_ListId] IN (${listIdsStr})
+            AND tp_RowOrdinal = 0
+        `;
+        const dbCountRes = await this.queryOldDb(dbCountQuery, { lastSyncTime: normalizedLastSyncTime, lastSyncId: normalizedLastSyncId });
+        const dbCount = Number(dbCountRes?.[0]?.total || 0);
+        
+        if (dbCount === 0) {
+          logger.info(`[StreamPassportMigrationModel] No new records in ${db}`);
+          continue;
+        }
+
+        const numIterations = Math.ceil(dbCount / fetchBatchSize);
+        for (let i = 0; i < numIterations; i++) {
+            const offset = i * fetchBatchSize;
+            logger.info(`[StreamPassportMigrationModel] [${db}] Fetching batch ${i + 1}/${numIterations} (Offset: ${offset})`);
+
+            const rows = await this.fetchListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId, offset, fetchBatchSize, db, listIds);
+            if (!rows || rows.length === 0) break;
+
+            const stageResult = await this.syncOldToStaging(rows, { dbName: db });
+            totalStagedCount += Number(stageResult?.stagedCount || rows.length || 0);
+
+            // Cập nhật cursor (Global cursor across all DBs)
+            for (const row of rows) {
+                const rowTime = this.extractRowSyncTime(row);
+                const rowId = this.extractRowSyncId(row);
+                if (!rowTime) continue;
+
+                const isAhead = this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId);
+                if (isAhead) {
+                    nextSyncTime = rowTime;
+                    nextSyncId = rowId;
+                }
+            }
+            logger.info(`[StreamPassportMigrationModel] [${db}] Staged: ${totalStagedCount} so far. Cursor: ${nextSyncTime} / ${nextSyncId}`);
+        }
+      } catch (dbErr) {
+        logger.error(`[StreamPassportMigrationModel] [SKIPPED SITE] Error processing database ${db}: ${dbErr.message}`);
+      }
     }
 
-    return { 
-        syncJobId, 
-        rows: [], 
-        totalCount: totalCount, 
+    // ★ Đếm pending thực tế trong staging (chưa xử lý)
+    let pendingCount = totalStagedCount;
+    try {
+      const pendingRes = await this.queryNewDb(`
+        SELECT COUNT(1) AS cnt FROM ${stagingTableRef}
+        WHERE ISNULL(MigrateFlg, 0) = 0
+          AND ISNULL(MigrateErrFlg, 0) = 0
+      `);
+      pendingCount = Number(pendingRes?.[0]?.cnt || 0);
+    } catch (e) {
+      logger.warn(`[StreamPassportMigrationModel] Không đếm được pending staging: ${e.message}`);
+    }
+    logger.info(`[StreamPassportMigrationModel] Pending records trong Staging: ${pendingCount}`);
+
+    return {
+        syncJobId,
+        rows: [],
+        totalCount: pendingCount,
         stagedCount: totalStagedCount,
-        lastSyncTime: nextSyncTime, 
-        lastSyncId: nextSyncId 
+        lastSyncTime: nextSyncTime,
+        lastSyncId: nextSyncId
     };
   }
 
@@ -529,68 +1099,189 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
     return rows?.[0] || null;
   }
 
-  async fetchOneFromStaging({ lastSyncTime, lastSyncId }) {
-    const tableRef = this.getStagingTableRef();
-    const query = `
-        SELECT TOP 1 *
-        FROM ${tableRef}
-        WHERE (
-            @lastSyncTime = '2100-01-01T00:00:00.000Z'
-            OR [__sync_time] < @lastSyncTime
-            OR ([__sync_time] = @lastSyncTime AND [ID] < @lastSyncId)
-        )
-        ORDER BY [__sync_time] DESC, [ID] DESC
-    `;
-    const rows = await this.queryNewDb(query, {
-        lastSyncTime,
-        lastSyncId: Number(lastSyncId || 0)
-    });
-    return rows?.[0] || null;
+  /**
+   * ★ Atomic claim: Lấy 1 bản ghi từ staging bằng CTE + UPDLOCK, ROWLOCK.
+   * Set MigrateFlg=2 (đang xử lý) ngay lúc SELECT để tránh multi-terminal trùng lặp.
+   */
+  async fetchOneFromStaging() {
+    try {
+      const tableRef = this.getStagingTableRef();
+
+      // Debug: đếm records sẵn sàng
+      const countResult = await this.queryNewDb(`
+        SELECT COUNT(1) AS cnt FROM ${tableRef}
+        WHERE ISNULL(MigrateFlg, 0) = 0
+          AND ISNULL(MigrateErrFlg, 0) = 0
+      `);
+      const availableCount = Number(countResult?.[0]?.cnt || 0);
+      logger.info(`[StreamPassportMigrationModel.fetchOneFromStaging] Available: ${availableCount}`);
+
+      if (availableCount === 0) return null;
+
+      const row = await claimNextStagingRow(this, {
+        tableRef,
+        orderBy: '[__sync_time] DESC, [ID] DESC',
+        owner: `pid_${process.pid}`,
+        label: this.modelName,
+      });
+      if (row) {
+        logger.info(`[${this.modelName}] [START] Processing started: ID=${row.ID}`);
+      }
+      return row;
+    } catch (error) {
+      logger.error(`[StreamPassportMigrationModel.fetchOneFromStaging] Failed: ${error.message}`);
+      throw error;
+    }
   }
 
+  async updateHeartbeat(rowId, transaction = null) {
+    if (!rowId) return 0;
+    return updateHeartbeat(this, {
+      tableRef: this.getStagingTableRef(),
+      keyWhere: 'ID = @ID',
+      params: { ID: rowId },
+      transaction,
+      rowToken: `ID=${rowId}`,
+      label: this.modelName,
+    });
+  }
+
+  /**
+   * ★ Xử lý 1 bản ghi staging trong transaction với retry.
+   * MigrateFlg: 0 → 2 (claimed) → 1 (thành công) hoặc 0+ErrFlg (lỗi).
+   */
   async processOne(syncJobId) {
     if (!syncJobId) throw new Error('syncJobId is required');
-    const state = await this.getSyncJobState(syncJobId);
-    const lastSyncTime = this.normalizeSyncTime(state?.last_sync_time);
-    const lastSyncId = Number(state?.last_sync_id || 0);
 
+    const jobState = await this.getSyncJobState(syncJobId);
     const stagingTableRef = this.getStagingTableRef();
-    
-    // Đếm tổng số bản ghi trong staging để log progress
-    const totalStagingRows = await this.queryNewDb(`SELECT COUNT(*) as total FROM ${stagingTableRef}`);
-    const total = Number(totalStagingRows?.[0]?.total || 0);
-    const current = Number(state?.total_processed || 0) + 1;
+    let rowData = null;
+    let stopHeartbeat = null;
 
-    // [STAGING FIRST] Lấy bản ghi tiếp theo từ staging
-    const row = await this.fetchOneFromStaging({ lastSyncTime, lastSyncId });
-    if (!row) {
-        console.log(`[StreamPassportMigrationModel] [processOne] No more records in staging for job ${syncJobId}. (Processed: ${state?.total_processed || 0}/${total})`);
-        return { backupId: null, affected: 0, done: true };
+    try {
+      // ★ Claim 1 record bằng atomic fetch (MigrateFlg=0→2)
+      rowData = await this.fetchOneFromStaging();
+
+      if (!rowData) {
+        logger.info(`[StreamPassportMigrationModel] Không còn dữ liệu trong staging cho job ${syncJobId}`);
+        await this.finalizeProcessingCursor(syncJobId);
+        return { syncJobId, processed: false, done: true };
+      }
+
+      const rowId = rowData.ID || null;
+      const current = Number(jobState?.total_processed || 0) + 1;
+      logger.info(`[StreamPassportMigrationModel] Process ${current}: record ID=${rowId}`);
+      stopHeartbeat = startHeartbeatLoop(
+        () => this.updateHeartbeat(rowId),
+        this.heartbeatIntervalMs,
+      );
+
+      // ★ Wrap trong transaction với retry
+      const result = await dbUtils.withTransactionRetry(this.newPool, async (transaction) => {
+        const res = await this.processRowData(rowData, { transaction });
+
+        // Cập nhật counters trong sync_jobs
+        await this.queryNewDbTx(
+          `UPDATE sync_jobs
+           SET total_processed = ISNULL(total_processed, 0) + 1,
+               total_success   = ISNULL(total_success, 0) + 1
+           WHERE job_id = @syncJobId`,
+          { syncJobId },
+          transaction
+        );
+
+        // ★ Đánh dấu staging row thành công: MigrateFlg=1
+        await markRowSuccess(this, {
+          tableRef: stagingTableRef,
+          keyWhere: 'ID = @ID',
+          params: { ID: rowId },
+          transaction,
+          rowToken: `ID=${rowId}`,
+          label: this.modelName,
+        });
+
+        return res;
+      }, { maxRetries: 5 });
+      if (stopHeartbeat) {
+        stopHeartbeat();
+        stopHeartbeat = null;
+      }
+
+      return {
+        syncJobId,
+        processed: true,
+        done: false,
+        rowId,
+        result
+      };
+    } catch (error) {
+      if (stopHeartbeat) {
+        stopHeartbeat();
+        stopHeartbeat = null;
+      }
+      // ★ Rollback staging: MigrateFlg=0, MigrateErrFlg=1, lưu lỗi
+      if (rowData && rowData.ID) {
+        try {
+          await markRowFailed(this, {
+            tableRef: stagingTableRef,
+            keyWhere: 'ID = @ID',
+            params: { ID: rowData.ID },
+            rowToken: `ID=${rowData.ID}`,
+            errorMessage: error.message,
+            label: this.modelName,
+          });
+        } catch (updateErr) { /* ignore */ }
+      }
+
+      logger.error(`[StreamPassportMigrationModel.processOne] Failed row ID=${rowData?.ID}: ${error.message}`);
+      throw error;
     }
+  }
 
-    const backupId = String(row.ID);
-    console.log(`[StreamPassportMigrationModel] [processOne] [${current}/${total}] Processing record ID=${backupId}, SyncTime=${row.__sync_time}`);
+  /**
+   * ★ Cập nhật cursor (last_sync_time, last_sync_id) từ MAX records đã xử lý thành công.
+   */
+  async finalizeProcessingCursor(syncJobId) {
+    try {
+      const stagingTableRef = this.getStagingTableRef();
+      const res = await this.queryNewDb(`
+        SELECT
+          MAX([__sync_time]) AS maxTime,
+          MAX([ID]) AS maxId
+        FROM ${stagingTableRef}
+        WHERE ISNULL(MigrateFlg, 0) = 1
+      `);
+      if (res?.[0]?.maxTime) {
+        const finalTime = new Date(res[0].maxTime).toISOString();
+        const finalId = Number(res[0].maxId || 0);
+        await this.queryNewDb(
+          `UPDATE sync_jobs
+           SET last_sync_time = @t,
+               last_sync_id   = @id
+           WHERE job_id = @jobId`,
+          { t: finalTime, id: finalId, jobId: syncJobId }
+        );
+        logger.info(`[StreamPassportMigrationModel] Cursor finalized: last_sync_time=${finalTime}, last_sync_id=${finalId}`);
+      } else {
+        logger.info(`[StreamPassportMigrationModel] finalizeProcessingCursor: không có bản ghi đã xử lý, cursor giữ nguyên.`);
+      }
+    } catch (err) {
+      logger.warn(`[StreamPassportMigrationModel.finalizeProcessingCursor] Lỗi: ${err.message}`);
+    }
+  }
 
-    const startTime = Date.now();
-    await this.processRowData(row);
-    const duration = Date.now() - startTime;
-
-    const nextSyncTime = this.extractRowSyncTime(row);
-    const nextSyncId   = this.extractRowSyncId(row);
-
-    // ✅ Cập nhật cursor trong sync_jobs để lần sau không lấy lại bản ghi này
-    await this.queryNewDb(
-      `UPDATE sync_jobs
-       SET total_processed = ISNULL(total_processed, 0) + 1,
-           total_success   = ISNULL(total_success, 0) + 1,
-           last_sync_time  = @lastSyncTime,
-           last_sync_id    = @lastSyncId
-       WHERE job_id = @syncJobId`,
-      { syncJobId, lastSyncTime: nextSyncTime, lastSyncId: nextSyncId }
-    );
-
-    console.log(`[StreamPassportMigrationModel] [processOne] Done ID=${backupId} in ${duration}ms. Next cursor: ${nextSyncTime} / ${nextSyncId}`);
-    return { syncJobId, processed: true, done: false, current, total };
+  /**
+   * Trích xuất mnemonic ngắn gọn từ tên database (ví dụ: WSS_Content_eoffice_khkd -> KHKD).
+   */
+  getSourceMnemonic(sourceDb) {
+    if (!sourceDb) return 'MAIN';
+    const parts = sourceDb.split('_');
+    const lastPart = parts[parts.length - 1];
+    
+    // Nếu db là 'WSS_Content_eoffice' thì coi là MAIN
+    if (lastPart.toLowerCase() === 'eoffice') return 'MAIN';
+    
+    return lastPart.toUpperCase();
   }
 
   /**
@@ -600,12 +1291,20 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
     if (!rowData?.ID) throw new Error('ID is required');
 
     const recordId = String(rowData.ID);
-    console.log(`[StreamPassportMigrationModel] processRowData: recordId=${recordId}`);
+    logger.info(`[StreamPassportMigrationModel] processRowData: recordId=${recordId}`);
     const { externalKey } = this.oldConfig;
 
-    // 1. Resolve người tạo phiếu (requester) từ thông tin Author
-    let requesterId = await this.helper.robustUserResolver(rowData, transaction);
-    console.log(`[StreamPassportMigrationModel] [recordId=${recordId}] Resolved Requester: ${requesterId || 'FALLBACK'}`);
+    // 1. Resolve người tạo phiếu (requester) theo rule đặc thù passport: UserId -> Account -> Email -> FullName
+    let requesterId = await this.helper.passportUserResolver(rowData, transaction);
+    
+    // FALLBACK: Nếu không tìm thấy user, dùng VANTHU_USER_ID để tránh lỗi NOT NULL DB
+    if (!requesterId) {
+      const defaultVanthuId = process.env.VANTHU_USER_ID || 'b23406e3-5c75-41d3-91e0-1654293ae6b2';
+      logger.warn(`[StreamPassportMigrationModel] [recordId=${recordId}] KHÔNG resolve được requester (${rowData.AuthorName || 'Unknown'}). Dùng fallback VANTHU_USER_ID.`);
+      requesterId = defaultVanthuId;
+    }
+
+    logger.info(`[StreamPassportMigrationModel] [recordId=${recordId}] Resolved Requester: ${requesterId}`);
 
     // Update roles_by_process & Group for the requester
     if (requesterId) {
@@ -615,20 +1314,24 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
 
     // 2. Map trạng thái từ hệ thống cũ sang hệ thống mới
     const mappedStatus = mapStatus(rowData.nvarchar4);
-    
-    // 3. Chuẩn bị dữ liệu - các field bắt buộc có fallback để không bao giờ bỏ qua bản ghi
-    const FALLBACK_USER = process.env.VANTHU_USER_ID || 'eac9bcb6-efcd-4b23-a656-dd351037a138';
-    rowData.requester_id = requesterId || FALLBACK_USER;
-    rowData.created_by   = requesterId || FALLBACK_USER;
+
+    // 3. Chuẩn bị dữ liệu - nếu không có requesterId, để null
+    rowData.requester_id = requesterId || null;
+    rowData.created_by   = requesterId || null;
     rowData.status       = mappedStatus || 'Chờ phê duyệt';
-    rowData.request_code = rowData.nvarchar1 || `HC-SYNC-${recordId}`;
+    
+    // 🔥 Disambiguate request_code cho multi-DB: thêm suffix /MNEMONIC
+    const mnemonic = this.getSourceMnemonic(rowData.source_db);
+    const rawCode = rowData.nvarchar1 || `HC-SYNC-${recordId}`;
+    rowData.request_code = `${rawCode}/${mnemonic}`;
+
     rowData.name_passport_request = rowData.AuthorFullName || rowData.AuthorName || 'Chưa xác định (Sync)';
     rowData.type_request = 'user';
 
     // 4. Xử lý ngày tháng — fallback về today nếu không có ngày mượn
-    rowData.borrow_date    = parseDate(rowData.datetime4) || parseDate(rowData.tp_Created) || new Date();
+    rowData.borrow_date    = parseDate(rowData.datetime6) || parseDate(rowData.tp_Created) || new Date();
     rowData.return_date    = parseDate(rowData.datetime7) || null;
-    rowData.departure_date = parseDate(rowData.datetime6) || null;
+    rowData.departure_date = parseDate(rowData.datetime4) || null;
     rowData.arrival_date   = parseDate(rowData.datetime8) || null;
 
     // 5. Ý kiến/ghi chú
@@ -644,14 +1347,14 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
       rowData.approval_reason = actionReason;
     }
 
-    console.log(`[StreamPassportMigrationModel] [recordId=${recordId}] Data Prepared: Code=${rowData.request_code}, Status=${rowData.status}, BorrowDate=${rowData.borrow_date.toISOString()}`);
+    logger.info(`[StreamPassportMigrationModel] [recordId=${recordId}] Data Prepared: Code=${rowData.request_code}, Status=${rowData.status}, BorrowDate=${rowData.borrow_date.toISOString()}`);
 
     // 7. Upsert vào bảng mới
     const result = await this.upsertPassportBorrowRequest(rowData, externalKey, recordId, transaction);
-    
-    // 8. Tạo audit trail mặc định
+
+    // 8. Tạo audit trail mặc định và audit từ ntext2
     if (result.id) {
-      await this.createDefaultAuditForPassport(result.id, requesterId, mappedStatus, transaction);
+      await this.createDefaultAuditForPassport(result.id, requesterId, mappedStatus, rowData.ntext2, transaction, rowData.tp_Title);
     }
 
     return {
@@ -671,7 +1374,7 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
 
     // Lấy danh sách cột thực tế trong bảng
     const existingCols = await this.getExistingColumns('passport_borrow_requests', schema);
-    console.log(`[StreamPassportMigrationModel] upsertPassportBorrowRequest: table=passport_borrow_requests, externalKeyValue=${externalKeyValue}`);
+    logger.info(`[StreamPassportMigrationModel] upsertPassportBorrowRequest: table=passport_borrow_requests, externalKeyValue=${externalKeyValue}`);
 
     const params = {};
     const insertCols = [];
@@ -711,6 +1414,7 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
       created_at:             parseDate(rawData.tp_Created) || new Date(),
       updated_at:             parseDate(rawData.tp_Modified) || new Date(),
       sharepoint_item_id:     externalKeyValue,
+      source_db:              rawData.source_db || null,
       tb_bak:                 1,  // 1 = đồng bộ từ SharePoint
     };
 
@@ -726,18 +1430,27 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
         updateSet.push(`[${field}] = @${field}`);
       }
     }
+    
+    // Đảm bảo updated_by luôn matching với created_by khi update
+    if (existingCols.has('updated_by') && fieldValues.created_by) {
+      if (!updateSet.some(s => s.includes('updated_by'))) {
+         params['updated_by'] = fieldValues.created_by;
+         updateSet.push(`[updated_by] = @updated_by`);
+      }
+    }
 
-    params._externalKeyValue = externalKeyValue;
+      params._externalKeyValue = externalKeyValue;
+      params._sourceDb = rawData.source_db;
 
-    const query = `
+      const query = `
       DECLARE @OutputTable TABLE (id NVARCHAR(255));
       DECLARE @affected INT;
 
-      IF EXISTS (SELECT 1 FROM ${tableRef} WHERE [${externalKeyField}] = @_externalKeyValue)
+      IF EXISTS (SELECT 1 FROM ${tableRef} WHERE [${externalKeyField}] = @_externalKeyValue AND [source_db] = @_sourceDb)
       BEGIN
           UPDATE ${tableRef} SET ${updateSet.length ? updateSet.join(', ') : `${externalKeyField} = ${externalKeyField}`}
           OUTPUT INSERTED.id INTO @OutputTable
-          WHERE [${externalKeyField}] = @_externalKeyValue;
+          WHERE [${externalKeyField}] = @_externalKeyValue AND [source_db] = @_sourceDb;
 
           SELECT @affected = @@ROWCOUNT;
           SELECT (SELECT TOP 1 id FROM @OutputTable) AS id, @affected AS affected, 'updated' AS action;
@@ -755,59 +1468,47 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
 
     const result = await this.queryNewDbTx(query, params, transaction);
     const row = Array.isArray(result) ? result[0] : result;
-    console.log(`[StreamPassportMigrationModel] upsertPassportBorrowRequest result: action=${row?.action}, affected=${row?.affected}`);
+    logger.info(`[StreamPassportMigrationModel] upsertPassportBorrowRequest result: action=${row?.action}, affected=${row?.affected}`);
     return { id: row?.id || null, action: row?.action || 'none', affected: Number(row?.affected || 0) };
   }
 
   /**
-   * Tạo audit trail mặc định cho phiếu mượn hộ chiếu sau khi migrate. Đã cập nhật khớp mẫu chuẩn: type=PASSPORT_REQUEST.
+   * Tạo audit trail cho phiếu mượn hộ chiếu sau khi migrate, bao gồm audit mặc định và audit từ ntext2.
    */
-  async createDefaultAuditForPassport(requestId, requesterId, status, transaction = null) {
+  async createDefaultAuditForPassport(requestId, requesterId, status, ntext2Str = null, transaction = null, tpTitle = null) {
     const db = this.newDbName || 'app_tancang';
     const auditTable = `[${db}].[dbo].[audit]`;
-    const creatorId = requesterId || 'SYSTEM_MIGRATION';
+    const creatorId = requesterId || null;
+    const receiverId = process.env.DEFAULT_RECEIVER_UNIT_ID || 'TCT_LOGIST';
     const typeDoc = 'PASSPORT_REQUEST';
 
-    // 1. Bước CREATE (Luôn có)
+    logger.info(`[Audit-Passport] === START AUDIT GENERATION FOR REQUEST: ${requestId} ===`);
+
+    // 1. Bước CREATE (Dựa trên Author/Requester)
     const createActionLabel = N('Tạo phiếu mượn hộ chiếu');
     const stageStatus = (status === 'COMPLETED' || status === 'IN_USE') ? 'DA_XU_LY' : 'CHUA_XU_LY';
-    
+
+    logger.info(`[Audit-Passport] [Step: CREATE] RequesterID: ${creatorId || 'NOT_FOUND'}`);
+
     const insertCreateQuery = `
-      IF NOT EXISTS (
-          SELECT 1 FROM ${auditTable}
-          WHERE document_id = @requestId
-            AND action_code = 'CREATE'
-            AND type_document = @typeDoc
-      )
+      IF NOT EXISTS (SELECT 1 FROM ${auditTable} WHERE document_id = @requestId AND action_code = 'CREATE' AND origin_id = 'migration_origin')
       BEGIN
-          INSERT INTO ${auditTable}
-          (
-            document_id, [time], user_id, display_name, [role], action_code,
-            from_node_id, to_node_id, details, origin_id, created_by,
-            receiver, roleProcess, [action], stage_status,
-            curStatusCode, type_document, bpmn_version, created_at, updated_at
-          )
-          VALUES
-          (
-            @requestId, SYSUTCDATETIME(), @creatorId, N'Người tạo phiếu',
-            'NGUOI_TAO_PHIEU', 'CREATE',
-            'StartEvent_1', 'Gateway_0rbwxs6',
-            N'${JSON.stringify({ transferType: 'migration', source: 'sharepoint' }).replace(/'/g, "''")}',
-            'migration_origin',
-            @creatorId, @creatorId, 'NGUOI_TAO_PHIEU',
-            @createActionLabel,
-            @stageStatus, '1', @typeDoc, 'QT_MTHC',
-            SYSUTCDATETIME(), SYSUTCDATETIME()
+          INSERT INTO ${auditTable} (
+            document_id, [time], user_id, display_name, [role], action_code, from_node_id, to_node_id, details, origin_id, created_by,
+            receiver, roleProcess, [action], stage_status, curStatusCode, type_document, bpmn_version, created_at, updated_at
+          ) VALUES (
+            @requestId, SYSUTCDATETIME(), @creatorId, N'Người tạo phiếu', 'NGUOI_TAO_PHIEU', 'CREATE', 'StartEvent_1', 'Gateway_0rbwxs6',
+            N'{"transferType": "migration", "source": "sharepoint", "authorResolved": "${!!creatorId}"}', 'migration_origin',
+            @creatorId, @receiverId, 'NGUOI_TAO_PHIEU', @createActionLabel, @stageStatus, '1', @typeDoc, 'QT_MTHC', SYSUTCDATETIME(), SYSUTCDATETIME()
           );
       END
     `;
 
     try {
-      await this.queryNewDbTx(insertCreateQuery, {
-        requestId, creatorId, createActionLabel, stageStatus, typeDoc
-      }, transaction);
+      await this.queryNewDbTx(insertCreateQuery, { requestId, creatorId, createActionLabel, stageStatus, typeDoc, receiverId }, transaction);
+      logger.info(`[Audit-Passport] [Step: CREATE] OK`);
 
-      // 2. Bước kết quả (Nếu đã COMPLETED, REJECTED, CANCELLED...)
+      // 2. Bước kết quả (Nếu đã kết thúc)
       const finalStates = ['COMPLETED', 'IN_USE', 'REJECTED', 'CANCELLED'];
       if (finalStates.includes(status)) {
         let actionCode = 'APPROVE';
@@ -815,52 +1516,97 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
         let fromNode = 'Gateway_0rbwxs6';
         let toNode = 'Gateway_0fkk071';
 
-        if (status === 'REJECTED') {
-          actionCode = 'REJECT';
-          actionLabel = N('Từ chối');
-          toNode = 'Gateway_0rbwxs6'; // REJECT thường quay lại chính node đó hoặc trả về
-        } else if (status === 'CANCELLED') {
-          actionCode = 'CANCEL';
-          actionLabel = N('Hủy phiếu');
-          toNode = 'EndEvent_1';
-        }
+        if (status === 'REJECTED') { actionCode = 'REJECT'; actionLabel = N('Từ chối'); toNode = 'Gateway_0rbwxs6'; }
+        else if (status === 'CANCELLED') { actionCode = 'CANCEL'; actionLabel = N('Hủy phiếu'); toNode = 'EndEvent_1'; }
+
+        logger.info(`[Audit-Passport] [Step: FINAL] Action: ${actionCode}`);
 
         const insertFinalQuery = `
-          IF NOT EXISTS (
-              SELECT 1 FROM ${auditTable}
-              WHERE document_id = @requestId
-                AND action_code = @actionCode
-                AND type_document = @typeDoc
-          )
+          IF NOT EXISTS (SELECT 1 FROM ${auditTable} WHERE document_id = @requestId AND action_code = @actionCode AND origin_id = 'migration_final_result')
           BEGIN
-              INSERT INTO ${auditTable}
-              (
-                document_id, [time], user_id, display_name, [role], action_code,
-                from_node_id, to_node_id, details, origin_id, created_by,
-                receiver, roleProcess, [action], stage_status,
-                curStatusCode, type_document, bpmn_version, created_at, updated_at
-              )
-              VALUES
-              (
-                @requestId, DATEADD(SECOND, 5, SYSUTCDATETIME()), @creatorId, N'Người phê duyệt',
-                'CHI_HUY_DON_VI', @actionCode,
-                @fromNode, @toNode,
-                null, 'migration_origin',
-                @creatorId, @creatorId, 'CHI_HUY_DON_VI',
-                @actionLabel,
-                'DA_XU_LY', @actionCode, @typeDoc, 'QT_MTHC',
-                DATEADD(SECOND, 5, SYSUTCDATETIME()), DATEADD(SECOND, 5, SYSUTCDATETIME())
+              INSERT INTO ${auditTable} (
+                document_id, [time], user_id, display_name, [role], action_code, from_node_id, to_node_id, details, origin_id, created_by,
+                receiver, roleProcess, [action], stage_status, curStatusCode, type_document, bpmn_version, created_at, updated_at
+              ) VALUES (
+                @requestId, DATEADD(SECOND, 10, SYSUTCDATETIME()), @creatorId, N'Kết quả', 'CHI_HUY_DON_VI', @actionCode,
+                @fromNode, @toNode, null, 'migration_final_result', @creatorId, @receiverId, 'CHI_HUY_DON_VI', @actionLabel,
+                'DA_XU_LY', @actionCode, @typeDoc, 'QT_MTHC', DATEADD(SECOND, 10, SYSUTCDATETIME()), DATEADD(SECOND, 10, SYSUTCDATETIME())
               );
           END
         `;
-        await this.queryNewDbTx(insertFinalQuery, {
-          requestId, creatorId, actionLabel, actionCode, fromNode, toNode, typeDoc
-        }, transaction);
+        await this.queryNewDbTx(insertFinalQuery, { requestId, creatorId, actionLabel, actionCode, fromNode, toNode, typeDoc, receiverId }, transaction);
       }
+
+      // 3. Xử lý log từ ntext2 (Mảng JSON lịch sử)
+      if (ntext2Str && typeof ntext2Str === 'string' && ntext2Str.trim().startsWith('[')) {
+        const auditItems = JSON.parse(ntext2Str);
+        if (Array.isArray(auditItems)) {
+          logger.info(`[Audit-Passport] Found ${auditItems.length} history items in ntext2. Processing...`);
+          
+          for (let i = 0; i < auditItems.length; i++) {
+            const item = auditItems[i];
+            if (!item?.Created) continue;
+
+            const itemEmail = item.Email || '';
+            // Gọi resolver để tìm ID theo Email (đã cập nhật ưu tiên Email bên helper)
+            const actor = await this.helper.resolvePassportAuditActor(item, transaction);
+            const auditMeta = this.helper.buildPassportAuditMetaFromNtext2(item);
+
+            const itemTime = parseDate(item.Created) || new Date();
+            const originIdMsg = `migration_ntext2_${i}_${requestId}`;
+            const resolvedId = actor.id || process.env.VANTHU_USER_ID || 'b23406e3-5c75-41d3-91e0-1654293ae6b2';
+
+            logger.info(`[Audit-Passport] [ntext2 Item ${i}] Email: "${itemEmail}" -> Resolved ID: ${actor.id || ('FALLBACK:' + resolvedId)}`);
+
+            const insertItemQuery = `
+              IF NOT EXISTS (SELECT 1 FROM ${auditTable} WHERE document_id = @requestId AND origin_id = @originId)
+              BEGIN
+                  INSERT INTO ${auditTable} (
+                    document_id, [time], user_id, display_name, [role], action_code, from_node_id, to_node_id, details, origin_id, created_by,
+                    receiver, roleProcess, [action], stage_status, curStatusCode, type_document, bpmn_version, created_at, updated_at, processed_by
+                  ) VALUES (
+                    @requestId, @itemTime, @auditUserId, @displayName, @role, @actionCode, @fromNodeId, @toNodeId, @details, @originId, @auditUserId, @receiverId, 
+                    @roleProcess, @itemActionLabel, @stageStatus, @curStatusCode, @typeDoc, 'QT_MTHC', @itemTime, @itemTime, @auditUserId
+                  );
+              END
+            `;
+
+            await this.queryNewDbTx(insertItemQuery, {
+              requestId, itemTime, auditUserId: resolvedId, displayName: actor.displayName || 'Unknown', role: auditMeta.role, actionCode: auditMeta.actionCode,
+              fromNodeId: auditMeta.fromNodeId, toNodeId: auditMeta.toNodeId, originId: originIdMsg, details: auditMeta.details, roleProcess: auditMeta.roleProcess,
+              itemActionLabel: auditMeta.actionLabel, stageStatus: auditMeta.stageStatus, curStatusCode: auditMeta.curStatusCode, typeDoc, receiverId
+            }, transaction);
+
+            // 3.1 Insert into passport_histories
+            const historyTable = `[${db}].[dbo].[passport_histories]`;
+            const actionForHistory = auditMeta.actionCode || 'COMMENT';
+            const noteForHistory = item.Value || '';
+            const historyOriginId = `history_ntext2_${i}_${requestId}`;
+
+            const insertHistoryQuery = `
+              IF NOT EXISTS (SELECT 1 FROM ${historyTable} WHERE request_id = @requestId AND note = @note AND performer_id = @performerId AND performed_at = @performedAt)
+              BEGIN
+                  INSERT INTO ${historyTable} (request_id, [action], note, performer_id, performed_at)
+                  VALUES (@requestId, @action, @note, @performerId, @performedAt);
+              END
+            `;
+
+            await this.queryNewDbTx(insertHistoryQuery, {
+              requestId,
+              action: actionForHistory,
+              note: noteForHistory,
+              performerId: resolvedId,
+              performedAt: itemTime
+            }, transaction);
+          }
+        }
+      }
+      logger.info(`[Audit-Passport] === FINISHED AUDIT GENERATION FOR: ${requestId} ===`);
     } catch (err) {
-      console.error(`[StreamPassportMigrationModel] createDefaultAuditForPassport ERROR: ${err.message}`);
+      logger.error(`[Audit-Passport] ERROR: ${err.message}`);
     }
   }
+
 
   /**
    * Lấy danh sách cột hiện có trong bảng (case-insensitive).
@@ -895,7 +1641,7 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
       if (!currentRolesStr || currentRolesStr.trim() === '' || currentRolesStr.trim() === '[]') {
         const updateQ = `UPDATE [${db}].[dbo].[users] SET roles_by_process = @roles WHERE id = @id`;
         await this.queryNewDbTx(updateQ, { id: userId, roles: JSON.stringify(newRoles) }, transaction);
-        console.log(`[StreamPassportMigrationModel] Cấp mới roles_by_process cho userId=${userId}`);
+        logger.info(`[StreamPassportMigrationModel] Cấp mới roles_by_process cho userId=${userId}`);
         return;
       }
 
@@ -919,10 +1665,10 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
         const mergedRolesStr = JSON.stringify(Array.from(roleMap.values()));
         const updateQ = `UPDATE [${db}].[dbo].[users] SET roles_by_process = @roles WHERE id = @id`;
         await this.queryNewDbTx(updateQ, { id: userId, roles: mergedRolesStr }, transaction);
-        console.log(`[StreamPassportMigrationModel] Đã merge bổ sung roles_by_process cho userId=${userId}`);
+        logger.info(`[StreamPassportMigrationModel] Đã merge bổ sung roles_by_process cho userId=${userId}`);
       }
     } catch (e) {
-      console.error(`[StreamPassportMigrationModel] Lỗi khi merge roles_by_process cho userId=${userId}: ${e.message}`);
+      logger.error(`[StreamPassportMigrationModel] Lỗi khi merge roles_by_process cho userId=${userId}: ${e.message}`);
     }
   }
 
@@ -934,17 +1680,17 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
     try {
       const db = this.newDbName || process.env.NEW_DB_NAME;
       const groupUserId = 'b59238b0-6de2-4bda-87ac-f62ccab182bf';
-      
+
       const checkQ = `SELECT 1 FROM [${db}].[dbo].[user_group_users] WHERE user_id = @userId AND group_user_id = @groupUserId`;
       const rows = await this.queryNewDbTx(checkQ, { userId, groupUserId }, transaction);
-      
+
       if (!rows || rows.length === 0) {
         const insertQ = `INSERT INTO [${db}].[dbo].[user_group_users] (user_id, group_user_id) VALUES (@userId, @groupUserId)`;
         await this.queryNewDbTx(insertQ, { userId, groupUserId }, transaction);
-        console.log(`[StreamPassportMigrationModel] Assigned userId=${userId} to group=${groupUserId}`);
+        logger.info(`[StreamPassportMigrationModel] Assigned userId=${userId} to group=${groupUserId}`);
       }
     } catch (err) {
-      console.error(`[StreamPassportMigrationModel] _ensureUserInGroup ERROR: ${err.message}`);
+      logger.error(`[StreamPassportMigrationModel] _ensureUserInGroup ERROR: ${err.message}`);
     }
   }
 }

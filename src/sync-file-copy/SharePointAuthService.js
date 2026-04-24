@@ -124,6 +124,9 @@ async function refreshAuth(pool) {
     const isSeaApp = process.execPath.toLowerCase().endsWith('.exe');
     let cmd = isSeaApp ? 'node' : (process.platform === 'win32' ? 'npm.cmd' : 'npm');
     let args = isSeaApp ? [path.join(process.cwd(), 'auth', 'login_playwright.js')] : ['run', 'login'];
+    const cookieFilePath = process.env.COOKIE_FILE_PATH || path.join(process.cwd(), 'auth', 'cookie.txt');
+    const cookieStatBefore = fs.existsSync(cookieFilePath) ? fs.statSync(cookieFilePath) : null;
+    const cookieMtimeBefore = cookieStatBefore?.mtimeMs || 0;
 
     const loginSuccess = await new Promise((resolve) => {
       const child = spawn(cmd, args, { cwd: process.cwd(), env: { ...process.env, HEADED: 'false' }, shell: true });
@@ -132,9 +135,16 @@ async function refreshAuth(pool) {
     });
 
     if (loginSuccess) {
-      const cookieFilePath = process.env.COOKIE_FILE_PATH || path.join(process.cwd(), 'auth', 'cookie.txt');
       if (!fs.existsSync(cookieFilePath)) {
         throw new Error(`File cookie không được tạo ra sau login: ${cookieFilePath}`);
+      }
+
+      const cookieStatAfter = fs.statSync(cookieFilePath);
+      const cookieMtimeAfter = cookieStatAfter?.mtimeMs || 0;
+      if (cookieMtimeAfter <= cookieMtimeBefore) {
+        throw new Error(
+          `File cookie không được làm mới sau login. Có thể tiến trình login đã thất bại nhưng vẫn thoát mã 0: ${cookieFilePath}`
+        );
       }
       
       const newCookie = fs.readFileSync(cookieFilePath, 'utf8').trim();
