@@ -42,12 +42,13 @@ class SyncOutgoingAdapter {
 
   /**
    * Implement BaseIncrementalSyncInterface.getCount()
-   * Đếm số bản ghi cần sync
+   * Đếm tổng số bản ghi cần sync (bao gồm cả trong source DB và đang chờ trong staging)
    */
   async getCount(lastTime, lastSyncId = 0) {
     const stagingTable = `outgoing_documents_sync_${this._instanceId}`;
 
-    const query = `
+    // 1. Đếm số bản ghi đang chờ xử lý trong staging
+    const stagingQuery = `
       SELECT COUNT(1) AS cnt
       FROM ${stagingTable}
       WHERE ISNULL(MigrateFlg, 0) = 0
@@ -56,16 +57,20 @@ class SyncOutgoingAdapter {
 
     try {
       const pool = dbConnection.getNewPool();
-      if (!pool) {
-        logger.error(`[SyncOutgoingAdapter] getCount: New pool NOT connected!`);
-        return 0;
-      }
-      const result = await pool.request().query(query);
-      const count = Number(result.recordset?.[0]?.cnt || 0);
-      logger.debug(`[SyncOutgoingAdapter] getCount from ${stagingTable}: ${count}`);
-      return count;
+      if (!pool) return 0;
+      
+      const stagingRes = await pool.request().query(stagingQuery);
+      const inStaging = Number(stagingRes.recordset?.[0]?.cnt || 0);
+
+      // 2. Đếm số bản ghi còn lại trong OLD DB chưa được fetch vào staging cho instance này
+      // Sử dụng getTotalCount của extractor
+      const inSource = await this._model.extractor.getTotalCount(lastTime, lastSyncId);
+
+      const total = inStaging + inSource;
+      logger.info(`[SyncOutgoingAdapter] getCount: ${total} (Staging: ${inStaging}, Source: ${inSource})`);
+      return total;
     } catch (error) {
-      logger.error(`[SyncOutgoingAdapter] getCount error on ${stagingTable}: ${error.message}`);
+      logger.error(`[SyncOutgoingAdapter] getCount error: ${error.message}`);
       return 0;
     }
   }

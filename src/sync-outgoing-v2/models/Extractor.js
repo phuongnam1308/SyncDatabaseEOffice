@@ -27,6 +27,54 @@ class Extractor extends BaseExtractor {
   }
 
   /**
+   * Get total count of records in old DB for the current date range and cursor
+   */
+  async getTotalCount(lastSyncTime, lastSyncId = 0) {
+    const syncTimeExpr = this.getSyncTimeExpression();
+    const defaultSyncTime = '2999-12-31T23:59:59.999Z';
+
+    const query = `
+      SELECT COUNT(1) AS cnt
+      FROM ${this.oldDbSchema}.${this.oldDbTable}
+      WHERE 1=1
+        AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
+        AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
+        AND (
+          ${syncTimeExpr} < @lastSyncTime
+          OR (
+            ${syncTimeExpr} = @lastSyncTime
+            AND TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')) < @lastSyncId
+          )
+        )
+        AND ${syncTimeExpr} >= @syncMinDate
+    `;
+
+    const lastSyncDate = new Date(lastSyncTime);
+    const isDateValid = !isNaN(lastSyncDate.getTime());
+    const isValidTime = lastSyncTime && 
+                        lastSyncTime !== '1970-01-01T00:00:00.000Z' &&
+                        isDateValid &&
+                        lastSyncDate.getFullYear() > 2000;
+    
+    const effectiveSyncTime = isValidTime ? lastSyncTime : defaultSyncTime;
+
+    try {
+      const results = await this.oldPool.request()
+        .input('lastSyncTime', sql.DateTime2, effectiveSyncTime)
+        .input('lastSyncId', sql.BigInt, lastSyncId)
+        .input('startDate', sql.DateTime2, process.env.SYNC_START_DATE || null)
+        .input('endDate', sql.DateTime2, process.env.SYNC_END_DATE || null)
+        .input('syncMinDate', sql.DateTime2, process.env.SYNC_MIN_DATE || '1753-01-01T00:00:00.000Z')
+        .query(query);
+
+      return Number(results.recordset?.[0]?.cnt || 0);
+    } catch (error) {
+      logger.error(`[${this.modelName}] getTotalCount failed: ${error.message}`);
+      return 0;
+    }
+  }
+
+  /**
    * Override fetchBatchFromOldDb for outgoing-specific logic
    */
   async fetchBatchFromOldDb(lastSyncTime, lastSyncId = 0, batchSize = 1000, offset = 0) {

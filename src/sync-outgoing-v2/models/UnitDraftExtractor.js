@@ -60,6 +60,22 @@ class UnitDraftExtractor extends BaseExtractor {
   }
 
   /**
+   * Get total item count across all SharePoint sites
+   */
+  async getTotalCount(lastSyncTime, lastSyncId = 0) {
+    let total = 0;
+    for (const site of this.sites) {
+      try {
+        const count = await spService.getListItemCount(site.url, this.listName);
+        total += Number(count || 0);
+      } catch (error) {
+        logger.warn(`[${this.modelName}] getTotalCount error for site ${site.name}: ${error.message}`);
+      }
+    }
+    return total;
+  }
+
+  /**
    * Check if a site has data
    */
   async checkSiteHasData(site) {

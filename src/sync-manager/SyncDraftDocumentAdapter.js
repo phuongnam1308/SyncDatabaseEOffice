@@ -41,12 +41,13 @@ class SyncDraftDocumentAdapter {
   }
 
   /**
-   * Implement interface - Đếm số bản ghi cần sync
+   * Implement interface - Đếm tổng số bản ghi cần sync (bao gồm cả trong source DB và đang chờ trong staging)
    */
   async getCount(lastTime, lastSyncId = 0) {
     const stagingTable = `draft_documents_sync_${this._instanceId}`;
 
-    const query = `
+    // 1. Đếm số bản ghi đang chờ xử lý trong staging
+    const stagingQuery = `
       SELECT COUNT(1) AS cnt
       FROM ${stagingTable}
       WHERE ISNULL(MigrateFlg, 0) = 0
@@ -55,16 +56,19 @@ class SyncDraftDocumentAdapter {
 
     try {
       const pool = dbConnection.getNewPool();
-      if (!pool) {
-        logger.error(`[SyncDraftDocumentAdapter] getCount: New pool NOT connected!`);
-        return 0;
-      }
-      const result = await pool.request().query(query);
-      const count = Number(result.recordset?.[0]?.cnt || 0);
-      logger.debug(`[SyncDraftDocumentAdapter] getCount from ${stagingTable}: ${count}`);
-      return count;
+      if (!pool) return 0;
+      
+      const stagingRes = await pool.request().query(stagingQuery);
+      const inStaging = Number(stagingRes.recordset?.[0]?.cnt || 0);
+
+      // 2. Đếm số bản ghi trong OLD DB chưa được fetch (theo cursor)
+      const inSource = await this._model.extractor.getTotalCount(lastTime, lastSyncId);
+
+      const total = inStaging + inSource;
+      logger.info(`[SyncDraftDocumentAdapter] getCount: ${total} (Staging: ${inStaging}, Source: ${inSource})`);
+      return total;
     } catch (error) {
-      logger.error(`[SyncDraftDocumentAdapter] getCount error on ${stagingTable}: ${error.message}`);
+      logger.error(`[SyncDraftDocumentAdapter] getCount error: ${error.message}`);
       return 0;
     }
   }

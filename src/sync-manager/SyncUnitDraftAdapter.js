@@ -48,12 +48,13 @@ class SyncUnitDraftAdapter {
   }
 
   /**
-   * Implement interface - Đếm số bản ghi cần sync trong staging
+   * Implement interface - Đếm tổng số bản ghi cần sync (bao gồm staging và SharePoint source)
    */
   async getCount(lastTime, lastSyncId = 0) {
     const stagingTable = `draft_documents_unit_sync_${this._instanceId}`;
 
-    const query = `
+    // 1. Đếm số bản ghi đang chờ xử lý trong staging
+    const stagingQuery = `
       SELECT COUNT(1) AS cnt
       FROM ${stagingTable}
       WHERE ISNULL(MigrateFlg, 0) = 0
@@ -62,16 +63,19 @@ class SyncUnitDraftAdapter {
 
     try {
       const pool = dbConnection.getNewPool();
-      if (!pool) {
-        logger.error(`[SyncUnitDraftAdapter] getCount: New pool NOT connected!`);
-        return 0;
-      }
-      const result = await pool.request().query(query);
-      const count = Number(result.recordset?.[0]?.cnt || 0);
-      logger.debug(`[SyncUnitDraftAdapter] getCount from ${stagingTable}: ${count}`);
-      return count;
+      if (!pool) return 0;
+
+      const stagingRes = await pool.request().query(stagingQuery);
+      const inStaging = Number(stagingRes.recordset?.[0]?.cnt || 0);
+
+      // 2. Đếm số bản ghi trong SharePoint (Tổng số lượng)
+      const inSource = await this._model.extractor.getTotalCount(lastTime, lastSyncId);
+
+      const total = inStaging + inSource;
+      logger.info(`[SyncUnitDraftAdapter] getCount: ${total} (Staging: ${inStaging}, SharePoint: ${inSource})`);
+      return total;
     } catch (error) {
-      logger.error(`[SyncUnitDraftAdapter] getCount error on ${stagingTable}: ${error.message}`);
+      logger.error(`[SyncUnitDraftAdapter] getCount error: ${error.message}`);
       return 0;
     }
   }
