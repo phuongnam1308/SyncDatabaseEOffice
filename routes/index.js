@@ -353,6 +353,7 @@ router.post('/sync-manager-src/login', syncCtrl.login);
 router.post('/sync-manager-src/settings', syncCtrl.updateSettings);
 router.post('/sync-manager-src/shutdown', syncCtrl.shutdown);
 router.post('/sync-manager-src/skip-login', syncCtrl.skipLogin);
+router.post('/sync-manager-src/check-session', syncCtrl.checkSession);
 
 
 const SyncOutgoingRoutes = require('../src/sync-outgoing-document/route');

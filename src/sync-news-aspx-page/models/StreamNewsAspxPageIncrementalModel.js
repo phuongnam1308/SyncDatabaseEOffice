@@ -14,6 +14,9 @@ const SYNC_START_DATE = process.env.SYNC_START_DATE || null;
 const SYNC_END_DATE = process.env.SYNC_END_DATE || null;
 const SYNC_MIN_DATE = process.env.SYNC_MIN_DATE || '1970-01-01T00:00:00.000Z';
 
+// Load list of databases for Multi-DB scanning
+const dbsConfig = require('../../sync-passport/migrate/databases.json');
+
 class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
   constructor() {
     super({ modelName: 'STREAM_NEWS_ASPX_PAGE_INCREMENTAL' });
@@ -21,6 +24,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
     this.newDbSchema = 'dbo';
     this.newTableSync = 'news_aspx_pages_temp';
     this.sharePointDb = process.env.SHAREPOINT_DB_NAME || 'WSS_Content_eoffice_khkd';
+    this.dbs = dbsConfig && dbsConfig.length > 0 ? dbsConfig : [this.sharePointDb];
 
     // local output
     this.outputRoot = process.env.RAW_DOWNLOAD_DIR || process.env.TINTUCRAW_DIR || 'tintucraw';
@@ -271,41 +275,51 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
            OR ( __sync_time = CAST(@lastSyncTime AS DATETIME2)
                 AND __sync_id < CAST(@lastSyncId AS bigint) ) )`;
 
-    const query = `
-      ;WITH src AS (
-        SELECT
-          d.[TimeLastModified] AS __sync_time,
-          ${syncIdExpr}        AS __sync_id
-        FROM [${this.sharePointDb}].[dbo].[AllDocs] d
-        INNER JOIN [${this.sharePointDb}].[dbo].[AllWebs] w
-          ON d.[SiteId] = w.[SiteId] AND d.[WebId]  = w.[Id]
-        LEFT JOIN [${this.sharePointDb}].[dbo].[AllLists] l
-          ON d.[SiteId]  = l.[tp_SiteId] AND d.[ListId] = l.[tp_ID]
-        WHERE
-          d.[DeleteTransactionId] = 0x0
-          AND d.[IsCurrentVersion] = 1
-          AND w.[FullUrl] LIKE '%tintuc%'
-          AND d.[LeafName] LIKE '%.aspx'
-          AND l.[tp_Title] LIKE '%Pages%'
-          AND (d.[TimeCreated] >= @startDate OR @startDate IS NULL)
-          AND (d.[TimeCreated] <= @endDate OR @endDate IS NULL)
-          AND d.[TimeLastModified] >= '${SYNC_MIN_DATE}'
-      )
-      SELECT COUNT(1) AS total
-      FROM src
-      WHERE ${filterClause}
-    `;
+    let totalAllDbs = 0;
 
-    const rows = await this.queryOldDb(query, {
-      lastSyncTime: normalizedLastSyncTime,
-      lastSyncId: normalizedLastSyncId,
-      startDate: SYNC_START_DATE,
-      endDate: SYNC_END_DATE
-    });
+    for (const db of this.dbs) {
+      const query = `
+        ;WITH src AS (
+          SELECT
+            d.[TimeLastModified] AS __sync_time,
+            ${syncIdExpr}        AS __sync_id
+          FROM [${db}].[dbo].[AllDocs] d
+          INNER JOIN [${db}].[dbo].[AllWebs] w
+            ON d.[SiteId] = w.[SiteId] AND d.[WebId]  = w.[Id]
+          LEFT JOIN [${db}].[dbo].[AllLists] l
+            ON d.[SiteId]  = l.[tp_SiteId] AND d.[ListId] = l.[tp_ID]
+          WHERE
+            d.[DeleteTransactionId] = 0x0
+            AND d.[IsCurrentVersion] = 1
+            AND w.[FullUrl] LIKE '%tintuc%'
+            AND d.[LeafName] LIKE '%.aspx'
+            AND l.[tp_Title] LIKE '%Pages%'
+            AND (d.[TimeCreated] >= @startDate OR @startDate IS NULL)
+            AND (d.[TimeCreated] <= @endDate OR @endDate IS NULL)
+            AND d.[TimeLastModified] >= '${SYNC_MIN_DATE}'
+        )
+        SELECT COUNT(1) AS total
+        FROM src
+        WHERE ${filterClause}
+      `;
 
-    const total = rows?.[0]?.total || 0;
+      try {
+        const rows = await this.queryOldDb(query, {
+          lastSyncTime: normalizedLastSyncTime,
+          lastSyncId: normalizedLastSyncId,
+          startDate: SYNC_START_DATE,
+          endDate: SYNC_END_DATE
+        });
+        
+        const dbTotal = rows?.[0]?.total || 0;
+        totalAllDbs += dbTotal;
+      } catch (err) {
+        logger.warn(`[StreamNewsAspxPageIncrementalModel] [getCount] Lỗi khi đếm tại DB ${db}: ${err.message}`);
+      }
+    }
+
     // Nếu limit = 0 thì không chặn (chạy full)
-    return limit > 0 ? Math.min(total, limit) : total;
+    return limit > 0 ? Math.min(totalAllDbs, limit) : totalAllDbs;
   }
 
   async ensureStagingTableExists() {
@@ -337,6 +351,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
           DownloadStatus     NVARCHAR(50) NULL,
           DownloadError      NVARCHAR(MAX) NULL,
           __sync_id          BIGINT NULL,
+          source_db          NVARCHAR(255) NULL,
 
           CONSTRAINT PK_news_aspx_pages_temp PRIMARY KEY (DocId)
         );
@@ -345,6 +360,17 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
       -- Add missing columns (idempotent)
       IF COL_LENGTH('${table}', '__sync_id') IS NULL
         ALTER TABLE ${table} ADD __sync_id BIGINT NULL;
+
+      IF COL_LENGTH('${table}', 'source_db') IS NULL
+        ALTER TABLE ${table} ADD source_db NVARCHAR(255) NULL;
+
+      -- Cột theo dõi lỗi
+      IF COL_LENGTH('${table}', 'MigrateFlg') IS NULL
+        ALTER TABLE ${table} ADD MigrateFlg INT DEFAULT 0;
+      IF COL_LENGTH('${table}', 'MigrateErrFlg') IS NULL
+        ALTER TABLE ${table} ADD MigrateErrFlg INT DEFAULT 0;
+      IF COL_LENGTH('${table}', 'MigrateErrMess') IS NULL
+        ALTER TABLE ${table} ADD MigrateErrMess NVARCHAR(MAX) NULL;
 
       -- Add missing columns (idempotent)
       IF COL_LENGTH('${table}', 'DocId') IS NULL
@@ -524,7 +550,9 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
     take = null,
     offset = null,
     direction = 'DESC',
+    dbName = null
   ) {
+    const targetDb = dbName || this.sharePointDb;
     const syncIdExpr = this.getSyncIdExpression();
     const safeTake = Number.isFinite(Number(take)) && Number(take) > 0 ? Number(take) : null;
     const safeOffset = Number.isFinite(Number(offset)) && Number(offset) >= 0 ? Number(offset) : 0;
@@ -538,7 +566,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
     const sortDir = isAsc ? 'ASC' : 'DESC';
 
     logger.debug(
-      `[StreamNewsAspxPageIncrementalModel] fetchListFromOldDb: lastSyncTime=${lastSyncTime}, lastSyncId=${lastSyncId}, direction=${direction}, take=${safeTake}`,
+      `[StreamNewsAspxPageIncrementalModel] fetchListFromOldDb [${targetDb}]: lastSyncTime=${lastSyncTime}, lastSyncId=${lastSyncId}, direction=${direction}, take=${safeTake}`,
     );
 
     // Dùng JS loại bỏ logic cồng kềnh, ép SQL chuẩn hóa kiểu DATETIME2 để tránh lỗi so sánh
@@ -571,10 +599,10 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
           l.[tp_Description]   AS ListDescription,
           d.[TimeLastModified] AS __sync_time,
           ${syncIdExpr}        AS __sync_id
-        FROM [${this.sharePointDb}].[dbo].[AllDocs] d
-        INNER JOIN [${this.sharePointDb}].[dbo].[AllWebs] w
+        FROM [${targetDb}].[dbo].[AllDocs] d
+        INNER JOIN [${targetDb}].[dbo].[AllWebs] w
           ON d.[SiteId] = w.[SiteId] AND d.[WebId]  = w.[Id]
-        LEFT JOIN [${this.sharePointDb}].[dbo].[AllLists] l
+        LEFT JOIN [${targetDb}].[dbo].[AllLists] l
           ON d.[SiteId]  = l.[tp_SiteId] AND d.[ListId] = l.[tp_ID]
         WHERE
           d.[DeleteTransactionId] = 0x0
@@ -614,9 +642,10 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
     return resultRows;
   }
 
-  async syncOldToStaging(rows, { transaction } = {}) {
+  async syncOldToStaging(rows, { transaction, dbName } = {}) {
     if (!Array.isArray(rows) || rows.length === 0) return { stagedCount: 0 };
     const table = this.getStagingTableRef();
+    const sourceDb = dbName || this.sharePointDb;
 
     let count = 0;
     for (const row of rows) {
@@ -644,6 +673,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
         FullPageUrl: fullUrl || null,
         LocalFilePath: localPath || null,
         __sync_id: Number(row?.__sync_id || 0),
+        source_db: sourceDb
       };
 
       const q = `
@@ -669,6 +699,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
                 FullPageUrl = @FullPageUrl,
                 LocalFilePath = @LocalFilePath,
                 __sync_id = @__sync_id,
+                source_db = @source_db,
                 -- Reset trạng thái download nếu bản tin nguồn mới hơn bản tin hiện tại trong staging
                 DownloadStatus = CASE
                     WHEN @TimeLastModified > TimeLastModified OR DownloadStatus IS NULL THEN NULL
@@ -686,12 +717,12 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
                 DocId, DirName, LeafName, DocType, Size,
                 TimeCreated, TimeLastModified, UIVersionString, Level,
                 WebUrl, WebTitle, Language, ListTitle, tp_ServerTemplate, ListDescription,
-                DocPath, FullPageUrl, LocalFilePath, __sync_id
+                DocPath, FullPageUrl, LocalFilePath, __sync_id, source_db
             ) VALUES (
                 @DocId, @DirName, @LeafName, @DocType, @Size,
                 @TimeCreated, @TimeLastModified, @UIVersionString, @Level,
                 @WebUrl, @WebTitle, @Language, @ListTitle, @tp_ServerTemplate, @ListDescription,
-                @DocPath, @FullPageUrl, @LocalFilePath, @__sync_id
+                @DocPath, @FullPageUrl, @LocalFilePath, @__sync_id, @source_db
             );
         END
       `;
@@ -738,16 +769,11 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
       const startSyncId = currentSyncId;
 
       // FIX LOOKBACK: Tính cursor xuất phát thực tế cho Phase 1.
-      // Áp dụng lookback 1 ngày vào lastSyncTime của job (mốc đồng bộ lần trước),
-      // để cover các bài viết bị sửa đổi trong 24h cuối của chu kỳ trước.
-      // Nếu staging rỗng (lần đầu chạy), dùng '1900-01-01' để kéo tất cả.
       const isFirstRun = lastSyncTime === DEFAULT_SYNC_TIME || !lastSyncTime;
       const jobCursorWithLookback = isFirstRun
         ? '1900-01-01T00:00:00.000Z'
-        : this.normalizeSyncTime(lastSyncTime, lookbackHours); // Trừ lookbackHours vào lastSyncTime của job
+        : this.normalizeSyncTime(lastSyncTime, lookbackHours);
 
-      // Cursor xuất phát thực tế = cái NHỎ HƠN giữa maxStagedTime và (lastSyncTime - 24h)
-      // Để đảm bảo không bỏ sót bài cũ hơn staging nhưng mới hơn checkpoint cũ
       let p1StartTime = startSyncTime;
       let p1StartId = startSyncId;
       if (!isFirstRun && jobCursorWithLookback < startSyncTime) {
@@ -756,56 +782,64 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
         logger.info(`🕐 [PHASE 1 - LOOKBACK] Áp dụng lookback: cursor xuất phát từ ${p1StartTime} (lastSyncTime=${lastSyncTime} - ${lookbackHours}h) thay vì maxStaged=${startSyncTime}`);
       }
 
+      let nextP1Time = p1StartTime;
+      let nextP1Id = p1StartId;
+
       if (currentSyncTime || !isFirstRun) {
         logger.info(`🚀 [PHASE 1 - NEW] Kéo bài viết mới/đã sửa từ cursor: ${p1StartTime} 🚀`);
 
-        // FIX: Dùng useLimit: false để không bị chặn bởi COMPLETED_LIMIT khi đếm
-        // số bài mới cho Phase 1. COMPLETED_LIMIT chỉ áp dụng cho pending staging.
-        const p1Total = await this.getCount(p1StartTime, p1StartId, { useLimit: false });
-        const p1Iterations = Math.ceil(p1Total / stageBatchSize) || 0;
+        for (const db of this.dbs) {
+          logger.info(`🚀 [PHASE 1] Kéo dữ liệu từ database: ${db}`);
+          let offset = 0;
+          let batchIndex = 0;
+          
+          while (true) {
+            const rows = await this.fetchListFromOldDb(
+              p1StartTime,
+              p1StartId,
+              stageBatchSize,
+              offset,
+              'ASC',
+              db
+            );
+            
+            if (!rows || rows.length === 0) break;
 
-        logger.info(`🔢 [PHASE 1] Tổng bài mới/đã sửa cần kéo: ${p1Total} (${p1Iterations} đợt).`);
+            let transaction = null;
+            let stageResult = null;
+            try {
+              transaction = new sql.Transaction(this.newPool);
+              await transaction.begin();
+              stageResult = await this.syncOldToStaging(rows, { transaction, dbName: db });
+              await transaction.commit();
+            } catch (err) {
+              if (transaction) await transaction.rollback().catch(() => {});
+              logger.error(`[Phase 1] Lỗi đồng bộ staging DB ${db} tại offset ${offset}: ${err.message}`);
+              throw err;
+            }
 
-        currentSyncTime = p1StartTime;
-        currentSyncId = p1StartId;
+            p1Staged += Number(stageResult?.stagedCount || 0);
+            p1Rows += rows.length;
 
-        for (let i = 0; i < p1Iterations; i++) {
-          const begin = i * stageBatchSize;
-          const rows = await this.fetchListFromOldDb(
-            p1StartTime,
-            p1StartId,
-            stageBatchSize,
-            begin,
-            'ASC',
-          );
-          if (!rows || rows.length === 0) break;
+            // Tìm cursor lớn nhất trong batch này
+            for (const row of rows) {
+                const rowTime = new Date(row.__sync_time).toISOString();
+                const rowId = Number(row.__sync_id);
+                // Nếu bản ghi hiện tại mới hơn nextP1Time, cập nhật cursor
+                if (rowTime > nextP1Time || (rowTime === nextP1Time && rowId > nextP1Id)) {
+                    nextP1Time = rowTime;
+                    nextP1Id = rowId;
+                }
+            }
 
-          let transaction = null;
-          let stageResult = null;
-          try {
-            transaction = new sql.Transaction(this.newPool);
-            await transaction.begin();
-            stageResult = await this.syncOldToStaging(rows, { transaction });
-            await transaction.commit();
-          } catch (err) {
-            if (transaction) await transaction.rollback().catch(() => {});
-            logger.error(`[Phase 1] Lỗi đồng bộ staging tại iteration ${i}: ${err.message}`);
-            throw err;
+            batchIndex++;
+            logger.info(`🔥 [PHASE 1] [${db}] Progress: batch ${batchIndex}. Đã kéo thêm ${rows.length} bài. Tổng: ${p1Rows}. Global Cursor: ${nextP1Time} / ${nextP1Id}`);
+            offset += stageBatchSize;
           }
-
-          p1Staged += Number(stageResult?.stagedCount || 0);
-          p1Rows += rows.length;
-
-          // Cập nhật cursor theo batch cuối cùng
-          for (const row of rows) {
-              const rowTime = new Date(row.__sync_time).toISOString();
-              const rowId = Number(row.__sync_id);
-              currentSyncTime = rowTime;
-              currentSyncId = rowId;
-          }
-
-          logger.info(`🔥 [PHASE 1] Progress: ${i+1}/${p1Iterations} batches. Đã kéo ${p1Rows} dòng mới/đã sửa. LastCursor: ${currentSyncTime} / ${currentSyncId}`);
         }
+        
+        currentSyncTime = nextP1Time;
+        currentSyncId = nextP1Id;
       }
 
       return { p1Staged, p1Rows, currentSyncTime, currentSyncId, startSyncTime, startSyncId };
@@ -824,50 +858,44 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
       let descSyncTime = minCursor ? minCursor.minTime : '2100-01-01T00:00:00.000Z';
       let descSyncId = minCursor ? minCursor.minId : 0;
 
-      // Tính tổng số bài cũ cần lùi về
-      const p2Total = await this.getCount(descSyncTime, descSyncId);
-      const p2Iterations = Math.ceil(p2Total / stageBatchSize);
+      logger.info(`[PHASE 2 - OLD] Bắt đầu quét lùi về quá khứ từ: ${descSyncTime}`);
 
-      logger.info(`[PHASE 2 - OLD] Cần lùi về ${p2Total} bài (${p2Iterations} đợt). Bắt đầu từ: ${descSyncTime}`);
+      for (const db of this.dbs) {
+        logger.info(`[PHASE 2] Kéo dữ liệu cũ từ database: ${db}`);
+        let offset = 0;
+        let batchIndex = 0;
+        
+        while (true) {
+          const rows = await this.fetchListFromOldDb(
+            descSyncTime,
+            descSyncId,
+            stageBatchSize,
+            offset,
+            'DESC',
+            db
+          );
+          if (!rows || rows.length === 0) break;
 
-      for (let i = 0; i < p2Iterations; i++) {
-        const begin = i * stageBatchSize;
-        const rows = await this.fetchListFromOldDb(
-          descSyncTime,
-          descSyncId,
-          stageBatchSize,
-          begin,
-          'DESC',
-        );
-        if (!rows || rows.length === 0) break;
+          let transaction = null;
+          let stageResult = null;
+          try {
+            transaction = new sql.Transaction(this.newPool);
+            await transaction.begin();
+            stageResult = await this.syncOldToStaging(rows, { transaction, dbName: db });
+            await transaction.commit();
+          } catch (err) {
+            if (transaction) await transaction.rollback().catch(() => {});
+            logger.error(`[Phase 2] Lỗi đồng bộ staging DB ${db} tại offset ${offset}: ${err.message}`);
+            throw err;
+          }
 
-        let transaction = null;
-        let stageResult = null;
-        try {
-          transaction = new sql.Transaction(this.newPool);
-          await transaction.begin();
-          stageResult = await this.syncOldToStaging(rows, { transaction });
-          await transaction.commit();
-        } catch (err) {
-          if (transaction) await transaction.rollback().catch(() => {});
-          logger.error(`[Phase 2] Lỗi đồng bộ staging tại iteration ${i}: ${err.message}`);
-          throw err;
+          p2Staged += Number(stageResult?.stagedCount || 0);
+          p2Rows += rows.length;
+
+          batchIndex++;
+          logger.info(`♻️ [PHASE 2] [${db}] Progress: batch ${batchIndex}. Đã lùi thêm ${rows.length} bài. Tích lũy: ${p2Rows}.`);
+          offset += stageBatchSize;
         }
-
-        p2Staged += Number(stageResult?.stagedCount || 0);
-        p2Rows += rows.length;
-
-        // LOG chi tiết từng bản ghi để debug cursor
-        for (const row of rows) {
-            const rowTime = new Date(row.__sync_time).toISOString();
-            const rowId = Number(row.__sync_id);
-            logger.info(`  └─ [Compare P2] DocId: ${row.DocId} | T: ${rowTime} ID: ${rowId} vs P2_Cursor(T: ${descSyncTime} ID: ${descSyncId})`);
-
-            descSyncTime = rowTime;
-            descSyncId = rowId;
-        }
-
-        logger.info(`♻️ [PHASE 2] Progress: ${i+1}/${p2Iterations} batches. Đã lùi thêm ${rows.length} bài. Tích lũy: ${p2Rows}. LastCursor: ${descSyncTime} / ${descSyncId}`);
       }
 
       return { p2Staged, p2Rows };
@@ -1023,7 +1051,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
     // Step 1: Download HTML
     let buffer = null;
     let attempt = 0;
-    const maxAttempts = 100; // Kiểm tra tối đa 100 lần theo yêu cầu
+    const maxAttempts = 3; // Kiểm tra tối đa 3 lần theo yêu cầu
     let downloadError = null;
 
     // Nếu bản ghi mới hơn tháng 2/2026, cho phép thời gian kết nối (timeout) đợi SharePoint load là 5 phút. Nếu cũ hơn thì 1 phút.
@@ -1078,10 +1106,45 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
         downloadError = err;
         logger.warn(`[Downloader] Lỗi tải ở lần ${attempt}: ${err.message}`);
 
+        // Break early if authentication failed to prevent infinite loops and 16-minute delays
+        if (err.message && err.message.includes('Authentication required')) {
+          logger.error(`[Downloader] Lỗi xác thực SharePoint. Dừng tải, yêu cầu đăng nhập lại.`);
+          global.sharePointLoginState = { required: true, inProgress: false, message: 'Phiên đăng nhập SharePoint đã hết hạn.' };
+          try { require('../../sync-manager/SyncManagerService')._broadcastSSE(); } catch(e){}
+          break;
+        }
+
         // Lắp lại chốt chặn 404: Nếu máy chủ xác nhận file không tồn tại, dừng spam ngay để tiết kiệm thời gian
         if (err.message && err.message.includes('404')) {
           logger.warn(`[Downloader] Lỗi 404 Not Found. File thực sự không còn trên máy chủ. Dừng spam.`);
           break;
+        }
+
+        // Chốt chặn cho lỗi không thể truy cập vĩnh viễn (sau khi đã refresh token vẫn lỗi 302/401/403)
+        if (err.message && err.message.includes('File có thể yêu cầu đăng nhập hoặc không tồn tại')) {
+          logger.warn(`[Downloader] Không thể truy cập file (đã thử làm mới token). Đang kiểm tra xem đây là lỗi file hay lỗi đăng nhập...`);
+          
+          try {
+            // Test thử xem cookie hiện tại có tải được trang chủ News hay không (giống logic API check-session)
+            const testUrl = `${process.env.BASE_URL || 'https://eoffice.saigonnewport.com.vn'}/tintuc/Pages/default.aspx`;
+            await require('../../sync-file-copy/SharePointAuthService').downloadFile(testUrl, this.newPool, 0, 15000);
+            
+            // Nếu không bị văng lỗi -> Token vẫn ngon! -> Lỗi nằm ở bản thân file này (bị xóa/cấm)
+            logger.warn(`[Downloader] Token vẫn hợp lệ! File này thực sự bị xoá hoặc phân quyền. Dừng spam và bỏ qua file.`);
+            downloadError = new Error('404 Not Found - ' + err.message); // Ép thành 404 để bỏ qua file
+            break;
+
+          } catch (sessionErr) {
+            // Nếu tải trang chủ cũng chết -> Token hỏng (dù auto-login báo thành công nhưng cookie không xài được)
+            logger.error(`[Downloader] Token hoàn toàn vô hiệu! Đăng nhập ngầm thất bại. Yêu cầu đăng nhập thủ công.`);
+            global.sharePointLoginState = { required: true, inProgress: false, message: 'Đăng nhập ngầm thất bại. Vui lòng đăng nhập thủ công.' };
+            try { 
+              const syncManager = require('../../sync-manager/SyncManagerService');
+              syncManager.pauseJob(syncJobId); // DỪNG JOB LẠI ĐỂ USER ĐĂNG NHẬP
+              syncManager._broadcastSSE(); 
+            } catch(e){}
+            break;
+          }
         }
       }
     }
@@ -1125,6 +1188,14 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
         attempts: attempt,
       });
 
+      // Cập nhật cờ lỗi trung gian
+      await this.queryNewDbTx(
+        `UPDATE ${this.getStagingTableRef()} 
+         SET MigrateErrFlg = 1, MigrateErrMess = @err 
+         WHERE DocId = @DocId`,
+        { err: errMsg, DocId: docId }
+      );
+
       // XỬ LÝ ĐẶC BIỆT CHO LỖI 404: Không dừng Job, tự động chuyển sang file tiếp theo
       if (is404) {
         logger.warn(`[Downloader] Bỏ qua bài viết lỗi 404 và CHẠY TIẾP bài khác, không dừng Job.`);
@@ -1133,12 +1204,17 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
           error: errMsg,
           downloadedAt: null,
         });
-        return { action: 'skipped_404', error: errMsg };
+        throw new Error(`Bỏ qua bài viết lỗi 404: ${errMsg}`);
       }
 
-      // Thay vì dừng Job, ta thông báo bài này sẽ được thử lại song song sau.
-      logger.warn(`[Downloader] Đã chuyển bài viết ${rowData?.LeafName} sang trạng thái RETRY_WAITING. Sẽ thử lại sau.`);
-      return { action: 'retry_queued', error: errMsg };
+      // Quá số lần thử: Ném lỗi để SyncManager đưa vào job_error và skip row
+      logger.error(`[Downloader] Đã chuyển bài viết ${rowData?.LeafName} sang trạng thái LỖI sau ${maxAttempts} lần tải.`);
+      await this._markDownloadResult(docId, {
+        status: 'ERROR',
+        error: errMsg,
+        downloadedAt: null,
+      });
+      throw new Error(`Quá 3 lần không tải được file: ${errMsg}`);
     }
 
     const html = buffer.toString('utf8');
@@ -1253,6 +1329,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
                         }
                       } catch (upErr) {
                         logger.error(`[API UPLOAD] ❌ Lỗi khi đẩy ảnh lên hệ thống mới: ${upErr.message}`);
+                        throw new Error(`Upload API thất bại: ${upErr.message}`);
                       }
                     })();
 
@@ -1260,7 +1337,8 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
                     await Promise.all([saveLocalTask, uploadApiTask]);
                   }
                 } catch (imgErr) {
-                  logger.warn(`[Image Downloader] ❌ Lỗi khi tải ảnh ${img.fullUrl}: ${imgErr.message}`);
+                  logger.error(`[Image Downloader] ❌ Lỗi khi tải ảnh ${img.fullUrl}: ${imgErr.message}`);
+                  throw imgErr; // Ném lỗi để skip bài viết này
                 }
               }));
 
@@ -1269,6 +1347,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
             }
           } catch (jsonErr) {
             logger.error(`[Parser Hook] Lỗi khi tạo file JSON hoặc tải ảnh: ${jsonErr.message}`);
+            throw jsonErr; // Ném lỗi lên trên
           }
 
           parsedData.DocId = docId; // Truyền DocId GUID chuẩn
@@ -1281,6 +1360,14 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
         logger.error(
           `[Parser Hook] Lỗi khi phân giải/lưu bảng trung gian cho ${docPath}: ${e.message}`,
         );
+        // Cập nhật cờ lỗi trung gian
+        await this.queryNewDbTx(
+          `UPDATE ${this.getStagingTableRef()} 
+           SET MigrateErrFlg = 1, MigrateErrMess = @err 
+           WHERE DocId = @DocId`,
+          { err: e.message, DocId: docId }
+        );
+        throw new Error(`Quá 3 lần không tải được tài nguyên (Ảnh/API): ${e.message}`);
       }
     } else {
       logger.warn(
@@ -1304,6 +1391,13 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
       } catch (e) {
         logger.error(`[Production Sync] Failed for ${docPath} after retries: ${e.message}`);
         actionLogs.push({ action: 'failed', error: e.message });
+        await this.queryNewDbTx(
+          `UPDATE ${this.getStagingTableRef()} 
+           SET MigrateErrFlg = 1, MigrateErrMess = @err 
+           WHERE DocId = @DocId`,
+          { err: `Đồng bộ DB (news) thất bại: ${e.message}`, DocId: docId }
+        );
+        throw new Error(`Đồng bộ Production thất bại: ${e.message}`);
       }
     }
 
@@ -1313,6 +1407,14 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
       error: null,
       downloadedAt: new Date(),
     });
+
+    // Cập nhật cờ thành công
+    await this.queryNewDbTx(
+      `UPDATE ${this.getStagingTableRef()} 
+       SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL 
+       WHERE DocId = @DocId`,
+      { DocId: docId }
+    );
 
     return {
       action: 'processed',
