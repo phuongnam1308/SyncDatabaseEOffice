@@ -368,4 +368,7 @@ router.use('/sync-meeting-copy', SyncMeetingCopyRoutes);
 const SyncPassportRoutes = require('../src/sync-passport/route');
 router.use('/sync-passport', SyncPassportRoutes);
 
+const KeycloakAuthRoutes = require('../src/auth/route');
+router.use('/auth-keycloak', KeycloakAuthRoutes);
+
 module.exports = router;
