@@ -16,12 +16,14 @@ class SyncManagerController extends BaseController {
   }
 
   _getSharePointLoginState() {
-    return global.sharePointLoginState || {
-      required: false,
-      inProgress: false,
-      message: '',
-      skipped: global.sharePointLoginSkipped || false
-    };
+    return (
+      global.sharePointLoginState || {
+        required: false,
+        inProgress: false,
+        message: '',
+        skipped: global.sharePointLoginSkipped || false,
+      }
+    );
   }
 
   /**
@@ -34,13 +36,9 @@ class SyncManagerController extends BaseController {
     try {
       await SyncManagerService.ensureStateLoaded();
 
-      await this.modelRegistry.initializeAll(
-        SyncManagerService,
-        SyncStateRepository
-      );
+      await this.modelRegistry.initializeAll(SyncManagerService, SyncStateRepository);
 
       this.initialized = true;
-
     } catch (error) {
       logger.error('[SyncManagerController] Failed to initialize models:', error);
       throw error;
@@ -111,7 +109,7 @@ class SyncManagerController extends BaseController {
 
     const result = SyncManagerService.startModel(modelName, {
       reset: reset === true || reset === 'true',
-      batchSize
+      batchSize,
     });
     return this.success(res, result, 'Đã kích hoạt đồng bộ đối tượng');
   });
@@ -200,7 +198,7 @@ class SyncManagerController extends BaseController {
    */
   shutdown = this.asyncHandler(async (req, res) => {
     logger.warn('[SyncManagerController] Người dùng yêu cầu dừng hệ thống');
-    
+
     // 1. Đóng trình duyệt Chrome (nếu đang mở qua Playwright)
     if (global.appBrowser) {
       await global.appBrowser.close().catch(() => {});
@@ -216,7 +214,9 @@ class SyncManagerController extends BaseController {
       process.exit(0);
     }, 1000);
 
-    return this.success(res, { message: 'Hệ thống đang thực hiện dừng lệnh... Tạm biệt đồng chí!' });
+    return this.success(res, {
+      message: 'Hệ thống đang thực hiện dừng lệnh... Tạm biệt đồng chí!',
+    });
   });
 
   /**
@@ -228,7 +228,7 @@ class SyncManagerController extends BaseController {
     global.sharePointLoginState = {
       required: false,
       inProgress: true,
-      message: ''
+      message: '',
     };
     SyncManagerService._broadcastSSE();
 
@@ -238,7 +238,7 @@ class SyncManagerController extends BaseController {
       global.sharePointLoginState = {
         required: false,
         inProgress: false,
-        message: ''
+        message: '',
       };
 
       if (typeof global.startBackgroundServicesOnce === 'function') {
@@ -246,17 +246,21 @@ class SyncManagerController extends BaseController {
       }
 
       SyncManagerService._broadcastSSE();
-      return this.success(res, {
-        loginRequired: false,
-        message: 'Đăng nhập SharePoint thành công.'
-      }, 'Đăng nhập SharePoint thành công.');
+      return this.success(
+        res,
+        {
+          loginRequired: false,
+          message: 'Đăng nhập SharePoint thành công.',
+        },
+        'Đăng nhập SharePoint thành công.',
+      );
     } catch (err) {
       logger.error('[SyncManagerController] Lỗi quy trình đăng nhập:', err);
 
       global.sharePointLoginState = {
         required: true,
         inProgress: false,
-        message: err?.message || 'Đăng nhập SharePoint thất bại.'
+        message: err?.message || 'Đăng nhập SharePoint thất bại.',
       };
       SyncManagerService._broadcastSSE();
 
@@ -264,7 +268,7 @@ class SyncManagerController extends BaseController {
         res,
         `Đăng nhập SharePoint thất bại: ${err?.message || 'Không rõ nguyên nhân'}`,
         500,
-        err
+        err,
       );
     }
   });
@@ -278,10 +282,21 @@ class SyncManagerController extends BaseController {
     global.sharePointLoginState = {
       required: false,
       inProgress: false,
-      message: ''
+      message: '',
     };
     SyncManagerService._broadcastSSE();
-    return this.success(res, { message: 'Đã bỏ qua đăng nhập SharePoint. Cảnh báo dữ liệu có thể không chính xác.' });
+    return this.success(res, {
+      message: 'Đã bỏ qua đăng nhập SharePoint. Cảnh báo dữ liệu có thể không chính xác.',
+    });
+  });
+
+  /**
+   * Kiểm tra trạng thái phiên đăng nhập hiện tại
+   */
+  checkSession = this.asyncHandler(async (req, res) => {
+    await this.ensureInitialized();
+    const state = this._getSharePointLoginState();
+    return this.success(res, state);
   });
 
   // ── MỚI: SSE endpoint và Settings endpoint ─────────────────────────────────────
@@ -293,7 +308,7 @@ class SyncManagerController extends BaseController {
     await this.ensureInitialized();
     const { key, value } = req.body;
     if (!key) return this.clientError(res, 'Thiếu key cấu hình');
-    
+
     // Nếu key là SKIP_PULL_FROM_OLD, value là boolean
     const success = await SyncManagerService.updateSetting(key, value);
     if (!success) {
@@ -313,7 +328,11 @@ class SyncManagerController extends BaseController {
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
     const ka = setInterval(() => {
-      try { res.write(': ka\n\n'); } catch (_) { clearInterval(ka); }
+      try {
+        res.write(': ka\n\n');
+      } catch (_) {
+        clearInterval(ka);
+      }
     }, 25_000);
     req.on('close', () => clearInterval(ka));
     SyncManagerService.addSSEClient(res);
@@ -335,7 +354,7 @@ class SyncManagerController extends BaseController {
     data.sharePointLoginMessage = sharePointLoginState.message;
     data.sharePointLoginSkipped = global.sharePointLoginSkipped || false;
     const registeredLabels = this.modelRegistry.getRegisteredLabels();
-    
+
     // ĐÃ KHÔI PHỤC: Lọc bỏ những đối tượng máy này không phụ trách
     const filteredEntities = {};
     for (const label of registeredLabels) {
@@ -751,7 +770,7 @@ class SyncManagerController extends BaseController {
       color: #94a3b8;
     }
     .empty-state i { font-size: 2.5rem; display: block; margin-bottom: 12px; color: #cbd5e1; }
-    
+
     /* ── Toggle Switch ── */
     .toggle-wrapper {
       display: flex;
@@ -775,7 +794,7 @@ class SyncManagerController extends BaseController {
       width: 38px;
       height: 20px;
     }
-    .switch input { 
+    .switch input {
       opacity: 0;
       width: 0;
       height: 0;
@@ -984,7 +1003,7 @@ class SyncManagerController extends BaseController {
         <button id="btn-reset" onclick="triggerSync(true)"  class="btn-dash btn-dash-danger"  ${data.isRunning ? 'disabled' : ''}>
           <i class="bi bi-arrow-counterclockwise"></i> Chạy lại toàn bộ tất cả đối tượng
         </button>
-        
+
         <div class="toggle-wrapper">
           <label class="toggle-label" for="skipPullToggle">
             <i class="bi bi-fast-forward-btn me-1"></i> Bỏ qua chuẩn bị dữ liệu từ các bảng (Người dùng, Văn bản đến/đi, Công việc...)
@@ -999,7 +1018,9 @@ class SyncManagerController extends BaseController {
 
       <!-- Notification Area -->
       <div id="notification-area">
-        ${!data.sharePointLoginRequired && data.sharePointLoginSkipped ? `
+        ${
+          !data.sharePointLoginRequired && data.sharePointLoginSkipped
+            ? `
           <div class="alert-banner alert-banner-warning">
             <div class="alert-banner-content">
               <i class="bi bi-info-circle-fill"></i>
@@ -1009,7 +1030,9 @@ class SyncManagerController extends BaseController {
               <button class="btn-banner btn-banner-secondary" onclick="triggerLogin()">Thử đăng nhập lại</button>
             </div>
           </div>
-        ` : ''}
+        `
+            : ''
+        }
       </div>
 
       <!-- Table -->
@@ -1027,7 +1050,9 @@ class SyncManagerController extends BaseController {
 
   <!-- Modal Area (Nằm ngoài để không bị mờ) -->
   <div id="modal-area">
-    ${data.sharePointLoginRequired && !data.sharePointLoginSkipped ? `
+    ${
+      data.sharePointLoginRequired && !data.sharePointLoginSkipped
+        ? `
       <div class="modal-overlay">
         <div class="modal-content">
           <div class="spinner-box">
@@ -1043,7 +1068,9 @@ class SyncManagerController extends BaseController {
           </div>
         </div>
       </div>
-    ` : ''}
+    `
+        : ''
+    }
   </div>
 
   <script>
@@ -1066,7 +1093,7 @@ class SyncManagerController extends BaseController {
 
       const area = document.getElementById('notification-area');
       const modalArea = document.getElementById('modal-area');
-      
+
       const newModalState = JSON.stringify({
         req: window.__sharePointLoginRequired,
         prog: window.__sharePointLoginInProgress,
@@ -1089,7 +1116,7 @@ class SyncManagerController extends BaseController {
               </div>
               <div class="modal-title">Đang kết nối SharePoint</div>
               <div class="modal-desc">Vui lòng đợi trong giây lát...</div>
-              
+
               <!-- Hiển thị log đăng nhập -->
               <div style="background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; margin-bottom: 20px; font-family: monospace; font-size: 0.8rem; color: #60a5fa; text-align: left; border: 1px solid rgba(255,255,255,0.1);">
                 <i class="bi bi-terminal me-2"></i> Trạng thái: \${window.__sharePointLoginMessage || 'Khởi tạo kết nối...'}
@@ -1103,7 +1130,7 @@ class SyncManagerController extends BaseController {
         \`;
         area.innerHTML = '';
         return;
-      } 
+      }
       // TRƯỜNG HỢP 4: THÀNH CÔNG (Hiện thông báo xanh trong 2 giây)
       else if (window.__sharePointLoginSuccessActive) {
         document.body.classList.add('has-modal');
@@ -1165,7 +1192,7 @@ class SyncManagerController extends BaseController {
       } else {
         document.body.classList.remove('has-modal');
         modalArea.innerHTML = '';
-        
+
         // Xử lý Banner Cảnh báo (Bỏ qua)
         if (window.__sharePointLoginSkipped) {
           area.innerHTML = \`
@@ -1292,7 +1319,10 @@ class SyncManagerController extends BaseController {
       }
 
       // Lọc dữ liệu hiển thị (giống logic server-side)
-      const registeredLabels = [${this.modelRegistry.getRegisteredLabels().map(l => `'${l}'`).join(',')}];
+      const registeredLabels = [${this.modelRegistry
+        .getRegisteredLabels()
+        .map((l) => `'${l}'`)
+        .join(',')}];
       const filteredEntities = {};
       for (const label of registeredLabels) {
         if (data.entities && data.entities[label]) {
@@ -1449,7 +1479,7 @@ class SyncManagerController extends BaseController {
           sharePointLoginRequired: false,
           sharePointLoginInProgress: false
         });
-        
+
         // Tự động đóng sau 2 giây
         setTimeout(() => {
           window.__sharePointLoginSuccessActive = false;
@@ -1507,60 +1537,76 @@ class SyncManagerController extends BaseController {
    * @returns {string}
    */
   _renderRows(entities, jobs) {
-    return Object.entries(entities).map(([name, info]) => {
-      const rel = Object.values(jobs || {})
-        .filter((j) => j.modelName === name)
-        .sort((a, b) => {
-          const ta = new Date(a.updatedAt || a.startedAt || 0).getTime();
-          const tb = new Date(b.updatedAt || b.startedAt || 0).getTime();
-          return tb - ta;
-        });
+    return Object.entries(entities)
+      .map(([name, info]) => {
+        const rel = Object.values(jobs || {})
+          .filter((j) => j.modelName === name)
+          .sort((a, b) => {
+            const ta = new Date(a.updatedAt || a.startedAt || 0).getTime();
+            const tb = new Date(b.updatedAt || b.startedAt || 0).getTime();
+            return tb - ta;
+          });
 
-      const rp = rel.find((j) => ['RUNNING', 'PAUSE_REQUESTED', 'RESUMING', 'PAUSED'].includes(j.status));
-      const cur = (info.activeJobId && jobs && jobs[info.activeJobId])
-        ? jobs[info.activeJobId] : (rp || rel[0] || null);
+        const rp = rel.find((j) =>
+          ['RUNNING', 'PAUSE_REQUESTED', 'RESUMING', 'PAUSED'].includes(j.status),
+        );
+        const cur =
+          info.activeJobId && jobs && jobs[info.activeJobId]
+            ? jobs[info.activeJobId]
+            : rp || rel[0] || null;
 
-      // Khong tu suy dien CRASHED theo timeout heartbeat khi render dashboard.
-      let ms = (info.status || 'IDLE').toUpperCase();
-      const js = cur ? String(cur.status || '').toUpperCase() : null;
+        // Khong tu suy dien CRASHED theo timeout heartbeat khi render dashboard.
+        let ms = (info.status || 'IDLE').toUpperCase();
+        const js = cur ? String(cur.status || '').toUpperCase() : null;
 
-      const canStart = ['IDLE', 'COMPLETED', 'FAILED', 'CRASHED'].includes(ms);
-      const canPause = js === 'RUNNING' || js === 'RESUMING';
-      const canResume = ms === 'PAUSED' || js === 'PAUSED';
-      const rid = canResume ? ((cur && cur.jobId) || info.activeJobId || '') : '';
+        const canStart = ['IDLE', 'COMPLETED', 'FAILED', 'CRASHED'].includes(ms);
+        const canPause = js === 'RUNNING' || js === 'RESUMING';
+        const canResume = ms === 'PAUSED' || js === 'PAUSED';
+        const rid = canResume ? (cur && cur.jobId) || info.activeJobId || '' : '';
 
-      const mapVN = {
-        'IDLE': 'Sẵn sàng', 'RUNNING': 'Đang chạy', 'RESUMING': 'Đang tiếp tục',
-        'PAUSE_REQUESTED': 'Đang dừng...', 'PAUSED': 'Đã tạm dừng',
-        'COMPLETED': 'Hoàn thành', 'FAILED': 'Thất bại', 'CRASHED': 'Sự cố', 'ERROR': 'Lỗi'
-      };
-      const txt = mapVN[ms] || ms;
+        const mapVN = {
+          IDLE: 'Sẵn sàng',
+          RUNNING: 'Đang chạy',
+          RESUMING: 'Đang tiếp tục',
+          PAUSE_REQUESTED: 'Đang dừng...',
+          PAUSED: 'Đã tạm dừng',
+          COMPLETED: 'Hoàn thành',
+          FAILED: 'Thất bại',
+          CRASHED: 'Sự cố',
+          ERROR: 'Lỗi',
+        };
+        const txt = mapVN[ms] || ms;
 
-      let pFill = 'blue';
-      if (ms === 'COMPLETED') pFill = 'green';
-      else if (['FAILED', 'CRASHED', 'ERROR'].includes(ms)) pFill = 'red';
-      else if (ms === 'PAUSED') pFill = 'yellow';
+        let pFill = 'blue';
+        if (ms === 'COMPLETED') pFill = 'green';
+        else if (['FAILED', 'CRASHED', 'ERROR'].includes(ms)) pFill = 'red';
+        else if (ms === 'PAUSED') pFill = 'yellow';
 
-      const pct = info.currentProgressPercent;
-      const prog = pct != null
-        ? `<div class="prog-wrap"><div class="prog-fill ${pFill}" style="width:${pct}%"></div></div>
+        const pct = info.currentProgressPercent;
+        const prog =
+          pct != null
+            ? `<div class="prog-wrap"><div class="prog-fill ${pFill}" style="width:${pct}%"></div></div>
        <div class="prog-label">${pct}%</div>`
-        : '<span style="color:var(--text-muted)">—</span>';
+            : '<span style="color:var(--text-muted)">—</span>';
 
-      const [synced, total] = info.currentTotalToSync != null
-        ? [`${(info.currentSynced || 0).toLocaleString()}`, `${info.currentTotalToSync.toLocaleString()}`]
-        : [null, null];
-      const syncCell = synced
-        ? `<span class="sync-count">${synced}</span><span class="sync-total"> / ${total}</span>`
-        : '<span style="color:var(--text-muted)">—</span>';
+        const [synced, total] =
+          info.currentTotalToSync != null
+            ? [
+                `${(info.currentSynced || 0).toLocaleString()}`,
+                `${info.currentTotalToSync.toLocaleString()}`,
+              ]
+            : [null, null];
+        const syncCell = synced
+          ? `<span class="sync-count">${synced}</span><span class="sync-total"> / ${total}</span>`
+          : '<span style="color:var(--text-muted)">—</span>';
 
-      const ji = cur
-        ? `<div class="job-id">${cur.jobId}</div><span class="job-status-pill">${cur.status}</span>`
-        : '<span style="color:var(--text-muted)">—</span>';
+        const ji = cur
+          ? `<div class="job-id">${cur.jobId}</div><span class="job-status-pill">${cur.status}</span>`
+          : '<span style="color:var(--text-muted)">—</span>';
 
-      const s = (info.status || 'idle').toLowerCase();
+        const s = (info.status || 'idle').toLowerCase();
 
-      return `<tr>
+        return `<tr>
         <td><span class="model-chip"><i class="bi bi-database-fill-gear"></i>${name}</span></td>
         <td><span class="status-badge status-${s}"><span class="dot"></span>${txt}</span></td>
         <td>${prog}</td>
@@ -1578,7 +1624,8 @@ class SyncManagerController extends BaseController {
           </div>
         </td>
       </tr>`;
-    }).join('');
+      })
+      .join('');
   }
 }
 
