@@ -770,7 +770,21 @@ class SyncManagerService {
   resumeJob(jobId) {
     const job = this.state.jobs[jobId];
     if (!job) throw new Error(`Job ${jobId} not found`);
-    if (job.status !== 'PAUSED') throw new Error(`Job ${jobId} is not paused`);
+
+    // Handle case where job status in memory is out of sync with model status
+    // If job is COMPLETED but model is PAUSED, we need to restart instead of resume
+    if (job.status === 'COMPLETED' || job.status === 'FAILED') {
+      logger.warn(`[SyncManagerService] Job ${jobId} is ${job.status}, cannot resume. Resetting model state.`);
+      const modelState = this.getModelState(job.modelName);
+      modelState.status = 'IDLE';
+      modelState.activeJobId = null;
+      this._dbUpdateModel(job.modelName, modelState);
+      throw new Error(`Job ${jobId} đã hoàn thành (${job.status}). Cần chạy lại từ đầu, không thể tiếp tục.`);
+    }
+
+    if (job.status !== 'PAUSED') {
+      throw new Error(`Job ${jobId} is not paused (currently: ${job.status})`);
+    }
 
     const modelState = this.getModelState(job.modelName);
     if (this.isModelBusy(modelState)) throw new Error(`Model ${job.modelName} is already running`);
@@ -1020,10 +1034,68 @@ class SyncManagerService {
         }
 
         if (jobFinishedEarly) {
+          // processFn returned done=true (staging was temporarily empty).
+          // Re-fetch staging to verify it's actually empty before breaking.
+          // This handles race condition where records are being processed by other concurrent tasks.
           logger.warn(
-            `[SyncManagerService][${job.modelName}] processFn returned done=true; continue next fetch cycle (jobId=${job.jobId}, batchProcessed=${batchProcessed}, totalProcessed=${job.totalProcessed}, totalToSync=${job.totalToSync == null ? 'null' : Number(job.totalToSync)})`
+            `[SyncManagerService][${job.modelName}] processFn returned done=true; re-checking staging for pending records (jobId=${job.jobId}, totalProcessed=${job.totalProcessed})`
           );
-          continue;
+
+          // Wait briefly for concurrent tasks to complete
+          await new Promise(resolve => setTimeout(resolve, 500));
+
+          // Re-fetch staging count using countFn (same function used to set totalToSync)
+          let stagingCount = 0;
+          try {
+            if (typeof handlers.countFn === 'function') {
+              stagingCount = await handlers.countFn(cursorTime, cursorId);
+              logger.info(
+                `[SyncManagerService][${job.modelName}] Staging pending count after re-check: ${stagingCount}`
+              );
+            }
+          } catch (countError) {
+            logger.warn(`[SyncManagerService][${job.modelName}] countFn re-check failed: ${countError.message}`);
+          }
+
+          if (stagingCount > 0) {
+            // There are pending records - continue processing
+            job.totalToSync = stagingCount; // Update to reflect actual count
+            logger.info(
+              `[SyncManagerService][${job.modelName}] Staging has ${stagingCount} pending after re-check, continuing...`
+            );
+            continue;
+          }
+
+          // Staging is truly empty - check if more records exist in source
+          logger.info(
+            `[SyncManagerService][${job.modelName}] Staging is empty. Checking source for more records...`
+          );
+
+          // Re-fetch from source to see if there are records not yet in staging
+          const sourceTimer = logger.startTimer(`SYNC_SOURCE_CHECK | ${job.modelName}`);
+          const sourceRecords = await handlers.fetchFn(cursorTime, job.batchSize, 0, {
+            modelName: job.modelName,
+            jobId: job.jobId,
+            lastSyncTime: cursorTime,
+            lastSyncId: cursorId,
+            totalProcessed: job.totalProcessed || 0,
+            settings: this.state.settings
+          });
+          sourceTimer.stop(sourceRecords?.length);
+
+          if (sourceRecords && sourceRecords.length > 0) {
+            // There are records in source not yet synced to staging
+            logger.info(
+              `[SyncManagerService][${job.modelName}] Found ${sourceRecords.length} records in source not yet in staging. Re-feeding staging...`
+            );
+            continue;
+          }
+
+          // Both staging and source are empty - job is truly complete
+          logger.info(
+            `[SyncManagerService][${job.modelName}] Both staging and source are empty. Job complete. (totalProcessed=${job.totalProcessed})`
+          );
+          break;
         }
 
         if (records.length < job.batchSize) break;

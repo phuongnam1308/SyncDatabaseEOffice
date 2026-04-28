@@ -1,6 +1,56 @@
 const logger = require('../../../utils/logger');
 const dbUtils = require('../../../utils/dbUtils');
+const { v4: uuidv4 } = require('uuid');
 const DraftDocumentMapper = require('../mappers/DraftDocumentMapper');
+const FileService = require('../../sync-file-copy/Fileuploadservice');
+const { downloadFile: spDownload } = require('../../sync-file-copy/SharePointAuthService');
+const {
+  CATEGORY_RELEASE_DV,
+  CATEGORY_RELEASE_TCT,
+  CATEGORY_OUTGOING
+} = require('../../sync-audit/SyncAuditModel');
+
+/**
+ * Detects MIME type from magic bytes
+ */
+function detectFileType(buffer) {
+  if (!buffer || buffer.length < 4) return { mime: 'application/octet-stream', ext: 'bin' };
+  const b = buffer;
+  if (b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46) return { mime: 'application/pdf', ext: 'pdf' };
+  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47) return { mime: 'image/png', ext: 'png' };
+  if (b[0] === 0xFF && b[1] === 0xD8 && b[2] === 0xFF) return { mime: 'image/jpeg', ext: 'jpg' };
+  if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) return { mime: 'image/gif', ext: 'gif' };
+  if (b[0] === 0x42 && b[1] === 0x4D) return { mime: 'image/bmp', ext: 'bmp' };
+  if (b[0] === 0x50 && b[1] === 0x4B && b[2] === 0x03 && b[3] === 0x04) {
+    const s = buffer.slice(0, 200).toString('latin1');
+    if (s.includes('word/')) return { mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', ext: 'docx' };
+    if (s.includes('xl/')) return { mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', ext: 'xlsx' };
+    if (s.includes('ppt/')) return { mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', ext: 'pptx' };
+    return { mime: 'application/zip', ext: 'zip' };
+  }
+  if (b[0] === 0xD0 && b[1] === 0xCF && b[2] === 0x11 && b[3] === 0xE0) return { mime: 'application/msword', ext: 'doc' };
+  if (b[0] === 0x52 && b[1] === 0x61 && b[2] === 0x72 && b[3] === 0x21) return { mime: 'application/x-rar-compressed', ext: 'rar' };
+  return { mime: 'application/octet-stream', ext: 'bin' };
+}
+
+const AUDIT_TABLES = [
+  'LuanChuyenVanBan', 'LuanChuyenVanBan_ATPC', 'LuanChuyenVanBan_CLL',
+  'LuanChuyenVanBan_CNTT', 'LuanChuyenVanBan_CT', 'LuanChuyenVanBan_CVTC',
+  'LuanChuyenVanBan_DonVi', 'LuanChuyenVanBan_DVHH', 'LuanChuyenVanBan_DVKT',
+  'LuanChuyenVanBan_GNVT', 'LuanChuyenVanBan_HC', 'LuanChuyenVanBan_HT',
+  'LuanChuyenVanBan_ICDLB', 'LuanChuyenVanBan_ICDST', 'LuanChuyenVanBan_KHDT',
+  'LuanChuyenVanBan_KHKD', 'LuanChuyenVanBan_KTVT', 'LuanChuyenVanBan_KVTC',
+  'LuanChuyenVanBan_MKT', 'LuanChuyenVanBan_NPL', 'LuanChuyenVanBan_QLCT',
+  'LuanChuyenVanBan_QSBV', 'LuanChuyenVanBan_SNPL', 'LuanChuyenVanBan_TC',
+  'LuanChuyenVanBan_TC189', 'LuanChuyenVanBan_TCCT', 'LuanChuyenVanBan_TCHP',
+  'LuanChuyenVanBan_TCIDI', 'LuanChuyenVanBan_TCLD', 'LuanChuyenVanBan_TCMT',
+  'LuanChuyenVanBan_TCO', 'LuanChuyenVanBan_TCOT', 'LuanChuyenVanBan_TCPC',
+  'LuanChuyenVanBan_TCPH', 'LuanChuyenVanBan_TCTT', 'LuanChuyenVanBan_TTDDC',
+  'LuanChuyenVanBan_TTDTC', 'LuanChuyenVanBan_VP', 'LuanChuyenVanBan_VPMB',
+  'LuanChuyenVanBan_VPTNB', 'LuanChuyenVanBan_VTB', 'LuanChuyenVanBan_VTT',
+  'LuanChuyenVanBan_XDCT', 'LuanChuyenVanBan_xdsm', 'LuanChuyenVanBan_XNCG',
+  'LuanChuyenVanBan_YTE'
+];
 
 /**
  * Handler class for upserting draft documents into outgoing_documents table.
@@ -15,7 +65,28 @@ class DraftDocumentUpsertHandler {
       this.queryNewDbTx.bind(this),
       this.queryOldDb.bind(this)
     );
+    this._fileService = null;
+    this._syncAuditModel = [];
     this.newDbName = process.env.NEW_DB_NAME || 'DataeOfficeDB';
+  }
+
+  /**
+   * Initialize dependencies (audit models, file service)
+   */
+  async initialize() {
+    const SyncOutgoingAuditModel = require('../../sync-audit/SyncOutgoingAuditModel');
+
+    for (const tableName of AUDIT_TABLES) {
+      const model = new SyncOutgoingAuditModel();
+      model.oldDbTable = tableName;
+      model.oldPool = this.oldPool;
+      model.newPool = this.newPool;
+      await model.initialize();
+      this._syncAuditModel.push(model);
+    }
+
+    this._fileService = new FileService();
+    logger.info(`[DraftDocumentUpsertHandler] Initialized with ${this._syncAuditModel.length} audit models`);
   }
 
   /**
@@ -70,17 +141,49 @@ class DraftDocumentUpsertHandler {
         `;
         const existing = await this.queryNewDbTx(existingQuery, { idOutgoingBak: mapped.id_outgoing_bak }, transaction);
 
+        let documentId;
+        let drafter = mapped.drafter;
+        let isNew = false;
+
         if (existing && existing.length > 0) {
           const dbDocId = existing[0].document_id;
           logger.info(`[DraftDocumentUpsertHandler] Found existing document: [${dbDocId}]`);
-
           await this._updateRecord(mapped, transaction, dbDocId);
-          return { action: 'updated', documentId: dbDocId };
+          documentId = dbDocId;
+        } else {
+          mapped.document_id = String(mapped.document_id).toUpperCase();
+          await this._insertRecord(mapped, transaction);
+          documentId = mapped.document_id;
+          isNew = true;
         }
 
-        mapped.document_id = String(mapped.document_id).toUpperCase();
-        await this._insertRecord(mapped, transaction);
-        return { action: 'inserted', documentId: mapped.document_id };
+        // Step 2: Process files (prepare outside transaction then apply)
+        // 2a. Files from SharePoint (old approach via Files field)
+        const preparedFiles = await this._prepareFilesFromSharePoint(oldRecord);
+
+        // 2b. Files from SNP.CodeAttach table
+        const attachFiles = await this._fetchAttachmentsFromCodeAttach(oldRecord.ID);
+
+        // Apply all files
+        await this._applyPreparedFiles(preparedFiles, oldRecord, {
+          id: documentId,
+          type_doc: 1,
+          drafter: drafter
+        }, transaction);
+
+        await this._applyCodeAttachFiles(attachFiles, oldRecord, {
+          id: documentId,
+          type_doc: 1,
+          drafter: drafter
+        }, transaction);
+
+        // Step 3: Process audits (Inside same transaction)
+        await this._processAudits(oldRecord, documentId, id, drafter, transaction, isNew);
+
+        // Step 4: Parse HTML comments
+        await this._processHtmlComments(oldRecord, documentId, id, transaction);
+
+        return { action: isNew ? 'inserted' : 'updated', documentId };
       });
 
       logger.info(`[DraftDocumentUpsertHandler] Completed draft ID: ${id}, action: ${result.action}`);
@@ -250,6 +353,294 @@ class DraftDocumentUpsertHandler {
       request.input(key, value);
     }
     await request.query(query);
+  }
+
+  /**
+   * Prepare files from SharePoint
+   */
+  async _prepareFilesFromSharePoint(oldRecord) {
+    const files = oldRecord?.Files || '';
+    if (!files) return [];
+
+    const baseUrl = (process.env.BASE_URL || '').replace(/\/$/, '');
+    if (!baseUrl) return [];
+
+    const parts = files.split('|').filter(Boolean);
+    if (parts.length === 0) return [];
+
+    let filesToPath = [];
+    const firstPartIsLikelyFile = /\.(pdf|docx?|xlsx?|pptx?|jpe?g|png|gif|bmp|txt|zip|rar)$/i.test(parts[0]);
+
+    if (firstPartIsLikelyFile) {
+      filesToPath.push(parts[0]);
+    } else {
+      const directory = parts[0];
+      const names = parts.slice(1);
+      for (const name of names) {
+        if (!name) continue;
+        filesToPath.push(directory.endsWith('/') ? `${directory}${name}` : `${directory}/${name}`);
+      }
+    }
+
+    const preparedResults = [];
+    for (const relativePath of filesToPath) {
+      try {
+        if (!relativePath.includes('/')) continue;
+        const fullUrl = `${baseUrl}${relativePath}`;
+        const fileName = relativePath.substring(relativePath.lastIndexOf('/') + 1);
+
+        logger.info(`[DraftDocumentUpsertHandler][prepareFiles] Downloading: ${fileName}`);
+        const buffer = await spDownload(fullUrl, this.newPool);
+
+        if (buffer && buffer.length > 0) {
+          preparedResults.push({ buffer, fileName, relativePath });
+        }
+      } catch (err) {
+        logger.error(`[DraftDocumentUpsertHandler][prepareFiles] Error downloading file ${relativePath}: ${err.message}`);
+      }
+    }
+    return preparedResults;
+  }
+
+  /**
+   * Apply prepared files to database
+   */
+  async _applyPreparedFiles(preparedFiles, oldRecord, newDocumentRecord, transaction) {
+    if (!Array.isArray(preparedFiles) || preparedFiles.length === 0) return true;
+
+    for (const fileItem of preparedFiles) {
+      const { buffer, fileName, relativePath } = fileItem;
+      const fileType = detectFileType(buffer);
+      const mimeType = fileType.mime;
+
+      const fileIdBak = uuidv4();
+      const fileRecord = {
+        file_name: fileName,
+        file_path: relativePath,
+        mime_type: mimeType,
+        created_by: newDocumentRecord?.drafter || null,
+        version: 1,
+        id_bak: fileIdBak,
+        table_bak: 'CodeItem',
+        type_doc: newDocumentRecord?.type_doc || null,
+        isBak: 1
+      };
+
+      const relationRecord = {
+        object_type: 'docDraft',
+        object_id: String(newDocumentRecord?.id),
+        object_id_bak: oldRecord?.ID,
+        file_id_bak: fileIdBak,
+        table_bak: 'CodeItem',
+        type_doc: 'docDraft',
+      };
+
+      await this._fileService.uploadAndInsert({
+        fileBuffer: buffer,
+        originalName: fileName,
+        mimeType,
+        fileRecord,
+        relationRecord,
+        folder: 'outgoing',
+        localFolder: 'outgoing',
+        transaction
+      });
+    }
+    return true;
+  }
+
+  /**
+   * Process HTML comments (YKien fields)
+   */
+  async _processHtmlComments(oldRecord, documentId, recordId, transaction) {
+    const htmlFields = ['YKien', 'YKienChiHuy', 'YKienLanhDao', 'YKienLanhDaoTCT', 'YKienLanhDaoVPDN', 'YKienCuaLDVPChoVanThu'];
+
+    for (const field of htmlFields) {
+      if (oldRecord?.[field]) {
+        try {
+          await this.mapper.parseAndInsertHtmlComments(
+            oldRecord[field],
+            documentId,
+            recordId,
+            'CodeItem',
+            field,
+            transaction
+          );
+        } catch (err) {
+          logger.warn(`[DraftDocumentUpsertHandler] Error parsing HTML ${field}: ${err.message}`);
+        }
+      }
+    }
+  }
+
+  /**
+   * Process audits (LuanChuyenVanBan*)
+   */
+  async _processAudits(oldRecord, documentId, recordId, drafter, transaction, isNew = false) {
+    if (!this._syncAuditModel || this._syncAuditModel.length === 0) {
+      logger.warn(`[DraftDocumentUpsertHandler][Audit] _syncAuditModel not initialized, skipping`);
+      return;
+    }
+
+    try {
+      const firstModel = this._syncAuditModel[0];
+      const auditTableNames = this._syncAuditModel.map(m => m.oldDbTable);
+
+      const allRawAudits = await firstModel.fetchAllAuditsAcrossTables(
+        recordId,
+        auditTableNames,
+        [CATEGORY_RELEASE_DV, CATEGORY_RELEASE_TCT, CATEGORY_OUTGOING]
+      );
+
+      if (allRawAudits.length > 0) {
+        const modelMap = new Map(this._syncAuditModel.map(m => [m.oldDbTable, m]));
+
+        let maxStatusCode = null;
+        for (const rawAudit of allRawAudits) {
+          const tableName = rawAudit.__source_table;
+          const model = modelMap.get(tableName) || firstModel;
+
+          try {
+            const result = await model.processSingleRecord(rawAudit, documentId, transaction, drafter, isNew);
+            if (result) {
+              if (result.results && Array.isArray(result.results)) {
+                for (const r of result.results) {
+                  if (r.audit && r.audit.status_code) {
+                    const sc = parseInt(r.audit.status_code, 10);
+                    if (!maxStatusCode || sc > maxStatusCode) maxStatusCode = sc;
+                  }
+                }
+              }
+              logger.info(`[DraftDocumentUpsertHandler][Audit] table=${tableName} documentId=${documentId} inserted=${result?.inserted || 0}`);
+            }
+          } catch (auditErr) {
+            logger.warn(`[DraftDocumentUpsertHandler][Audit] Error table=${tableName}: ${auditErr.message}`);
+          }
+        }
+
+        if (maxStatusCode !== null) {
+          await firstModel._updateDocumentStatusCode(documentId, 1, String(maxStatusCode), transaction);
+          logger.info(`[DraftDocumentUpsertHandler][Audit] Final status updated to ${maxStatusCode} for document ${documentId}`);
+        }
+      }
+    } catch (error) {
+      logger.warn(`[DraftDocumentUpsertHandler][Audit] Aggregate fetch failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Fetch attachments from SNP.CodeAttach table by CodeItemId
+   */
+  async _fetchAttachmentsFromCodeAttach(codeItemId) {
+    if (!codeItemId) return [];
+
+    try {
+      const query = `
+        SELECT
+          ID,
+          CodeItemId,
+          AttachCategoryId,
+          Code,
+          FullCode,
+          Name,
+          Title,
+          Type,
+          Size,
+          Path,
+          Flag,
+          Created,
+          Modified,
+          CreatedBy,
+          ModifiedBy,
+          SiteName,
+          SPListId,
+          SPItemId,
+          SPFileGuid,
+          SignInfoOld
+        FROM SNP.CodeAttach
+        WHERE CodeItemId = @codeItemId
+      `;
+
+      const rows = await this.oldPool.request()
+        .input('codeItemId', codeItemId)
+        .query(query);
+
+      logger.info(`[DraftDocumentUpsertHandler][CodeAttach] Found ${rows.recordset?.length || 0} attachments for CodeItemId=${codeItemId}`);
+      return rows.recordset || [];
+    } catch (error) {
+      logger.warn(`[DraftDocumentUpsertHandler][CodeAttach] Error fetching attachments: ${error.message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Apply files from SNP.CodeAttach to database
+   */
+  async _applyCodeAttachFiles(attachFiles, oldRecord, newDocumentRecord, transaction) {
+    if (!Array.isArray(attachFiles) || attachFiles.length === 0) return true;
+
+    const baseUrl = (process.env.BASE_URL || '').replace(/\/$/, '');
+
+    for (const attach of attachFiles) {
+      try {
+        const filePath = attach.Path || '';
+        const fileName = attach.Title || attach.Name || 'unknown';
+        const fullUrl = filePath.startsWith('http') ? filePath : `${baseUrl}${filePath}`;
+
+        logger.info(`[DraftDocumentUpsertHandler][CodeAttach] Processing: ${fileName} | Path: ${filePath}`);
+
+        // Download file from SharePoint
+        const buffer = await spDownload(fullUrl, this.newPool);
+
+        if (!buffer || buffer.length === 0) {
+          logger.warn(`[DraftDocumentUpsertHandler][CodeAttach] Empty buffer for ${fileName}, skipping`);
+          continue;
+        }
+
+        const fileType = detectFileType(buffer);
+        const mimeType = fileType.mime;
+        const fileIdBak = String(attach.ID || uuidv4());
+
+        const fileRecord = {
+          file_name: fileName,
+          file_path: filePath,
+          mime_type: mimeType,
+          file_size: attach.Size || buffer.length,
+          created_by: newDocumentRecord?.drafter || null,
+          version: 1,
+          id_bak: fileIdBak,
+          table_bak: 'CodeAttach',
+          type_doc: newDocumentRecord?.type_doc || null,
+          isBak: 1
+        };
+
+        const relationRecord = {
+          object_type: 'docDraft',
+          object_id: String(newDocumentRecord?.id),
+          object_id_bak: String(oldRecord?.ID),
+          file_id_bak: fileIdBak,
+          table_bak: 'CodeAttach',
+          type_doc: 'docDraft',
+        };
+
+        await this._fileService.uploadAndInsert({
+          fileBuffer: buffer,
+          originalName: fileName,
+          mimeType,
+          fileRecord,
+          relationRecord,
+          folder: 'outgoing',
+          localFolder: 'outgoing',
+          transaction
+        });
+
+        logger.info(`[DraftDocumentUpsertHandler][CodeAttach] Uploaded: ${fileName}`);
+      } catch (err) {
+        logger.error(`[DraftDocumentUpsertHandler][CodeAttach] Error processing attachment ID=${attach.ID}: ${err.message}`);
+      }
+    }
+
+    return true;
   }
 }
 

@@ -56,6 +56,7 @@ class SyncDraftDocumentModel extends BaseSyncModel {
 
     // Initialize upsert handler with pools
     this.upsertHandler = new DraftDocumentUpsertHandler(this.newPool, this.oldPool);
+    await this.upsertHandler.initialize();
 
     logger.info(`[${this.modelName}] Initialized with instanceId=${instanceId}`);
   }

@@ -11,7 +11,7 @@ const UnitDraftUpsertHandler = require('../sync-outgoing-v2/models/UnitDraftUpse
 
 class SyncUnitDraftAdapter {
   constructor() {
-    this._instanceId = process.env.INSTANCE_ID || '1';
+    this._instanceId = process.env.SYNC_INSTANCE_ID || process.env.INSTANCE_ID || '1';
     this._name = `UnitDraft_Instance_${this._instanceId}`;
     this._model = null;
     this._handler = null;

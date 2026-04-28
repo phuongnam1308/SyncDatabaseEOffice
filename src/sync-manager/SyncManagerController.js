@@ -160,8 +160,13 @@ class SyncManagerController extends BaseController {
   resumeJobSync = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
     const { jobId } = req.params;
-    const result = SyncManagerService.resumeJob(jobId);
-    return this.success(res, result, 'Đã tiếp tục tiến trình phần mềm');
+    try {
+      const result = SyncManagerService.resumeJob(jobId);
+      return this.success(res, result, 'Đã tiếp tục tiến trình phần mềm');
+    } catch (error) {
+      logger.warn(`[resumeJobSync] Resume job ${jobId} failed: ${error.message}`);
+      return this.error(res, error.message, 400, error);
+    }
   });
 
   /**
@@ -1410,8 +1415,20 @@ class SyncManagerController extends BaseController {
         const r = await fetch('/api/sync-manager-src/jobs/'+encodeURIComponent(jobId)+'/resume', {
           method:'POST', headers:{'Content-Type':'application/json'}
         });
+        if (!r.ok) {
+          let msg = 'Lỗi không xác định';
+          try {
+            const j = await r.json();
+            msg = j.message || j.error || JSON.stringify(j);
+          } catch {
+            msg = await r.text().then(t => t.length > 100 ? t.substring(0, 100) + '...' : t).catch(() => 'HTTP ' + r.status);
+          }
+          alert('Lỗi: ' + msg);
+          location.reload();
+          return;
+        }
         alert((await r.json()).message || 'Đồng chí đã yêu cầu tiếp tục');
-      } catch(e) { alert('Lỗi: '+e.message); }
+      } catch(e) { alert('Lỗi: '+e.message); location.reload(); }
     }
 
     async function triggerShutdown() {
