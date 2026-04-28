@@ -22,7 +22,9 @@ process.on('unhandledRejection', (reason) => {
  */
 const isPkg = typeof process.pkg !== 'undefined';
 // Nếu tên file không phải là node.exe thì mới coi là bản đóng gói SEA
-const isSea = path.basename(process.execPath).toLowerCase() !== 'node.exe' && process.execPath.toLowerCase().endsWith('.exe');
+const isSea =
+  path.basename(process.execPath).toLowerCase() !== 'node.exe' &&
+  process.execPath.toLowerCase().endsWith('.exe');
 const exeDir = isPkg || isSea ? path.dirname(process.execPath) : process.cwd();
 
 require('dotenv').config({ path: path.join(exeDir, '.env') });
@@ -43,7 +45,7 @@ const internalDir = __dirname;
 global.sharePointLoginState = {
   required: false,
   inProgress: false,
-  message: ''
+  message: '',
 };
 global.sharePointLoginSkipped = false;
 global.syncBackgroundServicesStarted = false;
@@ -52,7 +54,7 @@ function setSharePointLoginState(required, message = '', inProgress = false) {
   global.sharePointLoginState = {
     required: Boolean(required),
     inProgress: Boolean(inProgress),
-    message: message || ''
+    message: message || '',
   };
   if (required) {
     global.sharePointLoginSkipped = false; // Reset skipped status if new login is required
@@ -97,13 +99,23 @@ const ensureDesktopShortcut = () => {
     $s.WorkingDirectory = '${safeExeDir}';
     if (Test-Path '${safeIconPath}') { $s.IconLocation = '${safeIconPath},0'; }
     $s.Save();
-  `.replace(/\n/g, '\r\n').trim();
+  `
+    .replace(/\n/g, '\r\n')
+    .trim();
 
   try {
     require('fs').writeFileSync(tempPs, '\ufeff' + psScriptContent, { encoding: 'utf8' });
-    const psPath = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    const psPath = path.join(
+      process.env.SystemRoot || 'C:\\Windows',
+      'System32',
+      'WindowsPowerShell',
+      'v1.0',
+      'powershell.exe',
+    );
     exec(`"${psPath}" -ExecutionPolicy Bypass -File "${tempPs}"`, (err) => {
-      try { if (require('fs').existsSync(tempPs)) require('fs').unlinkSync(tempPs); } catch(e) {}
+      try {
+        if (require('fs').existsSync(tempPs)) require('fs').unlinkSync(tempPs);
+      } catch (e) {}
       if (err) console.error('⚠️ Không thể tạo shortcut tự động:', err.message);
       else console.log('🚀 Đã tự động kiểm tra và tạo shortcut ngoài Desktop.');
     });
@@ -128,7 +140,7 @@ if (process.platform === 'win32') {
   try {
     const { execSync } = require('child_process');
     const netstat = execSync(`netstat -ano | findstr :${PORT}`).toString();
-    const lines = netstat.split('\n').filter(line => line.includes('LISTENING'));
+    const lines = netstat.split('\n').filter((line) => line.includes('LISTENING'));
     if (lines.length > 0) {
       const parts = lines[0].trim().split(/\s+/);
       const pid = parts[parts.length - 1];
@@ -142,7 +154,6 @@ if (process.platform === 'win32') {
     // Bình thường — không có tiến trình nào chiếm cổng
   }
 }
-
 
 const isMigrationMode = process.argv.includes('--migrate');
 
@@ -178,6 +189,27 @@ if (isMigrationMode) {
  */
 const app = express();
 app.use(cors());
+
+// Session middleware for Keycloak OAuth2 (must come before routes)
+const session = require('express-session');
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET || 'keycloak-sync-tool-secret-key-change-in-production',
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 24 * 60 * 60 * 1000, // 24 hours
+    },
+  }),
+);
+
+// Cookie parser for CSRF protection
+const cookieParser = require('cookie-parser');
+app.use(cookieParser());
+
 app.use(express.json());
 
 /**
@@ -195,22 +227,16 @@ app.get('/swagger.json', (req, res) => {
 /**
  * Swagger UI (Giao dien tai lieu API)
  */
-app.use(
-  '/swagger',
-  express.static(path.join(__dirname, 'swagger'))
-);
+app.use('/swagger', express.static(path.join(__dirname, 'swagger')));
 
 /**
  * Tai nguyen tinh (Bootstrap Icons, Font Inter, v.v.)
  */
 app.use(
   '/assets/bootstrap-icons',
-  express.static(path.join(__dirname, 'node_modules/bootstrap-icons'))
+  express.static(path.join(__dirname, 'node_modules/bootstrap-icons')),
 );
-app.use(
-  '/assets/inter',
-  express.static(path.join(__dirname, 'node_modules/@fontsource/inter'))
-);
+app.use('/assets/inter', express.static(path.join(__dirname, 'node_modules/@fontsource/inter')));
 
 /**
  * Health Check
@@ -233,10 +259,12 @@ async function bootstrapAfterServerStart(url) {
       setSharePointLoginState(
         true,
         loginErr?.message || 'Đăng nhập SharePoint khi khởi động không thành công.',
-        false
+        false,
       );
       logger.error('❌ Không thể đăng nhập SharePoint khi khởi động:', loginErr);
-      logger.warn('⏸️ Tạm hoãn khởi động CronSyncScheduler và SessionRefresher vì login chưa thành công.');
+      logger.warn(
+        '⏸️ Tạm hoãn khởi động CronSyncScheduler và SessionRefresher vì login chưa thành công.',
+      );
       return;
     }
   }
@@ -264,7 +292,7 @@ app.listen(PORT, () => {
       process.env.CHROME_PATH,
       'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
       'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-      path.join(process.env.LOCALAPPDATA || '', 'Google\\Chrome\\Application\\chrome.exe')
+      path.join(process.env.LOCALAPPDATA || '', 'Google\\Chrome\\Application\\chrome.exe'),
     ].filter(Boolean);
 
     let chromeExec = null;
@@ -295,7 +323,7 @@ app.listen(PORT, () => {
           const browser = await playwright.chromium.launch({
             headless: false,
             executablePath: chromeExec.replace(/"/g, ''),
-            args: [`--app=${url}`, '--window-size=1280,800']
+            args: [`--app=${url}`, '--window-size=1280,800'],
           });
 
           // LƯU TOÀN CỤC ĐỂ ĐIỀU KHIỂN TỪ SHUTDOWN API
@@ -319,7 +347,6 @@ app.listen(PORT, () => {
             await browser.close().catch(() => {});
             process.exit(0);
           });
-
         } catch (pwErr) {
           logger.warn('⚠️ Playwright gặp sự cố khi mở cửa sổ App: ' + pwErr.message);
           exec(`start "" "${chromeExec}" "${url}"`);
@@ -349,12 +376,16 @@ let _shuttingDown = false;
 async function gracefulShutdown(signal) {
   if (_shuttingDown) return;
   _shuttingDown = true;
-  logger.info(`\n🛑 [GracefulShutdown] Nhận tín hiệu ${signal}. Đang tạm dừng các job đang chạy...`);
+  logger.info(
+    `\n🛑 [GracefulShutdown] Nhận tín hiệu ${signal}. Đang tạm dừng các job đang chạy...`,
+  );
 
   const doShutdown = async () => {
     try {
       const SyncManagerService = require('./src/sync-manager/SyncManagerService');
-      const svc = SyncManagerService.getInstance ? SyncManagerService.getInstance() : SyncManagerService;
+      const svc = SyncManagerService.getInstance
+        ? SyncManagerService.getInstance()
+        : SyncManagerService;
       if (svc && typeof svc.pauseAllRunningJobs === 'function') {
         await svc.pauseAllRunningJobs();
         logger.info('✅ [GracefulShutdown] Đã tạm dừng tất cả job. Hệ thống tắt an toàn.');
@@ -366,13 +397,10 @@ async function gracefulShutdown(signal) {
 
   // Race giữa shutdown logic và timeout 3s
   // → nếu DB write quá chậm, vẫn thoát sau 3s thay vì treo mãi
-  await Promise.race([
-    doShutdown(),
-    new Promise(resolve => setTimeout(resolve, 3000))
-  ]);
+  await Promise.race([doShutdown(), new Promise((resolve) => setTimeout(resolve, 3000))]);
 
   process.exit(0);
 }
 
-process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));

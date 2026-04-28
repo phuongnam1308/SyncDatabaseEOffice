@@ -186,6 +186,11 @@ async function downloadFile(url, pool = null, retryCount = 0, timeoutMs = 600000
     cookie = getCookie();
   }
 
+  // Tự động thêm ?InitialTabId=Ribbon.Read cho các link .aspx để tránh bị đẩy vào trang edit / login
+  if (url && url.toLowerCase().includes('.aspx') && !url.includes('InitialTabId=')) {
+    url = url.includes('?') ? `${url}&InitialTabId=Ribbon.Read` : `${url}?InitialTabId=Ribbon.Read`;
+  }
+
   const doRequest = () =>
     axios.get(url, {
       responseType: 'arraybuffer',
@@ -225,9 +230,17 @@ async function downloadFile(url, pool = null, retryCount = 0, timeoutMs = 600000
     }
   }
 
-  if (response.status === 401 || response.status === 403 || response.status === 302) {
+  const location = response.headers['location'] || '';
+  const isAuthRedirect = location.toLowerCase().includes('login') || 
+                         location.toLowerCase().includes('authenticate') || 
+                         location.toLowerCase().includes('adfs') ||
+                         location.toLowerCase().includes('signin');
+
+  if (response.status === 401 || response.status === 403 || (response.status === 302 && isAuthRedirect)) {
     if (retryCount === 0) logger.warn(`[SharePointAuth] HTTP ${response.status} (Auth Error). Cần refresh token.`);
     needsRetry = true;
+  } else if (response.status === 302) {
+    throw new Error(`[SharePointAuth] HTTP 302 Redirect to ${location}. (File may be deleted, moved, or restricted)`);
   }
 
   if (needsRetry && retryCount < 1) {
