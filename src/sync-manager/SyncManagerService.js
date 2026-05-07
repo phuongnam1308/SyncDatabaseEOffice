@@ -1024,6 +1024,10 @@ class SyncManagerService {
       }
       this.completeJob(job);
     } catch (error) {
+      logger.error(
+        `[SyncManagerService][${job.modelName}] runJob failed jobId=${job.jobId}: ${error?.message || 'unknown error'}`,
+        error
+      );
       this.failJob(job, error, 'FAILED');
     }
   }
@@ -1066,6 +1070,10 @@ class SyncManagerService {
    */
   failJob(job, error, status = 'FAILED') {
     const now = this.now(); const modelState = this.getModelState(job.modelName);
+    logger.error(
+      `[SyncManagerService][${job.modelName}] Job ${job.jobId} marked ${status}: ${error?.message || 'unknown error'}`,
+      error
+    );
     job.status = status; job.error = error.message; job.updatedAt = now; job.heartbeatAt = now; job.endedAt = now;
     modelState.status = status; modelState.error = error.message; modelState.activeJobId = null;
     if (job.lastSyncTime) modelState.lastSyncTime = job.lastSyncTime;

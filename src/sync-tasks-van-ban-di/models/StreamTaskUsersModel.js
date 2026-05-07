@@ -19,7 +19,19 @@ function safeDateParse(dateValue, fieldName = '') {
   return null;
 }
 
-/** Maps TaskVBDenPermission → task_users (9 columns with id_user_bak) */
+function normalizeRoleKey(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  return raw
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D')
+    .replace(/[^A-Za-z0-9]/g, '')
+    .toLowerCase();
+}
+
+/** Maps TaskVBDenPermission â†’ task_users (9 columns with id_user_bak) */
 class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
   constructor() {
     super({ modelName: 'STREAM_TASK_USERS_MODEL' });
@@ -102,7 +114,7 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
       // Generate fake ID if missing (id_user_bak is only for tracking, generates UUID if undefined)
       const userBackupId = String(stagingRow.ID || this._generateUUID()).trim();
 
-      // 1. Map bản ghi (all 8 columns)
+      // 1. Map báº£n ghi (all 8 columns)
       const mapped = await this.mapSingleRecord(stagingRow, userBackupId);
 
       // CRITICAL: Validate required field: task_id (prevent orphaned records)
@@ -110,7 +122,7 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
         throw new Error(`Task ID is required (orphaned user detection) for user ID=${userBackupId}`);
       }
 
-      // 2. Check tồn tại bằng id_user_bak
+      // 2. Check tá»“n táº¡i báº±ng id_user_bak
       const existQuery = `
         SELECT TOP 1 id FROM ${targetTable}
         WHERE id_user_bak = @idUserBak
@@ -187,7 +199,7 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
     }
   }
 
-  /** Map TaskVBDenPermission → task_users (all 8 columns) */
+  /** Map TaskVBDenPermission â†’ task_users (all 8 columns) */
   async mapSingleRecord(rawRecord, userBackupIdOverride = null) {
     if (!rawRecord) {
       throw new Error('rawRecord is required');
@@ -200,27 +212,81 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
       if (isNaN(typeValue)) typeValue = null;
     }
     
-    const processId = await this.helper.mapUserName(rawRecord.UserId) || null;
+    const processId = await this.helper.mapUserName(this.helper.safeString(rawRecord.UserId)) || null;
     const processName = await this.helper.getUserDisplayName(processId) || null;
     const roleRaw = await this.helper.getUserFieldName(rawRecord.UserFieldId) || null;
     const mapPriority = (val) => {
-      const key = String(val || '').trim();
-      return ({
-        'AssignedTo': 'director',
-        'NguoiPhanViec': 'director',
-        'Xem': 'viewer',
-        'NguoiDanhGia': 'director',
-        'ToChucThucHien': 'director',
-        'NguoiSoanThao': 'assigner',
-        'NguoiNhanDeBiet': 'viewer',
-        'NguoiNhanDeBaoCao': 'director',
-        'NguoiNhan': 'director',
-        'NguoiDuocYKien': 'director',
-        'NguoiDanhGia': 'director',
-        'Attendees': 'supporter',
-      }[key] || 'assigner');
+      const key = normalizeRoleKey(val);
+      if (!key) return 'participant';
+
+      const assignerSet = new Set([
+        'nguoigiao',
+        'nguoigiaoviec',
+        'nguoiphanviec',
+        'uyquyennguoigiao',
+        'nguoisoanthao'
+      ]);
+
+      const directorSet = new Set([
+        'nguoichutri',
+        'chutri',
+        'tochucthuchien',
+        'assignedto',
+        'nguoinhan',
+        'nguoidanhgia',
+        'delegateassignee',
+        'groupassignment',
+        'groupbanlanhdao',
+        'groupbanlanhdaoprevious',
+        'grouplanhdaodaxuly',
+        'grouplanhdaotct',
+        'grouplanhdaovpdn',
+        'groupthaythebanlanhdao',
+        'groupthaythebanlanhdaoprevious',
+        'groupthaythelanhdaotct',
+        'groupthaythelanhdaovpdn',
+        'groupuyquyenbanlanhdao',
+        'groupuyquyenbanlanhdaoprevious',
+        'groupuyquyenlanhdaotct',
+        'groupuyquyenlanhdaovpdn',
+        'uyquyen',
+        'vanthu'
+      ]);
+
+      const supporterSet = new Set([
+        'nguoiphoihop',
+        'phoihop',
+        'usershared',
+        'nguoinhandebaocao',
+        'nguoiduocy kien'.replace(' ', ''),
+        'attendees',
+        'attendeesofhsdt',
+        'thaythe'
+      ]);
+
+      const viewerSet = new Set([
+        'xem',
+        'nguoinhandebiet',
+        'usercbnvxem',
+        'grouplanhdaotctdebiet',
+        'permission',
+        'usercbnv'
+      ]);
+
+      if (assignerSet.has(key)) return 'assigner';
+      if (directorSet.has(key)) return 'director';
+      if (supporterSet.has(key)) return 'supporter';
+      if (viewerSet.has(key)) return 'viewer';
+
+      // Soft match to avoid losing "nguoi giao/chu tri" when source label varies.
+      if (key.includes('nguoigiao') || key.includes('giaoviec') || key.includes('phanviec')) return 'assigner';
+      if (key.includes('chutri') || key.includes('tochucthuchien')) return 'director';
+      if (key.includes('phoihop')) return 'supporter';
+      if (key.includes('debiet') || key.includes('xem')) return 'viewer';
+      if (key.includes('baocao') || key.includes('duocykien') || key.includes('support')) return 'supporter';
+      return 'participant';
     };
-    const role = mapPriority(roleRaw);
+    const role = mapPriority(this.helper.safeString(roleRaw));
     // Use provided override or try to extract from rawRecord, fallback to generated ID
     const userBackupId = userBackupIdOverride || String(rawRecord.ID || '').trim() || this._generateUUID();
 
@@ -264,3 +330,5 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
 }
 
 module.exports = StreamTaskUsersModel;
+
+

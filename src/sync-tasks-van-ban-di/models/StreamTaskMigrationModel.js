@@ -60,6 +60,13 @@ function safeDateParse(dateValue, fieldName = '') {
   return null;
 }
 
+function normalizeLegacyDateString(value) {
+  if (value === undefined || value === null) return null;
+  const raw = String(value).trim();
+  if (!raw || raw.toUpperCase() === 'NULL') return null;
+  return raw;
+}
+
 const TX_RETRY_MAX = 3;
 const TX_RETRY_BASE_DELAY_MS = 250;
 
@@ -283,7 +290,8 @@ class StreamTaskMigrationModel extends BaseModel {
               template_id = @templateId,
               dependent_task_id = @dependentTaskId,
               is_confidential = @isConfidential,
-              update_at = GETDATE()
+              created_at = @createdAt,
+              update_at = @updateAt
           WHERE id_task_bak = @idTaskBak
         `;
         
@@ -320,6 +328,8 @@ class StreamTaskMigrationModel extends BaseModel {
           templateId: mapped.template_id,
           dependentTaskId: mapped.dependent_task_id,
           isConfidential: mapped.is_confidential,
+          createdAt: mapped.created_at,
+          updateAt: mapped.update_at,
           idTaskBak: backupId
         };
 
@@ -329,6 +339,8 @@ class StreamTaskMigrationModel extends BaseModel {
           { transaction }
         );
         
+        const currentTaskId = Number(existing[0].id);
+        await this.resolveParentBackfillByBakId(backupId, currentTaskId, transaction);
         logger.info(`[StreamTaskMigrationModel.processSingleRecord] Updated task ${backupId}`);
         return { action: 'updated', idTaskBak: backupId, newTaskId: existing[0].id };
       } else {
@@ -347,7 +359,7 @@ class StreamTaskMigrationModel extends BaseModel {
            @processStatus, @status, @approvalStatus, @createdBy, @updatedBy, @recurringFromId,
            @typeTask, @docId, @meetingId, @meetingConclusionId, @weekDays, @projectId,
            @typeTaskMeeting, @templateId, @dependentTaskId, @isConfidential, @idTaskBak,
-           GETDATE(), GETDATE());
+           @createdAt, @updateAt);
           SELECT SCOPE_IDENTITY() as id
         `;
         
@@ -386,6 +398,8 @@ class StreamTaskMigrationModel extends BaseModel {
             templateId: mapped.template_id,
             dependentTaskId: mapped.dependent_task_id,
             isConfidential: mapped.is_confidential,
+            createdAt: mapped.created_at,
+            updateAt: mapped.update_at,
             idTaskBak: backupId
           }, transaction), `insert-task id_task_bak=${backupId}`, { transaction });
         } catch (insertErr) {
@@ -401,6 +415,7 @@ class StreamTaskMigrationModel extends BaseModel {
           throw new Error(msg);
         }
         
+        await this.resolveParentBackfillByBakId(backupId, Number(newId), transaction);
         logger.info(`[StreamTaskMigrationModel.processSingleRecord] Inserted task ${backupId} with new ID ${newId}`);
         return { action: 'inserted', idTaskBak: backupId, newTaskId: newId, createdBy: mapped.created_by, createdAt: mapped.created_at };
       }
@@ -439,8 +454,10 @@ class StreamTaskMigrationModel extends BaseModel {
     const startDate = safeDateParse(startDateRaw, 'StartDate');
     const endDate = safeDateParse(endDateRaw, 'DueDate');
     const completedDate = safeDateParse(completedDateRaw, 'CompletedDate');
-    const createdAt = safeDateParse(createdAtRaw, 'Created');
-    const updatedAt = safeDateParse(updatedAtRaw, 'Modified');
+    // Keep legacy date string format from old table (e.g. "Aug 6 2014 4:36PM")
+    // to map directly into task.created_at / task.update_at.
+    const createdAt = normalizeLegacyDateString(createdAtRaw);
+    const updatedAt = normalizeLegacyDateString(updatedAtRaw);
 
     // log debug data bẩn
     if (!startDate && rawRecord.StartDate) {
@@ -483,6 +500,7 @@ class StreamTaskMigrationModel extends BaseModel {
 
     const parentCandidate = rawRecord.ParentId ? String(rawRecord.ParentId).trim() : '';
     const parentRaw = (!parentCandidate || parentCandidate === '0') ? null : parentCandidate;
+    const parentResolved = await this.resolveParentIdByBakId(parentRaw, transaction);
 
     const docLookup = await this.helper.findDocumentIdByOldId(rawRecord.VBId, 'OutgoingDocument', transaction);
     const docId = docLookup?.document_id || null;
@@ -513,7 +531,9 @@ class StreamTaskMigrationModel extends BaseModel {
       month: null,
       repetitive_start: null,
       repetitive_end: null,
-      parent: parentRaw,
+      // If parent old-id has already been migrated, store mapped new task.id immediately.
+      // Otherwise keep old parent id temporarily, it will be backfilled later.
+      parent: parentResolved ?? parentRaw,
       path: null,
       progress: progress,
       process_status: processStatus,
@@ -571,6 +591,40 @@ class StreamTaskMigrationModel extends BaseModel {
     await this.queryNewDbTx(query, {}, transaction);
 
     logger.info('[resolveParentRelation] Parent mapping completed');
+  }
+
+  async resolveParentIdByBakId(parentBakId, transaction = null) {
+    if (!parentBakId) return null;
+    const targetTable = `${this.newDbName}.${this.newDbSchema}.${this.newDbTable}`;
+    const rows = await this.queryNewDbTx(
+      `
+        SELECT TOP 1 id
+        FROM ${targetTable}
+        WHERE id_task_bak = @parentBakId
+      `,
+      { parentBakId: String(parentBakId) },
+      transaction
+    );
+    if (!Array.isArray(rows) || !rows.length) return null;
+    const resolved = Number(rows[0].id);
+    return Number.isNaN(resolved) ? null : resolved;
+  }
+
+  async resolveParentBackfillByBakId(parentBakId, parentNewId, transaction = null) {
+    if (!parentBakId || !parentNewId) return;
+    const targetTable = `${this.newDbName}.${this.newDbSchema}.${this.newDbTable}`;
+    await this.queryNewDbTx(
+      `
+        UPDATE ${targetTable}
+        SET parent = @parentNewId
+        WHERE parent = @parentBakId
+      `,
+      {
+        parentNewId: Number(parentNewId),
+        parentBakId: String(parentBakId)
+      },
+      transaction
+    );
   }
 }
 
