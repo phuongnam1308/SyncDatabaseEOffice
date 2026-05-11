@@ -299,6 +299,7 @@ router.post('/sync-manager-src/settings', syncCtrl.updateSettings);
 router.post('/sync-manager-src/shutdown', syncCtrl.shutdown);
 router.post('/sync-manager-src/skip-login', syncCtrl.skipLogin);
 router.post('/sync-manager-src/check-session', syncCtrl.checkSession);
+router.post('/sync-manager-src/import-passport', syncCtrl.importPassport);
 
 const SyncOutgoingRoutes = require('../src/sync-outgoing-document/route');
 router.use('/sync-outgoing', SyncOutgoingRoutes);
@@ -312,7 +313,5 @@ router.use('/sync-meeting-copy', SyncMeetingCopyRoutes);
 const SyncPassportRoutes = require('../src/sync-passport/route');
 router.use('/sync-passport', SyncPassportRoutes);
 
-const KeycloakAuthRoutes = require('../src/auth/route');
-router.use('/auth-keycloak', KeycloakAuthRoutes);
 
 module.exports = router;

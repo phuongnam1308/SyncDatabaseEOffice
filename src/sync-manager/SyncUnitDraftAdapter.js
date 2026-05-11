@@ -1,4 +1,4 @@
-/**
+﻿/**
  * SyncUnitDraftAdapter - Wrapper để SyncUnitDraftModel hoạt động với SyncManagerService
  *
  * SyncUnitDraftModel lấy dữ liệu từ SharePoint List "Văn bản đi"
@@ -8,6 +8,7 @@
 const dbConnection = require('../../db/connection');
 const SyncUnitDraftModel = require('../sync-outgoing-v2/models/SyncUnitDraftModel');
 const UnitDraftUpsertHandler = require('../sync-outgoing-v2/models/UnitDraftUpsertHandler');
+const logger = require('../../utils/logger');
 
 class SyncUnitDraftAdapter {
   constructor() {

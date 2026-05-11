@@ -2,10 +2,10 @@
   "cookies": [
     {
       "name": "https%3A%2F%2Feoffice%2Esaigonnewport%2Ecom%2Evn%2Ftintuc%2FDiscovery",
-      "value": "WorkspaceSiteName=VGluIHThu6lj&WorkspaceSiteUrl=aHR0cHM6Ly9lb2ZmaWNlLnNhaWdvbm5ld3BvcnQuY29tLnZuL3RpbnR1Yw==&WorkspaceSiteTime=MjAyNi0wMy0xOFQwOTo1MjoxMw==",
+      "value": "WorkspaceSiteName=VGluIHThu6lj&WorkspaceSiteUrl=aHR0cHM6Ly9lb2ZmaWNlLnNhaWdvbm5ld3BvcnQuY29tLnZuL3RpbnR1Yw==&WorkspaceSiteTime=MjAyNi0wNS0wOFQxMjozMzo1Ng==",
       "domain": "eoffice.saigonnewport.com.vn",
       "path": "/_vti_bin/Discovery.asmx",
-      "expires": 1776419534.021412,
+      "expires": 1780835635.548286,
       "httpOnly": false,
       "secure": true,
       "sameSite": "Lax"
@@ -22,17 +22,17 @@
     },
     {
       "name": "FedAuth",
-      "value": "77u/PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0idXRmLTgiPz48U1A+MCMuZnxhZG1lbWJlcnN8bWlnc2VydmljZSwwIy5mfGFkbWVtYmVyc3xtaWdzZXJ2aWNlLDEzNDE4NzMzMTMwMDU2ODQ2MSxUcnVlLFVXUWF1bDNaYTNLTEttUkVaeFNCbk9zYmM4K3JZTEZhRCsxbkowQlEzdjFuYWJXTFVuUG5OVWdDS3BQUDRxQk1tbHZ5cktXOEhydmlxTHpXd2sxRmlwTURqYVAxMzlXeXlWeUlNZWxFQ2VlSE0yNUFkUE84a2VJei8yWVNkM2YrbXRVSE9WQmNXU2crWUdnaWxEZEVzUHhET0RGVHgrSzlJcFN4dW5DTjNKNUg5bXRkSE5kdENmZXE0R21JeVhvT094UEkvSkp4ak1WYzV2dEhnT1QvNGI4VzlvY0xSY0x0N0ExbkEycTBTUDlLYnkwWFk3M2VOZW9yWG5RaDhHOHI2dWlMSEZtbnJ6ZkZJdUdPa3VEbDFNeVVzbnJJYjdIN2tJd0tSNVhqWWtDMFJKZWtaZHE3L00vbjEwQzVBNURWeGsvSjJHOW43NkluVFQzZmw5WUV1dz09LGh0dHBzOi8vZW9mZmljZS5zYWlnb25uZXdwb3J0LmNvbS52bi90aW50dWMvUGFnZXMvZGVmYXVsdC5hc3B4PC9TUD4=",
+      "value": "77u/PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0idXRmLTgiPz48U1A+MCMuZnxhZG1lbWJlcnN8bWlnc2VydmljZSwwIy5mfGFkbWVtYmVyc3xtaWdzZXJ2aWNlLDEzNDIzMTQ5MTg4MDM5NzM1NCxUcnVlLE1XWm1VcTZJR040RkppdUo2OERXNWpMa3RlZlBTVDZITWFSTmFnOTlnbXN3QnJHeTBSVXlNTXo4RGR5anZQRVhLSElDcVR3dENWSjNLdDVEMmtUTlVoRGF1ZHV1Y1pLcXh2WEpTQWtCT0E5NExWclBucVYrK2YybksybFdreEtDZXdJcFJRang5V3NXYXFvOWRIVldPbm9mbGh6VnBZMWlNSEZ1eHdWaERlYlBabmo5M3lOeWtGWWRjbGVlMGdaR25SRTF3dzZadmdNY2l3QzdIbnZNbmZZU2ptcWNnTjMySUE5a29nakJObU9lR2ZLS3JYaVV6OWFCNkpZWmluZkpnWFUrM21jYkQ2T3V6UEFsM2xuUm5uS3RGTzN2eVd1ZWUwUmJxVjJjZ3REOXJ5Y2M0RE5Jb0krL1ZVaVVmSDRJZldNU2JUYTZFNG8rVlVjeUsvdGJTZz09LGh0dHBzOi8vZW9mZmljZS5zYWlnb25uZXdwb3J0LmNvbS52bi88L1NQPg==",
       "domain": "eoffice.saigonnewport.com.vn",
       "path": "/",
-      "expires": 1774259529.863896,
+      "expires": 1778675588.220094,
       "httpOnly": true,
       "secure": true,
       "sameSite": "None"
     },
     {
       "name": "ASP.NET_SessionId",
-      "value": "ouj4aqif4vh4egcnv55wtx2z",
+      "value": "ujysflowc2uajpx5wv445ufk",
       "domain": "eoffice.saigonnewport.com.vn",
       "path": "/",
       "expires": -1,
@@ -42,7 +42,7 @@
     },
     {
       "name": "X-CSRF-Token",
-      "value": "9c94507abe9e4e7f8a4a55ebe5b099d3",
+      "value": "b31bd1f273ef4edd8269e7ed61ad6abe",
       "domain": "eoffice.saigonnewport.com.vn",
       "path": "/",
       "expires": -1,

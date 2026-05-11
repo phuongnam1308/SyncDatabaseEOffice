@@ -1,4 +1,4 @@
-const logger = require('../../utils/logger');
+﻿const logger = require('../../utils/logger');
 const BaseIncrementalSyncInterface = require('./BaseIncrementalSyncInterface');
 
 class SyncHandlerModel {
@@ -102,10 +102,48 @@ class SyncHandlerModel {
       const take = Math.min(Number(limit || 1), remaining);
 
       if (take <= 0) {
-        // ★ KHI take <= 0: XÓA preparedJobs để buộc getList() chạy lại lần sau
-        // Điều này quan trọng khi processOne() trả về {done: true} vì staging đã hết
-        // mà không phải lỗi logic - sẽ không bị infinite loop
-        logger.warn(`[SyncHandlerModel] take=${take}, total=${total}, processed=${processed} → delete preparedJobs, return empty`);
+        // ★ KHI take <= 0: Trước khi trả [] và kết thúc job, recheck actual staging count.
+        // Lý do: với CONCURRENCY > 1, nhiều virtual items có thể "lãng phí" (không claim được record
+        // vì worker khác đang giữ lock), dẫn đến totalCount bị tiêu thụ hết trước khi staging xong.
+        let stagingRemaining = 0;
+        try {
+          if (typeof this.syncModel.getStagingRemainingCount === 'function') {
+            stagingRemaining = await this.syncModel.getStagingRemainingCount();
+          }
+        } catch (recheckErr) {
+          logger.warn(`[SyncHandlerModel] getStagingRemainingCount error: ${recheckErr.message}`);
+        }
+
+        if (stagingRemaining > 0) {
+          // Staging vẫn còn records → mở rộng totalCount để tiếp tục xử lý
+          state.totalCount += stagingRemaining;
+          const extendedRemaining = Math.max(0, state.totalCount - processed);
+          const extendedTake = Math.min(Number(limit || 1), extendedRemaining);
+          logger.info(
+            `[SyncHandlerModel] Virtual items exhausted but staging still has ${stagingRemaining} remaining. ` +
+            `Extended totalCount to ${state.totalCount}, take=${extendedTake}`
+          );
+          if (extendedTake <= 0) {
+            preparedJobs.delete(jobId);
+            return [];
+          }
+          // Tiếp tục generate items với take mới
+          const syncTime = state?.syncTime || lastTime;
+          const startIndex = processed;
+          state.nextIndex += extendedTake;
+          return Array.from({ length: extendedTake }, (_, idx) => ({
+            id: startIndex + idx + 1,
+            __item_index: startIndex + idx,
+            __sync_id: Number(state?.syncId || 0),
+            __sync_time: syncTime,
+            __source_sync_time: state?.sourceTime || lastTime,
+            __source_sync_id: Number(state?.sourceId || lastSyncId || 0),
+            updated_at: syncTime
+          }));
+        }
+
+        // Staging thực sự hết → kết thúc job
+        logger.warn(`[SyncHandlerModel] take=${take}, total=${total}, processed=${processed}, stagingRemaining=${stagingRemaining} → delete preparedJobs, return empty`);
         preparedJobs.delete(jobId);
         return [];
       }

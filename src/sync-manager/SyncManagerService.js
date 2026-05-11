@@ -1,4 +1,4 @@
-/**
+﻿/**
  * SyncManagerService.js
  *
  * ════════════════════════════════════════════════════════════════
@@ -946,15 +946,21 @@ class SyncManagerService {
           const executing = new Set();
           
           for (const record of records) {
-            if (job.pauseRequested || jobFinishedEarly) break;
+            // Chỉ dừng dispatch khi user yêu cầu pause, KHÔNG dừng khi jobFinishedEarly
+            // Lý do: jobFinishedEarly chỉ được set khi processOne() xác nhận staging hết sạch
+            // (pending=0 VÀ processing=0). Nếu break sớm ở đây, các virtual items cuối của
+            // batch bị bỏ qua không cần thiết — và SyncHandlerModel không nhận được tín hiệu
+            // để recheck staging remaining.
+            if (job.pauseRequested) break;
 
             const task = (async (r) => {
               try {
                 const resProc = await handlers.processFn(r, { modelName: job.modelName, jobId: job.jobId });
                 if (resProc && resProc.done) {
                   jobFinishedEarly = true;
-                  logger.warn(
-                    `[SyncManagerService][${job.modelName}] processFn returned done=true (jobId=${job.jobId}, itemIndex=${Number(r?.__item_index ?? -1)}, pauseRequested=${Boolean(job.pauseRequested)}, processed=${Number(job.totalProcessed || 0)}, totalToSync=${job.totalToSync == null ? 'null' : Number(job.totalToSync)})`
+                  logger.info(
+                    `[SyncManagerService][${job.modelName}] processFn signaled done=true (staging fully empty). ` +
+                    `(jobId=${job.jobId}, itemIndex=${Number(r?.__item_index ?? -1)}, processed=${Number(job.totalProcessed || 0)}, totalToSync=${job.totalToSync == null ? 'null' : Number(job.totalToSync)})`
                   );
                 }
                 return { success: true, record: r, result: resProc };
@@ -1021,9 +1027,9 @@ class SyncManagerService {
 
         if (jobFinishedEarly) {
           logger.warn(
-            `[SyncManagerService][${job.modelName}] processFn returned done=true; continue next fetch cycle (jobId=${job.jobId}, batchProcessed=${batchProcessed}, totalProcessed=${job.totalProcessed}, totalToSync=${job.totalToSync == null ? 'null' : Number(job.totalToSync)})`
+            `[SyncManagerService][${job.modelName}] processFn returned done=true; breaking fetch cycle (jobId=${job.jobId}, batchProcessed=${batchProcessed}, totalProcessed=${job.totalProcessed}, totalToSync=${job.totalToSync == null ? 'null' : Number(job.totalToSync)})`
           );
-          continue;
+          break;
         }
 
         if (records.length < job.batchSize) break;

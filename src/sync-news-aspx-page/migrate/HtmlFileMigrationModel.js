@@ -1,4 +1,4 @@
-const fs = require('fs');
+﻿const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 const cheerio = require('cheerio');
@@ -177,77 +177,173 @@ class HtmlFileMigrationModel extends BaseModel {
       }
     }
 
-    const links = $('a');
-    const docExtensions = [
-      '.doc',
-      '.docx',
-      '.pdf',
-      '.xls',
-      '.xlsx',
-      '.ppt',
-      '.pptx',
-      '.zip',
-      '.rar',
-      '.jpg',
-      '.jpeg',
-      '.png',
-      '.gif',
-      '.bmp',
-    ];
-    for (let i = 0; i < links.length; i++) {
-      try {
-        const link = $(links[i]);
-        let rawHref = link.attr('href')?.trim();
-        if (!rawHref) continue;
+    // === Xử LÝ LINK TÀI LIỆU (PDF/DOCX/XLSX...) trong nội dung ===
+    const updatedHtml = await this.replaceDocumentLinksInHtml(
+      $('body').html() || $.html(),
+      slug,
+      itemId
+    );
 
-        const oldServer = process.env.OLD_DB_SERVER || '';
-        const baseHost = this.baseSourceUrl.replace(/https?:\/\//, '').split('/')[0];
-        const isAlreadyNew = rawHref.includes('/api/files/view/');
-
-        const isInternal =
-          !rawHref.startsWith('http') ||
-          (oldServer && rawHref.includes(oldServer)) ||
-          rawHref.includes(baseHost);
-
-        const href = decodeURIComponent(rawHref);
-        const ext = path.extname(href.split('?')[0]).toLowerCase();
-        const isResource = docExtensions.includes(ext);
-
-        if (isResource && isInternal && !isAlreadyNew) {
-          logger.debug(`[HtmlFileMigrationModel] Dang xu ly tai lieu: ${href}`);
-          // Xử lý URL có tiếng Việt: Decode hết ra rồi Encode chuẩn URI lại
-          const downloadUrl = rawHref.startsWith('http')
-            ? encodeURI(href)
-            : encodeURI(this.baseSourceUrl.replace(/\/$/, '') + '/' + href.replace(/^\//, ''));
-
-          const buffer = await this._downloadToBuffer(downloadUrl, slug, `doc_${i}`);
-          if (buffer) {
-            const originalName = path.basename(href.split('?')[0]);
-            const uploadRes = await this.fileUploadService.uploadToNewSystem({
-              fileBuffer: buffer,
-              originalName: originalName,
-              objectType: 'news',
-              objectId: itemId || '9999',
-            });
-
-            if (uploadRes && uploadRes.id) {
-              const viewPrefix = (
-                process.env.NEW_SYSTEM_VIEW_PREFIX || 'https://apigw-uat.snp.com.vn/doffice-be'
-              ).replace(/\/$/, '');
-              const newHref = `${viewPrefix}/api/files/view/${uploadRes.id}`;
-              link.attr('href', newHref);
-              logger.info(`[HtmlFileMigrationModel] [✔] DA DOI FILE: ${newHref}`);
-            }
-          }
-        }
-      } catch (err) {
-        logger.warn(`[HtmlFileMigrationModel] [!] Bo qua file do loi: ${err.message}`);
-      }
-    }
     return {
-      content: $('body').html() || $.html(),
+      content: updatedHtml,
       images: imagesProcessed,
     };
+  }
+
+  /**
+   * Quét toàn bộ thẻ <a href> trong HTML, tìm các file tài liệu SharePoint
+   * (.pdf, .docx, .xlsx, .pptx...), tải về và upload lên API mới,
+   * sau đó thay thế href cũ bằng link view của hệ thống mới.
+   *
+   * @param {string} htmlContent  - Nội dung HTML cần xử lý
+   * @param {string} articleSlug  - Slug bài viết (dùng làm objectId khi upload)
+   * @param {string} [itemId]     - ItemId dự phòng nếu không có slug
+   * @returns {Promise<string>}   - HTML đã được thay thế href
+   */
+  async replaceDocumentLinksInHtml(htmlContent, articleSlug, itemId) {
+    if (!htmlContent) return htmlContent;
+
+    const $ = cheerio.load(htmlContent, { decodeEntities: false });
+    const baseHost = this.baseSourceUrl.replace(/https?:\/\//, '').split('/')[0];
+    const viewPrefix = (
+      process.env.NEW_SYSTEM_VIEW_PREFIX || 'https://apigw-uat.snp.com.vn/doffice-be'
+    ).replace(/\/$/, '');
+    const objectId = articleSlug || itemId || '9999';
+
+    // Phần mở rộng file tài liệu được hỗ trợ
+    const DOC_EXTENSIONS = new Set(['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.zip', '.rar']);
+
+    // === DEDUP CACHE: Tránh download + upload cùng 1 file nhiều lần trong 1 bài viết ===
+    // Key: URL chuẩn hóa (không có query string) -> Value: viewUrl mới hoặc null (upload thất bại)
+    const uploadCache = new Map();
+
+    // Lazy-load SharePointAuthService (tránh circular dependency)
+    let spDownloadFile;
+    try {
+      spDownloadFile = require('../../sync-file-copy/SharePointAuthService').downloadFile;
+    } catch {
+      logger.warn('[DocLink] Không thể load SharePointAuthService, dùng axios fallback.');
+    }
+
+    const links = $('a').toArray();
+
+    for (const el of links) {
+      const link = $(el);
+      const rawHref = link.attr('href')?.trim();
+      if (!rawHref) continue;
+
+      // Bỏ qua link đã được chuyển đổi
+      if (rawHref.includes('/api/files/view/')) continue;
+
+      // Kiểm tra có phải file tài liệu không
+      // rawHref có thể đã encode: /tintuc/Documents/Mai%20Đức...pdf
+      // Cần decode để check extension chính xác
+      let decodedHref;
+      try {
+        decodedHref = decodeURIComponent(rawHref);
+      } catch {
+        decodedHref = rawHref;
+      }
+
+      const hrefWithoutQuery = decodedHref.split('?')[0];
+      const ext = path.extname(hrefWithoutQuery).toLowerCase();
+      if (!DOC_EXTENSIONS.has(ext)) continue;
+
+      // Kiểm tra có phải link SharePoint nội bộ không
+      const isInternal =
+        !rawHref.startsWith('http') ||
+        rawHref.includes(baseHost) ||
+        rawHref.includes('saigonnewport.com.vn') ||
+        rawHref.includes(process.env.OLD_DB_SERVER || '10.1.25');
+
+      if (!isInternal) continue;
+
+      // === Tạo download URL đúy đủ (xử lý cả encode 2 lần, relative, absolute) ===
+      let downloadUrl;
+      try {
+        if (rawHref.startsWith('http')) {
+          // URL tuyệt đối: giữ nguyên nhưng re-encode đúng cách
+          downloadUrl = encodeURI(decodedHref);
+        } else {
+          // URL tương đối: ghép với BASE_URL
+          const cleanPath = decodedHref.replace(/^\/+/, '');
+          downloadUrl = encodeURI(`${this.baseSourceUrl.replace(/\/$/, '')}/${cleanPath}`);
+        }
+      } catch {
+        downloadUrl = rawHref; // Fallback nếu encode thất bại
+      }
+
+      // === DEDUP: Nếu URL này đã xử lý rồi, dùng lại kết quả ===
+      const cacheKey = downloadUrl.split('?')[0].toLowerCase();
+      if (uploadCache.has(cacheKey)) {
+        const cachedViewUrl = uploadCache.get(cacheKey);
+        if (cachedViewUrl) {
+          link.attr('href', cachedViewUrl);
+          logger.info(`[DocLink] ✅ Cache hit: ${cachedViewUrl}`);
+        }
+        continue;
+      }
+
+      try {
+        logger.info(`[DocLink] ⎳ Đang tải tài liệu: ${downloadUrl}`);
+
+        // Tải file (uu tiên SharePointAuth có pool, rồi mới fallback axios)
+        let buffer = null;
+        if (spDownloadFile) {
+          try {
+            buffer = await spDownloadFile(downloadUrl, this.newPool || null, 0, 120000);
+          } catch (authErr) {
+            logger.warn(`[DocLink] SharePointAuth lỗi (${authErr.message}), thử axios fallback...`);
+          }
+        }
+
+        if (!buffer) {
+          // Fallback: axios thường (nếu SharePoint không yêu cầu auth)
+          const axios = require('axios');
+          const res = await axios.get(downloadUrl, {
+            responseType: 'arraybuffer',
+            timeout: 60000,
+          });
+          if (res.status === 200) buffer = Buffer.from(res.data);
+        }
+
+        if (!buffer || buffer.length === 0) {
+          logger.warn(`[DocLink] Buffer rỗng: ${downloadUrl}. Giữ link cũ.`);
+          uploadCache.set(cacheKey, null); // Đánh dấu thất bại, không retry
+          continue;
+        }
+
+        logger.info(`[DocLink] ⬇ Tải xong: ${buffer.length} bytes`);
+
+        // Upload lên API mới
+        const originalName = path.basename(hrefWithoutQuery);
+        const uploadRes = await this.fileUploadService.uploadToNewSystem({
+          fileBuffer: buffer,
+          originalName: originalName,
+          objectType: 'NEWS',    // Đồng bộ với convention của FileUploadService
+          objectId: objectId,
+        });
+
+        const fileId = uploadRes?.id || uploadRes?.public_id;
+        if (fileId) {
+          const newHref = `${viewPrefix}/api/files/view/${fileId}`;
+          link.attr('href', newHref);
+          uploadCache.set(cacheKey, newHref); // Lưu cache kết quả thành công
+          logger.info(`[DocLink] ✅ Đã upload và thay thế: ${originalName} → ${newHref}`);
+        } else {
+          logger.warn(`[DocLink] Upload không có fileId trả về: ${JSON.stringify(uploadRes)}. Giữ link cũ.`);
+          uploadCache.set(cacheKey, null);
+        }
+
+      } catch (err) {
+        // Không throw để không làm chết cả bài viết; giữ link cũ
+        uploadCache.set(cacheKey, null);
+        logger.warn(`[DocLink] ⚠️ Bỏ qua tài liệu do lỗi: ${err.message} | URL: ${downloadUrl}`);
+      }
+    }
+
+    // Trả về HTML đã cập nhật
+    return $('body').html() || $.html();
   }
 
   async ensureSyncTableExists() {
@@ -473,7 +569,12 @@ class HtmlFileMigrationModel extends BaseModel {
     this.syncJobId = syncJobId; // Store for use in findUserIdByNameOnly
     const html = fs.readFileSync(filePath, 'utf-8');
     const $ = cheerio.load(html, { decodeEntities: false });
-    const slug = path.basename(filePath, '.aspx');
+
+    // === FIX: Strip query string khỏi tên file trước khi tạo slug ===
+    // Ví dụ: "danh-sach-nang-giu-bac-2017.aspx?InitialTabId=Ribbon" → "danh-sach-nang-giu-bac-2017"
+    const rawBasename = path.basename(filePath);
+    const cleanBasename = rawBasename.split('?')[0]; // Loại bỏ query string nếu có
+    const slug = cleanBasename.replace(/\.aspx$/i, ''); // Bỏ .aspx
 
     // 1. EXTRACT TITLE
     let titleExtract =
@@ -483,8 +584,14 @@ class HtmlFileMigrationModel extends BaseModel {
       '';
 
     // Fallback title from slug if empty
+    // Chuyển kebab-case thành tiêu đề đọc được:
+    // "danh-sach-nang-giu-bac-2017" → "Danh sach nang giu bac 2017"
     if (!titleExtract || titleExtract.trim() === '') {
-      titleExtract = slug.charAt(0).toUpperCase() + slug.slice(1).replace(/-/g, ' ');
+      const readableSlug = slug
+        .replace(/-/g, ' ')                    // dấu gạch nối → khoảng trắng
+        .replace(/\s+/g, ' ')                  // nhiều khoảng trắng → 1
+        .trim();
+      titleExtract = readableSlug.charAt(0).toUpperCase() + readableSlug.slice(1);
       logger.info(`[Parser] Title is empty, using fallback from slug: "${titleExtract}"`);
     }
 
