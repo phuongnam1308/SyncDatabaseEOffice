@@ -1,4 +1,4 @@
-﻿const logger = require('../../../utils/logger');
+const logger = require('../../../utils/logger');
 const dbUtils = require('../../../utils/dbUtils');
 const sql = require('mssql');
 const fs = require('fs');
@@ -1680,7 +1680,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
                     authorCode = @authorCode,
                     publishedAt = @publishedAt,
                     status = @status,
-                    updatedAt = GETDATE(),
+                    updatedAt = @updatedAt,
                     topic = @topic,
                     nameThumbnail = @nameThumbnail,
                     tags = @tags,
@@ -1703,9 +1703,9 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
                 )
                 VALUES (
                     @title, @slug, @content, @summary, @authorName, @authorDepartment, @authorId, @authorCode,
-                    @publishedAt, @status, GETDATE(), GETDATE(), @topic, @nameThumbnail,
+                    @publishedAt, @status, @createdAt, @updatedAt, @topic, @nameThumbnail,
                     1, 0, 0, @tags, 1, @DocId, @authorId,
-                    @authorId, @authorName, GETDATE(), @submitterId, @authorName, GETDATE()
+                    @authorId, @authorName, @updatedAt, @submitterId, @authorName, @createdAt
                 );
                 SELECT SCOPE_IDENTITY() AS newsId, 'inserted' AS action;
             END
@@ -1729,6 +1729,8 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
         tags: data.tags, // Usually NVARCHAR(MAX)
         DocId: data.DocId,
         created_by: this.safeTrim(authorId, 100),
+        createdAt: data.createdAt || data.publishedAt || new Date(),
+        updatedAt: data.updatedAt || data.publishedAt || new Date(),
       },
       transaction,
     );

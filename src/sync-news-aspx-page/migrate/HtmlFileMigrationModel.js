@@ -791,6 +791,8 @@ class HtmlFileMigrationModel extends BaseModel {
       submitterId: created_by,
       nameThumbnail: nameThumbnail,
       images: images, // Trả về danh sách ảnh để Step 3 xử lý tải về ổ cứng
+      createdAt: publishedAt,
+      updatedAt: publishedAt
     };
   }
 
