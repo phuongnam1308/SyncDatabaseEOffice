@@ -14,3 +14,6 @@ tintucraw/*
 logs/*
 build_version/
 upload/
+*.xlsx
+import_errors.json
+import_errors.xlsx

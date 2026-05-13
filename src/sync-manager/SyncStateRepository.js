@@ -107,28 +107,26 @@ class SyncStateRepository extends BaseModel {
    */
   async getDashboardData(instanceId = 'default') {
     try {
-      // 1. Lấy thông tin Sync Models của host hiện tại
-      const modelsQuery = `SELECT * FROM ${this.tblModels} WHERE instance_id = @instanceId`;
-      const models = await this.queryNewDb(modelsQuery, { instanceId });
+      // 1. Lấy tất cả thông tin Sync Models (Tạm bỏ lọc theo instance_id để hiện hết)
+      const modelsQuery = `SELECT * FROM ${this.tblModels}`;
+      const models = await this.queryNewDb(modelsQuery, {});
 
-      // 2. Lấy danh sách 10 Job gần nhất của host hiện tại
+      // 2. Lấy danh sách 50 Job gần nhất (Tạm bỏ lọc theo instance_id)
       const jobsQuery = `
-        SELECT TOP 10 *
+        SELECT TOP 50 *
         FROM ${this.tblJobs}
-        WHERE instance_id = @instanceId
         ORDER BY updated_at DESC
       `;
-      const jobs = await this.queryNewDb(jobsQuery, { instanceId });
+      const jobs = await this.queryNewDb(jobsQuery, {});
 
-      // 3. Lấy 50 lỗi mới nhất
+      // 3. Lấy 50 lỗi mới nhất (Tạm bỏ lọc theo instance_id)
       const errorsQuery = `
         SELECT TOP 50 e.*
         FROM ${this.tblErrors} e
         INNER JOIN ${this.tblJobs} j ON e.job_id = j.job_id
-        WHERE j.instance_id = @instanceId
         ORDER BY e.occurred_at DESC
       `;
-      const errors = await this.queryNewDb(errorsQuery, { instanceId });
+      const errors = await this.queryNewDb(errorsQuery, {});
 
       // 4. Lấy cấu hình Global
       const settingsQuery = `

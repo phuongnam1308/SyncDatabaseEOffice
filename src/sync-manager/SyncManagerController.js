@@ -1,3 +1,4 @@
+const path = require('path');
 const BaseController = require('../../controllers/BaseController');
 const SyncManagerService = require('./SyncManagerService');
 const SyncStateRepository = require('./SyncStateRepository');
@@ -12,37 +13,46 @@ class SyncManagerController extends BaseController {
   constructor() {
     super();
     this.initialized = false;
+    this._initPromise = null; // In-flight guard cho instance này
     this.modelRegistry = new SyncModelRegistry();
   }
 
   _getSharePointLoginState() {
-    return (
-      global.sharePointLoginState || {
-        required: false,
-        inProgress: false,
-        message: '',
-        skipped: global.sharePointLoginSkipped || false,
-      }
-    );
+    return global.sharePointLoginState || {
+      required: false,
+      inProgress: false,
+      message: '',
+      skipped: global.sharePointLoginSkipped || false
+    };
   }
 
   /**
    * Ensures all sync models are initialized and registered once.
-   * @returns {Promise<void>}
+   * Sử dụng in-flight Promise để nhiều request HTTP đồng thời
+   * không mỗi request spawn 1 lần init riêng biệt.
    */
   async ensureInitialized() {
     if (this.initialized) return;
 
-    try {
-      await SyncManagerService.ensureStateLoaded();
+    // Nếu đang có init chạy, được cùng Promise đó thay vì spawn mới
+    if (this._initPromise) return this._initPromise;
 
-      await this.modelRegistry.initializeAll(SyncManagerService, SyncStateRepository);
+    this._initPromise = (async () => {
+      try {
+        await SyncManagerService.ensureStateLoaded();
+        await this.modelRegistry.initializeAll(
+          SyncManagerService,
+          SyncStateRepository
+        );
+        this.initialized = true;
+      } catch (error) {
+        logger.error('[SyncManagerController] Failed to initialize models:', error);
+        this._initPromise = null; // Reset để cho phép retry
+        throw error;
+      }
+    })();
 
-      this.initialized = true;
-    } catch (error) {
-      logger.error('[SyncManagerController] Failed to initialize models:', error);
-      throw error;
-    }
+    return this._initPromise;
   }
 
   // ── Routes ─────────────────────
@@ -109,7 +119,7 @@ class SyncManagerController extends BaseController {
 
     const result = SyncManagerService.startModel(modelName, {
       reset: reset === true || reset === 'true',
-      batchSize,
+      batchSize
     });
     return this.success(res, result, 'Đã kích hoạt đồng bộ đối tượng');
   });
@@ -194,6 +204,16 @@ class SyncManagerController extends BaseController {
   });
 
   /**
+   * Kiểm tra phiên làm việc SharePoint
+   */
+  checkSession = this.asyncHandler(async (req, res) => {
+    return this.success(res, {
+      alive: !global.sharePointLoginState?.required,
+      message: global.sharePointLoginState?.message || 'Session is alive'
+    });
+  });
+
+  /**
    * Yêu cầu dừng toàn bộ hệ thống (Đóng Chrome và Terminal).
    */
   shutdown = this.asyncHandler(async (req, res) => {
@@ -214,9 +234,7 @@ class SyncManagerController extends BaseController {
       process.exit(0);
     }, 1000);
 
-    return this.success(res, {
-      message: 'Hệ thống đang thực hiện dừng lệnh... Tạm biệt đồng chí!',
-    });
+    return this.success(res, { message: 'Hệ thống đang thực hiện dừng lệnh... Tạm biệt đồng chí!' });
   });
 
   /**
@@ -228,7 +246,7 @@ class SyncManagerController extends BaseController {
     global.sharePointLoginState = {
       required: false,
       inProgress: true,
-      message: '',
+      message: ''
     };
     SyncManagerService._broadcastSSE();
 
@@ -238,7 +256,7 @@ class SyncManagerController extends BaseController {
       global.sharePointLoginState = {
         required: false,
         inProgress: false,
-        message: '',
+        message: ''
       };
 
       if (typeof global.startBackgroundServicesOnce === 'function') {
@@ -246,21 +264,17 @@ class SyncManagerController extends BaseController {
       }
 
       SyncManagerService._broadcastSSE();
-      return this.success(
-        res,
-        {
-          loginRequired: false,
-          message: 'Đăng nhập SharePoint thành công.',
-        },
-        'Đăng nhập SharePoint thành công.',
-      );
+      return this.success(res, {
+        loginRequired: false,
+        message: 'Đăng nhập SharePoint thành công.'
+      }, 'Đăng nhập SharePoint thành công.');
     } catch (err) {
       logger.error('[SyncManagerController] Lỗi quy trình đăng nhập:', err);
 
       global.sharePointLoginState = {
         required: true,
         inProgress: false,
-        message: err?.message || 'Đăng nhập SharePoint thất bại.',
+        message: err?.message || 'Đăng nhập SharePoint thất bại.'
       };
       SyncManagerService._broadcastSSE();
 
@@ -268,7 +282,7 @@ class SyncManagerController extends BaseController {
         res,
         `Đăng nhập SharePoint thất bại: ${err?.message || 'Không rõ nguyên nhân'}`,
         500,
-        err,
+        err
       );
     }
   });
@@ -282,21 +296,10 @@ class SyncManagerController extends BaseController {
     global.sharePointLoginState = {
       required: false,
       inProgress: false,
-      message: '',
+      message: ''
     };
     SyncManagerService._broadcastSSE();
-    return this.success(res, {
-      message: 'Đã bỏ qua đăng nhập SharePoint. Cảnh báo dữ liệu có thể không chính xác.',
-    });
-  });
-
-  /**
-   * Kiểm tra trạng thái phiên đăng nhập hiện tại
-   */
-  checkSession = this.asyncHandler(async (req, res) => {
-    await this.ensureInitialized();
-    const state = this._getSharePointLoginState();
-    return this.success(res, state);
+    return this.success(res, { message: 'Đã bỏ qua đăng nhập SharePoint. Cảnh báo dữ liệu có thể không chính xác.' });
   });
 
   // ── MỚI: SSE endpoint và Settings endpoint ─────────────────────────────────────
@@ -328,14 +331,62 @@ class SyncManagerController extends BaseController {
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
     const ka = setInterval(() => {
-      try {
-        res.write(': ka\n\n');
-      } catch (_) {
-        clearInterval(ka);
-      }
+      try { res.write(': ka\n\n'); } catch (_) { clearInterval(ka); }
     }, 25_000);
     req.on('close', () => clearInterval(ka));
     SyncManagerService.addSSEClient(res);
+  });
+
+  /**
+   * Thực hiện import hộ chiếu từ file Excel bằng script JS
+   */
+  importPassport = this.asyncHandler(async (req, res) => {
+    const { exec } = require('child_process');
+    const nodePath = 'node'; 
+    const scriptPath = path.join(process.cwd(), 'import_passport.js');
+    
+    logger.info(`[SyncManagerController] Đang khởi chạy script import hộ chiếu: ${scriptPath}`);
+    
+    // Sử dụng Promise để chờ script chạy xong và trả về kết quả cho UI
+    try {
+      const result = await new Promise((resolve, reject) => {
+        exec(`"${nodePath}" "${scriptPath}"`, { maxBuffer: 1024 * 1024 * 5 }, (error, stdout, stderr) => {
+          if (error) {
+            logger.error(`[SyncManagerController] Lỗi thực thi script JS: ${error.message}`);
+            return resolve({ success: false, message: error.message });
+          }
+          
+          if (stderr) {
+            logger.warn(`[SyncManagerController] Script JS stderr: ${stderr}`);
+          }
+
+          // Tìm dòng kết quả JSON
+          const lines = stdout.split('\n');
+          const resultLine = lines.find(l => l.trim().startsWith('JSON_RESULT:'));
+          
+          if (resultLine) {
+            try {
+              const jsonStr = resultLine.trim().replace('JSON_RESULT:', '');
+              const data = JSON.parse(jsonStr);
+              return resolve(data);
+            } catch (e) {
+              logger.error(`[SyncManagerController] Lỗi parse JSON kết quả: ${e.message}`);
+              return resolve({ success: false, message: 'Lỗi định dạng kết quả từ script' });
+            }
+          }
+          
+          resolve({ success: false, message: 'Không tìm thấy kết quả từ script' });
+        });
+      });
+
+      if (result.success) {
+        return this.success(res, result, 'Import thành công');
+      } else {
+        return this.error(res, result.message || 'Import thất bại', 500, result);
+      }
+    } catch (err) {
+      return this.error(res, `Lỗi hệ thống: ${err.message}`);
+    }
   });
 
   // ── Dashboard — giống bản gốc, bỏ meta refresh, thêm SSE JS
@@ -355,13 +406,8 @@ class SyncManagerController extends BaseController {
     data.sharePointLoginSkipped = global.sharePointLoginSkipped || false;
     const registeredLabels = this.modelRegistry.getRegisteredLabels();
 
-    // ĐÃ KHÔI PHỤC: Lọc bỏ những đối tượng máy này không phụ trách
-    const filteredEntities = {};
-    for (const label of registeredLabels) {
-      if (data.entities && data.entities[label]) {
-        filteredEntities[label] = data.entities[label];
-      }
-    }
+    // Bỏ qua bước lọc, gán thẳng toàn bộ models từ DB để hiện lên hết
+    const filteredEntities = data.entities || {};
 
     const initialRows = this._renderRows(filteredEntities, data.jobs);
     const noEntities = Object.keys(filteredEntities).length === 0;
@@ -1004,6 +1050,10 @@ class SyncManagerController extends BaseController {
           <i class="bi bi-arrow-counterclockwise"></i> Chạy lại toàn bộ tất cả đối tượng
         </button>
 
+        <button id="btn-import-passport" onclick="triggerImportPassport()" class="btn-dash" style="background: #8b5cf6; color: #fff;" ${data.isRunning ? 'disabled' : ''}>
+          <i class="bi bi-file-earmark-excel"></i> Import Hộ Chiếu từ Excel
+        </button>
+
         <div class="toggle-wrapper">
           <label class="toggle-label" for="skipPullToggle">
             <i class="bi bi-fast-forward-btn me-1"></i> Bỏ qua chuẩn bị dữ liệu từ các bảng (Người dùng, Văn bản đến/đi, Công việc...)
@@ -1018,9 +1068,7 @@ class SyncManagerController extends BaseController {
 
       <!-- Notification Area -->
       <div id="notification-area">
-        ${
-          !data.sharePointLoginRequired && data.sharePointLoginSkipped
-            ? `
+        ${!data.sharePointLoginRequired && data.sharePointLoginSkipped ? `
           <div class="alert-banner alert-banner-warning">
             <div class="alert-banner-content">
               <i class="bi bi-info-circle-fill"></i>
@@ -1030,9 +1078,7 @@ class SyncManagerController extends BaseController {
               <button class="btn-banner btn-banner-secondary" onclick="triggerLogin()">Thử đăng nhập lại</button>
             </div>
           </div>
-        `
-            : ''
-        }
+        ` : ''}
       </div>
 
       <!-- Table -->
@@ -1050,9 +1096,7 @@ class SyncManagerController extends BaseController {
 
   <!-- Modal Area (Nằm ngoài để không bị mờ) -->
   <div id="modal-area">
-    ${
-      data.sharePointLoginRequired && !data.sharePointLoginSkipped
-        ? `
+    ${data.sharePointLoginRequired && !data.sharePointLoginSkipped ? `
       <div class="modal-overlay">
         <div class="modal-content">
           <div class="spinner-box">
@@ -1068,9 +1112,7 @@ class SyncManagerController extends BaseController {
           </div>
         </div>
       </div>
-    `
-        : ''
-    }
+    ` : ''}
   </div>
 
   <script>
@@ -1309,6 +1351,8 @@ class SyncManagerController extends BaseController {
       badge.className   = data.isRunning ? 'syncing' : 'ready';
       document.getElementById('btn-all').disabled   = data.isRunning;
       document.getElementById('btn-reset').disabled = data.isRunning;
+      const btnImport = document.getElementById('btn-import-passport');
+      if (btnImport) btnImport.disabled = data.isRunning;
 
       const skipToggle = document.getElementById('skipPullToggle');
       if (skipToggle) {
@@ -1319,10 +1363,7 @@ class SyncManagerController extends BaseController {
       }
 
       // Lọc dữ liệu hiển thị (giống logic server-side)
-      const registeredLabels = [${this.modelRegistry
-        .getRegisteredLabels()
-        .map((l) => `'${l}'`)
-        .join(',')}];
+      const registeredLabels = [${this.modelRegistry.getRegisteredLabels().map(l => `'${l}'`).join(',')}];
       const filteredEntities = {};
       for (const label of registeredLabels) {
         if (data.entities && data.entities[label]) {
@@ -1471,6 +1512,53 @@ class SyncManagerController extends BaseController {
       } catch (e) { alert('Hệ thống đang đóng...'); window.close(); }
     }
 
+    async function triggerImportPassport() {
+      if (!confirm('Bạn có chắc chắn muốn thực hiện import hộ chiếu từ file ReportDSHoChieu.xlsx?')) return;
+      
+      const btn = document.getElementById('btn-import-passport');
+      const originalHtml = btn.innerHTML;
+      
+      // Hiệu ứng đang chạy
+      btn.disabled = true;
+      btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Đang import...';
+      btn.style.opacity = '0.7';
+
+      try {
+        const r = await fetch('/api/sync-manager-src/import-passport', { method: 'POST' });
+        const j = await r.json();
+        
+        console.log('[Import Result]', j); // Log ra console chi tiết cho kỹ thuật
+
+        if (j.success) {
+          const data = j.data;
+          let msg = '✅ KẾT QUẢ IMPORT HỘ CHIẾU\\n';
+          msg += '----------------------------------\\n';
+          msg += '• Tổng số bản ghi xử lý: ' + (data.inserted + data.skipped + data.errors) + '\\n';
+          msg += '• Thành công: ' + data.inserted + ' nhân viên\\n';
+          msg += '• Bỏ qua (đã tồn tại): ' + data.skipped + ' bản ghi\\n';
+          msg += '• Lỗi hệ thống: ' + data.errors + ' bản ghi\\n';
+          
+          if (data.report_file) {
+            msg += '\\nChi tiết các bản ghi lỗi/trùng xem tại:\\n' + data.report_file;
+          }
+          
+          alert(msg);
+          console.log('--- CHI TIẾT IMPORT ---');
+          console.log('Thành công:', data.inserted);
+          console.log('Trùng lặp:', data.skipped);
+          console.log('Lỗi:', data.errors);
+        } else {
+          alert('❌ THẤT BẠI: ' + (j.message || 'Lỗi không xác định'));
+        }
+      } catch(e) { 
+        alert('❌ LỖI KẾT NỐI: ' + e.message); 
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalHtml;
+        btn.style.opacity = '1';
+      }
+    }
+
     async function triggerLogin() {
       const ok = await retrySharePointLoginFromDashboard();
       if (ok) {
@@ -1537,76 +1625,60 @@ class SyncManagerController extends BaseController {
    * @returns {string}
    */
   _renderRows(entities, jobs) {
-    return Object.entries(entities)
-      .map(([name, info]) => {
-        const rel = Object.values(jobs || {})
-          .filter((j) => j.modelName === name)
-          .sort((a, b) => {
-            const ta = new Date(a.updatedAt || a.startedAt || 0).getTime();
-            const tb = new Date(b.updatedAt || b.startedAt || 0).getTime();
-            return tb - ta;
-          });
+    return Object.entries(entities).map(([name, info]) => {
+      const rel = Object.values(jobs || {})
+        .filter((j) => j.modelName === name)
+        .sort((a, b) => {
+          const ta = new Date(a.updatedAt || a.startedAt || 0).getTime();
+          const tb = new Date(b.updatedAt || b.startedAt || 0).getTime();
+          return tb - ta;
+        });
 
-        const rp = rel.find((j) =>
-          ['RUNNING', 'PAUSE_REQUESTED', 'RESUMING', 'PAUSED'].includes(j.status),
-        );
-        const cur =
-          info.activeJobId && jobs && jobs[info.activeJobId]
-            ? jobs[info.activeJobId]
-            : rp || rel[0] || null;
+      const rp = rel.find((j) => ['RUNNING', 'PAUSE_REQUESTED', 'RESUMING', 'PAUSED'].includes(j.status));
+      const cur = (info.activeJobId && jobs && jobs[info.activeJobId])
+        ? jobs[info.activeJobId] : (rp || rel[0] || null);
 
-        // Khong tu suy dien CRASHED theo timeout heartbeat khi render dashboard.
-        let ms = (info.status || 'IDLE').toUpperCase();
-        const js = cur ? String(cur.status || '').toUpperCase() : null;
+      // Khong tu suy dien CRASHED theo timeout heartbeat khi render dashboard.
+      let ms = (info.status || 'IDLE').toUpperCase();
+      const js = cur ? String(cur.status || '').toUpperCase() : null;
 
-        const canStart = ['IDLE', 'COMPLETED', 'FAILED', 'CRASHED'].includes(ms);
-        const canPause = js === 'RUNNING' || js === 'RESUMING';
-        const canResume = ms === 'PAUSED' || js === 'PAUSED';
-        const rid = canResume ? (cur && cur.jobId) || info.activeJobId || '' : '';
+      const canStart = ['IDLE', 'COMPLETED', 'FAILED', 'CRASHED'].includes(ms);
+      const canPause = js === 'RUNNING' || js === 'RESUMING';
+      const canResume = ms === 'PAUSED' || js === 'PAUSED';
+      const rid = canResume ? ((cur && cur.jobId) || info.activeJobId || '') : '';
 
-        const mapVN = {
-          IDLE: 'Sẵn sàng',
-          RUNNING: 'Đang chạy',
-          RESUMING: 'Đang tiếp tục',
-          PAUSE_REQUESTED: 'Đang dừng...',
-          PAUSED: 'Đã tạm dừng',
-          COMPLETED: 'Hoàn thành',
-          FAILED: 'Thất bại',
-          CRASHED: 'Sự cố',
-          ERROR: 'Lỗi',
-        };
-        const txt = mapVN[ms] || ms;
+      const mapVN = {
+        'IDLE': 'Sẵn sàng', 'RUNNING': 'Đang chạy', 'RESUMING': 'Đang tiếp tục',
+        'PAUSE_REQUESTED': 'Đang dừng...', 'PAUSED': 'Đã tạm dừng',
+        'COMPLETED': 'Hoàn thành', 'FAILED': 'Thất bại', 'CRASHED': 'Sự cố', 'ERROR': 'Lỗi'
+      };
+      const txt = mapVN[ms] || ms;
 
-        let pFill = 'blue';
-        if (ms === 'COMPLETED') pFill = 'green';
-        else if (['FAILED', 'CRASHED', 'ERROR'].includes(ms)) pFill = 'red';
-        else if (ms === 'PAUSED') pFill = 'yellow';
+      let pFill = 'blue';
+      if (ms === 'COMPLETED') pFill = 'green';
+      else if (['FAILED', 'CRASHED', 'ERROR'].includes(ms)) pFill = 'red';
+      else if (ms === 'PAUSED') pFill = 'yellow';
 
-        const pct = info.currentProgressPercent;
-        const prog =
-          pct != null
-            ? `<div class="prog-wrap"><div class="prog-fill ${pFill}" style="width:${pct}%"></div></div>
+      const pct = info.currentProgressPercent;
+      const prog = pct != null
+        ? `<div class="prog-wrap"><div class="prog-fill ${pFill}" style="width:${pct}%"></div></div>
        <div class="prog-label">${pct}%</div>`
-            : '<span style="color:var(--text-muted)">—</span>';
+        : '<span style="color:var(--text-muted)">—</span>';
 
-        const [synced, total] =
-          info.currentTotalToSync != null
-            ? [
-                `${(info.currentSynced || 0).toLocaleString()}`,
-                `${info.currentTotalToSync.toLocaleString()}`,
-              ]
-            : [null, null];
-        const syncCell = synced
-          ? `<span class="sync-count">${synced}</span><span class="sync-total"> / ${total}</span>`
-          : '<span style="color:var(--text-muted)">—</span>';
+      const [synced, total] = info.currentTotalToSync != null
+        ? [`${(info.currentSynced || 0).toLocaleString()}`, `${info.currentTotalToSync.toLocaleString()}`]
+        : [null, null];
+      const syncCell = synced
+        ? `<span class="sync-count">${synced}</span><span class="sync-total"> / ${total}</span>`
+        : '<span style="color:var(--text-muted)">—</span>';
 
-        const ji = cur
-          ? `<div class="job-id">${cur.jobId}</div><span class="job-status-pill">${cur.status}</span>`
-          : '<span style="color:var(--text-muted)">—</span>';
+      const ji = cur
+        ? `<div class="job-id">${cur.jobId}</div><span class="job-status-pill">${cur.status}</span>`
+        : '<span style="color:var(--text-muted)">—</span>';
 
-        const s = (info.status || 'idle').toLowerCase();
+      const s = (info.status || 'idle').toLowerCase();
 
-        return `<tr>
+      return `<tr>
         <td><span class="model-chip"><i class="bi bi-database-fill-gear"></i>${name}</span></td>
         <td><span class="status-badge status-${s}"><span class="dot"></span>${txt}</span></td>
         <td>${prog}</td>
@@ -1624,8 +1696,7 @@ class SyncManagerController extends BaseController {
           </div>
         </td>
       </tr>`;
-      })
-      .join('');
+    }).join('');
   }
 }
 

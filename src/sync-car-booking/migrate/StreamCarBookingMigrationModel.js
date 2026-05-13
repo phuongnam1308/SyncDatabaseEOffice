@@ -999,16 +999,63 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         const carBookingRoles = '[{"processKey":"VAN_BAN_DI","name":"VAN_BAN_DI","roles":[{"roleCode":"CAN_BO","name":"CAN_BO"}]},{"processKey":"QUY_TRINH_CV_PHONG_BAN","name":"QUY_TRINH_CV_PHONG_BAN","roles":[{"roleCode":"NGUOI_PHOI_HOP","name":"NGƯỜI PHỐI HỢP"}]},{"processKey":"PHUC_DAP_DV_CON","name":"PHUC_DAP_DV_CON","roles":[{"roleCode":"CAN_BO","name":"CAN_BO"},{"roleCode":"NHAN_VIEN_TCT","name":"NHAN_VIEN_TCT"}]},{"processKey":"quan_ly_tin_tuc","name":"quan_ly_tin_tuc","roles":[{"roleCode":"NGUOI_TAO_TIN","name":"NGUOI_TAO_TIN"}]},{"processKey":"SOANTHAO_PHATHANH_VBD","name":"SOANTHAO_PHATHANH_VBD","roles":[{"roleCode":"NGUOI_SOAN_THAO","name":"NGUOI_SOAN_THAO"}]},{"processKey":"QUY_TRINH_LICH_HOP","name":"QUY_TRINH_LICH_HOP","roles":[{"roleCode":"NGUOI_SOAN_LICH","name":"NGUOI_SOAN_LICH"},{"roleCode":"NGUOI_THAM_GIA","name":"NGUOI_THAM_GIA"},{"roleCode":"ADMIN","name":"ADMIN"}]},{"processKey":"quytrinhthuthaphoso1","name":"quytrinhthuthaphoso1","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qllsct","name":"qllsct","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvlfgttthcid","name":"qtdvlfgttthcid","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"dev_01","name":"dev_01","roles":[{"roleCode":"CB","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qlgttssddn","name":"qlgttssddn","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"quytrinhthuthaphoso","name":"quytrinhthuthaphoso","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtqlapi","name":"qtqlapi","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvdstphstsbnhs","name":"qtdvdstphstsbnhs","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtqllstthscd","name":"qtqllstthscd","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"listDetailImport","name":"listDetailImport","roles":[{"roleCode":"CANBO","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"kthsclone","name":"kthsclone","roles":[{"roleCode":"CANBO","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"tthsdn","name":"tthsdn","roles":[{"roleCode":"CANBO","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtqllssytl","name":"qtqllssytl","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qlgttssdcd","name":"qlgttssdcd","roles":[{"roleCode":"CANBO","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtqlkqgqtthccd","name":"qtqlkqgqtthccd","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"exceldoanhnghiep","name":"exceldoanhnghiep","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvldldtkqgqtthctsbncss","name":"qtdvldldtkqgqtthctsbncss","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvldstsdcdiddn","name":"qtdvldstsdcdiddn","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvttdtcn","name":"qtdvttdtcn","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtqltl","name":"qtqltl","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvldsidkqgqtthccd","name":"qtdvldsidkqgqtthccd","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"so2","name":"so2","roles":[{"roleCode":"CB","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"TVHSLT","name":"TVHSLT","roles":[{"roleCode":"CB","name":"CB","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtiedldtcd","name":"qtiedldtcd","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qldvcc","name":"qldvcc","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"ldsiqkqgqtthccd","name":"ldsiqkqgqtthccd","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtqllstths","name":"qtqllstths","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qlkqqgtthccd","name":"qlkqqgtthccd","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtth","name":"qtth","roles":[{"roleCode":"CANBOCQDV1","name":"Cán bộ CQDV1","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvttgikqtgqhstthc","name":"qtdvttgikqtgqhstthc","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qlhsdn","name":"qlhsdn","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtqllstthsdn","name":"qtqllstthsdn","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvlfkqgqtthcid","name":"qtdvlfkqgqtthcid","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"dongbo","name":"dongbo","roles":[{"roleCode":"CANBO","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdldtkqgqtthcid","name":"qtdldtkqgqtthcid","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtiedldtdn","name":"qtiedldtdn","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qllsctcd","name":"qllsctcd","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtqlhth","name":"qtqlhth","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtqlgttsdcd","name":"qtqlgttsdcd","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvldsgttsdcdid","name":"qtdvldsgttsdcdid","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qlkqqgtthcdn","name":"qlkqqgtthcdn","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvlfkqgqtthcbnhs","name":"qtdvlfkqgqtthcbnhs","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"kths","name":"kths","roles":[{"roleCode":"canbokhaithac","name":"Cán bộ khai thác","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvlddkqgqtthcdn","name":"qtdvlddkqgqtthcdn","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"Mã quy trình","name":"Mã quy trình","roles":[{"roleCode":"CANBO","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"importexcel","name":"importexcel","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvttkqgqtthc","name":"qtdvttkqgqtthc","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvldldtkqgqtthcid","name":"qtdvldldtkqgqtthcid","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtttgttsdddkscddn","name":"qtttgttsdddkscddn","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"LUONG_PHONG","name":"LUONG_PHONG","roles":[{"roleCode":"CAN_BO","name":"CAN_BO","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvlttdtdn","name":"qtdvlttdtdn","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvlddkqgq1dn","name":"qtdvlddkqgq1dn","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qllsctdn","name":"qllsctdn","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtqltldn","name":"qtqltldn","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"Administrator","name":"Administrator","roles":[{"roleCode":"CAN_BO","name":"CAN_BO","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"QUY_TRINH_PHONG_HOP","name":"QUY_TRINH_PHONG_HOP","roles":[{"roleCode":"XEM_PHONG_HOP","name":"XEM_PHONG_HOP","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"KY_SO_HS_VBD","name":"KY_SO_HS_VBD","roles":[{"roleCode":"NGUOI_SOAN_THAO","name":"NGUOI_SOAN_THAO"}]},{"processKey":"CVDAN","name":"CVDAN","roles":[{"roleCode":"NGUOI_GIAO","name":"NGƯỜI GIAO"},{"roleCode":"NGUOI_CHU_TRI","name":"NGƯỜI CHỦ TRÌ"},{"roleCode":"NGUOI_PHOI_HOP","name":"NGƯỜI PHỐI HỢP"}]},{"processKey":"QUY_TRINH_KHAI_THAC_HO_SO","name":"QUY_TRINH_KHAI_THAC_HO_SO","roles":[{"roleCode":"NGUOI_KHAI_THAC","name":"NGUOI_KHAI_THAC"}]},{"processKey":"hosoluutru","name":"hosoluutru","roles":[{"roleCode":"HHLT_CANBO","name":"HHLT_CANBO"}]},{"processKey":"thhs","name":"thhs","roles":[{"roleCode":"bld","name":"bld"}]},{"processKey":"PHUC_DAP_DV","name":"PHUC_DAP_DV","roles":[{"roleCode":"PHONG_NHAN_VIEN_TCT","name":"PHONG_NHAN_VIEN_TCT"},{"roleCode":"CAN_BO","name":"CAN_BO"}]},{"processKey":"QUY_TRINH_DANG_KY_XE","name":"QUY_TRINH_DANG_KY_XE","roles":[{"roleCode":"NGUOI_DANG_KY_XE","name":"NGUOI_DANG_KY_XE"}]},{"processKey":"QTVBNB","name":"QTVBNB","roles":[{"roleCode":"CAN_BO","name":"CAN_BO"}]},{"processKey":"QUY_TRINH_PHAN_ANH_KIEN_NGHI","name":"QUY_TRINH_PHAN_ANH_KIEN_NGHI","roles":[{"roleCode":"NGUOI_PHAN_ANH","name":"NGUOI_PHAN_ANH"}]},{"processKey":"QT_MTHC","name":"QT_MTHC","roles":[{"roleCode":"NGUOI_TAO","name":"NGUOI_TAO"}]},{"processKey":"SOANTHAO_PHATHANH_CQD","name":"SOANTHAO_PHATHANH_CQD","roles":[{"roleCode":"NGUOI_SOAN_THAO","name":"NGUOI_SOAN_THAO"}]},{"processKey":"dashboardPage","name":"dashboardPage","roles":[{"roleCode":"VT","name":"VT"}]},{"processKey":"KY_SO_HS_K_DD","name":"KY_SO_HS_K_DD","roles":[{"roleCode":"NGUOI_SOAN_THAO","name":"NGUOI_SOAN_THAO"}]},{"processKey":"reportsOutGoingDocument","name":"reportsOutGoingDocument","roles":[{"roleCode":"VT","name":"VT"}]},{"processKey":"PHOIHOP_NHANDEBIET","name":"PHOIHOP_NHANDEBIET","roles":[{"roleCode":"CAN_BO","name":"CAN_BO"}]},{"processKey":"statisticsAndReports","name":"statisticsAndReports","roles":[{"roleCode":"VT","name":"VT"}]}]';
 
         // 🔥 1. Resolve Thông tin Người dùng (Waterfall) - Đồng nhất ID cho Master & Audit
-        // Theo yêu cầu của USER: Ép cứng ID người dùng duy nhất
-        const finalUserId = 'b23406e3-5c75-41d3-91e0-1654293ae6b2';
-        console.log(`[StreamCarBookingMigrationModel] Using Hardcoded User ID: ${finalUserId}`);
+        let finalUserId = null;
+
+        // 1a. Tách tên thuần (Loại bỏ phòng ban phía sau dấu "-")
+        // Ví dụ: "Hoàng Thị Lan Phương - TB ATPC" -> "Hoàng Thị Lan Phương"
+        let pureName = null;
+        if (rowData.AuthorName) {
+            pureName = String(rowData.AuthorName).split('-')[0].trim();
+            console.log(`[StreamCarBookingMigrationModel] Extracted pure name: "${pureName}" from "${rowData.AuthorName}"`);
+        }
+
+        // 1b. Dùng MigrationHelper để tự động dò tìm hoặc tạo User ID
+        if (pureName) {
+            try {
+                if (this.helper && typeof this.helper.syncAndMapUser === 'function') {
+                    finalUserId = await this.helper.syncAndMapUser(pureName, transaction);
+                } else if (this.helper && typeof this.helper.mapUserName === 'function') {
+                    finalUserId = await this.helper.mapUserName(pureName, transaction);
+                }
+
+                if (finalUserId) {
+                    console.log(`[StreamCarBookingMigrationModel] Mapped User via Helper (${pureName}) -> ${finalUserId}`);
+                }
+            } catch (e) {
+                console.warn(`[StreamCarBookingMigrationModel] Lỗi tìm user qua Helper: ${e.message}`);
+            }
+        }
+
+        // 1c. Thử tìm ID theo Account (username) nếu Tên thất bại hoặc Helper không tìm thấy
+        if (!finalUserId && rowData.AuthorAccount) {
+            try {
+                const qAccount = `SELECT TOP 1 id FROM [${this.newDbName}].[dbo].[users] WHERE username = @account OR email LIKE @account + '@%'`;
+                const accRows = await this.queryNewDbTx(qAccount, { account: String(rowData.AuthorAccount).trim() }, transaction);
+                if (accRows && accRows.length > 0) {
+                    finalUserId = accRows[0].id;
+                    console.log(`[StreamCarBookingMigrationModel] Mapped User by Account (${rowData.AuthorAccount}) -> ${finalUserId}`);
+                }
+            } catch (e) {
+                console.warn(`[StreamCarBookingMigrationModel] Lỗi tìm user bằng Account: ${e.message}`);
+            }
+        }
+
+        // 1d. Fallback an toàn nếu vẫn không tìm thấy
+        if (!finalUserId) {
+            finalUserId = 'b23406e3-5c75-41d3-91e0-1654293ae6b2';
+            console.log(`[StreamCarBookingMigrationModel] User not found for ${rowData.AuthorName || rowData.AuthorAccount}. Using fallback Admin ID: ${finalUserId}`);
+        }
+
+        rowData.AuthorAccount = finalUserId;
+        
+        console.log(`[StreamCarBookingMigrationModel] Using User ID: ${finalUserId}`);
 
         // Đảm bảo user có quyền (roles) cần thiết nếu chưa có
         await this._ensureUserHasRoles(finalUserId, carBookingRoles, transaction);
 
-        // Đảm bảo đồng nhất tuyệt đối theo yêu cầu của USER
-        rowData.AuthorAccount = finalUserId; // Sẽ map vào created_by
-        rowData.Organizer = finalUserId;     // Sẽ map vào contact_person (Dùng chung 1 người cho tiện liên hệ)
+        if (!rowData.Organizer) {
+            rowData.Organizer = finalUserId;     // Map Organizer sang cùng user nếu bị rỗng
+        }
 
         // 🔥 1.5. Xử lý các giá trị mặc định thực tế cho MASTER nếu bị thiếu
         if (!rowData.departure_point || String(rowData.departure_point).trim() === '') {
@@ -1066,12 +1113,22 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         rowData.request_submitted_at = rowData.tp_Created || now;
 
         // 🔥 1.8. Tính toán các trường bổ trợ (Thời lượng & Chuẩn hóa thời gian)
-        // Cập nhật theo yêu cầu USER: Sử dụng StartDate/EndDate thực tế, nếu không có để NULL
-        const start = rowData.StartDate ? new Date(rowData.StartDate) : null;
-        const end = rowData.EndDate ? new Date(rowData.EndDate) : null;
+        // Lấy thời gian đi từ tp_Created và thời gian về từ tp_Modified theo yêu cầu USER
+        const parseDateFallback = (str) => {
+            if (!str) return null;
+            if (str instanceof Date) return isNaN(str.getTime()) ? null : str;
+            // Làm sạch khoảng trắng và thêm dấu cách trước AM/PM nếu thiếu (ví dụ: "6:36AM" -> "6:36 AM")
+            let cleanStr = String(str).replace(/\s+/g, ' ').trim();
+            cleanStr = cleanStr.replace(/([aApP][mM])$/, ' $1');
+            const d = new Date(cleanStr);
+            return isNaN(d.getTime()) ? null : d;
+        };
 
-        rowData.departure_time = (start && !isNaN(start.getTime())) ? start : null;
-        rowData.return_time = (end && !isNaN(end.getTime())) ? end : null;
+        const start = parseDateFallback(rowData.tp_Created || rowData.CreatedDate);
+        const end = parseDateFallback(rowData.tp_Modified || rowData.ModifiedDate);
+
+        rowData.departure_time = start || now;
+        rowData.return_time = end || now;
 
         if (rowData.departure_time && rowData.return_time) {
             const diffMs = rowData.return_time - rowData.departure_time;
@@ -1081,15 +1138,18 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         }
 
         // 🔥 2. Ghi vào bảng MASTER (vehicle_registrations)
-        // Safeguard: Chuẩn hóa cột JSON array - chuỗi rỗng '' → '[]' để tránh lỗi constraint
-        const normalizeArr = (v) => {
+        // Safeguard: Chuẩn hóa cột JSON array/số - chuỗi rỗng hoặc null → NULL (không ghi '[]' hay 0 giả)
+        const normalizeNullable = (v) => {
             if (v === null || v === undefined) return null;
             const s = String(v).trim();
-            return s === '' ? '[]' : s;
+            return s === '' || s === 'null' || s === 'undefined' ? null : s;
         };
-        rowData.driver_ids               = normalizeArr(rowData.driver_ids);
-        rowData.car_ids                  = normalizeArr(rowData.car_ids);
-        rowData.coordination_information = normalizeArr(rowData.coordination_information);
+        rowData.driver_ids               = normalizeNullable(rowData.driver_ids);
+        rowData.car_ids                  = normalizeNullable(rowData.car_ids);
+        rowData.coordination_information = normalizeNullable(rowData.coordination_information);
+        rowData.confirmed_driver_ids     = normalizeNullable(rowData.confirmed_driver_ids);
+        rowData.driver_notice_count      = (rowData.driver_notice_count === null || rowData.driver_notice_count === undefined || String(rowData.driver_notice_count).trim() === '') ? null : Number(rowData.driver_notice_count);
+        rowData.leader_notice_times      = normalizeNullable(rowData.leader_notice_times);
 
         logger.info(`[StreamCarBookingMigrationModel] Executing Upsert for MASTER table...`);
         const masterResult = await this.upsertDataToNewDB(rowData, this.oldConfig, 'id_sp_bak', recordId, transaction);
@@ -1111,11 +1171,41 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         if (Array.isArray(coordination) && coordination.length > 0) {
             console.log(`[StreamCarBookingMigrationModel] Upserting ${coordination.length} Coordination Items...`);
             let count = 0;
+            
+            const carList = this.cachedCarIds.length > 0 ? this.cachedCarIds : ['LC-20260224035946-Q6DQ2AL8'];
+            const driverList = this.cachedDriverIds.length > 0 ? this.cachedDriverIds : ['DR-20260316075949-SF8X4UZA'];
+
             for (const item of coordination) {
+                // 3a. Tìm ID Xe đã có sẵn trên hệ thống mới (Hoặc tự tạo nếu chưa có)
+                let finalCarId = item.carId || item.car_id;
+                if (finalCarId && isNaN(finalCarId)) {
+                    finalCarId = await this.getOrCreateCar(finalCarId, transaction);
+                } else {
+                    finalCarId = null;
+                }
+                
+                // Nếu không tìm thấy xe khớp tên và tạo thất bại, chọn random 1 xe có sẵn
+                if (!finalCarId) {
+                    finalCarId = carList[Math.floor(Math.random() * carList.length)];
+                }
+
+                // 3b. Tìm ID Tài xế đã có sẵn trên hệ thống mới (Hoặc tự tạo nếu chưa có)
+                let finalDriverId = item.driverId || item.driver_id;
+                if (finalDriverId && isNaN(finalDriverId)) {
+                    finalDriverId = await this.getOrCreateDriver(finalDriverId, transaction);
+                } else {
+                    finalDriverId = null;
+                }
+                
+                // Nếu không tìm thấy tài xế khớp tên và tạo thất bại, chọn random 1 tài xế có sẵn
+                if (!finalDriverId) {
+                    finalDriverId = driverList[Math.floor(Math.random() * driverList.length)];
+                }
+
                 const detailData = {
                     registration_id: masterId,
-                    car_id: item.carId || item.car_id || 'UNKNOWN_CAR',
-                    driver_id: item.driverId || item.driver_id || 'UNKNOWN_DRIVER',
+                    car_id: finalCarId || 'UNKNOWN_CAR',
+                    driver_id: finalDriverId || 'UNKNOWN_DRIVER',
                     is_confirmed: item.isConfirmed ? 1 : 0,
                     confirmed_at: item.confirmedAt ? new Date(item.confirmedAt) : null,
                     id_sp_bak: recordId,
@@ -1179,8 +1269,24 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
     const db = this.newDbName || 'app_tancang';
     const schema = 'dbo';
     const tableRef = `[${db}].[${schema}].[audit]`;
-    const creatorId = 'b23406e3-5c75-41d3-91e0-1654293ae6b2';
-    const createTime = rowData.tp_Modified ? new Date(rowData.tp_Modified) : (rowData.ModifiedDate ? new Date(rowData.ModifiedDate) : new Date());
+    const creatorId = rowData.AuthorAccount || 'b23406e3-5c75-41d3-91e0-1654293ae6b2';
+
+    const parseSharePointDate = (str) => {
+      if (!str) return new Date();
+      if (str instanceof Date) return isNaN(str.getTime()) ? new Date() : str;
+      // Làm sạch khoảng trắng (ví dụ "Oct  8 2014  6:36AM" -> "Oct 8 2014 6:36 AM")
+      let cleanStr = String(str).replace(/\s+/g, ' ').trim();
+      cleanStr = cleanStr.replace(/([aApP][mM])$/, ' $1');
+      const d = new Date(cleanStr);
+      if (isNaN(d.getTime())) {
+          console.warn(`[StreamCarBookingMigrationModel] Failed to parse date string "${str}", fallback to now.`);
+          return new Date();
+      }
+      return d;
+    };
+
+    const rawTimeStr = rowData.tp_Modified || rowData.tp_Created || rowData.created_at || rowData.ModifiedDate;
+    const createTime = parseSharePointDate(rawTimeStr);
 
     let auditSteps = [];
 
@@ -1378,6 +1484,71 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
       `;
       await this.queryNewDb(query);
     }
+  }
+
+  // =========================================================================
+  // HELPER: TỰ ĐỘNG TẠO XE & TÀI XẾ NẾU CHƯA CÓ TRÊN HỆ THỐNG MỚI
+  // =========================================================================
+  async getOrCreateDriver(driverNameOrId, transaction) {
+      if (!driverNameOrId || String(driverNameOrId).trim() === '') return null;
+      const name = String(driverNameOrId).trim();
+      const db = this.newDbName || 'app_tancang';
+      const schema = 'dbo';
+      const tableRef = `[${db}].[${schema}].[list_drivers]`;
+      
+      // Kiểm tra xem đã tồn tại chưa
+      const exist = await this.queryNewDbTx(`SELECT TOP 1 id FROM ${tableRef} WHERE id = @name OR full_name = @name OR full_name LIKE '%' + @name + '%'`, { name }, transaction);
+      if (exist && exist.length > 0) {
+          console.log(`[StreamCarBookingMigrationModel] Found Driver ID: ${name} -> ${exist[0].id}`);
+          return exist[0].id;
+      }
+      
+      // Tự động tạo mới
+      const { v4: uuidv4 } = require('uuid');
+      const newId = uuidv4().toUpperCase();
+      await this.queryNewDbTx(`
+          INSERT INTO ${tableRef} (
+              id, full_name, phone_number, id_card, license_number, license_class, license_issued_date,
+              status, created_at, updated_at, booking_available
+          )
+          VALUES (
+              @id, @name, '0000000000', '000000000000', 'UNKNOWN', 'B2', GETDATE(),
+              1, GETDATE(), GETDATE(), 1
+          )
+      `, { id: newId, name }, transaction);
+      
+      console.log(`[StreamCarBookingMigrationModel] Auto-created new Driver: "${name}" -> ${newId}`);
+      return newId;
+  }
+
+  async getOrCreateCar(carNameOrPlate, transaction) {
+      if (!carNameOrPlate || String(carNameOrPlate).trim() === '') return null;
+      const name = String(carNameOrPlate).trim();
+      const db = this.newDbName || 'app_tancang';
+      const schema = 'dbo';
+      const tableRef = `[${db}].[${schema}].[list_cars]`;
+      
+      // Kiểm tra xem đã tồn tại chưa
+      const exist = await this.queryNewDbTx(`SELECT TOP 1 id FROM ${tableRef} WHERE id = @name OR license_plate = @name OR brand = @name`, { name }, transaction);
+      if (exist && exist.length > 0) {
+          console.log(`[StreamCarBookingMigrationModel] Found Car ID: ${name} -> ${exist[0].id}`);
+          return exist[0].id;
+      }
+      
+      // Tự động tạo mới
+      const { v4: uuidv4 } = require('uuid');
+      const newId = uuidv4().toUpperCase();
+      await this.queryNewDbTx(`
+          INSERT INTO ${tableRef} (
+              id, license_plate, car_type, brand, manager, status_car, status, created_at, updated_at, booking_available
+          )
+          VALUES (
+              @id, @name, 'UNKNOWN', @name, 'admin', N'Sẵn sàng', 1, GETDATE(), GETDATE(), 1
+          )
+      `, { id: newId, name }, transaction);
+      
+      console.log(`[StreamCarBookingMigrationModel] Auto-created new Car: "${name}" -> ${newId}`);
+      return newId;
   }
 
   async upsertDetailToNewDB(data, transaction) {

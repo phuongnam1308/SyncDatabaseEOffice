@@ -1247,14 +1247,14 @@ class MigrationHelper {
       };
     }
 
-    if (normalized.includes('huy') || normalized === 'cancel') {
+    if (normalized.includes('huy') || normalized.includes('thu hoi') || normalized === 'cancel') {
       return {
         role: 'NGUOI_XU_LY',
         roleProcess: 'NGUOI_XU_LY',
         actionCode: 'CANCEL',
         fromNodeId: 'Gateway_0rbwxs6',
         toNodeId: 'EndEvent_1',
-        actionLabel: 'Hủy phiếu',
+        actionLabel: normalized.includes('thu hoi') ? 'Thu hồi' : 'Hủy phiếu',
         curStatusCode: 'CANCEL',
         stageStatus: 'DA_XU_LY',
         details: rawValue

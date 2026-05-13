@@ -121,50 +121,82 @@ const MODEL_DEFINITIONS = [
   },
 ];
 
+// ═══════════════════════════════════════════════════════════════════
+// MODULE-LEVEL SINGLETON GUARD
+// Đảm bảo initializeAll() chỉ chạy đúng 1 lần dù có bao nhiêu
+// instance SyncModelRegistry được tạo ra (do Express route handler).
+// ═══════════════════════════════════════════════════════════════════
+let _globalInitPromise = null;   // Promise duy nhất của quá trình init
+let _globalInitDone = false;     // Cờ "đã xong" để fast-path skip
+
 class SyncModelRegistry {
   /**
    * Keeps initialized model instances and their handler wrappers.
    */
   constructor() {
     this._registry = new Map();
-    this._initialized = false;
   }
 
   /**
    * Initializes all configured models and registers them to sync manager once.
-   * @param {import('./SyncManagerService')} syncManagerService
-   * @param {import('./SyncStateRepository')} syncStateRepository
-   * @returns {Promise<void>}
+   * Module-level Singleton — dù gọi bao nhiêu lần từ bao nhiêu instance,
+   * chỉ chạy đúng 1 lần thực sự.
    */
   async initializeAll(syncManagerService, syncStateRepository) {
-    if (this._initialized) {
-      logger.warn('[SyncModelRegistry] Already initialized, skip.');
+    // Fast-path: đã xong rồi
+    if (_globalInitDone) {
+      logger.debug('[SyncModelRegistry] Đã init xong từ trước. Skip.');
       return;
     }
 
-    logger.info(`[SyncModelRegistry] Initializing ${MODEL_DEFINITIONS.length} models...`);
-
-    const results = await Promise.allSettled(
-      MODEL_DEFINITIONS.map((def) =>
-        this._initializeSingle(def, syncManagerService, syncStateRepository)
-      )
-    );
-
-    const ok = results.filter((result) => result.status === 'fulfilled').length;
-    const err = results.filter((result) => result.status === 'rejected').length;
-
-    if (err > 0) {
-      results.forEach((result, idx) => {
-        if (result.status === 'rejected') {
-          logger.error(
-            `[SyncModelRegistry] x ${MODEL_DEFINITIONS[idx]?.key}: ${result.reason?.message}`
-          );
-        }
-      });
+    // In-flight guard: đang có init chạy, các caller khác được Promise cũ
+    if (_globalInitPromise) {
+      logger.info('[SyncModelRegistry] Đang init, chờ kết quả...');
+      return _globalInitPromise;
     }
 
-    this._initialized = true;
-    logger.info(`[SyncModelRegistry] Done: ${ok}/${MODEL_DEFINITIONS.length} models.`);
+    // Caller đầu tiên: tạo Promise và đăng ký toàn cục ngay
+    _globalInitPromise = this._doInitializeAll(syncManagerService, syncStateRepository)
+      .then(() => {
+        _globalInitDone = true;
+        logger.info('[SyncModelRegistry] ✅ Singleton init hoàn tất.');
+      })
+      .catch((err) => {
+        _globalInitPromise = null; // Reset để cho phép retry nếu xảy ra lỗi
+        logger.error('[SyncModelRegistry] ❌ Init thất bại:', err.message);
+        throw err;
+      });
+
+    return _globalInitPromise;
+  }
+
+  /**
+   * Thực thi khởi tạo (nội bộ): chạy tuần tự từng model để tránh deadlock.
+   * (Promise.allSettled song song khi nhiều model cùng ALTER TABLE gây deadlock)
+   */
+  async _doInitializeAll(syncManagerService, syncStateRepository) {
+    logger.info(`[SyncModelRegistry] Bắt đầu khởi tạo ${MODEL_DEFINITIONS.length} models (tuần tự)...`);
+
+    let ok = 0;
+    let failed = 0;
+
+    for (const def of MODEL_DEFINITIONS) {
+      try {
+        await this._initializeSingle(def, syncManagerService, syncStateRepository);
+        ok++;
+        logger.debug(`[SyncModelRegistry] ✅ ${def.key}`);
+      } catch (err) {
+        failed++;
+        logger.error(`[SyncModelRegistry] ❌ ${def.key}: ${err.message}`);
+        // Tiếp tục model tiếp theo, không throw để tránh block toàn bộ startup
+      }
+    }
+
+    logger.info(`[SyncModelRegistry] Hoàn tất: ${ok} thành công, ${failed} lỗi / tổng ${MODEL_DEFINITIONS.length} models.`);
+
+    if (ok === 0) {
+      throw new Error('Tất cả model đều thất bại khởi tạo. Kiểm tra kết nối DB.');
+    }
   }
 
   /**
@@ -260,13 +292,35 @@ class SyncModelRegistry {
     if (instanceId && isParallelModule && instanceId !== '1' && instanceId !== '3021') {
       label = `${label} (${instanceId})`;
     }
-    
+
     // Always register to display on Dashboard, even on secondary instances.
     // The execution safety (not running same non-parallel job twice) is handled by the Job Manager or manual start.
     if (!isPrimaryInstance && !isParallelModule) {
       logger.info(`[SyncModelRegistry] Registering "${key}" on secondary instance ${instanceId} for monitoring.`);
     }
 
+    // ── BƯỚC 1: Đảm bảo model luôn có record trong DB TRƯỚC khi init ──────────
+    // Ngay cả khi initialize() thất bại, model vẫn xuất hiện trên dashboard.
+    if (syncStateRepository) {
+      try {
+        if (!instanceId) {
+          // [QUY TRÌNH SỬA LỖI] Đổi tên key kỹ thuật thành Label Tiếng Việt
+          await syncStateRepository.renameModel(key, label, 'default');
+          if (key.startsWith('STREAM_')) {
+            const legacyKey = 'UNIT_TEST_' + key.replace('STREAM_', '');
+            const typoKey = legacyKey.includes('INCOMING') ? legacyKey.replace('INCOMING', 'INCOMMING') : legacyKey;
+            await syncStateRepository.renameModel(typoKey, label, 'default');
+          }
+          await syncStateRepository.ensureModel(label, 'default');
+        } else {
+          await syncStateRepository.ensureModel(label, instanceId);
+        }
+      } catch (dbErr) {
+        logger.warn(`[SyncModelRegistry] ensureModel failed for ${key}: ${dbErr.message}`);
+      }
+    }
+
+    // ── BƯỚC 2: Khởi tạo model và đăng ký handler ────────────────────────────
     try {
       logger.debug(`[SyncModelRegistry] Init: ${key}`);
 
@@ -274,23 +328,6 @@ class SyncModelRegistry {
       await instance.initialize();
 
       const handler = new SyncHandlerModel(instance);
-
-      // [QUY TRÌNH SỬA LỖI] Đổi tên key kỹ thuật thành Label Tiếng Việt trong DB nếu tồn tại
-      // CHỈ thực hiện rename nếu không phải chạy đa instance (để tránh tranh chấp record)
-      if (syncStateRepository && !instanceId) {
-        await syncStateRepository.renameModel(key, label, 'default');
-        if (key.startsWith('STREAM_')) {
-          const legacyKey = 'UNIT_TEST_' + key.replace('STREAM_', '');
-          // Special case for typo fix
-          const typoKey = legacyKey.includes('INCOMING') ? legacyKey.replace('INCOMING', 'INCOMMING') : legacyKey;
-          await syncStateRepository.renameModel(typoKey, label, 'default');
-        }
-        await syncStateRepository.ensureModel(label, 'default');
-      } else if (syncStateRepository && instanceId) {
-        // Nếu chạy đa instance, chỉ cần đảm bảo có dòng cho instance này
-        await syncStateRepository.ensureModel(label, instanceId);
-      }
-
       await handler.registerHandlers(syncManagerService, label);
 
       this._registry.set(key, {
