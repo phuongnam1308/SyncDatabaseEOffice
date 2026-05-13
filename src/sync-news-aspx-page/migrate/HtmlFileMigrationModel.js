@@ -1,4 +1,4 @@
-﻿const fs = require('fs');
+const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 const cheerio = require('cheerio');
@@ -208,7 +208,7 @@ class HtmlFileMigrationModel extends BaseModel {
     const viewPrefix = (
       process.env.NEW_SYSTEM_VIEW_PREFIX || 'https://apigw-uat.snp.com.vn/doffice-be'
     ).replace(/\/$/, '');
-    const objectId = articleSlug || itemId || '9999';
+    const objectId = itemId || articleSlug || '9999'; // Ưu tiên dùng DocId (itemId) làm object_id thay vì slug
 
     // Phần mở rộng file tài liệu được hỗ trợ
     const DOC_EXTENSIONS = new Set(['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.zip', '.rar']);
@@ -445,7 +445,8 @@ class HtmlFileMigrationModel extends BaseModel {
 
     // 1. Process content (images, docs inside)
     logger.info(`[Sync] Bắt đầu xử lý tài nguyên trong nội dung bài viết...`);
-    const result = await this.processContentResources(data.content, data.itemId, data.slug);
+    const DocIdToUse = data.DocId || realDocId || data.itemId;
+    const result = await this.processContentResources(data.content, DocIdToUse, data.slug);
     const updatedContent = result.content;
     const processedImages = result.images || [];
 
@@ -490,7 +491,7 @@ class HtmlFileMigrationModel extends BaseModel {
       logger.info(`[Sync] Tự động gán Ảnh đại diện từ ảnh đầu tiên của bài viết.`);
     }
 
-    const DocIdToUse = data.DocId || realDocId || data.itemId;
+    // const DocIdToUse = data.DocId || realDocId || data.itemId;
 
     const query = `
             DECLARE @nid INT = NULL;
