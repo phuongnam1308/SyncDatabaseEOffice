@@ -29,13 +29,9 @@ class BaseModel {
       const request = this.oldPool.request();
 
       // Bind parameters
-      Object.keys(params).forEach(key => {
-        request.input(key, params[key]);
-      });
+      this._bindParams(request, params);
 
-      // const timer = logger.startTimer(`queryOldDb | ${query.substring(0, 50).replace(/\n/g, ' ')}...`);
       const result = await request.query(query);
-      // timer.stop(result.recordset ? result.recordset.length : 0);
       return result.recordset;
     } catch (error) {
       logger.error(`Lỗi query database cũ: ${error.message}. Query: ${query.substring(0, 500)}. Params: ${JSON.stringify(params)}`);
@@ -52,13 +48,9 @@ class BaseModel {
       const request = this.newPool.request();
 
       // Bind parameters
-      Object.keys(params).forEach(key => {
-        request.input(key, params[key]);
-      });
+      this._bindParams(request, params);
 
-      // const timer = logger.startTimer(`queryNewDb | ${query.substring(0, 50).replace(/\n/g, ' ')}...`);
       const result = await request.query(query);
-      // timer.stop(result.recordset ? result.recordset.length : 0);
       return result.recordset;
     } catch (error) {
       logger.error(`Lỗi query database mới: ${error.message}. Query: ${query.substring(0, 500)}. Params: ${JSON.stringify(params)}`);
@@ -82,13 +74,9 @@ class BaseModel {
         ? new sql.Request(transaction)
         : this.newPool.request();
 
-      Object.keys(params || {}).forEach(key => {
-        request.input(key, params[key]);
-      });
+      this._bindParams(request, params);
 
-      // const timer = logger.startTimer(`queryNewDbTx | ${query.substring(0, 50).replace(/\n/g, ' ')}...`);
       const result = await request.query(query);
-      // timer.stop(result.recordset ? result.recordset.length : 0);
       return result.recordset;
     } catch (error) {
       logger.error(`Lỗi query database mới (TX): ${error.message}. Query: ${query.substring(0, 500)}. Params: ${JSON.stringify(params)}`);
@@ -102,9 +90,7 @@ class BaseModel {
       const request = this.newPool.request();
 
       // Bind parameters
-      Object.keys(params).forEach(key => {
-        request.input(key, params[key]);
-      });
+      this._bindParams(request, params);
 
       const result = await request.query(query);
       return result;
@@ -157,11 +143,14 @@ class BaseModel {
       const fields = Object.keys(data);
       const values = fields.map((_, i) => `@param${i}`).join(', ');
       const query = `INSERT INTO ${schema}.${tableName} (${fields.join(', ')}) VALUES (${values})`;
+      
+      const params = {};
+      fields.forEach((field, i) => {
+        params[`param${i}`] = data[field];
+      });
 
       const request = this.newPool.request();
-      fields.forEach((field, i) => {
-        request.input(`param${i}`, data[field]);
-      });
+      this._bindParams(request, params);
 
       await request.query(query);
       return true;
@@ -169,6 +158,19 @@ class BaseModel {
       logger.error(`Lỗi insert bản ghi: ${error.message}`);
       throw error;
     }
+  }
+
+  // Helper để bind parameters với hỗ trợ Unicode (NVarChar) cho chuỗi
+  _bindParams(request, params = {}) {
+    Object.keys(params || {}).forEach(key => {
+      const value = params[key];
+      // Nếu là chuỗi, ép kiểu sang NVarChar để hỗ trợ Unicode (Tiếng Việt)
+      if (typeof value === 'string') {
+        request.input(key, sql.NVarChar, value);
+      } else {
+        request.input(key, value);
+      }
+    });
   }
 
   // Đóng model (Giải phóng pool reference, không đóng pool thật)

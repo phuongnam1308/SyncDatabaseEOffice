@@ -11,6 +11,8 @@ const SyncOutgoingModel = require('../sync-outgoing-v2/models/SyncOutgoingModel'
 
 class SyncOutgoingAdapter {
   constructor() {
+    this._instanceId = process.env.SYNC_INSTANCE_ID || process.env.INSTANCE_ID || '1';
+    this._name = `StreamOutgoingV2_Instance_${this._instanceId}`;
     this._model = null;
     this._initialized = false;
   }
@@ -21,27 +23,32 @@ class SyncOutgoingAdapter {
   async initialize() {
     if (this._initialized) return;
 
-    // Initialize instance ID cho multi-terminal support
-    this._instanceId = process.env.INSTANCE_ID || '1';
-
     // Tạo instance của SyncOutgoingModel v2
     this._model = new SyncOutgoingModel();
-
+    
     // Gọi initialize của model để khởi tạo đầy đủ (pools, loader, staging table)
     await this._model.initialize(this._instanceId);
 
     this._initialized = true;
-    logger.info(`[SyncOutgoingAdapter] Initialized with instanceId=${this._instanceId}`);
+    logger.info(`[SyncOutgoingAdapter] Initialized as ${this._name}`);
+  }
+
+  /**
+   * Trả về tên định danh duy nhất cho instance này
+   */
+  getName() {
+    return this._name || 'StreamOutgoingV2_Unknown';
   }
 
   /**
    * Implement BaseIncrementalSyncInterface.getCount()
-   * Đếm số bản ghi cần sync
+   * Đếm tổng số bản ghi cần sync (bao gồm cả trong source DB và đang chờ trong staging)
    */
   async getCount(lastTime, lastSyncId = 0) {
     const stagingTable = `outgoing_documents_sync_${this._instanceId}`;
 
-    const query = `
+    // 1. Đếm số bản ghi đang chờ xử lý trong staging
+    const stagingQuery = `
       SELECT COUNT(1) AS cnt
       FROM ${stagingTable}
       WHERE ISNULL(MigrateFlg, 0) = 0
@@ -50,18 +57,30 @@ class SyncOutgoingAdapter {
 
     try {
       const pool = dbConnection.getNewPool();
-      if (!pool) {
-        logger.error(`[SyncOutgoingAdapter] getCount: New pool NOT connected!`);
-        return 0;
-      }
-      const result = await pool.request().query(query);
-      const count = Number(result.recordset?.[0]?.cnt || 0);
-      logger.debug(`[SyncOutgoingAdapter] getCount from ${stagingTable}: ${count}`);
-      return count;
+      if (!pool) return 0;
+      
+      const stagingRes = await pool.request().query(stagingQuery);
+      const inStaging = Number(stagingRes.recordset?.[0]?.cnt || 0);
+
+      // 2. Đếm số bản ghi còn lại trong OLD DB chưa được fetch vào staging cho instance này
+      // Sử dụng getTotalCount của extractor
+      const inSource = await this._model.extractor.getTotalCount(lastTime, lastSyncId);
+
+      const total = inStaging + inSource;
+      logger.info(`[SyncOutgoingAdapter] getCount: ${total} (Staging: ${inStaging}, Source: ${inSource})`);
+      return total;
     } catch (error) {
-      logger.error(`[SyncOutgoingAdapter] getCount error on ${stagingTable}: ${error.message}`);
+      logger.error(`[SyncOutgoingAdapter] getCount error: ${error.message}`);
       return 0;
     }
+  }
+
+  /**
+   * Implement countListFromOldDb - required for dashboard in Full Sync mode
+   */
+  async countListFromOldDb(lastSyncTime, lastSyncId = 0) {
+    if (!this._model || !this._model.extractor) return 0;
+    return this._model.extractor.countListFromOldDb(lastSyncTime, lastSyncId);
   }
 
   /**
@@ -75,12 +94,18 @@ class SyncOutgoingAdapter {
     // Default to max date (DESC ordering starts from newest)
     const DEFAULT_SYNC_TIME = '2999-12-31T23:59:59.999Z';
 
-    // Handle epoch time (1970-01-01) as "not set" - use default
-    const isValidTime = lastSyncTime && lastSyncTime !== '1970-01-01T00:00:00.000Z';
+    // Handle epoch time (1970-01-01) or 1900-01-01 as "reset" - use default (2999) for DESC sync
+    const lastSyncDate = new Date(lastSyncTime);
+    const isDateValid = !isNaN(lastSyncDate.getTime());
+    const isValidTime = lastSyncTime && 
+                        lastSyncTime !== '1970-01-01T00:00:00.000Z' &&
+                        isDateValid &&
+                        lastSyncDate.getFullYear() > 2000; // Nếu nhỏ hơn năm 2000, coi như Reset
+
     let cursorTime = isValidTime ? lastSyncTime : DEFAULT_SYNC_TIME;
     let cursorId = Number(lastSyncId || 0);
 
-    logger.info(`[SyncOutgoingAdapter] getList start: cursorTime=${cursorTime}, lastSyncId=${cursorId}`);
+    logger.info(`[SyncOutgoingAdapter] getList start: cursorTime=${cursorTime}, lastSyncId=${cursorId} (Raw lastSyncTime: ${lastSyncTime})`);
 
     while (hasMore) {
       const batch = await this._model.extractor.fetchBatchFromOldDb(
@@ -126,7 +151,7 @@ class SyncOutgoingAdapter {
     const batchSize = Number(limit) || Number(process.env.STAGING_FETCH_BATCH_SIZE || 2000);
     const effectiveOffset = Number(offset) || 0;
     // Handle epoch time as "not set"
-    const DEFAULT_SYNC_TIME = '9999-12-31T23:59:59.999Z';
+    const DEFAULT_SYNC_TIME = '2999-12-31T23:59:59.999Z';
     const isValidTime = lastSyncTime && lastSyncTime !== '1970-01-01T00:00:00.000Z';
     const effectiveSyncTime = isValidTime ? lastSyncTime : DEFAULT_SYNC_TIME;
 

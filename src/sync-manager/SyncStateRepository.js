@@ -66,18 +66,38 @@ class SyncStateRepository extends BaseModel {
    * Đảm bảo Model đã tồn tại trong bảng sync_models
    */
   async ensureModel(modelName, instanceId = 'default') {
-    try {
-      const query = `
-        IF NOT EXISTS (SELECT 1 FROM ${this.tblModels} 
+    const query = `
+      BEGIN TRY
+        IF NOT EXISTS (SELECT 1 FROM ${this.tblModels} WITH (UPDLOCK, HOLDLOCK)
                        WHERE model_name = @modelName AND instance_id = @instanceId)
         BEGIN
             INSERT INTO ${this.tblModels} (model_name, instance_id, status, created_at, updated_at)
             VALUES (@modelName, @instanceId, 'IDLE', SYSDATETIME(), SYSDATETIME())
         END
-      `;
+      END TRY
+      BEGIN CATCH
+        -- Ignore duplicate key error (2627: Unique constraint, 2601: Duplicate key index)
+        IF ERROR_NUMBER() NOT IN (2627, 2601)
+        BEGIN
+            THROW;
+        END
+      END CATCH
+    `;
+
+    try {
       await this.queryNewDb(query, { modelName, instanceId });
     } catch (error) {
-      logger.error(`[SyncStateRepository] Failed to ensure model ${modelName} (host=${instanceId}):`, error);
+      // Ignore duplicate key error (2627: Unique constraint, 2601: Duplicate key index)
+      if (error.number === 2627 || error.number === 2601) {
+        logger.debug(`[SyncStateRepository] Model ${modelName} already exists (instance=${instanceId}), skipping`);
+        return;
+      }
+      // Handle string truncation - model name too long
+      if (error.number === 2628) {
+        logger.warn(`[SyncStateRepository] Model name truncated for ${modelName}, skipping insert`);
+        return;
+      }
+      logger.error(`[SyncStateRepository] Failed to ensure model ${modelName} (host=${instanceId}):`, error.message);
     }
   }
 
@@ -87,28 +107,26 @@ class SyncStateRepository extends BaseModel {
    */
   async getDashboardData(instanceId = 'default') {
     try {
-      // 1. Lấy thông tin Sync Models của host hiện tại
-      const modelsQuery = `SELECT * FROM ${this.tblModels} WHERE instance_id = @instanceId`;
-      const models = await this.queryNewDb(modelsQuery, { instanceId });
+      // 1. Lấy tất cả thông tin Sync Models (Tạm bỏ lọc theo instance_id để hiện hết)
+      const modelsQuery = `SELECT * FROM ${this.tblModels}`;
+      const models = await this.queryNewDb(modelsQuery, {});
 
-      // 2. Lấy danh sách 10 Job gần nhất của host hiện tại
+      // 2. Lấy danh sách 50 Job gần nhất (Tạm bỏ lọc theo instance_id)
       const jobsQuery = `
-        SELECT TOP 10 *
+        SELECT TOP 50 *
         FROM ${this.tblJobs}
-        WHERE instance_id = @instanceId
         ORDER BY updated_at DESC
       `;
-      const jobs = await this.queryNewDb(jobsQuery, { instanceId });
+      const jobs = await this.queryNewDb(jobsQuery, {});
 
-      // 3. Lấy 50 lỗi mới nhất
+      // 3. Lấy 50 lỗi mới nhất (Tạm bỏ lọc theo instance_id)
       const errorsQuery = `
         SELECT TOP 50 e.*
         FROM ${this.tblErrors} e
         INNER JOIN ${this.tblJobs} j ON e.job_id = j.job_id
-        WHERE j.instance_id = @instanceId
         ORDER BY e.occurred_at DESC
       `;
-      const errors = await this.queryNewDb(errorsQuery, { instanceId });
+      const errors = await this.queryNewDb(errorsQuery, {});
 
       // 4. Lấy cấu hình Global
       const settingsQuery = `
@@ -184,12 +202,14 @@ class SyncStateRepository extends BaseModel {
             ? Math.min(100, Math.round((jobSynced / jobNeeded) * 100)) : 0;
 
           entities[m.model_name] = {
+            id: m.id,
             status: m.status || 'IDLE',
             lastSyncTime: m.last_sync_time,
             lastSyncId: m.last_sync_id,
             totalSynced: m.total_synced || 0,
             lastRun: m.last_run,
             activeJobId: m.active_job_id,
+            instanceId: m.instance_id,
             error: m.last_error,
             // Các trường tính toán cho dashboard
             currentJobId: currentJob ? currentJob.jobId : null,

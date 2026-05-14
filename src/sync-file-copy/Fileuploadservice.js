@@ -1,4 +1,4 @@
-const { Client: MinioClient } = require('minio');
+﻿const { Client: MinioClient } = require('minio');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const logger = require('../../utils/logger');
@@ -131,7 +131,7 @@ class FileUploadService {
    * @param {boolean} forceRefresh - Nếu true, bỏ qua cache và lấy mới
    */
   async _getNewSystemToken(forceRefresh = false) {
-    const TOKEN_CACHE_PATH = path.join(__dirname, '..', '..', 'uploads', '.doffice_jwt_cache');
+    const TOKEN_CACHE_PATH = path.join(__dirname, '..', '..', 'uploads', '.keycloak_jwt_cache');
 
     try {
       if (!forceRefresh) {
@@ -146,62 +146,37 @@ class FileUploadService {
         } catch (_) { }
       }
 
-      const JWT_SECRET = '0a6b944d-d2fb-46fc-a85e-0295c986cd9f';
-      const USERNAME = 'vanthutc01';
-      const USER_ID = 'f2d92a70-b3ba-432b-b70b-311e57e11c64';
+      const USERNAME = process.env.KEYCLOAK_USERNAME || 'admin-tancang';
+      const PASSWORD = process.env.KEYCLOAK_PASSWORD || '@SnpAdmin2026';
 
-      const PASSWORD = 'TanCang@123';
+      logger.info(`[FileUploadService] Khởi chạy Playwright để lấy token Keycloak qua giao diện web...`);
+      const { spawn } = require('child_process');
+      const scriptPath = path.join(__dirname, '..', '..', 'auth', 'login_keycloak_playwright.js');
 
-      // Lay token Keycloak de xac nhan account hop le (chi dung de verify)
-      const issuer = process.env.KEYCLOAK_ISSUER || 'https://iam-uat.snp.com.vn/realms/snp-internal';
-      const clientId = 'doffice';
-      const clientSecret = process.env.KEYCLOAK_CLIENT_SECRET || 'wKORFQNrraWJk2qO6j6hB1Ae7G82xLyF';
-
-      const tokenUrl = `${issuer}/protocol/openid-connect/token`;
-      const params = new URLSearchParams();
-      params.append('grant_type', 'password');
-      params.append('username', USERNAME);
-      params.append('password', PASSWORD);
-      params.append('client_id', clientId);
-      params.append('client_secret', clientSecret);
-
-      const agent = new https.Agent({ rejectUnauthorized: false });
-
-      logger.info('[FileUploadService] Lay token Keycloak de lay user info...');
-      const kcResponse = await axios.post(tokenUrl, params.toString(), {
-        httpsAgent: agent,
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      await new Promise((resolve, reject) => {
+        const child = spawn(process.execPath, [scriptPath], {
+          env: process.env,
+          stdio: 'inherit'
+        });
+        child.on('close', (code) => {
+          if (code === 0) resolve();
+          else reject(new Error(`Playwright Keycloak login exited with code ${code}`));
+        });
+        child.on('error', (err) => reject(err));
       });
 
-      const kcToken = kcResponse.data?.access_token;
+      // Đọc lại cache file sau khi Playwright script cập nhật nó
+      const cached = await fs.readFile(TOKEN_CACHE_PATH, 'utf-8');
+      const { token: kcToken, expiresAt } = JSON.parse(cached);
+
       if (!kcToken) {
-        throw new Error('[FileUploadService] Keycloak khong tra ve access_token');
+        throw new Error('[FileUploadService] Keycloak không trả về access_token sau khi chạy Playwright');
       }
 
-      // Tao HS256 JWT theo dinh dang cua doffice-be
-      const payload = {
-        user: USER_ID,
-        username: USERNAME,
-        email: null,
-        roles: ['offline_access', 'default-roles-snp-internal', 'uma_authorization']
-      };
-
-      const issuedAt = Math.floor(Date.now() / 1000);
-      const expiresAt = issuedAt + 7 * 60 * 60; // 7 hours
-
-      const dofficeToken = jwt.sign(payload, JWT_SECRET, {
-        algorithm: 'HS256',
-        expiresIn: '7h'
-      });
-
-      // Cache 300 ngay
-      const cacheExpiresAt = Date.now() + 300 * 24 * 60 * 60 * 1000;
-      await fs.writeFile(TOKEN_CACHE_PATH, JSON.stringify({ token: dofficeToken, expiresAt: cacheExpiresAt }), 'utf-8');
-
-      logger.info(`[FileUploadService] Tao DOffice JWT thanh cong: expiresAt=${new Date(expiresAt * 1000).toISOString()}`);
-      return dofficeToken;
+      logger.info(`[FileUploadService] Lấy token Keycloak (Playwright) thành công: expiresAt=${new Date(expiresAt).toISOString()}`);
+      return kcToken;
     } catch (error) {
-      logger.error(`[FileUploadService] Loi lay token DOffice: ${error.message}`);
+      logger.error(`[FileUploadService] Lỗi lấy token Keycloak bằng Playwright: ${error.message}`);
       return null;
     }
   }
@@ -229,30 +204,81 @@ class FileUploadService {
       return null;
     }
 
+    const getRealFileParams = (buffer, defaultName) => {
+      let realExt = String(defaultName || '').split('.').pop().toLowerCase();
+      let realMime = 'application/octet-stream';
+
+      if (buffer && buffer.length >= 4) {
+        const hex = buffer.toString('hex', 0, 4).toUpperCase();
+        if (hex.startsWith('FFD8FF')) {
+          realExt = 'jpg';
+          realMime = 'image/jpeg';
+        } else if (hex === '89504E47') {
+          realExt = 'png';
+          realMime = 'image/png';
+        } else if (hex.startsWith('47494638')) {
+          realExt = 'gif';
+          realMime = 'image/gif';
+        } else if (hex === '25504446') {
+          realExt = 'pdf';
+          realMime = 'application/pdf';
+        }
+      }
+
+      // fallback
+      if (realMime === 'application/octet-stream') {
+        if (realExt === 'jpg' || realExt === 'jpeg') realMime = 'image/jpeg';
+        else if (realExt === 'png') realMime = 'image/png';
+        else if (realExt === 'gif') realMime = 'image/gif';
+        else if (realExt === 'pdf') realMime = 'application/pdf';
+        else if (realExt === 'doc') realMime = 'application/msword';
+        else if (realExt === 'docx') realMime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+        else if (realExt === 'xls') realMime = 'application/vnd.ms-excel';
+        else if (realExt === 'xlsx') realMime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      }
+
+      // Rename file if extension doesn't match magic bytes
+      let finalName = defaultName;
+      const currentExt = String(defaultName || '').split('.').pop().toLowerCase();
+      if (currentExt !== realExt && ['jpg', 'png', 'gif', 'pdf'].includes(realExt)) {
+        finalName = (defaultName || 'file').replace(new RegExp(`\\.${currentExt}$`, 'i'), `.${realExt}`);
+      }
+
+      return { finalName, finalMime: realMime };
+    };
+
+    const { finalName, finalMime } = getRealFileParams(fileBuffer, originalName);
+
     const formData = new FormData();
     formData.append('file', fileBuffer, {
-      filename: originalName,
-      contentType: 'application/octet-stream' // Sẽ để detect tự động hoặc pass từ ngoài
+      filename: finalName,
+      contentType: finalMime,
+      knownLength: fileBuffer.length // Quan trọng: Ngăn chặn lỗi Chunked Transfer Encoding gây lỗi 500
     });
-    formData.append('object_type', objectType || '');
+    // Đảm bảo gửi đúng NEWS hoặc news (thường backend yêu cầu uppercase nhưng dự phòng trường hợp lowercase)
+    formData.append('object_type', objectType || 'NEWS');
     formData.append('object_id', String(objectId || ''));
 
     if (retryCount === 0) {
-      logger.info(`[FileUploadService] Đang upload lên hệ thống mới: ${url} | object_type=${objectType} | object_id=${objectId} | size=${fileBuffer.length} bytes`);
+      logger.info(`[FileUploadService] Đang upload lên hệ thống mới: ${url} | file=${finalName} | object_type=${objectType} | object_id=${objectId} | size=${fileBuffer.length} bytes`);
     } else {
-      logger.info(`[FileUploadService] Đang upload lại (lần ${retryCount}): ${url} | object_type=${objectType} | object_id=${objectId} | size=${fileBuffer.length} bytes`);
+      logger.info(`[FileUploadService] Đang upload lại (lần ${retryCount}): ${url} | file=${finalName} | object_type=${objectType} | object_id=${objectId} | size=${fileBuffer.length} bytes`);
     }
 
     try {
+      // Tính toán Content-Length đồng bộ để pass vào Header (bắt buộc cho nhiều API Gateway/Nginx)
+      const contentLength = formData.getLengthSync();
+      
       const response = await axios.post(url, formData, {
         headers: {
           ...formData.getHeaders(),
+          'Content-Length': contentLength,
           'Authorization': `Bearer ${token}`,
           'Accept': 'application/json, text/plain, */*'
         },
         maxContentLength: Infinity,
         maxBodyLength: Infinity,
-        timeout: 60000 // 1 phút timeout cho file lớn
+        timeout: 300000 // Tăng lên 5 phút để tránh timeout file PDF lớn >20MB
       });
 
       logger.info(`[FileUploadService] Upload hệ thống mới thành công: ${JSON.stringify(response.data)}`);
@@ -263,6 +289,8 @@ class FileUploadService {
         (error.response.data && error.response.data.message === 'API rate limit exceeded')
       );
 
+      const isServerError = error.response && error.response.status >= 500;
+
       // Mở rộng retry cho các lỗi mạng (ECONNRESET, ETIMEDOUT, etc.)
       const isNetworkError = !error.response && (
         error.code === 'ECONNRESET' ||
@@ -272,30 +300,37 @@ class FileUploadService {
         (error.message && error.message.includes('ECONNRESET'))
       );
 
-      // Nếu là lỗi 401 (Unauthorized), thử xóa token và login lại 1 lần duy nhất
-      const isUnauthorized = error.response && error.response.status === 401;
+      // Nếu là lỗi 401 (Unauthorized) hoặc 403 (Forbidden), thử xóa token và login lại 1 lần duy nhất bằng Playwright
+      const isUnauthorized = error.response && (error.response.status === 401 || error.response.status === 403);
 
       const maxRetries = parseInt(process.env.NEW_SYSTEM_UPLOAD_RETRY_COUNT || '5', 10);
       const retryDelay = parseInt(process.env.NEW_SYSTEM_UPLOAD_RETRY_DELAY_MS || '3000', 10);
 
       if (isUnauthorized && retryCount === 0) {
-        logger.warn('[FileUploadService] Bị lỗi 401 (Unauthorized). Đang xóa token cũ và thử lại với token mới...');
+        logger.warn('[FileUploadService] Bị lỗi 401 hoặc 403 (Unauthorized/Forbidden). Đang chạy Playwright để lấy token mới...');
         // Force refresh token
         await this._getNewSystemToken(true);
         return this.uploadToNewSystem({ fileBuffer, originalName, objectType, objectId }, retryCount + 1);
       }
 
-      if ((isRateLimit || isNetworkError) && retryCount < maxRetries) {
+      if ((isRateLimit || isNetworkError || isServerError) && retryCount < maxRetries) {
         const delay = Math.pow(2, retryCount) * retryDelay;
-        const reason = isRateLimit ? 'rate limit (429)' : `lỗi mạng (${error.code || error.message})`;
-        logger.warn(`[FileUploadService] Bị ${reason}. Đang chờ ${delay}ms trước khi thử lại lần ${retryCount + 1}/${maxRetries}...`);
+        const reason = isRateLimit ? 'rate limit (429)' : (isServerError ? `lỗi server (${error.response.status})` : `lỗi mạng (${error.code || error.message})`);
+        logger.warn(`[FileUploadService] Bị ${reason} file ${finalName}. Đang chờ ${delay}ms trước khi thử lại lần ${retryCount + 1}/${maxRetries}...`);
         await this._sleep(delay);
         return this.uploadToNewSystem({ fileBuffer, originalName, objectType, objectId }, retryCount + 1);
       }
 
       const errorDetail = error.response ? JSON.stringify(error.response.data) : (error.code ? `${error.code}: ${error.message}` : error.message);
-      logger.error(`[FileUploadService] Upload he thong moi (API) THAT BAI (retry=${retryCount}): ${errorDetail}`);
-      return null;
+      
+      // Xử lý riêng lỗi Mime Type không khớp từ backend để log warning gọn gàng hơn
+      if (error.response && error.response.status === 400 && errorDetail.includes('không khớp với phần mở rộng')) {
+        logger.warn(`[FileUploadService] ⚠️ Upload thất bại do lỗi mime-type từ API: ${errorDetail} (File: ${finalName})`);
+        throw new Error(`Mime-type mismatch: ${errorDetail}`); // Ném lỗi để bên ngoài catch và log warning (không làm sập job)
+      }
+
+      logger.error(`[FileUploadService] Upload he thong moi (API) THAT BAI (retry=${retryCount}) - File: ${finalName}: ${errorDetail}`);
+      throw error;
     }
   }
 
@@ -417,7 +452,7 @@ class FileUploadService {
         objectId: relationRecord.object_id
       });
 
-      if (apiResponse && apiResponse.id) {
+      if (apiResponse && (apiResponse.id || apiResponse.public_id)) {
         storagePath = apiResponse.file_path;
         logger.info(`[FileUploadService] THANH CONG: Da upload qua API hệ thống mới. storagePath: ${storagePath}`);
       } else {

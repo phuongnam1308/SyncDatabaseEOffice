@@ -17,17 +17,13 @@ const MigrationIncomingDocumentController = require('../controllers/MigrationInc
 const MigrationIncomingDocumentDeleteController = require('../controllers/MigrationIncomingDocumentDeleteController');
 const MigrationGroupController = require('../controllers/MigrationGroupController');
 const MappingBookDocOutgoingController = require('../controllers/MappingBookDocOutgoingController');
-const SenderUnitController = require('../controllers/SenderUnitController');// Health check
+const SenderUnitController = require('../controllers/SenderUnitController'); // Health check
 const DrafterMigrationController = require('../controllers/DrafterMigrationController');
-const UpdateIncomingBookDocumentIdController =
-  require('../controllers/updates/UpdateIncomingBookDocumentIdController');
-const UpdateIncomingStatusCodeController =
-  require('../controllers/updates/UpdateIncomingStatusCodeController');
-const migrateIncomingDocs =
-  require('../controllers/updates/MigrateIncomingDocumentsController');
+const UpdateIncomingBookDocumentIdController = require('../controllers/updates/UpdateIncomingBookDocumentIdController');
+const UpdateIncomingStatusCodeController = require('../controllers/updates/UpdateIncomingStatusCodeController');
+const migrateIncomingDocs = require('../controllers/updates/MigrateIncomingDocumentsController');
 
-const UpdateIncomingSenderUnitController =
-  require('../controllers/UpdateIncomingSenderUnitController');
+const UpdateIncomingSenderUnitController = require('../controllers/UpdateIncomingSenderUnitController');
 const MigrationTaskController = require('../controllers/MigrationTaskController');
 const MigrationTaskDeleteController = require('../controllers/MigrationTaskDeleteController');
 // Lấy thống kê migration
@@ -38,16 +34,11 @@ const MigrationTaskUsersVBDiController = require('../controllers/MigrationTaskUs
 const MigrationTaskUsersMappingController = require('../controllers/MigrationTaskUsersMappingController');
 const TaskUsersTaskIdController = require('../controllers/TaskUsersTaskIdController');
 const MigrationTaskUsers2ProcessController = require('../controllers/MigrationTaskUsers2ProcessController');
-const TaskUsers2TypeSyncController =
-  require('../controllers/TaskUsers2TypeSyncController');
-const MigrationTaskUsers2ProcessOrgController =
-  require('../controllers/MigrationTaskUsers2ProcessOrgController');
-const MigrationTaskUsers2ProcessGroupController =
-  require('../controllers/MigrationTaskUsers2ProcessGroupController');
-const FileMigrationController =
-  require('../controllers/FileMigrationController');
-const IncomingFileMigrationController =
-  require('../controllers/IncomingFileMigrationController');
+const TaskUsers2TypeSyncController = require('../controllers/TaskUsers2TypeSyncController');
+const MigrationTaskUsers2ProcessOrgController = require('../controllers/MigrationTaskUsers2ProcessOrgController');
+const MigrationTaskUsers2ProcessGroupController = require('../controllers/MigrationTaskUsers2ProcessGroupController');
+const FileMigrationController = require('../controllers/FileMigrationController');
+const IncomingFileMigrationController = require('../controllers/IncomingFileMigrationController');
 router.get('/statistics', MigrationController.getStatistics);
 
 // Thực hiện migration phòng ban - ĐỔI SANG GET ĐỂ DỄ TEST
@@ -86,7 +77,10 @@ router.get('/migrate/bookdocuments', MigrationBookDocumentController.migrateBook
 router.get('/statistics/bookdocumentsdelete', MigrationBookDocumentDeleteController.getStatistics);
 
 // Migration Văn bản đến Delete (gộp theo Title, check duplicate name)
-router.get('/migrate/bookdocumentsdelete', MigrationBookDocumentDeleteController.migrateBookDocumentsDelete);
+router.get(
+  '/migrate/bookdocumentsdelete',
+  MigrationBookDocumentDeleteController.migrateBookDocumentsDelete,
+);
 
 // Thống kê Văn bản ban hành
 router.get('/statistics/bookbanhanh', MigrationBookBanHanhController.getStatistics);
@@ -98,7 +92,10 @@ router.get('/migrate/bookbanhanh', MigrationBookBanHanhController.migrateBookBan
 router.get('/statistics/bookbanhanhdelete', MigrationBookBanHanhDeleteController.getStatistics);
 
 // Migration Văn bản ban hành Delete (gộp theo SoVanBan, check duplicate to_book_code)
-router.get('/migrate/bookbanhanhdelete', MigrationBookBanHanhDeleteController.migrateBookBanHanhDelete);
+router.get(
+  '/migrate/bookbanhanhdelete',
+  MigrationBookBanHanhDeleteController.migrateBookBanHanhDelete,
+);
 
 // Thống kê tổng quát 4 nguồn sổ văn bản
 router.get('/statistics/book-total', MigrationBookTotalStatisticsController.getTotalStatistics);
@@ -113,7 +110,10 @@ router.get('/migrate/agencies', MigrationAgencyController.migrateAgencies);
 router.get('/statistics/incomingdocuments', MigrationIncomingDocumentController.getStatistics);
 
 // Migration Văn bản đến
-router.get('/migrate/incomingdocuments', MigrationIncomingDocumentController.migrateIncomingDocuments);
+router.get(
+  '/migrate/incomingdocuments',
+  MigrationIncomingDocumentController.migrateIncomingDocuments,
+);
 
 // const MigrationIncomingDocumentController =
 //   require('../controllers/MigrationIncomingDocumentController');
@@ -123,13 +123,17 @@ router.get('/migrate/incomingdocuments', MigrationIncomingDocumentController.mig
 //   MigrationIncomingDocumentController.migrate
 // );
 
-
-
 // Thống kê Văn bản đến Delete
-router.get('/statistics/incomingdocumentsdelete', MigrationIncomingDocumentDeleteController.getStatistics);
+router.get(
+  '/statistics/incomingdocumentsdelete',
+  MigrationIncomingDocumentDeleteController.getStatistics,
+);
 
 // Migration Văn bản đến Delete
-router.get('/migrate/incomingdocumentsdelete', MigrationIncomingDocumentDeleteController.migrateIncomingDocumentsDelete);
+router.get(
+  '/migrate/incomingdocumentsdelete',
+  MigrationIncomingDocumentDeleteController.migrateIncomingDocumentsDelete,
+);
 
 // Thống kê Group
 router.get('/statistics/group', MigrationGroupController.getStatistics);
@@ -137,7 +141,10 @@ router.get('/statistics/group', MigrationGroupController.getStatistics);
 // Migration Group
 router.get('/migrate/group', MigrationGroupController.migrateGroups);
 router.get('/mapping/bookdoc-outgoing', MappingBookDocOutgoingController.mapBookDocToOutgoing);
-router.get('/statistics/mapping-bookdoc-outgoing', MappingBookDocOutgoingController.getMappingStats);
+router.get(
+  '/statistics/mapping-bookdoc-outgoing',
+  MappingBookDocOutgoingController.getMappingStats,
+);
 
 // API sender_unit
 router.get('/statistics/sender-unit', SenderUnitController.getSenderUnitStatistics);
@@ -148,20 +155,11 @@ router.get('/sender-unit/update/:id', SenderUnitController.updateSingleSenderUni
 router.get('/statistics/drafter-preview', DrafterMigrationController.preview);
 router.get('/migrate/drafter', DrafterMigrationController.migrate);
 router.get('/update/incoming-book-document-id', UpdateIncomingBookDocumentIdController.update);
-router.get(
-  '/update/incoming-status-code',
-  UpdateIncomingStatusCodeController.update
-);
+router.get('/update/incoming-status-code', UpdateIncomingStatusCodeController.update);
 
-router.get(
-  '/update/incoming-sender-unit',
-  UpdateIncomingSenderUnitController.update
-);
+router.get('/update/incoming-sender-unit', UpdateIncomingSenderUnitController.update);
 
-router.get(
-  '/migrate/incoming-documents',
-  migrateIncomingDocs.migrate
-);
+router.get('/migrate/incoming-documents', migrateIncomingDocs.migrate);
 const IncomingDocumentSyncController = require('../controllers/IncomingDocumentSyncController');
 router.get('/sync/incoming-documents', IncomingDocumentSyncController.sync);
 router.get('/statistics/incoming-sync-status', IncomingDocumentSyncController.status);
@@ -188,27 +186,14 @@ router.get('/statistics/task-users-taskid', TaskUsersTaskIdController.statistics
 router.get('/update/task-users-taskid', TaskUsersTaskIdController.update);
 
 // (Tùy chọn) Nếu bạn muốn dùng POST để an toàn hơn, có thể thay bằng:
-router.get('/update/task-users-taskid', TaskUsersTaskIdController.update); router.get('/update/task-users-taskid', MigrationTaskUsersMappingController.updateMapping);
-router.get(
-  '/mapping/task-users2-process',
-  MigrationTaskUsers2ProcessController.mapProcess
-);
-router.get(
-  '/sync/task-users2-type',
-  TaskUsers2TypeSyncController.sync
-);
-router.get(
-  '/mapping/task-users2-process-org',
-  MigrationTaskUsers2ProcessOrgController.map
-);
-router.get(
-  '/mapping/task-users2-process-group',
-  MigrationTaskUsers2ProcessGroupController.map
-);
+router.get('/update/task-users-taskid', TaskUsersTaskIdController.update);
+router.get('/update/task-users-taskid', MigrationTaskUsersMappingController.updateMapping);
+router.get('/mapping/task-users2-process', MigrationTaskUsers2ProcessController.mapProcess);
+router.get('/sync/task-users2-type', TaskUsers2TypeSyncController.sync);
+router.get('/mapping/task-users2-process-org', MigrationTaskUsers2ProcessOrgController.map);
+router.get('/mapping/task-users2-process-group', MigrationTaskUsers2ProcessGroupController.map);
 
-router.get('/migrate/files-vanbanbanhanh',
-  FileMigrationController.migrate
-);
+router.get('/migrate/files-vanbanbanhanh', FileMigrationController.migrate);
 router.get('/migrate/files-vbden', IncomingFileMigrationController.migrate);
 
 // Thêm vào index.js
@@ -221,72 +206,42 @@ const UpdateFiles2NameController = require('../controllers/UpdateFiles2NameContr
 router.get('/statistics/files2-name-update', UpdateFiles2NameController.getStatistics);
 router.get('/update/files2-name-from-path', UpdateFiles2NameController.update);
 
-
 const MigrationFileRelationsController = require('../controllers/MigrationFileRelationsController');
 router.get('/statistics/file-relations', MigrationFileRelationsController.getStatistics);
 router.get('/migrate/file-relations', MigrationFileRelationsController.migrateFileRelations);
 
-
 const FileRelationsMappingController = require('../controllers/FileRelationsMappingController');
 
-router.get(
-  '/migrate/file-relations/object-type',
-  FileRelationsMappingController.mappingObjectType
-);
+router.get('/migrate/file-relations/object-type', FileRelationsMappingController.mappingObjectType);
 
-const FileRelationTypeResolverController =
-  require('../controllers/FileRelationTypeResolverController');
+const FileRelationTypeResolverController = require('../controllers/FileRelationTypeResolverController');
 
-router.get(
-  '/resolve/file-relations-object-type',
-  FileRelationTypeResolverController.resolve
-);
+router.get('/resolve/file-relations-object-type', FileRelationTypeResolverController.resolve);
 
-const FileRelations2ToMainController =
-  require('../controllers/FileRelations2ToMainController');
+const FileRelations2ToMainController = require('../controllers/FileRelations2ToMainController');
 
-router.get(
-  '/migration/file-relations2-to-main',
-  FileRelations2ToMainController.migrate
-);
+router.get('/migration/file-relations2-to-main', FileRelations2ToMainController.migrate);
 
 router.get(
   '/migration/file-relations2-to-main/statistics',
-  FileRelations2ToMainController.statistics
+  FileRelations2ToMainController.statistics,
 );
 
-const IncommingBpmnVersionTestController =
-  require('../controllers/tests/IncommingBpmnVersionTestController');
+const IncommingBpmnVersionTestController = require('../controllers/tests/IncommingBpmnVersionTestController');
 
-router.post(
-  '/test/incomming/update-bpmn-version',
-  IncommingBpmnVersionTestController.update
-);
+router.post('/test/incomming/update-bpmn-version', IncommingBpmnVersionTestController.update);
 
+const IncommingBackupBeforeTestController = require('../controllers/tests/IncommingBackupBeforeTestController');
 
-const IncommingBackupBeforeTestController =
-  require('../controllers/tests/IncommingBackupBeforeTestController');
+router.get('/test/incomming/backup-before-test', IncommingBackupBeforeTestController.backup);
 
-router.get(
-  '/test/incomming/backup-before-test',
-  IncommingBackupBeforeTestController.backup
-);
+const IncommingBulkUpdateTestController = require('../controllers/tests/IncommingBulkUpdateTestController');
 
-const IncommingBulkUpdateTestController =
-  require('../controllers/tests/IncommingBulkUpdateTestController');
+router.post('/test/incomming/bulk-update', IncommingBulkUpdateTestController.update);
 
-router.post(
-  '/test/incomming/bulk-update',
-  IncommingBulkUpdateTestController.update
-);
+const IncommingAuditCreateController = require('../controllers/tests/IncommingAuditCreateController');
 
-const IncommingAuditCreateController =
-  require('../controllers/tests/IncommingAuditCreateController');
-
-router.post(
-  '/test/incomming/create-audit',
-  IncommingAuditCreateController.create
-);
+router.post('/test/incomming/create-audit', IncommingAuditCreateController.create);
 
 const MigrationTask3ToTaskController = require('../controllers/MigrationTask3ToTaskController');
 // Task3 to Task migration routes
@@ -299,27 +254,18 @@ const MigrationTask2ToTaskController = require('../controllers/MigrationTask2ToT
 router.get('/migrate/task2toTask', MigrationTask2ToTaskController.migrateTaskRecords);
 router.get('/migrate/task2toTask/stats', MigrationTask2ToTaskController.getStatistics);
 
-const MigrationTaskUsers2ToTaskUsersController =
-  require('../controllers/MigrationTaskUsers2ToTaskUsersController');
+const MigrationTaskUsers2ToTaskUsersController = require('../controllers/MigrationTaskUsers2ToTaskUsersController');
 
-router.get(
-  '/migrate/task-users2-to-task-users',
-  MigrationTaskUsers2ToTaskUsersController.migrate
-);
+router.get('/migrate/task-users2-to-task-users', MigrationTaskUsers2ToTaskUsersController.migrate);
 
 router.get(
   '/migrate/task-users2-to-task-users/stats',
-  MigrationTaskUsers2ToTaskUsersController.statistics
+  MigrationTaskUsers2ToTaskUsersController.statistics,
 );
 
-const TaskAuditTestController =
-  require('../controllers/tests/TaskAuditTestController');
+const TaskAuditTestController = require('../controllers/tests/TaskAuditTestController');
 
-router.post(
-  '/test/create-task-audit',
-  TaskAuditTestController.create
-);
-
+router.post('/test/create-task-audit', TaskAuditTestController.create);
 
 const UserRoutes = require('../src/sync-user/route');
 router.use('/user', UserRoutes);
@@ -339,8 +285,7 @@ router.use('/file', FileRoutes);
 const incommingRoutes = require('../src/sync-incoming-document/route');
 router.use('/incoming', incommingRoutes);
 
-
-module.exports = router;
+// --- SYNC MANAGER CORE ROUTES ---
 const syncCtrl = require('../src/sync-manager/SyncManagerController');
 router.get('/sync-manager-src/dashboard', syncCtrl.getDashboard);
 router.post('/sync-manager-src/start', syncCtrl.startSync);
@@ -349,8 +294,16 @@ router.post('/sync-manager-src/jobs/:jobId/pause', syncCtrl.pauseJobSync);
 router.post('/sync-manager-src/jobs/:jobId/resume', syncCtrl.resumeJobSync);
 router.get('/sync-manager-src/jobs/:jobId', syncCtrl.getJobSyncStatus);
 router.get('/sync-manager-src/events', syncCtrl.sseEvents);
+router.post('/sync-manager-src/login', syncCtrl.login);
+router.post('/sync-manager-src/settings', syncCtrl.updateSettings);
+router.post('/sync-manager-src/shutdown', syncCtrl.shutdown);
+router.post('/sync-manager-src/skip-login', syncCtrl.skipLogin);
+router.post('/sync-manager-src/check-session', syncCtrl.checkSession);
+router.post('/sync-manager-src/upload-passport-file', syncCtrl.uploadPassportFile);
+router.post('/sync-manager-src/import-passport', syncCtrl.importPassport);
+router.get('/sync-manager-src/download-passport-template', syncCtrl.downloadPassportTemplate);
 
-
+// --- OTHER MODULE ROUTES ---
 const SyncOutgoingRoutes = require('../src/sync-outgoing-document/route');
 router.use('/sync-outgoing', SyncOutgoingRoutes);
 

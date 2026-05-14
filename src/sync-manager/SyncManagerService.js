@@ -307,7 +307,13 @@ class SyncManagerService {
    * @returns {string}
    */
   generateJobId(modelName) {
-    return `${modelName}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const slug = String(modelName || 'job')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^\w\s-]/g, '')
+      .replace(/[\s_-]+/g, '-')
+      .toLowerCase();
+    return `${slug}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   }
 
   /**
@@ -500,6 +506,8 @@ class SyncManagerService {
       logger.warn(`[SyncManagerService] register("${name}") called again — skipping duplicate`);
       return;
     }
+
+    logger.info(`[SyncManagerService] 📥 Đang đăng ký module vào Service: ${name}`);
 
     this.registry.set(name, {
       fetchFn,
@@ -764,7 +772,21 @@ class SyncManagerService {
   resumeJob(jobId) {
     const job = this.state.jobs[jobId];
     if (!job) throw new Error(`Job ${jobId} not found`);
-    if (job.status !== 'PAUSED') throw new Error(`Job ${jobId} is not paused`);
+
+    // Handle case where job status in memory is out of sync with model status
+    // If job is COMPLETED but model is PAUSED, we need to restart instead of resume
+    if (job.status === 'COMPLETED' || job.status === 'FAILED') {
+      logger.warn(`[SyncManagerService] Job ${jobId} is ${job.status}, cannot resume. Resetting model state.`);
+      const modelState = this.getModelState(job.modelName);
+      modelState.status = 'IDLE';
+      modelState.activeJobId = null;
+      this._dbUpdateModel(job.modelName, modelState);
+      throw new Error(`Job ${jobId} đã hoàn thành (${job.status}). Cần chạy lại từ đầu, không thể tiếp tục.`);
+    }
+
+    if (job.status !== 'PAUSED') {
+      throw new Error(`Job ${jobId} is not paused (currently: ${job.status})`);
+    }
 
     const modelState = this.getModelState(job.modelName);
     if (this.isModelBusy(modelState)) throw new Error(`Model ${job.modelName} is already running`);
@@ -940,15 +962,21 @@ class SyncManagerService {
           const executing = new Set();
           
           for (const record of records) {
-            if (job.pauseRequested || jobFinishedEarly) break;
+            // Chỉ dừng dispatch khi user yêu cầu pause, KHÔNG dừng khi jobFinishedEarly
+            // Lý do: jobFinishedEarly chỉ được set khi processOne() xác nhận staging hết sạch
+            // (pending=0 VÀ processing=0). Nếu break sớm ở đây, các virtual items cuối của
+            // batch bị bỏ qua không cần thiết — và SyncHandlerModel không nhận được tín hiệu
+            // để recheck staging remaining.
+            if (job.pauseRequested) break;
 
             const task = (async (r) => {
               try {
                 const resProc = await handlers.processFn(r, { modelName: job.modelName, jobId: job.jobId });
                 if (resProc && resProc.done) {
                   jobFinishedEarly = true;
-                  logger.warn(
-                    `[SyncManagerService][${job.modelName}] processFn returned done=true (jobId=${job.jobId}, itemIndex=${Number(r?.__item_index ?? -1)}, pauseRequested=${Boolean(job.pauseRequested)}, processed=${Number(job.totalProcessed || 0)}, totalToSync=${job.totalToSync == null ? 'null' : Number(job.totalToSync)})`
+                  logger.info(
+                    `[SyncManagerService][${job.modelName}] processFn signaled done=true (staging fully empty). ` +
+                    `(jobId=${job.jobId}, itemIndex=${Number(r?.__item_index ?? -1)}, processed=${Number(job.totalProcessed || 0)}, totalToSync=${job.totalToSync == null ? 'null' : Number(job.totalToSync)})`
                   );
                 }
                 return { success: true, record: r, result: resProc };
@@ -976,7 +1004,7 @@ class SyncManagerService {
             batchSuccess += 1;
             const recordTime = this.extractRecordTime(res.record);
             const recordId = this.extractRecordId(res.record);
-            if (recordTime && this.compareCursor(recordTime, recordId, cursorTime, cursorId) > 0) {
+            if (recordTime && this.compareCursor(recordTime, recordId, cursorTime, cursorId) !== 0) {
               cursorTime = recordTime;
               cursorId = recordId;
             }
@@ -1014,10 +1042,13 @@ class SyncManagerService {
         }
 
         if (jobFinishedEarly) {
+          // processFn returned done=true (staging was temporarily empty).
+          // Re-fetch staging to verify it's actually empty before breaking.
+          // This handles race condition where records are being processed by other concurrent tasks.
           logger.warn(
-            `[SyncManagerService][${job.modelName}] processFn returned done=true; continue next fetch cycle (jobId=${job.jobId}, batchProcessed=${batchProcessed}, totalProcessed=${job.totalProcessed}, totalToSync=${job.totalToSync == null ? 'null' : Number(job.totalToSync)})`
+            `[SyncManagerService][${job.modelName}] processFn returned done=true; breaking fetch cycle (jobId=${job.jobId}, batchProcessed=${batchProcessed}, totalProcessed=${job.totalProcessed}, totalToSync=${job.totalToSync == null ? 'null' : Number(job.totalToSync)})`
           );
-          continue;
+          break;
         }
 
         if (records.length < job.batchSize) break;
@@ -1076,6 +1107,9 @@ class SyncManagerService {
     );
     job.status = status; job.error = error.message; job.updatedAt = now; job.heartbeatAt = now; job.endedAt = now;
     modelState.status = status; modelState.error = error.message; modelState.activeJobId = null;
+
+    logger.error(`[SyncManagerService][${job.modelName}] Job ${job.jobId} FAILED: ${error.message}`, error);
+
     if (job.lastSyncTime) modelState.lastSyncTime = job.lastSyncTime;
     if (job.lastSyncId !== undefined) modelState.lastSyncId = job.lastSyncId;
     this.updateSyncLogFromJob(job); this.saveState(); this._dbUpdateJob(job); this._dbUpdateModel(job.modelName, modelState);
@@ -1090,6 +1124,12 @@ class SyncManagerService {
    * @returns {Promise<object>}
    */
   async getDashboardData() {
+    const sharePointLoginState = global.sharePointLoginState || {
+      required: false,
+      inProgress: false,
+      message: ''
+    };
+
     const entities = {};
     for (const [modelName, modelState] of Object.entries(this.state.models)) {
       const currentJob = modelState.activeJobId
@@ -1114,7 +1154,11 @@ class SyncManagerService {
     return {
       isRunning: this.isRunning, entities,
       jobs: this.state.jobs, syncLogs: this.state.syncLogs,
-      registeredCount: this.registry.size
+      registeredCount: this.registry.size,
+      sharePointLoginRequired: sharePointLoginState.required,
+      sharePointLoginInProgress: sharePointLoginState.inProgress,
+      sharePointLoginMessage: sharePointLoginState.message,
+      sharePointLoginSkipped: global.sharePointLoginSkipped || false
     };
   }
 

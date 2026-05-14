@@ -4,6 +4,14 @@ const { roleMapping } = require('./roleMapping');
 const { USER_PAREN_DEFAULT, ROLES_DEFAULT } = require('../../config');
 const MigrationHelper = require('../../helpers/MigrationHelper');
 const { v4: uuidv4 } = require('uuid');
+const {
+  claimNextStagingRow,
+  ensureTrackingColumns,
+  markRowFailed,
+  markRowSuccess,
+  startHeartbeatLoop,
+  updateHeartbeat,
+} = require('../../helpers/StagingQueueHelper');
 
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 
@@ -17,6 +25,7 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
     this.newTableSync = 'user_sync'; //Bảng trung gian lưu data raw dùng để sync dần vào bảng chính `user_clone_for_sync`
     this.newDbTable = 'users';
     //_clone_for_sync';
+    this.heartbeatIntervalMs = Number(process.env.HEARTBEAT_INTERVAL_MS || 30000);
     this.migrationHelper = new MigrationHelper(
       (...args) => this.queryNewDbTx(...args),
       (...args) => this.queryOldDb?.(...args) ?? null,
@@ -195,6 +204,13 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
     `;
 
     await this.queryNewDb(query);
+    await ensureTrackingColumns(this, {
+      tableRef,
+      tableName: this.newTableSync,
+      schemaName: this.newDbSchema,
+      dbName: this.newDbName,
+      label: this.modelName,
+    });
   }
 
   getStagingTableRef() {
@@ -312,12 +328,6 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
     const lowerPos = position.normalize('NFC').toLowerCase();
     const noAccent = this.normalizeVietnamese(position);
 
-    // // DEBUG: log để xem giá trị thực tế từ DB
-    // console.log('[mapPositionToRoles] position raw    :', JSON.stringify(position));
-    // console.log('[mapPositionToRoles] position lowerPos:', JSON.stringify(lowerPos));
-    // console.log('[mapPositionToRoles] position noAccent:', JSON.stringify(noAccent));
-    // console.log('[mapPositionToRoles] codepoints:', [...position].map(c => c.codePointAt(0).toString(16)).join(' '));
-
     for (const { keywords, roles } of roleMapping) {
       if (!Array.isArray(roles) || !roles.length) continue;
 
@@ -338,7 +348,6 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
 
   async processAvatar(imageHtml, username) {
     if (!imageHtml) {
-      // logger.debug(`[StreamUserMigrationModel][Avatar] processAvatar: imageHtml trống cho user ${username}`);
       return '[]';
     }
 
@@ -535,10 +544,9 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
   }
 
   /**
-   * @param {string} lastSyncTime - ISO datetime hoặc giá trị mặc định để lấy từ thời điểm đó về sau
-   * @returns {Promise<number>} tổng số bản ghi từ CSDL cũ
+   * countListFromOldDb - Đếm tổng số bản ghi từ CSDL cũ
    */
-  async getCount(lastSyncTime, lastSyncId = 0) {
+  async countListFromOldDb(lastSyncTime, lastSyncId = 0) {
     const query = `
       ;WITH source_rows AS (
         SELECT
@@ -572,14 +580,28 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
   }
 
   /**
-   * Lấy danh sách user từ CSDL cũ sau `lastSyncTime`.
-   * Trả về mảng bản ghi (ID, AccountName, FullName, Modified, NgayTao) đã sắp xếp theo thời gian sửa/tao.
-   * @param {string} lastSyncTime - ISO datetime hoặc giá trị mặc định để lấy từ thời điểm đó về sau
-   * @param {number} lastSyncId - ID cuối cùng đã đồng bộ
-   * @param {number} limit - Số lượng bản ghi cần lấy
-   * @param {number} offset - Vị trí bắt đầu lấy
-   * @returns {Promise<Array>} danh sách bản ghi từ CSDL cũ
+   * getCount - Đếm số bản ghi đang chờ xử lý trong Staging (Hỗ trợ Skip Pull)
    */
+  async getCount(lastSyncTime, lastSyncId = 0) {
+    const tableRef = this.getStagingTableRef();
+    const query = `
+      SELECT COUNT(1) AS total
+      FROM ${tableRef}
+      WHERE ISNULL(MigrateFlg, 0) = 0
+        AND ISNULL(MigrateErrFlg, 0) = 0
+    `;
+
+    try {
+      const rows = await this.queryNewDb(query);
+      const count = Number(rows?.[0]?.total || 0);
+      logger.debug(`[StreamUserMigrationModel] getCount from staging: ${count}`);
+      return count;
+    } catch (error) {
+      logger.error(`[StreamUserMigrationModel] getCount staging error: ${error.message}`);
+      return 0;
+    }
+  }
+
   async fetchListFromOldDb(lastSyncTime, lastSyncId = 0, limit = null, offset = null) {
     const query = `
       ;WITH source_rows AS (
@@ -697,7 +719,7 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
     const batchSize = Number(process.env.STAGING_FETCH_BATCH_SIZE || 2000);
 
     // 1. Đếm tổng và cập nhật Dashboard
-    const totalCount = await this.getCount(normalizedLastSyncTime, normalizedLastSyncId);
+    const totalCount = await this.countListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId);
     logger.info(`[StreamUserMigration] Tổng số bản ghi (User) cần hút về Staging: ${totalCount}`);
 
     await this.queryNewDb(`UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`, {
@@ -811,71 +833,89 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
       };
     }
 
-    const result = await this.processRowData(rowData);
-    return {
-      syncJobId,
-      itemIndex,
-      processed: true,
-      done: false,
-      rowId: rowData.ID || null,
-      result,
-    };
+    const rowId = rowData.ID || null;
+    const stopHeartbeat = startHeartbeatLoop(
+      () => this.updateHeartbeat(rowId),
+      this.heartbeatIntervalMs,
+    );
+
+    try {
+      const result = await this.processRowData(rowData);
+      await markRowSuccess(this, {
+        tableRef: this.getStagingTableRef(),
+        keyWhere: 'ID = @ID',
+        params: { ID: rowId },
+        rowToken: `ID=${rowId}`,
+        label: this.modelName,
+      });
+      stopHeartbeat();
+      return {
+        syncJobId,
+        itemIndex,
+        processed: true,
+        done: false,
+        rowId,
+        result,
+      };
+    } catch (error) {
+      stopHeartbeat();
+      await markRowFailed(this, {
+        tableRef: this.getStagingTableRef(),
+        keyWhere: 'ID = @ID',
+        params: { ID: rowId },
+        rowToken: `ID=${rowId}`,
+        errorMessage: error.message,
+        label: this.modelName,
+      });
+      throw error;
+    }
   }
 
   async fetchOneFromStaging({ lastSyncTime, lastSyncId = 0, itemIndex, transaction } = {}) {
-    const rowNumber = Number(itemIndex || 0) + 1;
     const stagingTableRef = this.getStagingTableRef();
-    const query = `
-      ;WITH source_rows AS (
-        SELECT
-          *,
-          COALESCE(TRY_CONVERT(datetime2, Modified), TRY_CONVERT(datetime2, NgayTao)) AS __sync_time,
-          TRY_CONVERT(
-            BIGINT,
-            NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
-          ) AS __sync_id_num
-        FROM ${stagingTableRef}
-      ),
-      staged AS (
-        SELECT
-          *,
-          ROW_NUMBER() OVER (
-            ORDER BY
-              __sync_time ASC,
-              ISNULL(__sync_id_num, -9223372036854775808) ASC,
-              ID ASC
-          ) AS rn
-        FROM source_rows
-        WHERE (
-          __sync_time > @lastSyncTime
+    const row = await claimNextStagingRow(this, {
+      tableRef: stagingTableRef,
+      extraWhere: `
+        (
+          COALESCE(TRY_CONVERT(datetime2, Modified), TRY_CONVERT(datetime2, NgayTao)) > @lastSyncTime
           OR (
-            __sync_time = @lastSyncTime
-            AND ISNULL(__sync_id_num, -9223372036854775808) > @lastSyncId
+            COALESCE(TRY_CONVERT(datetime2, Modified), TRY_CONVERT(datetime2, NgayTao)) = @lastSyncTime
+            AND ISNULL(
+              TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')),
+              -9223372036854775808
+            ) > @lastSyncId
           )
         )
-      )
-      SELECT TOP 1 *
-      FROM staged
-      WHERE rn = @rowNumber
-    `;
-
-    const rows = await this.queryNewDbTx(
-      query,
-      {
+      `,
+      params: {
         lastSyncTime,
         lastSyncId: Number(lastSyncId || 0),
-        rowNumber,
       },
+      owner: `pid_${process.pid}`,
+      orderBy: `
+        COALESCE(TRY_CONVERT(datetime2, Modified), TRY_CONVERT(datetime2, NgayTao)) ASC,
+        ISNULL(TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')), -9223372036854775808) ASC,
+        ID ASC
+      `,
+      label: this.modelName,
       transaction,
-    );
-
-    if (!rows?.length) {
-      return null;
+    });
+    if (row) {
+      logger.info(`[${this.modelName}] [START] Processing started: ID=${row.ID}`);
     }
-
-    const row = { ...rows[0] };
-    delete row.rn;
     return row;
+  }
+
+  async updateHeartbeat(rowId, transaction = null) {
+    if (!rowId) return 0;
+    return updateHeartbeat(this, {
+      tableRef: this.getStagingTableRef(),
+      keyWhere: 'ID = @ID',
+      params: { ID: rowId },
+      transaction,
+      rowToken: `ID=${rowId}`,
+      label: this.modelName,
+    });
   }
 
   /**
@@ -939,10 +979,6 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
         // ① Chuẩn hoá tên phòng ban qua processSenderUnit
         const normalizedDept = this.migrationHelper.processSenderUnit(rowData.Department);
 
-        // console.log(
-        //   `[upsertUserById] user.id=${mapped.id} | Department raw="${rowData.Department}" → processSenderUnit="${normalizedDept}"`
-        // );
-
         let parentId = null;
         if (normalizedDept) {
           // ② Tìm id trong organization_units theo tên đã chuẩn hoá
@@ -958,10 +994,6 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
         }
         // ③ Gán vào parent
         mapped.parent = parentId;
-
-        // console.log(
-        //   `[upsertUserById] user.id=${mapped.id} | Department="${normalizedDept}" → parent=${parentId ?? 'NULL (không tìm thấy)'}`
-        // );
       } catch (err) {
         console.warn(`[upsertUserById] Lỗi resolve parent cho user.id=${mapped.id}:`, err.message);
         mapped.parent = null;
@@ -980,7 +1012,8 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
         @existingId = id,
         @existingUpdatedAt = updated_at
       FROM ${tableRef}
-      WHERE username = @username;
+      WHERE (username = @username AND @username IS NOT NULL AND @username <> '')
+         OR (id_user_bak = @id_user_bak AND @id_user_bak IS NOT NULL AND @id_user_bak <> '');
 
       IF @existingId IS NOT NULL
       BEGIN
@@ -1076,7 +1109,6 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
     `;
 
     const oldModifiedStr = rowData.__sync_time || rowData.Modified || rowData.NgayTao;
-    // ensure parsing logic handles empty cases correctly, JS new Date() does not error on empty but gives Invalid Date, so do it right:
     const old_modified =
       oldModifiedStr && !Number.isNaN(new Date(oldModifiedStr).getTime())
         ? new Date(oldModifiedStr)

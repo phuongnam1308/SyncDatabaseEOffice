@@ -1,6 +1,15 @@
+const logger = require('../../../utils/logger');
 const MigrationHelper = require('../../helpers/MigrationHelper');
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 const { tableMappings } = require('./config');
+const {
+  claimNextStagingRow,
+  ensureTrackingColumns,
+  markRowFailed,
+  markRowSuccess,
+  startHeartbeatLoop,
+  updateHeartbeat,
+} = require('../../helpers/StagingQueueHelper');
 
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 
@@ -21,10 +30,17 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         codeItem: new Set(),
         hasUserInfo: false
     };
+    this.heartbeatIntervalMs = Number(process.env.HEARTBEAT_INTERVAL_MS || 30000);
+
+    // Multi-DB List Discovery
+    this.listIdCache = {}; // { dbName: [listId1, listId2] }
+    this.canonicalListTitle = null;
+    this.cachedCarIds = [];
+    this.cachedDriverIds = [];
   }
 
   async initialize() {
-    console.log(`[StreamCarBookingMigrationModel] Initializing...`);
+    logger.info(`[StreamCarBookingMigrationModel] Initializing...`);
     await super.initialize();
 
     // 🔥 Cache Source Schema to prevent "Invalid column name" errors
@@ -32,7 +48,28 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
 
     await this.ensureStagingTableExists();
     await this.ensureTargetColumnsExist();
-    console.log(`[StreamCarBookingMigrationModel] Initialization complete.`);
+    await this.ensureReferenceTablesExist();
+    await this.seedCars();
+    await this.seedDrivers();
+    await this.cacheReferenceIds();
+    logger.info(`[StreamCarBookingMigrationModel] Initialization complete.`);
+  }
+
+  async cacheReferenceIds() {
+    try {
+      const db = this.newDbName || 'camunda';
+      const schema = 'dbo';
+
+      const cars = await this.queryNewDb(`SELECT id FROM [${db}].[${schema}].[list_cars] WHERE status = 1`);
+      this.cachedCarIds = cars.map(c => c.id);
+
+      const drivers = await this.queryNewDb(`SELECT id FROM [${db}].[${schema}].[list_drivers] WHERE status = 1`);
+      this.cachedDriverIds = drivers.map(d => d.id);
+
+      logger.info(`[StreamCarBookingMigrationModel] Cached ${this.cachedCarIds.length} cars and ${this.cachedDriverIds.length} drivers for random assignment.`);
+    } catch (err) {
+      logger.warn(`[StreamCarBookingMigrationModel] Failed to cache reference IDs: ${err.message}`);
+    }
   }
 
   async cacheSourceSchema() {
@@ -40,11 +77,13 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
           this.sourceSchema.allUserData = await this.helper.getExistingColumnsSource(this.oldDbName, 'AllUserData');
           this.sourceSchema.codeItem = await this.helper.getExistingColumnsSource('DataEOfficeSNP', 'CodeItem', 'SNP');
           this.sourceSchema.hasUserInfo = await this.helper.checkTableExistsSource(this.oldUserDb, 'UserInfo');
+          this.sourceSchema.hasDepartment = await this.helper.checkTableExistsSource(this.oldUserDb, 'Department');
 
-          console.log(`[StreamCarBookingMigrationModel] Source Schema Cached:
+          logger.info(`[StreamCarBookingMigrationModel] Source Schema Cached:
             AllUserData: ${this.sourceSchema.allUserData.size} columns,
             CodeItem: ${this.sourceSchema.codeItem.size} columns,
-            UserInfo exists: ${this.sourceSchema.hasUserInfo}`);
+            UserInfo exists: ${this.sourceSchema.hasUserInfo},
+            Department exists: ${this.sourceSchema.hasDepartment}`);
       } catch (err) {
           console.warn(`[StreamCarBookingMigrationModel] cacheSourceSchema Error: ${err.message}`);
       }
@@ -100,7 +139,8 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         { name: 'leader_notice_times', type: 'nvarchar(MAX)', nullable: 'NULL' },
         { name: 'leader_escalated_at', type: 'datetime', nullable: 'NULL' },
         { name: 'table_bak', type: 'int', nullable: 'NULL' },
-        { name: 'id_sp_bak', type: 'nvarchar(255)', nullable: 'NULL' }
+        { name: 'id_sp_bak', type: 'nvarchar(255)', nullable: 'NULL' },
+        { name: 'source_db', type: 'nvarchar(255)', nullable: 'NULL' }
       ];
 
       console.log(`[StreamCarBookingMigrationModel] Checking/Creating Master table: ${masterTable}`);
@@ -124,7 +164,9 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
       }
 
       // Index Master
-      await this.queryNewDb(`IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${masterTable}_id_sp_bak' AND object_id = OBJECT_ID('${masterRef}')) CREATE INDEX IX_${masterTable}_id_sp_bak ON ${masterRef}(id_sp_bak);`);
+      const dropMasterIdx = `IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${masterTable}_id_sp_bak' AND object_id = OBJECT_ID('${masterRef}')) DROP INDEX IX_${masterTable}_id_sp_bak ON ${masterRef};`;
+      await this.queryNewDb(dropMasterIdx);
+      await this.queryNewDb(`IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${masterTable}_sp_source' AND object_id = OBJECT_ID('${masterRef}')) CREATE UNIQUE INDEX IX_${masterTable}_sp_source ON ${masterRef}(id_sp_bak, source_db) WHERE id_sp_bak IS NOT NULL AND source_db IS NOT NULL;`);
 
       // 2. Phân tích & Khởi tạo Bảng VEHICLE_REGISTRATION_ASSIGNMENTS (Detail)
       const detailTable = 'vehicle_registration_assignments';
@@ -139,7 +181,8 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         { name: 'confirmed_at', type: 'datetime', nullable: 'NULL' },
         { name: 'created_at', type: 'datetime', nullable: 'DEFAULT getdate() NULL' },
         { name: 'table_bak', type: 'int', nullable: 'NULL' },
-        { name: 'id_sp_bak', type: 'nvarchar(255)', nullable: 'NULL' }
+        { name: 'id_sp_bak', type: 'nvarchar(255)', nullable: 'NULL' },
+        { name: 'source_db', type: 'nvarchar(255)', nullable: 'NULL' }
       ];
 
       console.log(`[StreamCarBookingMigrationModel] Checking/Creating Detail table: ${detailTable}`);
@@ -163,7 +206,12 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
       }
 
       // Index Detail
-      await this.queryNewDb(`IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${detailTable}_id_sp_bak' AND object_id = OBJECT_ID('${detailRef}')) CREATE INDEX IX_${detailTable}_id_sp_bak ON ${detailRef}(id_sp_bak);`);
+      const dropDetailIdx = `IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${detailTable}_id_sp_bak' AND object_id = OBJECT_ID('${detailRef}')) DROP INDEX IX_${detailTable}_id_sp_bak ON ${detailRef};`;
+      await this.queryNewDb(dropDetailIdx);
+      // Note: Detail doesn't necessarily need unique on (id_sp_bak, source_db) if it's 1-to-many,
+      // but if SharePoint has 1 row per assignment (which it doesn't seem to, it's parsed from JSON),
+      // we'll at least index it for performance.
+      await this.queryNewDb(`IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${detailTable}_sp_source' AND object_id = OBJECT_ID('${detailRef}')) CREATE INDEX IX_${detailTable}_sp_source ON ${detailRef}(id_sp_bak, source_db);`);
       await this.queryNewDb(`IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_vra_car' AND object_id = OBJECT_ID('${detailRef}')) CREATE INDEX idx_vra_car ON ${detailRef}(car_id);`);
       await this.queryNewDb(`IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_vra_driver' AND object_id = OBJECT_ID('${detailRef}')) CREATE INDEX idx_vra_driver ON ${detailRef}(driver_id);`);
       await this.queryNewDb(`IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_vra_registration' AND object_id = OBJECT_ID('${detailRef}')) CREATE INDEX idx_vra_registration ON ${detailRef}(registration_id);`);
@@ -201,12 +249,20 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
               [SY_SyncId] INT IDENTITY(1,1) PRIMARY KEY,
               [__sync_time] DATETIME2 NULL,
               [__sync_id_num] BIGINT NULL,
-              [ID] BIGINT NOT NULL
+              [ID] BIGINT NOT NULL,
+              [source_db] NVARCHAR(255) NULL
           );
-          CREATE UNIQUE INDEX IX_${table}_ID ON ${stagingTableRef}([ID]);
+          CREATE UNIQUE INDEX IX_${table}_ID_Source ON ${stagingTableRef}([ID], [source_db]);
       END
       `;
       await this.queryNewDb(createQuery);
+      await ensureTrackingColumns(this, {
+        tableRef: stagingTableRef,
+        tableName: table,
+        schemaName: schema,
+        dbName: this.newDbName,
+        label: this.modelName,
+      });
 
       // 2. Danh sách các cột cần đảm bảo (Đã chuyển sang tiếng Anh cho đồng bộ)
       const columnsToAdd = [
@@ -295,7 +351,13 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         { name: 'DonViSoanThao', type: 'NVARCHAR(MAX)' },
         { name: 'GoiDuAn1', type: 'NVARCHAR(MAX)' },
         { name: 'IsNAS', type: 'INT' },
-        { name: 'NAS_MESS', type: 'NVARCHAR(MAX)' }
+        { name: 'NAS_MESS', type: 'NVARCHAR(MAX)' },
+        { name: 'DepartmentName', type: 'NVARCHAR(MAX)' },
+        { name: 'source_db', type: 'NVARCHAR(255)' },
+        // ★ Staging flags — dùng cho cơ chế claim/process chuẩn
+        { name: 'MigrateFlg',     type: 'INT' },
+        { name: 'MigrateErrFlg',  type: 'INT' },
+        { name: 'MigrateErrMess', type: 'NVARCHAR(MAX)' }
       ];
 
       for (const col of columnsToAdd) {
@@ -307,6 +369,19 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
           `;
           await this.queryNewDb(alterQuery);
       }
+
+      // Đảm bảo index tổng hợp tồn tại
+      const indexCheckQuery = `
+      IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${table}_ID' AND object_id = OBJECT_ID('${stagingTableRef}'))
+      BEGIN
+          DROP INDEX IX_${table}_ID ON ${stagingTableRef};
+      END
+      IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${table}_ID_Source' AND object_id = OBJECT_ID('${stagingTableRef}'))
+      BEGIN
+          CREATE UNIQUE INDEX IX_${table}_ID_Source ON ${stagingTableRef}([ID], [source_db]);
+      END
+      `;
+      await this.queryNewDb(indexCheckQuery);
       console.log(`[StreamCarBookingMigrationModel] [ensureStagingTableExists] OK: ${stagingTableRef} is ready`);
     } catch (err) {
       console.error(`[StreamCarBookingMigrationModel] [ensureStagingTableExists] ERROR: ${err.message}`);
@@ -343,30 +418,114 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
     return Number(aId || 0) > Number(bId || 0);
   }
 
-  async getCount(lastSyncTime, lastSyncId = 0) {
-    const listIds = this.oldConfig.listIds || [];
-    const listIdsStr = listIds.map(id => `'${id}'`).join(',');
-    const query = `
-        SELECT COUNT(*) AS total
-        FROM [${this.oldDbName}].[dbo].[AllUserData] ud
-        WHERE ud.[tp_ListId] IN (${listIdsStr})
-        AND ud.tp_RowOrdinal = 0
-        AND ud.[tp_IsCurrentVersion] = 1
-        AND (
-            ud.[tp_Modified] > @lastSyncTime
-            OR (
-                ud.[tp_Modified] = @lastSyncTime
-                AND ud.[tp_ID] > @lastSyncId
-            )
-        )
-    `;
-    const rows = await this.queryOldDb(query, { lastSyncTime, lastSyncId: Number(lastSyncId || 0) });
-    return Number(rows?.[0]?.total || 0);
+  /**
+   * Giải quyết List IDs cho một database cụ thể của module Đặt xe.
+   */
+  async resolveListIdsForDb(dbName) {
+    if (this.listIdCache[dbName]) return this.listIdCache[dbName];
+
+    const referenceIds = this.oldConfig.listIds || [];
+
+    // 1. Lấy Title mẫu từ reference DB (khkd) nếu chưa có
+    if (!this.canonicalListTitle) {
+      const refDb = this.oldDbName;
+      const refId = referenceIds[0];
+      const titleQuery = `SELECT TOP 1 tp_Title FROM [${refDb}].[dbo].[AllLists] WHERE tp_ID = @refId`;
+      try {
+        const rows = await this.queryOldDb(titleQuery, { refId });
+        if (rows?.length) {
+          this.canonicalListTitle = rows[0].tp_Title;
+          logger.info(`[StreamCarBookingMigrationModel] Canonical List Title discovered: "${this.canonicalListTitle}"`);
+        }
+      } catch (err) {
+        logger.error(`[StreamCarBookingMigrationModel] Failed to discover canonical title from ${refDb}: ${err.message}`);
+      }
+    }
+
+    // 2. Tìm List IDs trong target DB theo Title (ưu tiên Exact Match)
+    let discoveredIds = [];
+    if (this.canonicalListTitle) {
+      const discoveryQuery = `SELECT tp_ID FROM [${dbName}].[dbo].[AllLists] WHERE tp_Title = @title AND tp_DeleteTransactionId = 0x0`;
+      try {
+        const rows = await this.queryOldDb(discoveryQuery, { title: this.canonicalListTitle });
+        discoveredIds = rows.map(r => String(r.tp_ID).toUpperCase());
+      } catch (err) {
+        logger.error(`[StreamCarBookingMigrationModel] discoveryQuery failed for DB ${dbName}: ${err.message}`);
+      }
+    }
+
+    // 3. Nếu chưa thấy, thử tìm theo từ khóa đặc thù cho Đặt xe
+    if (discoveredIds.length === 0) {
+      const keywords = ['Lịch xe', 'Đặt xe', 'Đăng ký xe', 'Lịch đăng ký xe'];
+      try {
+        const patterns = keywords.map(k => `tp_Title LIKE N'%${k}%'`).join(' OR ');
+        const likeQuery = `
+          SELECT tp_ID, tp_Title
+          FROM [${dbName}].[dbo].[AllLists]
+          WHERE (${patterns})
+          AND tp_DeleteTransactionId = 0x0
+          AND tp_Title NOT LIKE N'%Đính kèm%'
+          AND tp_Title NOT LIKE N'%Văn bản%'
+          AND tp_Title NOT LIKE N'%Tài liệu%'
+        `;
+
+        const rows = await this.queryOldDb(likeQuery);
+        if (rows?.length) {
+          discoveredIds = rows.map(r => String(r.tp_ID).toUpperCase());
+          logger.info(`[StreamCarBookingMigrationModel] [${dbName}] Found potential lists: ${rows.map(r => r.tp_Title).join(', ')}`);
+        }
+      } catch (err) {
+        logger.error(`[StreamCarBookingMigrationModel] likeQuery failed for DB ${dbName}: ${err.message}`);
+      }
+    }
+
+    if (discoveredIds.length > 0) {
+      this.listIdCache[dbName] = discoveredIds;
+      logger.info(`[StreamCarBookingMigrationModel] Final resolved List IDs for [${dbName}]: ${discoveredIds.join(', ')}`);
+      return discoveredIds;
+    }
+
+    // 4. Fallback cuối cùng
+    if (dbName === this.oldDbName) {
+      logger.warn(`[StreamCarBookingMigrationModel] Using hardcoded reference IDs for ${dbName}.`);
+      return referenceIds;
+    }
+
+    logger.error(`[StreamCarBookingMigrationModel] !!! KHÔNG TÌM THẤY DANH SÁCH ĐẶT XE TẠI DB: ${dbName} !!!`);
+    return [];
   }
 
-  async fetchListFromOldDb(lastSyncTime, lastSyncId = 0, offset = 0, limit = 2000) {
-    const listIds = this.oldConfig.listIds || [];
-    const listIdsStr = listIds.map(id => `'${id}'`).join(',');
+  async getCount(lastSyncTime, lastSyncId = 0) {
+    const dbs = this.oldConfig.databaseList || [this.oldDbName];
+
+    let total = 0;
+    for (const db of dbs) {
+      const listIds = await this.resolveListIdsForDb(db);
+      if (!listIds?.length) continue;
+
+      const listIdsStr = listIds.map(id => `'${id}'`).join(',');
+      const query = `
+          SELECT COUNT(*) AS total
+          FROM [${db}].[dbo].[AllUserData] ud
+          WHERE ud.[tp_ListId] IN (${listIdsStr})
+          AND ud.tp_RowOrdinal = 0
+      `;
+      try {
+        const rows = await this.queryOldDb(query, { lastSyncTime, lastSyncId: Number(lastSyncId || 0) });
+        const dbCount = Number(rows?.[0]?.total || 0);
+        total += dbCount;
+        logger.info(`[StreamCarBookingMigrationModel] [getCount] DB: ${db} -> ${dbCount} items`);
+      } catch (err) {
+        logger.error(`[StreamCarBookingMigrationModel] [getCount] Failed for DB: ${db}: ${err.message}`);
+      }
+    }
+    return total;
+  }
+
+  async fetchListFromOldDb(lastSyncTime, lastSyncId = 0, offset = 0, limit = 2000, dbName = null) {
+    const targetDb = dbName || this.oldDbName;
+    const resolvedListIds = await this.resolveListIdsForDb(targetDb);
+    const listIdsStr = resolvedListIds.map(id => `'${id}'`).join(',');
 
     // 🔥 Build dynamic SELECT based on existing columns in Source DB
     const cols = this.sourceSchema;
@@ -384,15 +543,15 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         cols.hasUserInfo ? `ui_author.[tp_Email]    AS AuthorEmail` : `NULL AS AuthorEmail`,
         cols.hasUserInfo ? `ui_editor.[tp_Title]    AS EditorName` : `NULL AS EditorName`,
         cols.hasUserInfo ? `ui_editor.[tp_Login]    AS EditorAccount` : `NULL AS EditorAccount`,
-        cols.allUserData.has('nvarchar1') ? `ud.[nvarchar1] AS Title` : `NULL AS Title`,
+        cols.allUserData.has('nvarchar1') ? `CAST(ud.[nvarchar1] AS NVARCHAR(MAX)) AS Title` : `NULL AS Title`,
         cols.allUserData.has('datetime1') ? `ud.[datetime1] AS StartDate` : `NULL AS StartDate`,
         cols.allUserData.has('datetime2') ? `ud.[datetime2] AS EndDate` : `NULL AS EndDate`,
-        cols.allUserData.has('nvarchar2') ? `ud.[nvarchar2] AS Location` : `NULL AS Location`,
-        cols.allUserData.has('nvarchar3') ? `ud.[nvarchar3] AS Description` : `NULL AS Description`,
-        cols.allUserData.has('nvarchar4') ? `ud.[nvarchar4] AS Organizer` : `NULL AS Organizer`
+        cols.allUserData.has('nvarchar2') ? `CAST(ud.[nvarchar2] AS NVARCHAR(MAX)) AS Location` : `NULL AS Location`,
+        cols.allUserData.has('nvarchar3') ? `CAST(ud.[nvarchar3] AS NVARCHAR(MAX)) AS Description` : `NULL AS Description`,
+        cols.allUserData.has('nvarchar4') ? `CAST(ud.[nvarchar4] AS NVARCHAR(MAX)) AS Organizer` : `NULL AS Organizer`
     ];
 
-    const ciColumns = [
+    const ciSelect = [
         'Title', 'Subject', 'LoaiVanBan', 'DepartmentId', 'Status', 'StatusText',
         'WorkflowId', 'Approver', 'ApprovedDate', 'Created', 'CreatedBy', 'Modified',
         'ModifiedBy', 'SPItemId', 'SPListId', 'SubmitDate', 'Step', 'DocumentId',
@@ -404,9 +563,7 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         'ResourceFormId', 'SiteName', 'IsDaIn', 'IsDaKy', 'ChildId', 'StampWithKey',
         'Name', 'IsHubSendOut', 'HubPackageId', 'GoiDauTu', 'GoiDuAn', 'DonViChuTri',
         'NgayKyKH', 'SoKH', 'DonViSoanThao', 'GoiDuAn1', 'IsNAS', 'NAS_MESS'
-    ];
-
-    const ciSelect = ciColumns.map(col => {
+    ].map(col => {
         const alias = col === 'ID' ? 'DocumentID' :
                      (col === 'Title' ? 'DocumentTitle' :
                      (col === 'Subject' ? 'DocumentSubject' :
@@ -431,46 +588,40 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
             SELECT
                 ${udSelect.join(',\n                ')},
                 ${ciSelect.join(',\n                ')},
+                ${cols.hasDepartment ? `dept.[Title] AS DepartmentName` : `NULL AS DepartmentName`},
                 ud.[tp_Modified] AS __sync_time,
                 ud.[tp_ID] AS __sync_id_num,
                 ROW_NUMBER() OVER (ORDER BY ud.[tp_Modified] ASC, ud.[tp_ID] ASC) AS __page_rn
 
-            FROM [${this.oldDbName}].[dbo].[AllUserData] ud
-            INNER JOIN [${this.oldDbName}].[dbo].[AllLists] l
+            FROM [${targetDb}].[dbo].[AllUserData] ud
+            INNER JOIN [${targetDb}].[dbo].[AllLists] l
                 ON ud.[tp_ListId] = l.[tp_ID]
             ${cols.hasUserInfo ? `LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_author ON ud.[tp_Author] = ui_author.[tp_ID]` : ''}
             ${cols.hasUserInfo ? `LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_editor ON ud.[tp_Editor] = ui_editor.[tp_ID]` : ''}
-            LEFT JOIN [DataEOfficeSNP].[SNP].[CodeItem] ci ON ud.[tp_ID] = ci.[SPItemId]
+            LEFT JOIN [DataEOfficeSNP].[SNP].[CodeItem] ci ON ud.[tp_ID] = ci.[SPItemId] AND CAST(ud.[tp_ListId] AS NVARCHAR(100)) = CAST(ci.[SPListId] AS NVARCHAR(100))
+            ${cols.hasDepartment ? `LEFT JOIN [${this.oldUserDb}].[dbo].[Department] dept ON ci.[DepartmentId] = dept.[ID]` : ''}
 
             WHERE ud.[tp_ListId] IN (${listIdsStr})
             AND ud.tp_RowOrdinal = 0
-            AND ud.[tp_IsCurrentVersion] = 1
-            AND (
-                ud.[tp_Modified] > @lastSyncTime
-                OR (
-                    ud.[tp_Modified] = @lastSyncTime
-                    AND ud.[tp_ID] > @lastSyncId
-                )
-            )
         ) AS t
         WHERE __page_rn > @offset AND __page_rn <= (@offset + @limit)
         ORDER BY __page_rn;
     `;
 
-    const rows = await this.queryOldDb(query, { 
-      lastSyncTime, 
+    const rows = await this.queryOldDb(query, {
+      lastSyncTime,
       lastSyncId: Number(lastSyncId || 0),
       offset: Number(offset || 0),
       limit: Number(limit || 2000)
     });
-    console.log(`[StreamCarBookingMigrationModel] Fetched ${rows.length} rows from old DB`);
     return rows;
   }
 
-  async syncOldToStaging(rows, { transaction } = {}) {
+  async syncOldToStaging(rows, { transaction, dbName } = {}) {
     if (!Array.isArray(rows) || rows.length === 0) return { stagedCount: 0 };
-    console.log(`[StreamCarBookingMigrationModel] Staging ${rows.length} rows to ${this.newTableSync}...`);
-    const internalColumns = new Set(['__sync_time', '__sync_id_num']);
+    const targetDb = dbName || this.oldDbName;
+    console.log(`[StreamCarBookingMigrationModel] Staging ${rows.length} rows from ${targetDb} to ${this.newTableSync}...`);
+    const internalColumns = new Set(['__sync_time', '__sync_id_num', 'source_db']);
     const columns = Object.keys(rows[0] || {}).filter(
       (c) => !String(c).startsWith('__') && !internalColumns.has(c)
     );
@@ -507,6 +658,7 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
           params['id_key'] = normalizeValue(row[keyColumn], keyColumn);
           params['sync_time'] = row.__sync_time;
           params['sync_id_num'] = row.__sync_id_num;
+          params['source_db'] = targetDb;
 
           columns.forEach((col, index) => {
             const pName = `p${index}`;
@@ -514,29 +666,31 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
             if (col !== keyColumn) colPairs.push(`[${col}] = @${pName}`);
           });
 
+          // Metadata flags
+          params.MigrateFlg = 0;
+          params.MigrateErrFlg = 0;
+
           const updateSet = colPairs.length > 0 ? colPairs.join(', ') : `[${keyColumn}] = [${keyColumn}]`;
           const insertCols = columns.map(c => `[${c}]`).join(', ');
           const insertVals = columns.map((_, i) => `@p${i}`).join(', ');
 
           const query = `
-          IF EXISTS (SELECT 1 FROM ${stagingTableRef} WHERE [${keyColumn}] = @id_key)
+          IF EXISTS (SELECT 1 FROM ${stagingTableRef} WHERE [${keyColumn}] = @id_key AND [source_db] = @source_db)
           BEGIN
-              UPDATE ${stagingTableRef} SET ${updateSet}, __sync_time = @sync_time, __sync_id_num = @sync_id_num WHERE [${keyColumn}] = @id_key
+              UPDATE ${stagingTableRef} SET ${updateSet}, __sync_time = @sync_time, __sync_id_num = @sync_id_num, MigrateFlg = @MigrateFlg, MigrateErrFlg = @MigrateErrFlg, MigrateErrMess = NULL WHERE [${keyColumn}] = @id_key AND [source_db] = @source_db
           END
           ELSE
           BEGIN
-              INSERT INTO ${stagingTableRef} (${insertCols}, __sync_time, __sync_id_num) VALUES (${insertVals}, @sync_time, @sync_id_num)
+              INSERT INTO ${stagingTableRef} (${insertCols}, __sync_time, __sync_id_num, source_db, MigrateFlg, MigrateErrFlg) VALUES (${insertVals}, @sync_time, @sync_id_num, @source_db, @MigrateFlg, @MigrateErrFlg)
           END
           `;
           await this.queryNewDbTx(query, params, transaction);
           processedCount++;
       } catch (err) {
-          console.error(`[StreamCarBookingMigrationModel] ERROR staging row ID=${row[keyColumn]}: ${err.message}`);
-          console.error(`Problematic values: ${JSON.stringify(row)}`);
+          console.error(`[StreamCarBookingMigrationModel] ERROR staging row ID=${row[keyColumn]} from ${targetDb}: ${err.message}`);
           if (err.message.includes('deadlock') || err.message.includes('connection')) throw err;
       }
     }
-    console.log(`[StreamCarBookingMigrationModel] Staging complete for ${processedCount}/${rows.length} rows`);
     return { stagedCount: processedCount };
   }
 
@@ -544,57 +698,103 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
     if (!syncJobId) throw new Error('syncJobId is required');
     const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
     const normalizedLastSyncId = Number(lastSyncId || 0);
+    const stagingTableRef = this.getStagingTableRef();
+
+    // ★ Cleanup stale records (MigrateFlg=2)
+    try {
+      await this.queryNewDb(`UPDATE ${stagingTableRef} SET MigrateFlg = 0 WHERE MigrateFlg = 2`);
+    } catch (e) {}
 
     const totalCount = await this.getCount(normalizedLastSyncTime, normalizedLastSyncId);
-    console.log(`[StreamCarBookingMigrationModel] Total records to sync: ${totalCount}`);
+    logger.info(`[StreamCarBookingMigrationModel] Total records across all DBs: ${totalCount}`);
 
-    // Cập nhật Dashboard ngay lập tức
+    // Cập nhật Dashboard
     await this.queryNewDb(`UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`, {
       total: totalCount,
       jobId: syncJobId
     });
 
     const fetchBatchSize = Number(process.env.STAGING_FETCH_BATCH_SIZE || 2000);
-    const numIterations = Math.ceil(totalCount / fetchBatchSize);
+    const dbs = this.oldConfig.databaseList || [this.oldDbName];
 
     let totalStagedCount = 0;
     let nextSyncTime = normalizedLastSyncTime;
     let nextSyncId = normalizedLastSyncId;
 
-    for (let i = 0; i < numIterations; i++) {
-        const offset = i * fetchBatchSize;
-        logger.info(`[StreamCarBookingMigrationModel] Fetching batch ${i + 1}/${numIterations} (Offset: ${offset}, Limit: ${fetchBatchSize})`);
-        
-        const rows = await this.fetchListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId, offset, fetchBatchSize);
-        if (!rows || rows.length === 0) break;
+    let dbIdx = 0;
+    for (const db of dbs) {
+      dbIdx++;
+      try {
+        logger.info(`[StreamCarBookingMigrationModel] [SITE ${dbIdx}/${dbs.length}] Processing database: ${db}`);
 
-        const stageResult = await this.syncOldToStaging(rows);
-        totalStagedCount += Number(stageResult?.stagedCount || rows.length || 0);
-
-        // Cập nhật cursor và LOG chi tiết từng bản ghi
-        for (const row of rows) {
-            const rowTime = this.extractRowSyncTime(row);
-            const rowId = this.extractRowSyncId(row);
-            if (!rowTime) continue;
-
-            const isAhead = this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId);
-            logger.info(`  └─ [Compare] rowID: ${row.ID} | T: ${rowTime} ID: ${rowId} vs Cursor(T: ${nextSyncTime} ID: ${nextSyncId}) -> Ahead: ${isAhead}`);
-
-            if (isAhead) {
-                nextSyncTime = rowTime;
-                nextSyncId = rowId;
-            }
+        // Resolve List IDs cho DB này
+        const listIds = await this.resolveListIdsForDb(db);
+        if (listIds.length === 0) {
+          logger.warn(`[StreamCarBookingMigrationModel] No List IDs resolved for DB ${db}. Skipping.`);
+          continue;
         }
-        logger.info(`🔥 [StreamCarBookingMigrationModel] Batch ${i + 1}/${numIterations} staged: ${totalStagedCount}/${totalCount}. LastSyncTime: ${nextSyncTime}, LastSyncId: ${nextSyncId}`);
+        const listIdsStr = listIds.map(id => `'${id}'`).join(',');
+
+        // Lấy count riêng cho DB này
+        const dbCountQuery = `
+            SELECT COUNT(*) AS total
+            FROM [${db}].[dbo].[AllUserData]
+            WHERE [tp_ListId] IN (${listIdsStr})
+            AND tp_RowOrdinal = 0
+        `;
+        const dbCountRes = await this.queryOldDb(dbCountQuery, { lastSyncTime: normalizedLastSyncTime, lastSyncId: normalizedLastSyncId });
+        const dbCount = Number(dbCountRes?.[0]?.total || 0);
+
+        if (dbCount === 0) {
+          logger.info(`[StreamCarBookingMigrationModel] No new records in ${db}`);
+          continue;
+        }
+
+        const numIterations = Math.ceil(dbCount / fetchBatchSize);
+        for (let i = 0; i < numIterations; i++) {
+            const offset = i * fetchBatchSize;
+            logger.info(`[StreamCarBookingMigrationModel] [${db}] Fetching batch ${i + 1}/${numIterations} (Offset: ${offset})`);
+
+            const rows = await this.fetchListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId, offset, fetchBatchSize, db);
+            if (!rows || rows.length === 0) break;
+
+            const stageResult = await this.syncOldToStaging(rows, { dbName: db });
+            totalStagedCount += Number(stageResult?.stagedCount || rows.length || 0);
+
+            // Cập nhật cursor (Global)
+            for (const row of rows) {
+                const rowTime = this.extractRowSyncTime(row);
+                const rowId = this.extractRowSyncId(row);
+                if (!rowTime) continue;
+
+                const isAhead = this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId);
+                if (isAhead) {
+                    nextSyncTime = rowTime;
+                    nextSyncId = rowId;
+                }
+            }
+            logger.info(`[StreamCarBookingMigrationModel] [${db}] Staged so far: ${totalStagedCount}. Cursor: ${nextSyncTime} / ${nextSyncId}`);
+        }
+      } catch (dbErr) {
+        logger.error(`[StreamCarBookingMigrationModel] [SKIPPED SITE] Error processing database ${db}: ${dbErr.message}`);
+        // Tiếp tục tới DB tiếp theo
+      }
     }
 
-    return { 
-        syncJobId, 
-        rows: [], 
-        totalCount: totalCount, 
+    // Đếm pending thực tế trong staging
+    let pendingCount = totalStagedCount;
+    try {
+      const pendingRes = await this.queryNewDb(`SELECT COUNT(1) AS cnt FROM ${stagingTableRef} WHERE ISNULL(MigrateFlg, 0) = 0 AND ISNULL(MigrateErrFlg, 0) = 0`);
+      pendingCount = Number(pendingRes?.[0]?.cnt || 0);
+    } catch (e) {}
+
+    return {
+        syncJobId,
+        rows: [],
+        totalCount: pendingCount,
         stagedCount: totalStagedCount,
-        lastSyncTime: nextSyncTime, 
-        lastSyncId: nextSyncId 
+        lastSyncTime: nextSyncTime,
+        lastSyncId: nextSyncId
     };
   }
 
@@ -616,12 +816,12 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         cols.hasUserInfo ? `ui_author.[tp_Email]    AS AuthorEmail` : `NULL AS AuthorEmail`,
         cols.hasUserInfo ? `ui_editor.[tp_Title]    AS EditorName` : `NULL AS EditorName`,
         cols.hasUserInfo ? `ui_editor.[tp_Login]    AS EditorAccount` : `NULL AS EditorAccount`,
-        cols.allUserData.has('nvarchar1') ? `ud.[nvarchar1] AS Title` : `NULL AS Title`,
+        cols.allUserData.has('nvarchar1') ? `CAST(ud.[nvarchar1] AS NVARCHAR(MAX)) AS Title` : `NULL AS Title`,
         cols.allUserData.has('datetime1') ? `ud.[datetime1] AS StartDate` : `NULL AS StartDate`,
         cols.allUserData.has('datetime2') ? `ud.[datetime2] AS EndDate` : `NULL AS EndDate`,
-        cols.allUserData.has('nvarchar2') ? `ud.[nvarchar2] AS Location` : `NULL AS Location`,
-        cols.allUserData.has('nvarchar3') ? `ud.[nvarchar3] AS Description` : `NULL AS Description`,
-        cols.allUserData.has('nvarchar4') ? `ud.[nvarchar4] AS Organizer` : `NULL AS Organizer`,
+        cols.allUserData.has('nvarchar2') ? `CAST(ud.[nvarchar2] AS NVARCHAR(MAX)) AS Location` : `NULL AS Location`,
+        cols.allUserData.has('nvarchar3') ? `CAST(ud.[nvarchar3] AS NVARCHAR(MAX)) AS Description` : `NULL AS Description`,
+        cols.allUserData.has('nvarchar4') ? `CAST(ud.[nvarchar4] AS NVARCHAR(MAX)) AS Organizer` : `NULL AS Organizer`,
         `ud.[tp_Modified] AS __sync_time`,
         `ud.[tp_ID] AS __sync_id_num`
     ];
@@ -676,7 +876,7 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         AND ud.[tp_DeleteTransactionId] = 0x0
         AND (
             @lastSyncTime = '1970-01-01T00:00:00.000Z'
-            OR ud.[tp_Modified] < @lastSyncTime 
+            OR ud.[tp_Modified] < @lastSyncTime
             OR (ud.[tp_Modified] = @lastSyncTime AND ud.[tp_ID] < @lastSyncId)
         )
         ORDER BY ud.[tp_Modified] DESC, ud.[tp_ID] DESC
@@ -690,29 +890,98 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
     return rows?.[0] || null;
   }
 
-  async processOne(syncJobId) {
-    console.log(`[StreamCarBookingMigrationModel] processOne: Starting job ${syncJobId}`);
-    const jobState = await this.getSyncJobState(syncJobId);
-    if (!jobState) throw new Error(`Job state not found: ${syncJobId}`);
-    const rowData = await this.fetchOneFromSource({
-      lastSyncTime: this.normalizeSyncTime(jobState.last_sync_time || DEFAULT_SYNC_TIME),
-      lastSyncId: Number(jobState.last_sync_id || 0)
+  async fetchOneFromStaging() {
+    const stagingTableRef = this.getStagingTableRef();
+    const row = await claimNextStagingRow(this, {
+      tableRef: stagingTableRef,
+      orderBy: 'SY_SyncId ASC',
+      owner: `pid_${process.pid}`,
+      label: this.modelName,
     });
-    if (!rowData) {
-        console.log(`[StreamCarBookingMigrationModel] processOne: No more data for job ${syncJobId}`);
-        return { syncJobId, processed: false, done: true };
+    if (row) {
+      logger.info(`[${this.modelName}] [START] Processing started: SY_SyncId=${row.SY_SyncId}, ID=${row.ID}`);
+    }
+    return row;
+  }
+
+  async updateHeartbeat(rowData, transaction = null) {
+    if (!rowData?.SY_SyncId) return 0;
+    return updateHeartbeat(this, {
+      tableRef: this.getStagingTableRef(),
+      keyWhere: 'SY_SyncId = @syncId',
+      params: { syncId: rowData.SY_SyncId },
+      transaction,
+      rowToken: `SY_SyncId=${rowData.SY_SyncId}`,
+      label: this.modelName,
+    });
+  }
+
+  async processOne(syncJobId) {
+    const stagingTableRef = this.getStagingTableRef();
+    let rowData = null;
+
+    try {
+      rowData = await this.fetchOneFromStaging();
+    } catch (e) {
+      logger.error(`[StreamCarBookingMigrationModel] Error claiming row from staging: ${e.message}`);
+      return { syncJobId, processed: false, done: false };
     }
 
-    console.log(`[StreamCarBookingMigrationModel] processOne: Processing row ID ${rowData.ID}`);
-    await this.processRowData(rowData);
+    if (!rowData) {
+      logger.info(`[StreamCarBookingMigrationModel] No more pending records in staging for job ${syncJobId}`);
+      return { syncJobId, processed: false, done: true };
+    }
 
-    await this.queryNewDb(
-      `UPDATE sync_jobs SET total_processed = ISNULL(total_processed,0) + 1, total_success = ISNULL(total_success,0) + 1,
-       last_sync_time = @lastSyncTime, last_sync_id = @lastSyncId WHERE job_id = @syncJobId`,
-      { syncJobId, lastSyncTime: this.extractRowSyncTime(rowData), lastSyncId: this.extractRowSyncId(rowData) }
+    const recordId = rowData.ID;
+    const dbSource = rowData.source_db || this.oldDbName;
+    rowData.source_db = dbSource; // Ensure it's set for processRowData
+    logger.info(`[StreamCarBookingMigrationModel] processOne: Processing row ID ${recordId} from ${dbSource}`);
+    const stopHeartbeat = startHeartbeatLoop(
+      () => this.updateHeartbeat(rowData),
+      this.heartbeatIntervalMs,
     );
-    console.log(`[StreamCarBookingMigrationModel] processOne: Successfully processed row ID ${rowData.ID}`);
-    return { syncJobId, processed: true, done: false };
+
+    try {
+      await this.processRowData(rowData);
+
+      // Mark success
+      await markRowSuccess(this, {
+        tableRef: stagingTableRef,
+        keyWhere: 'SY_SyncId = @syncId',
+        params: { syncId: rowData.SY_SyncId },
+        rowToken: `SY_SyncId=${rowData.SY_SyncId}`,
+        label: this.modelName,
+      });
+
+      // Update Dashboard
+      await this.queryNewDb(
+        `UPDATE sync_jobs SET total_processed = ISNULL(total_processed,0) + 1, total_success = ISNULL(total_success,0) + 1 WHERE job_id = @syncJobId`,
+        { syncJobId }
+      );
+      stopHeartbeat();
+
+      return { syncJobId, processed: true, done: false };
+    } catch (err) {
+      stopHeartbeat();
+      logger.error(`[StreamCarBookingMigrationModel] processOne: Error ID ${recordId}: ${err.message}`);
+
+      // Mark error
+      await markRowFailed(this, {
+        tableRef: stagingTableRef,
+        keyWhere: 'SY_SyncId = @syncId',
+        params: { syncId: rowData.SY_SyncId },
+        rowToken: `SY_SyncId=${rowData.SY_SyncId}`,
+        errorMessage: err.message,
+        label: this.modelName,
+      });
+
+      await this.queryNewDb(
+        `UPDATE sync_jobs SET total_processed = ISNULL(total_processed,0) + 1, total_errors = ISNULL(total_errors,0) + 1 WHERE job_id = @syncJobId`,
+        { syncJobId }
+      );
+
+      return { syncJobId, processed: false, done: false, error: err.message };
+    }
   }
 
   async processRowData(rowData, { transaction } = {}) {
@@ -730,42 +999,73 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         const carBookingRoles = '[{"processKey":"VAN_BAN_DI","name":"VAN_BAN_DI","roles":[{"roleCode":"CAN_BO","name":"CAN_BO"}]},{"processKey":"QUY_TRINH_CV_PHONG_BAN","name":"QUY_TRINH_CV_PHONG_BAN","roles":[{"roleCode":"NGUOI_PHOI_HOP","name":"NGƯỜI PHỐI HỢP"}]},{"processKey":"PHUC_DAP_DV_CON","name":"PHUC_DAP_DV_CON","roles":[{"roleCode":"CAN_BO","name":"CAN_BO"},{"roleCode":"NHAN_VIEN_TCT","name":"NHAN_VIEN_TCT"}]},{"processKey":"quan_ly_tin_tuc","name":"quan_ly_tin_tuc","roles":[{"roleCode":"NGUOI_TAO_TIN","name":"NGUOI_TAO_TIN"}]},{"processKey":"SOANTHAO_PHATHANH_VBD","name":"SOANTHAO_PHATHANH_VBD","roles":[{"roleCode":"NGUOI_SOAN_THAO","name":"NGUOI_SOAN_THAO"}]},{"processKey":"QUY_TRINH_LICH_HOP","name":"QUY_TRINH_LICH_HOP","roles":[{"roleCode":"NGUOI_SOAN_LICH","name":"NGUOI_SOAN_LICH"},{"roleCode":"NGUOI_THAM_GIA","name":"NGUOI_THAM_GIA"},{"roleCode":"ADMIN","name":"ADMIN"}]},{"processKey":"quytrinhthuthaphoso1","name":"quytrinhthuthaphoso1","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qllsct","name":"qllsct","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvlfgttthcid","name":"qtdvlfgttthcid","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"dev_01","name":"dev_01","roles":[{"roleCode":"CB","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qlgttssddn","name":"qlgttssddn","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"quytrinhthuthaphoso","name":"quytrinhthuthaphoso","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtqlapi","name":"qtqlapi","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvdstphstsbnhs","name":"qtdvdstphstsbnhs","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtqllstthscd","name":"qtqllstthscd","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"listDetailImport","name":"listDetailImport","roles":[{"roleCode":"CANBO","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"kthsclone","name":"kthsclone","roles":[{"roleCode":"CANBO","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"tthsdn","name":"tthsdn","roles":[{"roleCode":"CANBO","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtqllssytl","name":"qtqllssytl","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qlgttssdcd","name":"qlgttssdcd","roles":[{"roleCode":"CANBO","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtqlkqgqtthccd","name":"qtqlkqgqtthccd","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"exceldoanhnghiep","name":"exceldoanhnghiep","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvldldtkqgqtthctsbncss","name":"qtdvldldtkqgqtthctsbncss","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvldstsdcdiddn","name":"qtdvldstsdcdiddn","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvttdtcn","name":"qtdvttdtcn","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtqltl","name":"qtqltl","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvldsidkqgqtthccd","name":"qtdvldsidkqgqtthccd","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"so2","name":"so2","roles":[{"roleCode":"CB","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"TVHSLT","name":"TVHSLT","roles":[{"roleCode":"CB","name":"CB","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtiedldtcd","name":"qtiedldtcd","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qldvcc","name":"qldvcc","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"ldsiqkqgqtthccd","name":"ldsiqkqgqtthccd","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtqllstths","name":"qtqllstths","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qlkqqgtthccd","name":"qlkqqgtthccd","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtth","name":"qtth","roles":[{"roleCode":"CANBOCQDV1","name":"Cán bộ CQDV1","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvttgikqtgqhstthc","name":"qtdvttgikqtgqhstthc","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qlhsdn","name":"qlhsdn","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtqllstthsdn","name":"qtqllstthsdn","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvlfkqgqtthcid","name":"qtdvlfkqgqtthcid","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"dongbo","name":"dongbo","roles":[{"roleCode":"CANBO","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdldtkqgqtthcid","name":"qtdldtkqgqtthcid","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtiedldtdn","name":"qtiedldtdn","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qllsctcd","name":"qllsctcd","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtqlhth","name":"qtqlhth","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtqlgttsdcd","name":"qtqlgttsdcd","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvldsgttsdcdid","name":"qtdvldsgttsdcdid","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qlkqqgtthcdn","name":"qlkqqgtthcdn","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvlfkqgqtthcbnhs","name":"qtdvlfkqgqtthcbnhs","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"kths","name":"kths","roles":[{"roleCode":"canbokhaithac","name":"Cán bộ khai thác","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvlddkqgqtthcdn","name":"qtdvlddkqgqtthcdn","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"Mã quy trình","name":"Mã quy trình","roles":[{"roleCode":"CANBO","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"importexcel","name":"importexcel","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvttkqgqtthc","name":"qtdvttkqgqtthc","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvldldtkqgqtthcid","name":"qtdvldldtkqgqtthcid","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtttgttsdddkscddn","name":"qtttgttsdddkscddn","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"LUONG_PHONG","name":"LUONG_PHONG","roles":[{"roleCode":"CAN_BO","name":"CAN_BO","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvlttdtdn","name":"qtdvlttdtdn","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtdvlddkqgq1dn","name":"qtdvlddkqgq1dn","roles":[{"roleCode":"CANBO","name":"Cán Bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qllsctdn","name":"qllsctdn","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"qtqltldn","name":"qtqltldn","roles":[{"roleCode":"canbo","name":"Cán bộ","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"Administrator","name":"Administrator","roles":[{"roleCode":"CAN_BO","name":"CAN_BO","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"QUY_TRINH_PHONG_HOP","name":"QUY_TRINH_PHONG_HOP","roles":[{"roleCode":"XEM_PHONG_HOP","name":"XEM_PHONG_HOP","__groupId":"b59238b0-6de2-4bda-87ac-f62ccab182bf"}]},{"processKey":"KY_SO_HS_VBD","name":"KY_SO_HS_VBD","roles":[{"roleCode":"NGUOI_SOAN_THAO","name":"NGUOI_SOAN_THAO"}]},{"processKey":"CVDAN","name":"CVDAN","roles":[{"roleCode":"NGUOI_GIAO","name":"NGƯỜI GIAO"},{"roleCode":"NGUOI_CHU_TRI","name":"NGƯỜI CHỦ TRÌ"},{"roleCode":"NGUOI_PHOI_HOP","name":"NGƯỜI PHỐI HỢP"}]},{"processKey":"QUY_TRINH_KHAI_THAC_HO_SO","name":"QUY_TRINH_KHAI_THAC_HO_SO","roles":[{"roleCode":"NGUOI_KHAI_THAC","name":"NGUOI_KHAI_THAC"}]},{"processKey":"hosoluutru","name":"hosoluutru","roles":[{"roleCode":"HHLT_CANBO","name":"HHLT_CANBO"}]},{"processKey":"thhs","name":"thhs","roles":[{"roleCode":"bld","name":"bld"}]},{"processKey":"PHUC_DAP_DV","name":"PHUC_DAP_DV","roles":[{"roleCode":"PHONG_NHAN_VIEN_TCT","name":"PHONG_NHAN_VIEN_TCT"},{"roleCode":"CAN_BO","name":"CAN_BO"}]},{"processKey":"QUY_TRINH_DANG_KY_XE","name":"QUY_TRINH_DANG_KY_XE","roles":[{"roleCode":"NGUOI_DANG_KY_XE","name":"NGUOI_DANG_KY_XE"}]},{"processKey":"QTVBNB","name":"QTVBNB","roles":[{"roleCode":"CAN_BO","name":"CAN_BO"}]},{"processKey":"QUY_TRINH_PHAN_ANH_KIEN_NGHI","name":"QUY_TRINH_PHAN_ANH_KIEN_NGHI","roles":[{"roleCode":"NGUOI_PHAN_ANH","name":"NGUOI_PHAN_ANH"}]},{"processKey":"QT_MTHC","name":"QT_MTHC","roles":[{"roleCode":"NGUOI_TAO","name":"NGUOI_TAO"}]},{"processKey":"SOANTHAO_PHATHANH_CQD","name":"SOANTHAO_PHATHANH_CQD","roles":[{"roleCode":"NGUOI_SOAN_THAO","name":"NGUOI_SOAN_THAO"}]},{"processKey":"dashboardPage","name":"dashboardPage","roles":[{"roleCode":"VT","name":"VT"}]},{"processKey":"KY_SO_HS_K_DD","name":"KY_SO_HS_K_DD","roles":[{"roleCode":"NGUOI_SOAN_THAO","name":"NGUOI_SOAN_THAO"}]},{"processKey":"reportsOutGoingDocument","name":"reportsOutGoingDocument","roles":[{"roleCode":"VT","name":"VT"}]},{"processKey":"PHOIHOP_NHANDEBIET","name":"PHOIHOP_NHANDEBIET","roles":[{"roleCode":"CAN_BO","name":"CAN_BO"}]},{"processKey":"statisticsAndReports","name":"statisticsAndReports","roles":[{"roleCode":"VT","name":"VT"}]}]';
 
         // 🔥 1. Resolve Thông tin Người dùng (Waterfall) - Đồng nhất ID cho Master & Audit
-        const authorCandidates = [
-          { key: 'AuthorAccount', type: 'account', value: rowData.AuthorAccount },
-          { key: 'AuthorName', type: 'name', value: rowData.AuthorName }
-        ];
+        let finalUserId = null;
 
-        let finalUserId = '6915f2387e39c2ba33cef79a'; // Fallback Van thu TCT nếu không tìm thấy
-        for (const cand of authorCandidates) {
-          if (!cand.value) continue;
-          console.log(`[StreamCarBookingMigrationModel] Resolving Final User ID via [${cand.key}]: ${cand.value}`);
-          let resolvedId = null;
-          if (cand.type === 'account') {
-            resolvedId = await this.helper.resolveUserIdByAccountName(cand.value, transaction, carBookingRoles);
-          } else {
-            resolvedId = await this.helper.resolveUserIdByFullName(cand.value, transaction, carBookingRoles);
-          }
-          if (resolvedId) {
-              finalUserId = resolvedId;
-              console.log(`[StreamCarBookingMigrationModel] >> SUCCESS Resolved User to UUID: ${finalUserId}`);
-              await this._ensureUserHasRoles(finalUserId, carBookingRoles, transaction);
-              break;
-          }
+        // 1a. Tách tên thuần (Loại bỏ phòng ban phía sau dấu "-")
+        // Ví dụ: "Hoàng Thị Lan Phương - TB ATPC" -> "Hoàng Thị Lan Phương"
+        let pureName = null;
+        if (rowData.AuthorName) {
+            pureName = String(rowData.AuthorName).split('-')[0].trim();
+            console.log(`[StreamCarBookingMigrationModel] Extracted pure name: "${pureName}" from "${rowData.AuthorName}"`);
         }
 
-        // Đảm bảo đồng nhất tuyệt đối theo yêu cầu của USER
-        rowData.AuthorAccount = finalUserId; // Sẽ map vào created_by
-        rowData.Organizer = finalUserId;     // Sẽ map vào contact_person (Dùng chung 1 người cho tiện liên hệ)
+        // 1b. Dùng MigrationHelper để tự động dò tìm hoặc tạo User ID
+        if (pureName) {
+            try {
+                if (this.helper && typeof this.helper.syncAndMapUser === 'function') {
+                    finalUserId = await this.helper.syncAndMapUser(pureName, transaction);
+                } else if (this.helper && typeof this.helper.mapUserName === 'function') {
+                    finalUserId = await this.helper.mapUserName(pureName, transaction);
+                }
+
+                if (finalUserId) {
+                    console.log(`[StreamCarBookingMigrationModel] Mapped User via Helper (${pureName}) -> ${finalUserId}`);
+                }
+            } catch (e) {
+                console.warn(`[StreamCarBookingMigrationModel] Lỗi tìm user qua Helper: ${e.message}`);
+            }
+        }
+
+        // 1c. Thử tìm ID theo Account (username) nếu Tên thất bại hoặc Helper không tìm thấy
+        if (!finalUserId && rowData.AuthorAccount) {
+            try {
+                const qAccount = `SELECT TOP 1 id FROM [${this.newDbName}].[dbo].[users] WHERE username = @account OR email LIKE @account + '@%'`;
+                const accRows = await this.queryNewDbTx(qAccount, { account: String(rowData.AuthorAccount).trim() }, transaction);
+                if (accRows && accRows.length > 0) {
+                    finalUserId = accRows[0].id;
+                    console.log(`[StreamCarBookingMigrationModel] Mapped User by Account (${rowData.AuthorAccount}) -> ${finalUserId}`);
+                }
+            } catch (e) {
+                console.warn(`[StreamCarBookingMigrationModel] Lỗi tìm user bằng Account: ${e.message}`);
+            }
+        }
+
+        // 1d. Fallback an toàn nếu vẫn không tìm thấy
+        if (!finalUserId) {
+            finalUserId = 'b23406e3-5c75-41d3-91e0-1654293ae6b2';
+            console.log(`[StreamCarBookingMigrationModel] User not found for ${rowData.AuthorName || rowData.AuthorAccount}. Using fallback Admin ID: ${finalUserId}`);
+        }
+
+        rowData.AuthorAccount = finalUserId;
+
+        console.log(`[StreamCarBookingMigrationModel] Using User ID: ${finalUserId}`);
+
+        // Đảm bảo user có quyền (roles) cần thiết nếu chưa có
+        await this._ensureUserHasRoles(finalUserId, carBookingRoles, transaction);
+
+        if (!rowData.Organizer) {
+            rowData.Organizer = finalUserId;     // Map Organizer sang cùng user nếu bị rỗng
+        }
 
         // 🔥 1.5. Xử lý các giá trị mặc định thực tế cho MASTER nếu bị thiếu
         if (!rowData.departure_point || String(rowData.departure_point).trim() === '') {
-            rowData.departure_point = 'Tại đơn vị';
+            rowData.departure_point = N('Tại đơn vị');
         }
         if (!rowData.Location || String(rowData.Location).trim() === '') {
-            rowData.Location = 'Công tác nội thành/Theo lộ trình yêu cầu';
+            rowData.Location = N('Công tác nội thành/Theo lộ trình yêu cầu');
         }
         if (!rowData.Description || String(rowData.Description).trim() === '') {
-            rowData.Description = 'Giải quyết công việc chuyên môn';
+            rowData.Description = N('Giải quyết công việc chuyên môn');
         }
         if (rowData.passenger_count === undefined || rowData.passenger_count === null) {
             rowData.passenger_count = 1;
@@ -775,12 +1075,29 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         const now = new Date();
 
         // 🔥 1.7. ÉP CỨNG DỮ LIỆU CHUẨN HIỂN THỊ (Strict Hardcoding - No Fallbacks)
-        // name = destination (Location) theo yêu cầu của bạn
-        rowData.name = rowData.Location;
-        
-        // contact_person là Tên hiển thị (không phải mã ID/UUID)
-        rowData.contact_person = rowData.AuthorName || rowData.Organizer || 'Cán bộ 01';
-        
+        // name = Title gốc từ SharePoint (nếu có), fallback sang Location
+        rowData.name = rowData.Title || rowData.Location || N('Yêu cầu đặt xe');
+
+        // contact_person là Tên hiển thị (Theo yêu cầu: Thay bằng ID người dùng)
+        rowData.contact_person = finalUserId;
+
+        // Mapping Phòng ban từ DepartmentName
+        if (rowData.DepartmentName) {
+            const mappedDeptId = await this.helper.mapSenderUnitId(rowData.DepartmentName, transaction);
+            if (mappedDeptId) {
+                rowData.department = mappedDeptId;
+                console.log(`[StreamCarBookingMigrationModel] Resolved Department: ${rowData.DepartmentName} -> ${mappedDeptId}`);
+            }
+        }
+
+        // Mapping Status dựa trên DocumentStatus (SharePoint) -> status_code (DiOffice)
+        // Mặc định 2 (Đã duyệt) nếu không bóc tách được
+        let statusCode = 2;
+        if (rowData.DocumentStatus === 1 || rowData.DocumentStatus === '1') statusCode = 1; // Chờ duyệt
+        if (rowData.DocumentStatus === 3 || rowData.DocumentStatus === '3') statusCode = 2; // Đã duyệt
+        if (rowData.DocumentStatus === 4 || rowData.DocumentStatus === '4') statusCode = 3; // Từ chối
+        rowData.status_code = statusCode;
+
         // Ép cứng đồng loạt các thông số nghiệp vụ (Strict)
         rowData.request_type = 'Tp';
         rowData.priority = 'bt';
@@ -791,34 +1108,50 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         rowData.request_code = 'YC-20260329-004';
         rowData.contact_phone = '0297227381';
         rowData.department = '68afbefecb36081f0bbbef2e';
-        
+
         // Thời gian gốc từ SharePoint
         rowData.request_submitted_at = rowData.tp_Created || now;
 
         // 🔥 1.8. Tính toán các trường bổ trợ (Thời lượng & Chuẩn hóa thời gian)
-        if (rowData.StartDate && rowData.EndDate) {
-            const start = new Date(rowData.StartDate);
-            const end = new Date(rowData.EndDate);
-            const diffMs = end - start;
+        // Lấy thời gian đi từ tp_Created và thời gian về từ tp_Modified theo yêu cầu USER
+        const parseDateFallback = (str) => {
+            if (!str) return null;
+            if (str instanceof Date) return isNaN(str.getTime()) ? null : str;
+            // Làm sạch khoảng trắng và thêm dấu cách trước AM/PM nếu thiếu (ví dụ: "6:36AM" -> "6:36 AM")
+            let cleanStr = String(str).replace(/\s+/g, ' ').trim();
+            cleanStr = cleanStr.replace(/([aApP][mM])$/, ' $1');
+            const d = new Date(cleanStr);
+            return isNaN(d.getTime()) ? null : d;
+        };
+
+        const start = parseDateFallback(rowData.tp_Created || rowData.CreatedDate);
+        const end = parseDateFallback(rowData.tp_Modified || rowData.ModifiedDate);
+
+        rowData.departure_time = start || now;
+        rowData.return_time = end || now;
+
+        if (rowData.departure_time && rowData.return_time) {
+            const diffMs = rowData.return_time - rowData.departure_time;
             rowData.trip_duration_minutes = diffMs > 0 ? Math.floor(diffMs / (1000 * 60)) : 0;
-            // Đảm bảo không ghi đè thời gian kết thúc bằng thời gian hiện tại
-            rowData.return_time = end;
         } else {
             rowData.trip_duration_minutes = 0;
         }
 
         // 🔥 2. Ghi vào bảng MASTER (vehicle_registrations)
-        // Safeguard: Chuẩn hóa cột JSON array - chuỗi rỗng '' → '[]' để tránh lỗi constraint
-        const normalizeArr = (v) => {
+        // Safeguard: Chuẩn hóa cột JSON array/số - chuỗi rỗng hoặc null → NULL (không ghi '[]' hay 0 giả)
+        const normalizeNullable = (v) => {
             if (v === null || v === undefined) return null;
             const s = String(v).trim();
-            return s === '' ? '[]' : s;
+            return s === '' || s === 'null' || s === 'undefined' ? null : s;
         };
-        rowData.driver_ids               = normalizeArr(rowData.driver_ids);
-        rowData.car_ids                  = normalizeArr(rowData.car_ids);
-        rowData.coordination_information = normalizeArr(rowData.coordination_information);
+        rowData.driver_ids               = normalizeNullable(rowData.driver_ids);
+        rowData.car_ids                  = normalizeNullable(rowData.car_ids);
+        rowData.coordination_information = normalizeNullable(rowData.coordination_information);
+        rowData.confirmed_driver_ids     = normalizeNullable(rowData.confirmed_driver_ids);
+        rowData.driver_notice_count      = (rowData.driver_notice_count === null || rowData.driver_notice_count === undefined || String(rowData.driver_notice_count).trim() === '') ? null : Number(rowData.driver_notice_count);
+        rowData.leader_notice_times      = normalizeNullable(rowData.leader_notice_times);
 
-        console.log(`[StreamCarBookingMigrationModel] Executing Upsert for MASTER table...`);
+        logger.info(`[StreamCarBookingMigrationModel] Executing Upsert for MASTER table...`);
         const masterResult = await this.upsertDataToNewDB(rowData, this.oldConfig, 'id_sp_bak', recordId, transaction);
         const masterId = masterResult.id;
         console.log(`[StreamCarBookingMigrationModel] MASTER Upsert successful: Action=${masterResult.action}, Master_ID=${masterId}`);
@@ -838,36 +1171,73 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         if (Array.isArray(coordination) && coordination.length > 0) {
             console.log(`[StreamCarBookingMigrationModel] Upserting ${coordination.length} Coordination Items...`);
             let count = 0;
+
+            const carList = this.cachedCarIds.length > 0 ? this.cachedCarIds : ['LC-20260224035946-Q6DQ2AL8'];
+            const driverList = this.cachedDriverIds.length > 0 ? this.cachedDriverIds : ['DR-20260316075949-SF8X4UZA'];
+
             for (const item of coordination) {
+                // 3a. Tìm ID Xe đã có sẵn trên hệ thống mới (Hoặc tự tạo nếu chưa có)
+                let finalCarId = item.carId || item.car_id;
+                if (finalCarId && isNaN(finalCarId)) {
+                    finalCarId = await this.getOrCreateCar(finalCarId, transaction);
+                } else {
+                    finalCarId = null;
+                }
+
+                // Nếu không tìm thấy xe khớp tên và tạo thất bại, chọn random 1 xe có sẵn
+                if (!finalCarId) {
+                    finalCarId = carList[Math.floor(Math.random() * carList.length)];
+                }
+
+                // 3b. Tìm ID Tài xế đã có sẵn trên hệ thống mới (Hoặc tự tạo nếu chưa có)
+                let finalDriverId = item.driverId || item.driver_id;
+                if (finalDriverId && isNaN(finalDriverId)) {
+                    finalDriverId = await this.getOrCreateDriver(finalDriverId, transaction);
+                } else {
+                    finalDriverId = null;
+                }
+
+                // Nếu không tìm thấy tài xế khớp tên và tạo thất bại, chọn random 1 tài xế có sẵn
+                if (!finalDriverId) {
+                    finalDriverId = driverList[Math.floor(Math.random() * driverList.length)];
+                }
+
                 const detailData = {
                     registration_id: masterId,
-                    car_id: item.carId || item.car_id || 'UNKNOWN_CAR',
-                    driver_id: item.driverId || item.driver_id || 'UNKNOWN_DRIVER',
+                    car_id: finalCarId || 'UNKNOWN_CAR',
+                    driver_id: finalDriverId || 'UNKNOWN_DRIVER',
                     is_confirmed: item.isConfirmed ? 1 : 0,
                     confirmed_at: item.confirmedAt ? new Date(item.confirmedAt) : null,
                     id_sp_bak: recordId,
-                    table_bak: 1
+                    table_bak: 1,
+                    source_db: rowData.source_db
                 };
                 await this.upsertDetailToNewDB(detailData, transaction);
                 count++;
             }
             console.log(`[StreamCarBookingMigrationModel] Completed Upserting ${count} Coordination Items.`);
         } else {
-            console.log(`[StreamCarBookingMigrationModel] No Coordination Items found. Generating 1 MOCK detail assignment...`);
-            const mockCars = ['LC-20260316085406-YYAQZ3FB', 'LC-20260317155714-B2SY4GOP', 'LC-20260316154534-3VU6ZAWS', 'LC-20260317155520-S96ZHPI1', 'LC-20260316085106-914TB6XO', 'LC-20260316154406-YY7NLZA6', 'LC-20260316084914-TKE1NSHW', 'LC-20260316081003-VJBXL0CN', 'LC-20260316084952-DVELWNUF', 'LC-20260317012020-JL60VIXQ'];
-            const mockDrivers = ['6928176e213f38bebc8024cf', '9cc1fccc-0ccb-4305-9cab-f701aa70e54c', '11dd5425-1f60-496f-920b-805027b0aa97', '69281962213f38bebc802aaa', 'bd97f40e-c9a1-4b07-a147-e134f12a1b30', '2baa768c-effc-46b0-b635-fb3c47cb7d02', 'b243d70a-c26e-42e1-92f3-71ca4e0d5de1', 'cd51a8be-f79d-460c-914e-a43fe0f62d06', 'b8f190da-70d0-4cf2-b290-a25c2ae31154', 'f2ed1e24-c2e7-4a3e-b1c0-9583e5e544be'];
+            console.log(`[StreamCarBookingMigrationModel] No Coordination Items found. Generating 1 RANDOM detail assignment...`);
+
+            // Fallback lists nếu cache bị rỗng
+            const fallbackCars = ['LC-20260224035946-Q6DQ2AL8', 'LC-20260316085406-YYAQZ3FB', 'LC-20260317155714-B2SY4GOP'];
+            const fallbackDrivers = ['DR-20260316075949-SF8X4UZA', '6928176e213f38bebc8024cf', '9cc1fccc-0ccb-4305-9cab-f701aa70e54c'];
+
+            const carList = this.cachedCarIds.length > 0 ? this.cachedCarIds : fallbackCars;
+            const driverList = this.cachedDriverIds.length > 0 ? this.cachedDriverIds : fallbackDrivers;
 
             const detailData = {
                 registration_id: masterId,
-                car_id: mockCars[Math.floor(Math.random() * mockCars.length)],
-                driver_id: mockDrivers[Math.floor(Math.random() * mockDrivers.length)],
+                car_id: carList[Math.floor(Math.random() * carList.length)],
+                driver_id: driverList[Math.floor(Math.random() * driverList.length)],
                 is_confirmed: 1,
                 confirmed_at: new Date(),
                 id_sp_bak: recordId,
-                table_bak: 1
+                table_bak: 1,
+                source_db: rowData.source_db
             };
             await this.upsertDetailToNewDB(detailData, transaction);
-            console.log(`[StreamCarBookingMigrationModel] Completed Upserting 1 MOCK Coordination Item.`);
+            console.log(`[StreamCarBookingMigrationModel] Completed Upserting 1 RANDOM Coordination Item.`);
         }
 
         // 🔥 4. Tạo Nhật ký (Audit Trail) mặc định cho Quy trình Đặt xe
@@ -899,85 +1269,161 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
     const db = this.newDbName || 'app_tancang';
     const schema = 'dbo';
     const tableRef = `[${db}].[${schema}].[audit]`;
-    const creatorId = rowData.AuthorAccount || 'SYSTEM_MIGRATION';
-    const createTime = rowData.tp_Created ? new Date(rowData.tp_Created) : new Date();
+    const creatorId = rowData.AuthorAccount || 'b23406e3-5c75-41d3-91e0-1654293ae6b2';
 
-    const auditSteps = [
-      {
-        action_code: 'TAO_VA_GUI_YEU_CAU_DANG_KY_XE',
-        display_name: 'Người đăng ký xe',
-        role: 'NGUOI_DANG_KY_XE',
-        details: '"Tạo và gửi yêu cầu đăng ký xe"',
-        action: 'Tạo và gửi yêu cầu đăng ký xe',
-        from_node_id: 'Activity_00hcfcm',
-        to_node_id: 'Activity_00hcfcm',
-        curStatusCode: '1',
-        stage_status: 'DA_XU_LY',
-        receiver: creatorId,
-        origin_id: 'preview'
-      },
-      {
-        action_code: 'TAO_VA_GUI_YEU_CAU_DANG_KY_XE',
-        display_name: 'Phòng hậu cần, đội xe',
-        role: 'NGUOI_DANG_KY_XE',
-        details: '"Yêu cầu điều phối"',
-        action: 'Yêu cầu điều phối',
-        from_node_id: 'Activity_00hcfcm',
-        to_node_id: 'Gateway_1ilkpo8',
-        curStatusCode: '2',
-        stage_status: 'DA_XU_LY',
-        receiver: 'PHONG_DOI_HAU_CAN_NGUOI_DIEU_PHOI',
-        origin_id: 'preview'
-      },
-      {
-        action_code: 'DIEU_PHOI_XE_PHONG_HAU_CAN',
-        display_name: 'Điều phối yêu cầu',
-        role: 'PHONG_HAU_CAN_DOI_XE',
-        details: '"Đã điều phối"',
-        action: 'Điều phối lại',
-        from_node_id: 'Gateway_1ilkpo8',
-        to_node_id: 'Gateway_1ilkpo8',
-        curStatusCode: '2',
-        stage_status: 'DA_XU_LY',
-        receiver: 'TAI_XE_TIEP_NHAN',
-        origin_id: 'wi_' + Date.now()
+    const parseSharePointDate = (str) => {
+      if (!str) return new Date();
+      if (str instanceof Date) return isNaN(str.getTime()) ? new Date() : str;
+      // Làm sạch khoảng trắng (ví dụ "Oct  8 2014  6:36AM" -> "Oct 8 2014 6:36 AM")
+      let cleanStr = String(str).replace(/\s+/g, ' ').trim();
+      cleanStr = cleanStr.replace(/([aApP][mM])$/, ' $1');
+      const d = new Date(cleanStr);
+      if (isNaN(d.getTime())) {
+          console.warn(`[StreamCarBookingMigrationModel] Failed to parse date string "${str}", fallback to now.`);
+          return new Date();
       }
-    ];
+      return d;
+    };
 
+    const rawTimeStr = rowData.tp_Modified || rowData.tp_Created || rowData.created_at || rowData.ModifiedDate;
+    const createTime = parseSharePointDate(rawTimeStr);
+
+    let auditSteps = [];
+
+    // 2. Luôn tạo log mặc định đủ 3 bước (Submit -> Coordinate -> Finish) theo yêu cầu USER
+    // Cộng thêm giây để đảm bảo thứ tự hiển thị trong UI
+    const time1 = createTime;
+    const time2 = new Date(createTime.getTime() + 1000); // +1s
+    const time3 = new Date(createTime.getTime() + 2000); // +2s
+
+    auditSteps.push(
+        {
+            action_code: 'TAO_VA_GUI_YEU_CAU_DANG_KY_XE',
+            display_name: 'b23406e3-5c75-41d3-91e0-1654293ae6b2',
+            role: 'NGUOI_DANG_KY_XE',
+            details: N('Tạo tạo mới yêu cầu'),
+            action: N('Tạo tạo mới yêu cầu'),
+            from_node_id: 'Activity_00hcfcm',
+            to_node_id: 'Gateway_1ilkpo8',
+            curStatusCode: '1',
+            stage_status: 'DA_XU_LY',
+            receiver: creatorId,
+            origin_id: 'migrated_init',
+            time: time1
+        },
+        {
+            action_code: 'DIEU_PHOI_XE',
+            display_name: 'b23406e3-5c75-41d3-91e0-1654293ae6b2',
+            role: 'BO_PHAN_DIEU_PHOI',
+            details: N('Đã điều phối'),
+            action: N('Điều phối'),
+            from_node_id: 'Gateway_1ilkpo8',
+            to_node_id: 'Gateway_1ilkpo8',
+            curStatusCode: '2',
+            stage_status: 'DA_XU_LY',
+            receiver: creatorId,
+            origin_id: 'migrated_coord',
+            time: time2
+        },
+        {
+            action_code: 'TAI_XE_XAC_NHAN_YEU_CAU',
+            display_name: 'b23406e3-5c75-41d3-91e0-1654293ae6b2',
+            role: 'BO_PHAN_VAN_THU',
+            details: N('Tài xế xác nhận chuyến xe'),
+            action: N('Xác nhận yêu cầu đăng ký xe'),
+            from_node_id: 'Activity_0k060ta',
+            to_node_id: 'Event_1ffnh4z',
+            curStatusCode: '3',
+            stage_status: 'DA_XU_LY',
+            receiver: creatorId,
+            origin_id: 'migrated_finish',
+            time: time3
+        }
+    );
+
+    // 3. Thực hiện Insert
     for (const step of auditSteps) {
         const query = `
-        IF NOT EXISTS (SELECT 1 FROM ${tableRef} WHERE document_id = @document_id AND action_code = @action_code AND [action] = @action AND to_node_id = @to_node_id)
+        IF NOT EXISTS (SELECT 1 FROM ${tableRef} WHERE document_id = @document_id AND action_code = @action_code AND [time] = @time)
         BEGIN
             INSERT INTO ${tableRef} (
                 document_id, [time], user_id, display_name, [role], action_code,
                 from_node_id, to_node_id, [details], origin_id, created_by, receiver, roleProcess,
-                [action], curStatusCode, stage_status, type_document, created_at, updated_at, table_bak
+                [action], curStatusCode, stage_status, type_document, created_at, modifiedAt, table_bak, table_backups
             )
             VALUES (
                 @document_id, @time, @user_id, @display_name, @role, @action_code,
                 @from_node_id, @to_node_id, @details, @origin_id, @created_by, @receiver, 'processor',
-                @action, @curStatusCode, @stage_status, 'VEHICLE_REGISTRATION', @time, @time, 1
+                @action, @curStatusCode, @stage_status, 'VEHICLE_REGISTRATION', @time, @time, 1, 'auto create'
             )
         END
         `;
         const params = {
             document_id: masterId,
-            time: createTime,
-            user_id: creatorId,
+            time: step.time || createTime,
+            user_id: step.user_id || creatorId,
             created_by: creatorId,
             ...step
         };
+        // Xóa thuộc tính time khỏi params để tránh trùng lặp
+        delete params.time;
+
         try {
-            console.log(`[StreamCarBookingMigrationModel] Inserting Audit Item: ActionCode=${step.action_code}, Role=${step.role}`);
-            await this.queryNewDbTx(query, params, transaction);
+            await this.queryNewDbTx(query, { ...params, time: step.time || createTime }, transaction);
         } catch (auditErr) {
-            console.error(`\n[StreamCarBookingMigrationModel] ❌ AUDIT SQL EXECUTION FAILED!`);
-            console.error(`[StreamCarBookingMigrationModel] Audit Step: ${step.action_code}`);
-            console.error(`[StreamCarBookingMigrationModel] Error Message: ${auditErr.message}`);
-            console.error(`[StreamCarBookingMigrationModel] Params Dump: ${JSON.stringify(params, null, 2)}`);
-            console.error(`====================================================================\n`);
-            throw auditErr;
+            logger.warn(`[StreamCarBookingMigrationModel] Audit insertion failed: ${auditErr.message}`);
         }
+    }
+  }
+
+  /**
+   * Parse HTML YKien từ SharePoint
+   * Cấu trúc: <span class='noidung title'>Name (Date)</span> <div class='noidung'>Comment</div>
+   */
+  parseYKienHTML(html, masterId) {
+    const steps = [];
+    try {
+        // Regex bóc tách các khối ý kiến
+        // Format: <span class='noidung title'>... (DD/MM/YYYY HH:mm)</span> ... <div class='noidung'>...</div>
+        const entryRegex = /<span class='noidung title'>\s*(.*?)\s*\((\d{1,2}\/\d{1,2}\/\d{4}\s*\d{1,2}:\d{2})\)\s*<\/span>\s*<div class='noidung'>\s*(.*?)\s*<\/div>/gs;
+
+        let match;
+        let index = 0;
+        while ((match = entryRegex.exec(html)) !== null) {
+            const userName = match[1].trim();
+            const dateStr = match[2].trim();
+            const comment = match[3].trim().replace(/<br\s*\/?>/gi, '\n').replace(/&nbsp;/g, ' ');
+
+            // Parse ngày Việt Nam (DD/MM/YYYY HH:mm)
+            const [dmy, hm] = dateStr.split(/\s+/);
+            const [d, m, y] = dmy.split('/');
+            const [h, min] = hm.split(':');
+            const stepTime = new Date(y, m - 1, d, h, min);
+
+            steps.push({
+                action_code: index === 0 ? 'DONG_BO_Y_KIEN_CUOI' : `DONG_BO_Y_KIEN_${index}`,
+                display_name: userName,
+                role: 'NGUOI_XU_LY',
+                details: JSON.stringify(comment),
+                action: N('Ghi ý kiến/Phê duyệt'),
+                from_node_id: 'Activity_External',
+                to_node_id: 'Activity_External',
+                curStatusCode: '2',
+                stage_status: 'DA_XU_LY',
+                receiver: 'SYSTEM',
+                origin_id: `sp_bak_${masterId}_${index}`,
+                time: isNaN(stepTime.getTime()) ? new Date() : stepTime,
+                user_id: 'b23406e3-5c75-41d3-91e0-1654293ae6b2' // Theo yêu cầu USER: Ép cứng ID
+            });
+            index++;
+        }
+
+        // Sắp xếp theo thời gian tăng dần
+        steps.sort((a, b) => a.time - b.time);
+        return steps;
+    } catch (e) {
+        logger.error(`[StreamCarBookingMigrationModel] Error parsing YKien HTML: ${e.message}`);
+        return [];
     }
   }
 
@@ -1017,6 +1463,7 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
       { name: 'stage_status', type: 'nvarchar(100)' },
       { name: 'curStatusCode', type: 'nvarchar(64)' },
       { name: 'created_at', type: 'datetime', nullable: 'DEFAULT getdate()' },
+      { name: 'modifiedAt', type: 'datetime', nullable: 'DEFAULT getdate()' },
       { name: 'updated_at', type: 'datetime', nullable: 'DEFAULT getdate()' },
       { name: 'type_document', type: 'varchar(100)' },
       { name: 'processed_by', type: 'varchar(100)' },
@@ -1039,6 +1486,71 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
     }
   }
 
+  // =========================================================================
+  // HELPER: TỰ ĐỘNG TẠO XE & TÀI XẾ NẾU CHƯA CÓ TRÊN HỆ THỐNG MỚI
+  // =========================================================================
+  async getOrCreateDriver(driverNameOrId, transaction) {
+      if (!driverNameOrId || String(driverNameOrId).trim() === '') return null;
+      const name = String(driverNameOrId).trim();
+      const db = this.newDbName || 'app_tancang';
+      const schema = 'dbo';
+      const tableRef = `[${db}].[${schema}].[list_drivers]`;
+
+      // Kiểm tra xem đã tồn tại chưa
+      const exist = await this.queryNewDbTx(`SELECT TOP 1 id FROM ${tableRef} WHERE id = @name OR full_name = @name OR full_name LIKE '%' + @name + '%'`, { name }, transaction);
+      if (exist && exist.length > 0) {
+          console.log(`[StreamCarBookingMigrationModel] Found Driver ID: ${name} -> ${exist[0].id}`);
+          return exist[0].id;
+      }
+
+      // Tự động tạo mới
+      const { v4: uuidv4 } = require('uuid');
+      const newId = uuidv4().toUpperCase();
+      await this.queryNewDbTx(`
+          INSERT INTO ${tableRef} (
+              id, full_name, phone_number, id_card, license_number, license_class, license_issued_date,
+              status, created_at, updated_at, booking_available
+          )
+          VALUES (
+              @id, @name, '0000000000', '000000000000', 'UNKNOWN', 'B2', GETDATE(),
+              1, GETDATE(), GETDATE(), 1
+          )
+      `, { id: newId, name }, transaction);
+
+      console.log(`[StreamCarBookingMigrationModel] Auto-created new Driver: "${name}" -> ${newId}`);
+      return newId;
+  }
+
+  async getOrCreateCar(carNameOrPlate, transaction) {
+      if (!carNameOrPlate || String(carNameOrPlate).trim() === '') return null;
+      const name = String(carNameOrPlate).trim();
+      const db = this.newDbName || 'app_tancang';
+      const schema = 'dbo';
+      const tableRef = `[${db}].[${schema}].[list_cars]`;
+
+      // Kiểm tra xem đã tồn tại chưa
+      const exist = await this.queryNewDbTx(`SELECT TOP 1 id FROM ${tableRef} WHERE id = @name OR license_plate = @name OR brand = @name`, { name }, transaction);
+      if (exist && exist.length > 0) {
+          console.log(`[StreamCarBookingMigrationModel] Found Car ID: ${name} -> ${exist[0].id}`);
+          return exist[0].id;
+      }
+
+      // Tự động tạo mới
+      const { v4: uuidv4 } = require('uuid');
+      const newId = uuidv4().toUpperCase();
+      await this.queryNewDbTx(`
+          INSERT INTO ${tableRef} (
+              id, license_plate, car_type, brand, manager, status_car, status, created_at, updated_at, booking_available
+          )
+          VALUES (
+              @id, @name, 'UNKNOWN', @name, 'admin', N'Sẵn sàng', 1, GETDATE(), GETDATE(), 1
+          )
+      `, { id: newId, name }, transaction);
+
+      console.log(`[StreamCarBookingMigrationModel] Auto-created new Car: "${name}" -> ${newId}`);
+      return newId;
+  }
+
   async upsertDetailToNewDB(data, transaction) {
       const db = this.newDbName || 'app_tancang';
       const schema = this.newDbSchema || 'dbo';
@@ -1052,16 +1564,17 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
           car_id: data.car_id,
           driver_id: data.driver_id,
           is_confirmed: data.is_confirmed || 0,
-          confirmed_at: data.confirmed_at,
-          table_bak: data.table_bak || 1,
-          id_sp_bak: data.id_sp_bak
+          confirmed_at: data.confirmed_at || null,
+          table_bak: 1, // Fixed: Missing in params but used in query
+          id_sp_bak: data.id_sp_bak,
+          source_db: data.source_db || null
       };
 
       const query = `
-      IF NOT EXISTS (SELECT 1 FROM ${tableRef} WHERE registration_id = @registration_id AND car_id = @car_id AND driver_id = @driver_id)
+      IF NOT EXISTS (SELECT 1 FROM ${tableRef} WHERE registration_id = @registration_id AND car_id = @car_id AND driver_id = @driver_id AND source_db = @source_db)
       BEGIN
-          INSERT INTO ${tableRef} (id, registration_id, car_id, driver_id, is_confirmed, confirmed_at, table_bak, id_sp_bak)
-          VALUES (@id, @registration_id, @car_id, @driver_id, @is_confirmed, @confirmed_at, @table_bak, @id_sp_bak)
+          INSERT INTO ${tableRef} (id, registration_id, car_id, driver_id, is_confirmed, confirmed_at, table_bak, id_sp_bak, source_db)
+          VALUES (@id, @registration_id, @car_id, @driver_id, @is_confirmed, @confirmed_at, @table_bak, @id_sp_bak, @source_db)
       END
       ELSE
       BEGIN
@@ -1070,7 +1583,7 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
             confirmed_at = @confirmed_at,
             table_bak = @table_bak,
             id_sp_bak = @id_sp_bak
-          WHERE registration_id = @registration_id AND car_id = @car_id AND driver_id = @driver_id
+          WHERE registration_id = @registration_id AND car_id = @car_id AND driver_id = @driver_id AND source_db = @source_db
       END
       `;
       try {
@@ -1146,13 +1659,21 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
       const exists = Object.keys(params).some(k => k.toLowerCase() === lowerNewField);
       if (!exists || params[Object.keys(params).find(k => k.toLowerCase() === lowerNewField)] === null) {
           const val = typeof valueFn === 'function' ? valueFn(rawData) : valueFn;
-          if (val !== undefined && val !== null) {
-              params[lowerNewField] = val;
-              if (!insertCols.includes(`[${lowerNewField}]`)) {
-                  insertCols.push(`[${lowerNewField}]`); insertVals.push(`@${lowerNewField}`);
-                  if (lowerNewField !== 'id' && lowerNewField !== 'created_at') updateSet.push(`[${lowerNewField}] = @${lowerNewField}`);
-              }
-          }
+
+        // Fix: Never pass NULL or Invalid Date for created_at/updated_at to avoid "Invalid date" validation errors
+        if ((val === null || (val instanceof Date && isNaN(val.getTime()))) &&
+            (lowerNewField === 'created_at' || lowerNewField === 'updated_at')) {
+            params[lowerNewField] = new Date(); // Fallback to now for NOT NULL columns
+        } else if (val !== undefined && val !== null) {
+            params[lowerNewField] = val;
+        }
+
+        if (params[lowerNewField] !== undefined && params[lowerNewField] !== null) {
+            if (!insertCols.includes(`[${lowerNewField}]`)) {
+                insertCols.push(`[${lowerNewField}]`); insertVals.push(`@${lowerNewField}`);
+                if (lowerNewField !== 'id' && lowerNewField !== 'created_at') updateSet.push(`[${lowerNewField}] = @${lowerNewField}`);
+            }
+        }
       }
     }
 
@@ -1174,18 +1695,46 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         }
     }
 
+    // Ensure source_db is correctly set for persistence if it exists in schema
+    if (rawData.source_db && existingCols.has('source_db')) {
+        const lowerSourceDb = 'source_db';
+        params[lowerSourceDb] = rawData.source_db;
+        if (!insertCols.includes(`[${lowerSourceDb}]`)) {
+            insertCols.push(`[${lowerSourceDb}]`); insertVals.push(`@${lowerSourceDb}`);
+            // No need to update source_db usually, but good for completeness if strategy is update
+            if (!updateSet.some(s => s.includes(`[${lowerSourceDb}]`))) {
+                updateSet.push(`[${lowerSourceDb}] = @${lowerSourceDb}`);
+            }
+        }
+    }
+
+    // --- 4. Final Parameter Sanitization (Safety check for Dates) ---
+    for (const key of Object.keys(params)) {
+        const val = params[key];
+        if (val instanceof Date && isNaN(val.getTime())) {
+            // Invalid Date object detected
+            if (key.toLowerCase() === 'created_at' || key.toLowerCase() === 'updated_at') {
+                params[key] = new Date(); // Fallback for mandatory fields
+            } else {
+                params[key] = null; // Let DB handle optional fields
+            }
+        }
+    }
+
     params._externalKeyValue = externalKeyValue;
-    console.log(`[StreamCarBookingMigrationModel] upsertDataToNewDB params: ${JSON.stringify(params)}`);
+    params._sourceDb = rawData.source_db || null;
+
+    console.log(`[StreamCarBookingMigrationModel] upsertDataToNewDB params (Sanitized): ${JSON.stringify(params)}`);
     const tableRef = `[${this.newDbName}].[${newSchema}].[${newTable}]`;
     const query = `
       DECLARE @OutputTable TABLE (id NVARCHAR(255));
       DECLARE @affected INT;
 
-      IF EXISTS (SELECT 1 FROM ${tableRef} WHERE [${externalKeyField}] = @_externalKeyValue)
+      IF EXISTS (SELECT 1 FROM ${tableRef} WHERE [${externalKeyField}] = @_externalKeyValue AND source_db = @_sourceDb)
       BEGIN
           UPDATE ${tableRef} SET ${updateSet.length ? updateSet.join(', ') : `${externalKeyField} = ${externalKeyField}`}
           OUTPUT INSERTED.id INTO @OutputTable
-          WHERE [${externalKeyField}] = @_externalKeyValue;
+          WHERE [${externalKeyField}] = @_externalKeyValue AND source_db = @_sourceDb;
 
           SELECT @affected = @@ROWCOUNT;
           SELECT (SELECT TOP 1 id FROM @OutputTable) AS id, @affected AS affected, 'updated' AS action;
@@ -1223,9 +1772,9 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
       const q = `SELECT TOP 1 roles_by_process FROM [${this.newDbName}].[dbo].[users] WHERE id = @id`;
       const rows = await this.queryNewDbTx(q, { id: userId }, transaction);
       if (!rows || rows.length === 0) return;
-      
+
       const currentRolesStr = rows[0].roles_by_process;
-      
+
       if (!currentRolesStr || currentRolesStr.trim() === '' || currentRolesStr.trim() === '[]') {
         const updateQ = `UPDATE [${this.newDbName}].[dbo].[users] SET roles_by_process = @roles WHERE id = @id`;
         await this.queryNewDbTx(updateQ, { id: userId, roles: customRolesStr }, transaction);
@@ -1235,7 +1784,7 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
 
       const oldArr = JSON.parse(currentRolesStr);
       const newArr = JSON.parse(customRolesStr);
-      
+
       if (!Array.isArray(oldArr) || !Array.isArray(newArr)) return;
 
       const map = new Map();
@@ -1279,6 +1828,244 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
       console.warn(`[StreamCarBookingMigrationModel] Không thể đảm bảo quyền roles_by_process cho ${userId}: ${e.message}`);
     }
   }
+
+  async ensureReferenceTablesExist() {
+    const db = this.newDbName || 'camunda';
+    const schema = 'dbo';
+
+    // 1. list_drivers
+    const tableDrivers = 'list_drivers';
+    const refDrivers = `[${db}].[${schema}].[${tableDrivers}]`;
+    const createDriversTable = `
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '${tableDrivers}' AND TABLE_SCHEMA = '${schema}')
+    BEGIN
+        CREATE TABLE ${refDrivers} (id varchar(40) PRIMARY KEY);
+    END
+    `;
+    await this.queryNewDb(createDriversTable);
+
+    const driverCols = [
+      { name: 'id', type: 'varchar(40) COLLATE SQL_Latin1_General_CP1_CI_AS NOT NULL' },
+      { name: 'full_name', type: 'nvarchar(255) COLLATE SQL_Latin1_General_CP1_CI_AS NOT NULL' },
+      { name: 'phone_number', type: 'varchar(20) COLLATE SQL_Latin1_General_CP1_CI_AS NOT NULL' },
+      { name: 'id_card', type: 'varchar(20) COLLATE SQL_Latin1_General_CP1_CI_AS NOT NULL' },
+      { name: 'email', type: 'nvarchar(255) COLLATE SQL_Latin1_General_CP1_CI_AS NULL' },
+      { name: 'address', type: 'nvarchar(500) COLLATE SQL_Latin1_General_CP1_CI_AS NULL' },
+      { name: 'license_number', type: 'varchar(50) COLLATE SQL_Latin1_General_CP1_CI_AS NOT NULL' },
+      { name: 'license_class', type: 'nvarchar(50) COLLATE SQL_Latin1_General_CP1_CI_AS NOT NULL' },
+      { name: 'license_issued_date', type: 'datetime2 NOT NULL' },
+      { name: 'note', type: 'nvarchar(1000) COLLATE SQL_Latin1_General_CP1_CI_AS NULL' },
+      { name: 'status', type: 'int DEFAULT 1 NOT NULL' },
+      { name: 'created_at', type: 'datetime2 DEFAULT sysdatetime() NOT NULL' },
+      { name: 'updated_at', type: 'datetime2 DEFAULT sysdatetime() NOT NULL' },
+      { name: 'driverId', type: 'varchar(50) COLLATE SQL_Latin1_General_CP1_CI_AS NULL' },
+      { name: 'total_trips', type: 'int DEFAULT 0 NOT NULL' },
+      { name: 'experience_years', type: 'int DEFAULT 0 NULL' },
+      { name: 'booking_available', type: 'bit DEFAULT 1 NOT NULL' }
+    ];
+
+    for (const col of driverCols) {
+      await this.queryNewDb(`
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${tableDrivers}' AND COLUMN_NAME = '${col.name}' AND TABLE_SCHEMA = '${schema}')
+        BEGIN
+            ALTER TABLE ${refDrivers} ADD [${col.name}] ${col.type};
+        END
+      `);
+    }
+
+    // Index cho drivers
+    await this.queryNewDb(`
+      IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_list_drivers_search' AND object_id = OBJECT_ID('${refDrivers}'))
+          CREATE NONCLUSTERED INDEX IX_list_drivers_search ON ${refDrivers} (full_name ASC, phone_number ASC) WITH (FILLFACTOR = 100);
+      IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_list_drivers_status' AND object_id = OBJECT_ID('${refDrivers}'))
+          CREATE NONCLUSTERED INDEX IX_list_drivers_status ON ${refDrivers} (status ASC) WITH (FILLFACTOR = 100);
+    `);
+
+    // 2. list_cars
+    const tableCars = 'list_cars';
+    const refCars = `[${db}].[${schema}].[${tableCars}]`;
+    const createCarsTable = `
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '${tableCars}' AND TABLE_SCHEMA = '${schema}')
+    BEGIN
+        CREATE TABLE ${refCars} (id varchar(40) PRIMARY KEY);
+    END
+    `;
+    await this.queryNewDb(createCarsTable);
+
+    const carCols = [
+      { name: 'id', type: 'varchar(40) COLLATE SQL_Latin1_General_CP1_CI_AS NOT NULL' },
+      { name: 'license_plate', type: 'nvarchar(50) COLLATE SQL_Latin1_General_CP1_CI_AS NOT NULL' },
+      { name: 'car_type', type: 'nvarchar(100) COLLATE SQL_Latin1_General_CP1_CI_AS NOT NULL' },
+      { name: 'brand', type: 'nvarchar(100) COLLATE SQL_Latin1_General_CP1_CI_AS NOT NULL' },
+      { name: 'seat_count', type: 'int NULL' },
+      { name: 'manager', type: 'nvarchar(255) COLLATE SQL_Latin1_General_CP1_CI_AS NOT NULL' },
+      { name: 'status_car', type: 'nvarchar(50) COLLATE SQL_Latin1_General_CP1_CI_AS DEFAULT N\'Sẵn sàng\' NOT NULL' },
+      { name: 'status', type: 'int DEFAULT 1 NOT NULL' },
+      { name: 'note', type: 'nvarchar(1000) COLLATE SQL_Latin1_General_CP1_CI_AS NULL' },
+      { name: 'created_at', type: 'datetime2 DEFAULT sysdatetime() NOT NULL' },
+      { name: 'updated_at', type: 'datetime2 DEFAULT sysdatetime() NOT NULL' },
+      { name: 'total_trips', type: 'int DEFAULT 0 NOT NULL' },
+      { name: 'booking_available', type: 'bit DEFAULT 1 NOT NULL' },
+      { name: 'maintenance', type: 'nvarchar(100) COLLATE SQL_Latin1_General_CP1_CI_AS NULL' }
+    ];
+
+    for (const col of carCols) {
+      await this.queryNewDb(`
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${tableCars}' AND COLUMN_NAME = '${col.name}' AND TABLE_SCHEMA = '${schema}')
+        BEGIN
+            ALTER TABLE ${refCars} ADD [${col.name}] ${col.type};
+        END
+      `);
+    }
+
+    await this.queryNewDb(`
+      IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_list_cars_status' AND object_id = OBJECT_ID('${refCars}'))
+          CREATE NONCLUSTERED INDEX IX_list_cars_status ON ${refCars} (status ASC) WITH (FILLFACTOR = 100);
+    `);
+  }
+
+  async seedDrivers() {
+    const drivers = [
+        {
+          id: 'DR-20260316075949-SF8X4UZA',
+          full_name: 'Canbo3',
+          phone_number: '0903456123',
+          id_card: '020201023142',
+          email: 'Canbo3@gmail.com',
+          address: '125 Nguyễn Duy Trinh, P. Bình Trưng Đông, TP Thủ Đức, TP.HCM',
+          license_number: '790123456781',
+          license_class: 'B2',
+          license_issued_date: '2020-05-12T07:00:00.000Z',
+          note: null,
+          status: 1,
+          created_at: '2026-03-16T14:59:48.613Z',
+          updated_at: '2026-03-17T00:59:51.740Z',
+          driverId: '69281962213f38bebc802aaa',
+          total_trips: 3,
+          experience_years: 6,
+          booking_available: 1
+        },
+        { name: 'Mr Công', phone: '0963607288', license: 'QH - 59:95', note: 'PTGĐ Toàn' },
+        { name: 'Mr Tuấn', phone: '0363456166', license: 'QH - 68:69', note: 'TGĐ Thuấn' },
+        { name: 'Mr Trung', phone: '0987497125', license: 'QH - 61:39', note: 'PTGĐ Minh' },
+        { name: 'Mr Tú', phone: '0974157555', license: 'QH - 61:66', note: 'PTGĐ Phương Nam' },
+        { name: 'Mr Trúc', phone: '0987366165', license: 'QH - 59:59', note: 'PTGĐ Trúc' }
+    ];
+
+    const { v4: uuidv4 } = require('uuid');
+    const db = this.newDbName || 'camunda';
+    const schema = 'dbo';
+    const tableRef = `[${db}].[${schema}].[list_drivers]`;
+
+    for (const d of drivers) {
+        const idToUse = d.id || uuidv4().toUpperCase();
+        const phoneToUse = d.phone_number || d.phone;
+
+        const query = `
+        IF NOT EXISTS (SELECT 1 FROM ${tableRef} WHERE id = @id OR phone_number = @phone)
+        BEGIN
+            INSERT INTO ${tableRef} (
+              id, full_name, phone_number, id_card, email, address,
+              license_number, license_class, license_issued_date, note,
+              status, created_at, updated_at, driverId,
+              total_trips, experience_years, booking_available
+            )
+            VALUES (
+              @id, @full_name, @phone, @id_card, @email, @address,
+              @license_number, @license_class, @license_issued_date, @note,
+              @status, @created_at, @updated_at, @driverId,
+              @total_trips, @experience_years, @booking_available
+            )
+        END
+        `;
+        const params = {
+            id: idToUse,
+            full_name: d.full_name || d.name,
+            phone: phoneToUse,
+            id_card: d.id_card || d.license,
+            email: d.email || null,
+            address: d.address || null,
+            license_number: d.license_number || d.license,
+            license_class: d.license_class || 'B2',
+            license_issued_date: d.license_issued_date ? new Date(d.license_issued_date) : new Date(),
+            note: d.note || null,
+            status: d.status || 1,
+            created_at: d.created_at ? new Date(d.created_at) : new Date(),
+            updated_at: d.updated_at ? new Date(d.updated_at) : new Date(),
+            driverId: d.driverId || null,
+            total_trips: d.total_trips || 0,
+            experience_years: d.experience_years || 0,
+            booking_available: d.booking_available !== undefined ? d.booking_available : 1
+        };
+        await this.queryNewDb(query, params);
+    }
+    console.log(`[StreamCarBookingMigrationModel] Seeding of drivers complete.`);
+  }
+
+  async seedCars() {
+    const cars = [
+      {
+        id: 'LC-20260224035946-Q6DQ2AL8',
+        license_plate: '222222',
+        car_type: '7cho',
+        brand: '222222',
+        seat_count: 7,
+        manager: 'admin_a',
+        status_car: 'SAN_SANG',
+        status: 1,
+        note: '222222',
+        created_at: '2026-02-24T10:59:48.094Z',
+        updated_at: '2026-03-12T16:18:51.426Z',
+        total_trips: 0,
+        booking_available: 1
+      }
+    ];
+
+    const { v4: uuidv4 } = require('uuid');
+    const db = this.newDbName || 'camunda';
+    const schema = 'dbo';
+    const tableRef = `[${db}].[${schema}].[list_cars]`;
+
+    for (const c of cars) {
+      const idToUse = c.id || uuidv4().toUpperCase();
+      const query = `
+      IF NOT EXISTS (SELECT 1 FROM ${tableRef} WHERE id = @id OR license_plate = @plate)
+      BEGIN
+          INSERT INTO ${tableRef} (
+            id, license_plate, car_type, brand, seat_count, manager,
+            status_car, status, note, created_at, updated_at,
+            total_trips, booking_available
+          )
+          VALUES (
+            @id, @plate, @type, @brand, @seats, @manager,
+            @status_car, @status, @note, @created_at, @updated_at,
+            @total_trips, @booking_available
+          )
+      END
+      `;
+      const params = {
+        id: idToUse,
+        plate: c.license_plate,
+        type: c.car_type,
+        brand: c.brand,
+        seats: c.seat_count,
+        manager: c.manager,
+        status_car: c.status_car,
+        status: c.status || 1,
+        note: c.note || null,
+        created_at: c.created_at ? new Date(c.created_at) : new Date(),
+        updated_at: c.updated_at ? new Date(c.updated_at) : new Date(),
+        total_trips: c.total_trips || 0,
+        booking_available: c.booking_available !== undefined ? c.booking_available : 1
+      };
+      await this.queryNewDb(query, params);
+    }
+    console.log(`[StreamCarBookingMigrationModel] Seeding of cars complete.`);
+  }
+
 }
+
+// Helper: wrap string in N'' for nvarchar (only used in template literals)
+function N(str) { return str; }
 
 module.exports = StreamCarBookingMigrationModel;

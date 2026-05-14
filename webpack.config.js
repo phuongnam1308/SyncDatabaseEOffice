@@ -25,51 +25,51 @@ module.exports = {
       patterns: [
         { from: 'swagger.json', to: 'swagger.json' },
         { from: 'swagger', to: 'swagger' },
-        { 
-          from: 'node_modules/swagger-ui-dist/swagger-ui-bundle.js', 
-          to: 'swagger/swagger-ui-bundle.js' 
+        {
+          from: 'node_modules/swagger-ui-dist/swagger-ui-bundle.js',
+          to: 'swagger/swagger-ui-bundle.js'
         },
-        { 
-          from: 'node_modules/swagger-ui-dist/swagger-ui-standalone-preset.js', 
-          to: 'swagger/swagger-ui-standalone-preset.js' 
+        {
+          from: 'node_modules/swagger-ui-dist/swagger-ui-standalone-preset.js',
+          to: 'swagger/swagger-ui-standalone-preset.js'
         },
-        { 
-          from: 'node_modules/swagger-ui-dist/swagger-ui.css', 
-          to: 'swagger/swagger-ui.css' 
+        {
+          from: 'node_modules/swagger-ui-dist/swagger-ui.css',
+          to: 'swagger/swagger-ui.css'
         },
-        { 
-          from: 'node_modules/swagger-ui-dist/favicon-32x32.png', 
-          to: 'swagger/favicon-32x32.png' 
+        {
+          from: 'node_modules/swagger-ui-dist/favicon-32x32.png',
+          to: 'swagger/favicon-32x32.png'
         },
-        { 
-          from: 'node_modules/swagger-ui-dist/favicon-16x16.png', 
-          to: 'swagger/favicon-16x16.png' 
+        {
+          from: 'node_modules/swagger-ui-dist/favicon-16x16.png',
+          to: 'swagger/favicon-16x16.png'
         },
-        { 
-          from: '.env', 
+        {
+          from: '.env',
           to: '.env',
           toType: 'file',
           noErrorOnMissing: true
         },
-        { 
-          from: 'auth', 
+        {
+          from: 'auth',
           to: 'auth',
-          noErrorOnMissing: true 
+          noErrorOnMissing: true
         },
-        { 
-          from: 'scripts/setup_domain.bat', 
-          to: 'setup_domain.bat' 
+        {
+          from: 'scripts/setup_domain.bat',
+          to: 'setup_domain.bat'
         },
-        { 
-          from: 'scripts/HUONG_DAN.md', 
-          to: 'HUONG_DAN.md' 
+        {
+          from: 'scripts/HUONG_DAN.md',
+          to: 'HUONG_DAN.md'
         },
-        { 
-          from: 'scripts/install.bat', 
-          to: 'install.bat' 
+        {
+          from: 'scripts/install.bat',
+          to: 'install.bat'
         },
-        { 
-          from: 'assets/icon/img.ico', 
+        {
+          from: 'assets/icon/img.ico',
           to: 'swagger/img.ico',
           noErrorOnMissing: true
         },

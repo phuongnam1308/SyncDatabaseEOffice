@@ -14,6 +14,9 @@ const SYNC_START_DATE = process.env.SYNC_START_DATE || null;
 const SYNC_END_DATE = process.env.SYNC_END_DATE || null;
 const SYNC_MIN_DATE = process.env.SYNC_MIN_DATE || '1970-01-01T00:00:00.000Z';
 
+// Load list of databases for Multi-DB scanning
+const dbsConfig = require('../../sync-passport/migrate/databases.json');
+
 class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
   constructor() {
     super({ modelName: 'STREAM_NEWS_ASPX_PAGE_INCREMENTAL' });
@@ -21,6 +24,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
     this.newDbSchema = 'dbo';
     this.newTableSync = 'news_aspx_pages_temp';
     this.sharePointDb = process.env.SHAREPOINT_DB_NAME || 'WSS_Content_eoffice_khkd';
+    this.dbs = dbsConfig && dbsConfig.length > 0 ? dbsConfig : [this.sharePointDb];
 
     // local output
     this.outputRoot = process.env.RAW_DOWNLOAD_DIR || process.env.TINTUCRAW_DIR || 'tintucraw';
@@ -34,6 +38,12 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
     this.topicIds = [];
     this.topicMap = {};
     this.adminId = null;
+
+    // === DEDUP CACHE: Tránh download cùng URL ảnh nhiều lần ===
+    // Key: URL chuẩn hóa -> Value: Promise (in-flight) hoặc { fileId, viewUrl } (đã xong)
+    this._imgDownloadCache = new Map();
+    // Set lưu các DocId đang được xử lý để tránh race condition giữa các worker
+    this._processingDocIds = new Set();
   }
 
   async initialize() {
@@ -42,66 +52,81 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
 
     // Đảm bảo bảng News chính có đầy đủ các cột cần thiết
     try {
-      await this.queryNewDb(`
-            -- 1. Đảm bảo cột tóm tắt (summary) đủ lớn để không bị truncated
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'summary')
-                ALTER TABLE dbo.news ADD summary NVARCHAR(MAX) NULL;
-            ELSE
-                ALTER TABLE dbo.news ALTER COLUMN summary NVARCHAR(MAX) NULL;
+      // Check if 'news' table exists first
+      const newsTableCheck = await this.queryNewDb(`SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'news'`);
+      if (newsTableCheck && newsTableCheck.length > 0) {
+        await this.queryNewDb(`
+              -- 1. Đảm bảo cột tóm tắt (summary) đủ lớn để không bị truncated
+              IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'summary')
+                  ALTER TABLE dbo.news ADD summary NVARCHAR(MAX) NULL;
+              ELSE
+                  ALTER TABLE dbo.news ALTER COLUMN summary NVARCHAR(MAX) NULL;
+  
+              -- 2. Đảm bảo các cột tiêu đề/tags cũng đủ lớn
+              IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'title')
+                  ALTER TABLE dbo.news ALTER COLUMN title NVARCHAR(500) NULL;
+              IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'tags')
+                  ALTER TABLE dbo.news ALTER COLUMN tags NVARCHAR(MAX) NULL;
+  
+              -- 3. Cột phòng ban tác giả
+              IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'authorDepartment')
+                  ALTER TABLE dbo.news ADD authorDepartment NVARCHAR(255) NULL;
+              ELSE
+                  ALTER TABLE dbo.news ALTER COLUMN authorDepartment NVARCHAR(255) NULL;
+  
+              -- 4. Các trường khác
+              IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'isBak')
+                  ALTER TABLE dbo.news ADD isBak INT DEFAULT 0;
+              IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'nameThumbnail')
+                  ALTER TABLE dbo.news ADD nameThumbnail NVARCHAR(500) NULL;
+              IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'topic')
+                  ALTER TABLE dbo.news ADD topic NVARCHAR(255) NULL;
+              -- 4. Cập nhật các cột ID sang NVARCHAR để tránh lỗi Conversion failed (uniqueidentifier)
+              IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'authorId' AND DATA_TYPE = 'uniqueidentifier')
+                  ALTER TABLE dbo.news ALTER COLUMN authorId NVARCHAR(100) NULL;
+              IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'DocId' AND DATA_TYPE = 'uniqueidentifier')
+                  ALTER TABLE dbo.news ALTER COLUMN DocId NVARCHAR(100) NULL;
+              IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'topic' AND DATA_TYPE = 'uniqueidentifier')
+                  ALTER TABLE dbo.news ALTER COLUMN topic NVARCHAR(255) NULL;
+              IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'reviewerId' AND DATA_TYPE = 'uniqueidentifier')
+                  ALTER TABLE dbo.news ALTER COLUMN reviewerId NVARCHAR(100) NULL;
+  
+              -- 5. Đảm bảo cột DocId tồn tại
+              IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'DocId')
+                  ALTER TABLE dbo.news ADD DocId NVARCHAR(100) NULL;
+  
+              -- 6. Cột người tạo (created_by)
+              IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'created_by')
+                  ALTER TABLE dbo.news ADD created_by NVARCHAR(100) NULL;
+  
+              -- 7. Cột mã nhân viên tác giả (authorCode)
+              IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'authorCode')
+                  ALTER TABLE dbo.news ADD authorCode NVARCHAR(255) NULL;
+          `);
+      } else {
+        logger.warn('[StreamNewsAspxPageIncrementalModel] Table "news" not found in target DB. Skipping column ensure.');
+      }
 
-            -- 2. Đảm bảo các cột tiêu đề/tags cũng đủ lớn
-            IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'title')
-                ALTER TABLE dbo.news ALTER COLUMN title NVARCHAR(500) NULL;
-            IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'tags')
-                ALTER TABLE dbo.news ALTER COLUMN tags NVARCHAR(MAX) NULL;
-
-            -- 3. Cột phòng ban tác giả
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'authorDepartment')
-                ALTER TABLE dbo.news ADD authorDepartment NVARCHAR(255) NULL;
-            ELSE
-                ALTER TABLE dbo.news ALTER COLUMN authorDepartment NVARCHAR(255) NULL;
-
-            -- 4. Các trường khác
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'isBak')
-                ALTER TABLE dbo.news ADD isBak INT DEFAULT 0;
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'nameThumbnail')
-                ALTER TABLE dbo.news ADD nameThumbnail NVARCHAR(500) NULL;
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'topic')
-                ALTER TABLE dbo.news ADD topic NVARCHAR(255) NULL;
-            -- 4. Cập nhật các cột ID sang NVARCHAR để tránh lỗi Conversion failed (uniqueidentifier)
-            IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'authorId' AND DATA_TYPE = 'uniqueidentifier')
-                ALTER TABLE dbo.news ALTER COLUMN authorId NVARCHAR(100) NULL;
-            IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'DocId' AND DATA_TYPE = 'uniqueidentifier')
-                ALTER TABLE dbo.news ALTER COLUMN DocId NVARCHAR(100) NULL;
-            IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'topic' AND DATA_TYPE = 'uniqueidentifier')
-                ALTER TABLE dbo.news ALTER COLUMN topic NVARCHAR(255) NULL;
-            IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'reviewerId' AND DATA_TYPE = 'uniqueidentifier')
-                ALTER TABLE dbo.news ALTER COLUMN reviewerId NVARCHAR(100) NULL;
-
-            -- 5. Đảm bảo cột DocId tồn tại
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'DocId')
-                ALTER TABLE dbo.news ADD DocId NVARCHAR(100) NULL;
-
-            -- 6. Cột người tạo (created_by)
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'created_by')
-                ALTER TABLE dbo.news ADD created_by NVARCHAR(100) NULL;
-
-            -- 7. Cột mã nhân viên tác giả (authorCode)
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'authorCode')
-                ALTER TABLE dbo.news ADD authorCode NVARCHAR(255) NULL;
-
-            -- 8. Đảm bảo bảng topics có các cột cần thiết cho migration
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'topics' AND COLUMN_NAME = 'tb_bak')
-                ALTER TABLE dbo.topics ADD tb_bak INT DEFAULT 0;
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'topics' AND COLUMN_NAME = 'href')
-                ALTER TABLE dbo.topics ADD href NVARCHAR(255) NULL;
-        `);
+      // Check if 'topics' table exists
+      const topicsTableCheck = await this.queryNewDb(`SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'topics'`);
+      if (topicsTableCheck && topicsTableCheck.length > 0) {
+        await this.queryNewDb(`
+              -- 8. Đảm bảo bảng topics có các cột cần thiết cho migration
+              IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'topics' AND COLUMN_NAME = 'tb_bak')
+                  ALTER TABLE dbo.topics ADD tb_bak INT DEFAULT 0;
+              IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'topics' AND COLUMN_NAME = 'href')
+                  ALTER TABLE dbo.topics ADD href NVARCHAR(255) NULL;
+          `);
+      } else {
+        logger.warn('[StreamNewsAspxPageIncrementalModel] Table "topics" not found in target DB. Skipping column ensure.');
+      }
+      
       logger.info(
-        '[StreamNewsAspxPageIncrementalModel] Schema widened (NVARCHAR(MAX)) for dbo.news.',
+        '[StreamNewsAspxPageIncrementalModel] Schema check/widening completed for dbo.news and dbo.topics.',
       );
     } catch (e) {
       logger.warn(
-        `[StreamNewsAspxPageIncrementalModel] Lỗi khi mở rộng schema bảng news: ${e.message}`,
+        `[StreamNewsAspxPageIncrementalModel] Lỗi khi mở rộng schema bảng news/topics: ${e.message}`,
       );
     }
 
@@ -167,12 +192,12 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
     if (Number.isNaN(dateValue.getTime())) return DEFAULT_SYNC_TIME;
     // Nếu là ngày quá cũ (mặc định ban đầu), coi như chưa đồng bộ
     if (dateValue.getFullYear() <= 1970) return DEFAULT_SYNC_TIME;
-    
+
     // Nếu có yêu cầu quét lùi (lookback)
     if (lookbackHours > 0) {
       dateValue.setTime(dateValue.getTime() - lookbackHours * 3600 * 1000);
     }
-    
+
     return dateValue.toISOString();
   }
 
@@ -258,7 +283,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
    */
   async getCount(lastSyncTime, lastSyncId = 0, { useLimit = true, lookbackHours = 0 } = {}) {
     // Nếu là đồng bộ tăng trưởng (ASC), ta áp dụng lookback để tránh sót bài viết bị sửa đổi
-    const actualLookback = (lastSyncTime !== DEFAULT_SYNC_TIME) ? lookbackHours : 0;
+    const actualLookback = lastSyncTime !== DEFAULT_SYNC_TIME ? lookbackHours : 0;
     const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime, actualLookback);
     const normalizedLastSyncId = Number(lastSyncId || 0);
     const limit = useLimit ? Number(process.env.COMPLETED_LIMIT || 0) : 0;
@@ -271,41 +296,53 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
            OR ( __sync_time = CAST(@lastSyncTime AS DATETIME2)
                 AND __sync_id < CAST(@lastSyncId AS bigint) ) )`;
 
-    const query = `
-      ;WITH src AS (
-        SELECT
-          d.[TimeLastModified] AS __sync_time,
-          ${syncIdExpr}        AS __sync_id
-        FROM [${this.sharePointDb}].[dbo].[AllDocs] d
-        INNER JOIN [${this.sharePointDb}].[dbo].[AllWebs] w
-          ON d.[SiteId] = w.[SiteId] AND d.[WebId]  = w.[Id]
-        LEFT JOIN [${this.sharePointDb}].[dbo].[AllLists] l
-          ON d.[SiteId]  = l.[tp_SiteId] AND d.[ListId] = l.[tp_ID]
-        WHERE
-          d.[DeleteTransactionId] = 0x0
-          AND d.[IsCurrentVersion] = 1
-          AND w.[FullUrl] LIKE '%tintuc%'
-          AND d.[LeafName] LIKE '%.aspx'
-          AND l.[tp_Title] LIKE '%Pages%'
-          AND (d.[TimeCreated] >= @startDate OR @startDate IS NULL)
-          AND (d.[TimeCreated] <= @endDate OR @endDate IS NULL)
-          AND d.[TimeLastModified] >= '${SYNC_MIN_DATE}'
-      )
-      SELECT COUNT(1) AS total
-      FROM src
-      WHERE ${filterClause}
-    `;
+    let totalAllDbs = 0;
 
-    const rows = await this.queryOldDb(query, {
-      lastSyncTime: normalizedLastSyncTime,
-      lastSyncId: normalizedLastSyncId,
-      startDate: SYNC_START_DATE,
-      endDate: SYNC_END_DATE
-    });
+    for (const db of this.dbs) {
+      const query = `
+        ;WITH src AS (
+          SELECT
+            d.[TimeLastModified] AS __sync_time,
+            ${syncIdExpr}        AS __sync_id
+          FROM [${db}].[dbo].[AllDocs] d
+          INNER JOIN [${db}].[dbo].[AllWebs] w
+            ON d.[SiteId] = w.[SiteId] AND d.[WebId]  = w.[Id]
+          LEFT JOIN [${db}].[dbo].[AllLists] l
+            ON d.[SiteId]  = l.[tp_SiteId] AND d.[ListId] = l.[tp_ID]
+          WHERE
+            d.[DeleteTransactionId] = 0x0
+            AND d.[IsCurrentVersion] = 1
+            AND w.[FullUrl] LIKE '%tintuc%'
+            AND d.[LeafName] LIKE '%.aspx'
+            AND l.[tp_Title] LIKE '%Pages%'
+            AND (d.[TimeCreated] >= @startDate OR @startDate IS NULL)
+            AND (d.[TimeCreated] <= @endDate OR @endDate IS NULL)
+            AND d.[TimeLastModified] >= '${SYNC_MIN_DATE}'
+        )
+        SELECT COUNT(1) AS total
+        FROM src
+        WHERE ${filterClause}
+      `;
 
-    const total = rows?.[0]?.total || 0;
+      try {
+        const rows = await this.queryOldDb(query, {
+          lastSyncTime: normalizedLastSyncTime,
+          lastSyncId: normalizedLastSyncId,
+          startDate: SYNC_START_DATE,
+          endDate: SYNC_END_DATE,
+        });
+
+        const dbTotal = rows?.[0]?.total || 0;
+        totalAllDbs += dbTotal;
+      } catch (err) {
+        logger.warn(
+          `[StreamNewsAspxPageIncrementalModel] [getCount] Lỗi khi đếm tại DB ${db}: ${err.message}`,
+        );
+      }
+    }
+
     // Nếu limit = 0 thì không chặn (chạy full)
-    return limit > 0 ? Math.min(total, limit) : total;
+    return limit > 0 ? Math.min(totalAllDbs, limit) : totalAllDbs;
   }
 
   async ensureStagingTableExists() {
@@ -337,6 +374,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
           DownloadStatus     NVARCHAR(50) NULL,
           DownloadError      NVARCHAR(MAX) NULL,
           __sync_id          BIGINT NULL,
+          source_db          NVARCHAR(255) NULL,
 
           CONSTRAINT PK_news_aspx_pages_temp PRIMARY KEY (DocId)
         );
@@ -345,6 +383,17 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
       -- Add missing columns (idempotent)
       IF COL_LENGTH('${table}', '__sync_id') IS NULL
         ALTER TABLE ${table} ADD __sync_id BIGINT NULL;
+
+      IF COL_LENGTH('${table}', 'source_db') IS NULL
+        ALTER TABLE ${table} ADD source_db NVARCHAR(255) NULL;
+
+      -- Cột theo dõi lỗi
+      IF COL_LENGTH('${table}', 'MigrateFlg') IS NULL
+        ALTER TABLE ${table} ADD MigrateFlg INT DEFAULT 0;
+      IF COL_LENGTH('${table}', 'MigrateErrFlg') IS NULL
+        ALTER TABLE ${table} ADD MigrateErrFlg INT DEFAULT 0;
+      IF COL_LENGTH('${table}', 'MigrateErrMess') IS NULL
+        ALTER TABLE ${table} ADD MigrateErrMess NVARCHAR(MAX) NULL;
 
       -- Add missing columns (idempotent)
       IF COL_LENGTH('${table}', 'DocId') IS NULL
@@ -483,6 +532,21 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
     `;
 
     await this.queryNewDb(query);
+
+    // === CLEANUP: Reset các row bị kẹt 'PROCESSING' khi tool bị tắt giữa chừng ===
+    // Nếu row này đang 'PROCESSING' mà đã quá 10 phút -> Reset về NULL để worker khác tiếp quản
+    try {
+      const resetResult = await this.queryNewDb(`
+        UPDATE ${this.getStagingTableRef()}
+        SET DownloadStatus = NULL
+        WHERE DownloadStatus = 'PROCESSING'
+          AND DownloadedAt IS NULL
+          AND (TimeLastModified IS NULL OR DATEDIFF(MINUTE, TimeLastModified, GETDATE()) > 0)
+      `);
+      logger.info('[StreamNewsAspxPageIncrementalModel] Đã reset các row bị kẹt PROCESSING từ phiên cũ.');
+    } catch (e) {
+      logger.warn(`[StreamNewsAspxPageIncrementalModel] Không thể reset stuck PROCESSING rows: ${e.message}`);
+    }
   }
 
   buildDocPath(row) {
@@ -503,8 +567,10 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
     return `${baseUrl}/${p}`;
   }
 
+
   buildLocalFilePath(docPath) {
     const safeRel = String(docPath || '')
+      .split('?')[0]          // === FIX: Strip query string (?InitialTabId=Ribbon.Read...)
       .replace(/^\/+/, '')
       .replace(/[:*?"<>|]/g, '_');
     return path.join(process.cwd(), this.outputRoot, safeRel);
@@ -524,7 +590,9 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
     take = null,
     offset = null,
     direction = 'DESC',
+    dbName = null,
   ) {
+    const targetDb = dbName || this.sharePointDb;
     const syncIdExpr = this.getSyncIdExpression();
     const safeTake = Number.isFinite(Number(take)) && Number(take) > 0 ? Number(take) : null;
     const safeOffset = Number.isFinite(Number(offset)) && Number(offset) >= 0 ? Number(offset) : 0;
@@ -538,7 +606,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
     const sortDir = isAsc ? 'ASC' : 'DESC';
 
     logger.debug(
-      `[StreamNewsAspxPageIncrementalModel] fetchListFromOldDb: lastSyncTime=${lastSyncTime}, lastSyncId=${lastSyncId}, direction=${direction}, take=${safeTake}`,
+      `[StreamNewsAspxPageIncrementalModel] fetchListFromOldDb [${targetDb}]: lastSyncTime=${lastSyncTime}, lastSyncId=${lastSyncId}, direction=${direction}, take=${safeTake}`,
     );
 
     // Dùng JS loại bỏ logic cồng kềnh, ép SQL chuẩn hóa kiểu DATETIME2 để tránh lỗi so sánh
@@ -571,10 +639,10 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
           l.[tp_Description]   AS ListDescription,
           d.[TimeLastModified] AS __sync_time,
           ${syncIdExpr}        AS __sync_id
-        FROM [${this.sharePointDb}].[dbo].[AllDocs] d
-        INNER JOIN [${this.sharePointDb}].[dbo].[AllWebs] w
+        FROM [${targetDb}].[dbo].[AllDocs] d
+        INNER JOIN [${targetDb}].[dbo].[AllWebs] w
           ON d.[SiteId] = w.[SiteId] AND d.[WebId]  = w.[Id]
-        LEFT JOIN [${this.sharePointDb}].[dbo].[AllLists] l
+        LEFT JOIN [${targetDb}].[dbo].[AllLists] l
           ON d.[SiteId]  = l.[tp_SiteId] AND d.[ListId] = l.[tp_ID]
         WHERE
           d.[DeleteTransactionId] = 0x0
@@ -609,14 +677,15 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
       take: safeTake,
       offset: safeOffset,
       startDate: SYNC_START_DATE,
-      endDate: SYNC_END_DATE
+      endDate: SYNC_END_DATE,
     });
     return resultRows;
   }
 
-  async syncOldToStaging(rows, { transaction } = {}) {
+  async syncOldToStaging(rows, { transaction, dbName } = {}) {
     if (!Array.isArray(rows) || rows.length === 0) return { stagedCount: 0 };
     const table = this.getStagingTableRef();
+    const sourceDb = dbName || this.sharePointDb;
 
     let count = 0;
     for (const row of rows) {
@@ -644,6 +713,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
         FullPageUrl: fullUrl || null,
         LocalFilePath: localPath || null,
         __sync_id: Number(row?.__sync_id || 0),
+        source_db: sourceDb,
       };
 
       const q = `
@@ -669,6 +739,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
                 FullPageUrl = @FullPageUrl,
                 LocalFilePath = @LocalFilePath,
                 __sync_id = @__sync_id,
+                source_db = @source_db,
                 -- Reset trạng thái download nếu bản tin nguồn mới hơn bản tin hiện tại trong staging
                 DownloadStatus = CASE
                     WHEN @TimeLastModified > TimeLastModified OR DownloadStatus IS NULL THEN NULL
@@ -686,12 +757,12 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
                 DocId, DirName, LeafName, DocType, Size,
                 TimeCreated, TimeLastModified, UIVersionString, Level,
                 WebUrl, WebTitle, Language, ListTitle, tp_ServerTemplate, ListDescription,
-                DocPath, FullPageUrl, LocalFilePath, __sync_id
+                DocPath, FullPageUrl, LocalFilePath, __sync_id, source_db
             ) VALUES (
                 @DocId, @DirName, @LeafName, @DocType, @Size,
                 @TimeCreated, @TimeLastModified, @UIVersionString, @Level,
                 @WebUrl, @WebTitle, @Language, @ListTitle, @tp_ServerTemplate, @ListDescription,
-                @DocPath, @FullPageUrl, @LocalFilePath, @__sync_id
+                @DocPath, @FullPageUrl, @LocalFilePath, @__sync_id, @source_db
             );
         END
       `;
@@ -715,13 +786,18 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
 
     // 0. CẬP NHẬT TỔNG SỐ BẢN GHI ĐỂ DASHBOARD HIỂN THỊ NGAY
     // QUAN TRỌNG: Khi gọi getCount để lấy total_to_sync, ta áp dụng lookback (nếu không phải chạy lại từ đầu)
-    const totalToSync = await this.getCount(lastSyncTime, lastSyncId, { useLimit: true, lookbackHours });
-    logger.info(`[StreamNewsAspxPageIncrementalModel] Tổng số bản ghi (News) cần đồng bộ (áp dụng lookback ${lookbackHours}h): ${totalToSync}`);
+    const totalToSync = await this.getCount(lastSyncTime, lastSyncId, {
+      useLimit: true,
+      lookbackHours,
+    });
+    logger.info(
+      `[StreamNewsAspxPageIncrementalModel] Tổng số bản ghi (News) cần đồng bộ (áp dụng lookback ${lookbackHours}h): ${totalToSync}`,
+    );
     await this.queryNewDb(`UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`, {
       total: totalToSync,
-      jobId: syncJobId
+      jobId: syncJobId,
     });
-    
+
     // =========================================================================
     // BUOC 0.5: THU LAI CAC BAI BI LOI TIMEOUT (RETRY_WAITING) - CHAY SONG SONG
     // =========================================================================
@@ -738,74 +814,83 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
       const startSyncId = currentSyncId;
 
       // FIX LOOKBACK: Tính cursor xuất phát thực tế cho Phase 1.
-      // Áp dụng lookback 1 ngày vào lastSyncTime của job (mốc đồng bộ lần trước),
-      // để cover các bài viết bị sửa đổi trong 24h cuối của chu kỳ trước.
-      // Nếu staging rỗng (lần đầu chạy), dùng '1900-01-01' để kéo tất cả.
       const isFirstRun = lastSyncTime === DEFAULT_SYNC_TIME || !lastSyncTime;
       const jobCursorWithLookback = isFirstRun
         ? '1900-01-01T00:00:00.000Z'
-        : this.normalizeSyncTime(lastSyncTime, lookbackHours); // Trừ lookbackHours vào lastSyncTime của job
+        : this.normalizeSyncTime(lastSyncTime, lookbackHours);
 
-      // Cursor xuất phát thực tế = cái NHỎ HƠN giữa maxStagedTime và (lastSyncTime - 24h)
-      // Để đảm bảo không bỏ sót bài cũ hơn staging nhưng mới hơn checkpoint cũ
       let p1StartTime = startSyncTime;
       let p1StartId = startSyncId;
       if (!isFirstRun && jobCursorWithLookback < startSyncTime) {
         p1StartTime = jobCursorWithLookback;
         p1StartId = 0;
-        logger.info(`🕐 [PHASE 1 - LOOKBACK] Áp dụng lookback: cursor xuất phát từ ${p1StartTime} (lastSyncTime=${lastSyncTime} - ${lookbackHours}h) thay vì maxStaged=${startSyncTime}`);
+        logger.info(
+          `🕐 [PHASE 1 - LOOKBACK] Áp dụng lookback: cursor xuất phát từ ${p1StartTime} (lastSyncTime=${lastSyncTime} - ${lookbackHours}h) thay vì maxStaged=${startSyncTime}`,
+        );
       }
+
+      let nextP1Time = p1StartTime;
+      let nextP1Id = p1StartId;
 
       if (currentSyncTime || !isFirstRun) {
         logger.info(`🚀 [PHASE 1 - NEW] Kéo bài viết mới/đã sửa từ cursor: ${p1StartTime} 🚀`);
 
-        // FIX: Dùng useLimit: false để không bị chặn bởi COMPLETED_LIMIT khi đếm
-        // số bài mới cho Phase 1. COMPLETED_LIMIT chỉ áp dụng cho pending staging.
-        const p1Total = await this.getCount(p1StartTime, p1StartId, { useLimit: false });
-        const p1Iterations = Math.ceil(p1Total / stageBatchSize) || 0;
+        for (const db of this.dbs) {
+          logger.info(`🚀 [PHASE 1] Kéo dữ liệu từ database: ${db}`);
+          let offset = 0;
+          let batchIndex = 0;
 
-        logger.info(`🔢 [PHASE 1] Tổng bài mới/đã sửa cần kéo: ${p1Total} (${p1Iterations} đợt).`);
+          while (true) {
+            const rows = await this.fetchListFromOldDb(
+              p1StartTime,
+              p1StartId,
+              stageBatchSize,
+              offset,
+              'ASC',
+              db,
+            );
 
-        currentSyncTime = p1StartTime;
-        currentSyncId = p1StartId;
+            if (!rows || rows.length === 0) break;
 
-        for (let i = 0; i < p1Iterations; i++) {
-          const begin = i * stageBatchSize;
-          const rows = await this.fetchListFromOldDb(
-            p1StartTime,
-            p1StartId,
-            stageBatchSize,
-            begin,
-            'ASC',
-          );
-          if (!rows || rows.length === 0) break;
+            let transaction = null;
+            let stageResult = null;
+            try {
+              transaction = new sql.Transaction(this.newPool);
+              await transaction.begin();
+              stageResult = await this.syncOldToStaging(rows, { transaction, dbName: db });
+              await transaction.commit();
+            } catch (err) {
+              if (transaction) await transaction.rollback().catch(() => {});
+              logger.error(
+                `[Phase 1] Lỗi đồng bộ staging DB ${db} tại offset ${offset}: ${err.message}`,
+              );
+              throw err;
+            }
 
-          let transaction = null;
-          let stageResult = null;
-          try {
-            transaction = new sql.Transaction(this.newPool);
-            await transaction.begin();
-            stageResult = await this.syncOldToStaging(rows, { transaction });
-            await transaction.commit();
-          } catch (err) {
-            if (transaction) await transaction.rollback().catch(() => {});
-            logger.error(`[Phase 1] Lỗi đồng bộ staging tại iteration ${i}: ${err.message}`);
-            throw err;
-          }
+            p1Staged += Number(stageResult?.stagedCount || 0);
+            p1Rows += rows.length;
 
-          p1Staged += Number(stageResult?.stagedCount || 0);
-          p1Rows += rows.length;
-
-          // Cập nhật cursor theo batch cuối cùng
-          for (const row of rows) {
+            // Tìm cursor lớn nhất trong batch này
+            for (const row of rows) {
               const rowTime = new Date(row.__sync_time).toISOString();
               const rowId = Number(row.__sync_id);
-              currentSyncTime = rowTime;
-              currentSyncId = rowId;
-          }
+              // Nếu bản ghi hiện tại mới hơn nextP1Time, cập nhật cursor
+              if (rowTime > nextP1Time || (rowTime === nextP1Time && rowId > nextP1Id)) {
+                nextP1Time = rowTime;
+                nextP1Id = rowId;
+              }
+            }
 
-          logger.info(`🔥 [PHASE 1] Progress: ${i+1}/${p1Iterations} batches. Đã kéo ${p1Rows} dòng mới/đã sửa. LastCursor: ${currentSyncTime} / ${currentSyncId}`);
+            batchIndex++;
+            logger.info(
+              `🔥 [PHASE 1] [${db}] Progress: batch ${batchIndex}. Đã kéo thêm ${rows.length} bài. Tổng: ${p1Rows}. Global Cursor: ${nextP1Time} / ${nextP1Id}`,
+            );
+            offset += stageBatchSize;
+          }
         }
+
+        currentSyncTime = nextP1Time;
+        currentSyncId = nextP1Id;
       }
 
       return { p1Staged, p1Rows, currentSyncTime, currentSyncId, startSyncTime, startSyncId };
@@ -816,7 +901,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
     // =========================================================================
     const runPhase2 = async () => {
       // Cho Bước 1 xuất phát trước 2s
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise((resolve) => setTimeout(resolve, 2000));
 
       let p2Staged = 0;
       let p2Rows = 0;
@@ -824,50 +909,48 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
       let descSyncTime = minCursor ? minCursor.minTime : '2100-01-01T00:00:00.000Z';
       let descSyncId = minCursor ? minCursor.minId : 0;
 
-      // Tính tổng số bài cũ cần lùi về
-      const p2Total = await this.getCount(descSyncTime, descSyncId);
-      const p2Iterations = Math.ceil(p2Total / stageBatchSize);
+      logger.info(`[PHASE 2 - OLD] Bắt đầu quét lùi về quá khứ từ: ${descSyncTime}`);
 
-      logger.info(`[PHASE 2 - OLD] Cần lùi về ${p2Total} bài (${p2Iterations} đợt). Bắt đầu từ: ${descSyncTime}`);
+      for (const db of this.dbs) {
+        logger.info(`[PHASE 2] Kéo dữ liệu cũ từ database: ${db}`);
+        let offset = 0;
+        let batchIndex = 0;
 
-      for (let i = 0; i < p2Iterations; i++) {
-        const begin = i * stageBatchSize;
-        const rows = await this.fetchListFromOldDb(
-          descSyncTime,
-          descSyncId,
-          stageBatchSize,
-          begin,
-          'DESC',
-        );
-        if (!rows || rows.length === 0) break;
+        while (true) {
+          const rows = await this.fetchListFromOldDb(
+            descSyncTime,
+            descSyncId,
+            stageBatchSize,
+            offset,
+            'DESC',
+            db,
+          );
+          if (!rows || rows.length === 0) break;
 
-        let transaction = null;
-        let stageResult = null;
-        try {
-          transaction = new sql.Transaction(this.newPool);
-          await transaction.begin();
-          stageResult = await this.syncOldToStaging(rows, { transaction });
-          await transaction.commit();
-        } catch (err) {
-          if (transaction) await transaction.rollback().catch(() => {});
-          logger.error(`[Phase 2] Lỗi đồng bộ staging tại iteration ${i}: ${err.message}`);
-          throw err;
+          let transaction = null;
+          let stageResult = null;
+          try {
+            transaction = new sql.Transaction(this.newPool);
+            await transaction.begin();
+            stageResult = await this.syncOldToStaging(rows, { transaction, dbName: db });
+            await transaction.commit();
+          } catch (err) {
+            if (transaction) await transaction.rollback().catch(() => {});
+            logger.error(
+              `[Phase 2] Lỗi đồng bộ staging DB ${db} tại offset ${offset}: ${err.message}`,
+            );
+            throw err;
+          }
+
+          p2Staged += Number(stageResult?.stagedCount || 0);
+          p2Rows += rows.length;
+
+          batchIndex++;
+          logger.info(
+            `♻️ [PHASE 2] [${db}] Progress: batch ${batchIndex}. Đã lùi thêm ${rows.length} bài. Tích lũy: ${p2Rows}.`,
+          );
+          offset += stageBatchSize;
         }
-
-        p2Staged += Number(stageResult?.stagedCount || 0);
-        p2Rows += rows.length;
-
-        // LOG chi tiết từng bản ghi để debug cursor
-        for (const row of rows) {
-            const rowTime = new Date(row.__sync_time).toISOString();
-            const rowId = Number(row.__sync_id);
-            logger.info(`  └─ [Compare P2] DocId: ${row.DocId} | T: ${rowTime} ID: ${rowId} vs P2_Cursor(T: ${descSyncTime} ID: ${descSyncId})`);
-
-            descSyncTime = rowTime;
-            descSyncId = rowId;
-        }
-
-        logger.info(`♻️ [PHASE 2] Progress: ${i+1}/${p2Iterations} batches. Đã lùi thêm ${rows.length} bài. Tích lũy: ${p2Rows}. LastCursor: ${descSyncTime} / ${descSyncId}`);
       }
 
       return { p2Staged, p2Rows };
@@ -916,7 +999,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
     // Cập nhật Dashboard lần cuối với tổng số thực tế (bao gồm cả các bản ghi tồn đọng cũ trong staging)
     await this.queryNewDb(`UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`, {
       total: pendingCount,
-      jobId: syncJobId
+      jobId: syncJobId,
     });
 
     return {
@@ -952,22 +1035,39 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
 
   async fetchOneFromStaging({ transaction } = {}) {
     const table = this.getStagingTableRef();
-    const beginLimit = Number(process.env.BEGIN_LIMIT || 0);
 
-    // Dùng BEGIN_LIMIT làm OFFSET để bỏ qua những record đầu (nếu cần)
-    // Lấy 1 record pending tiếp theo (newest-first)
+    // === FIX RACE CONDITION: Dùng UPDATE...OUTPUT để "claim" row nguyên tử ===
+    // Mỗi worker sẽ claim một row khác nhau, không bao giờ cùng lấy 1 row.
+    // RETRY_WAITING được loại ra để tránh worker thường cướp job của retry job.
     const query = `
-      SELECT *
-      FROM (
-        SELECT *, ROW_NUMBER() OVER (ORDER BY TimeLastModified DESC, DocId DESC) AS __rn
-        FROM ${table}
-        WHERE ISNULL(DownloadStatus, '') NOT IN ('OK', 'ERROR', 'RETRY_WAITING')
-      ) AS sub
-      WHERE __rn = ${beginLimit + 1}
+      UPDATE TOP(1) ${table}
+      SET DownloadStatus = 'PROCESSING'
+      OUTPUT
+        INSERTED.DocId,
+        INSERTED.DirName,
+        INSERTED.LeafName,
+        INSERTED.DocType,
+        INSERTED.Size,
+        INSERTED.TimeCreated,
+        INSERTED.TimeLastModified,
+        INSERTED.UIVersionString,
+        INSERTED.Level,
+        INSERTED.WebUrl,
+        INSERTED.WebTitle,
+        INSERTED.Language,
+        INSERTED.ListTitle,
+        INSERTED.tp_ServerTemplate,
+        INSERTED.ListDescription,
+        INSERTED.DocPath,
+        INSERTED.FullPageUrl,
+        INSERTED.LocalFilePath,
+        INSERTED.__sync_id,
+        INSERTED.source_db
+      WHERE ISNULL(DownloadStatus, '') NOT IN ('OK', 'ERROR', 'RETRY_WAITING', 'PROCESSING')
+        AND ISNULL(MigrateErrFlg, 0) = 0
     `;
 
     const rows = await this.queryNewDbTx(query, {}, transaction);
-
     return rows?.length ? rows[0] : null;
   }
 
@@ -995,15 +1095,101 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
       return { syncJobId, itemIndex, processed: false, done: true };
     }
 
-    const result = await this.processRowData(rowData, syncJobId);
-    return {
-      syncJobId,
-      itemIndex,
-      processed: true,
-      done: false,
-      rowId: rowData.DocId || null,
-      result,
-    };
+    const docId = rowData.DocId;
+
+    // === FIX RACE CONDITION: Kiểm tra in-memory lock để tránh 2 worker xử lý cùng 1 DocId ===
+    // (Hàng phòng thủ thứ 2 sau UPDATE+OUTPUT ở fetchOneFromStaging)
+    if (this._processingDocIds.has(docId)) {
+      logger.warn(`[processOne] DocId ${docId} đang được xử lý bởi worker khác. Bỏ qua.`);
+      return { syncJobId, itemIndex, processed: false, done: false };
+    }
+    this._processingDocIds.add(docId);
+
+    try {
+      const result = await this.processRowData(rowData, syncJobId);
+      return {
+        syncJobId,
+        itemIndex,
+        processed: true,
+        done: false,
+        rowId: docId || null,
+        result,
+      };
+    } finally {
+      // Luôn giải phóng lock dù thành công hay thất bại
+      this._processingDocIds.delete(docId);
+    }
+  }
+  /**
+   * [TEST API] Gọi thẳng SharePoint REST API để lấy JSON của bài viết dựa vào tên file
+   */
+  async fetchArticleJsonFromApi(leafName) {
+    const fs = require('fs');
+    const path = require('path');
+    const axios = require('axios');
+    const https = require('https');
+    const { refreshAuth } = require('../../sync-file-copy/SharePointAuthService');
+
+    const domain = process.env.SHAREPOINT_DOMAIN || 'eoffice.saigonnewport.com.vn';
+    const baseUrl = `https://${domain}/tintuc`; // Tuỳ thuộc sub-site của bạn
+    const listName = 'Pages';
+    const apiUrl = `${baseUrl}/_api/web/lists/getbytitle('${listName}')/items?$filter=FileLeafRef eq '${leafName}'`;
+
+    let cookie = '';
+    const cookiePath = path.join(process.cwd(), 'auth', 'cookie.txt');
+    if (fs.existsSync(cookiePath)) {
+      cookie = fs.readFileSync(cookiePath, 'utf8').trim();
+    }
+
+    const httpsAgent = new https.Agent({ rejectUnauthorized: false });
+
+    // Gọi lần 1
+    let response;
+    try {
+      response = await axios.get(apiUrl, {
+        httpsAgent,
+        headers: { 'Accept': 'application/json;odata=verbose', 'Cookie': cookie }
+      });
+    } catch (error) {
+      if (error.response && (error.response.status === 401 || error.response.status === 403)) {
+         logger.warn(`[API] Cookie hết hạn khi gọi API JSON. Đang làm mới Token...`);
+         await refreshAuth(this.pool);
+         cookie = fs.readFileSync(cookiePath, 'utf8').trim(); // Đọc lại cookie mới
+         response = await axios.get(apiUrl, { // Gọi lần 2
+            httpsAgent,
+            headers: { 'Accept': 'application/json;odata=verbose', 'Cookie': cookie }
+         });
+      } else {
+         throw error;
+      }
+    }
+
+    const items = response.data?.d?.results;
+    if (items && items.length > 0) {
+       const article = items[0];
+       
+       // Bước 2: Dịch Taxonomy ID (WssId) thành Tên thật (Plain Text) từ Root Site
+       const taxonomyId = article.Categories1 && article.Categories1.Label ? article.Categories1.Label : null;
+       if (taxonomyId && !isNaN(Number(taxonomyId))) {
+           try {
+               const rootUrl = `https://${domain}`;
+               const taxApiUrl = `${rootUrl}/_api/web/lists/getbytitle('TaxonomyHiddenList')/items(${taxonomyId})`;
+               const taxResponse = await axios.get(taxApiUrl, {
+                   httpsAgent,
+                   headers: { 'Accept': 'application/json;odata=verbose', 'Cookie': cookie }
+               });
+               const taxItem = taxResponse.data.d;
+               // Ghi đè số ID thành chữ
+               article.Categories1.Label = taxItem.Term || taxItem.Title || taxonomyId;
+               logger.info(`[API] Đã dịch chuyên mục ID ${taxonomyId} thành "${article.Categories1.Label}"`);
+           } catch (taxErr) {
+               logger.warn(`[API] Không thể dịch chuyên mục ID ${taxonomyId}. Lỗi: ${taxErr.message}`);
+           }
+       }
+       
+       return article;
+    }
+    return null;
   }
 
   async processRowData(rowData, syncJobId) {
@@ -1023,7 +1209,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
     // Step 1: Download HTML
     let buffer = null;
     let attempt = 0;
-    const maxAttempts = 100; // Kiểm tra tối đa 100 lần theo yêu cầu
+    const maxAttempts = 3; // Kiểm tra tối đa 3 lần theo yêu cầu
     let downloadError = null;
 
     // Nếu bản ghi mới hơn tháng 2/2026, cho phép thời gian kết nối (timeout) đợi SharePoint load là 5 phút. Nếu cũ hơn thì 1 phút.
@@ -1043,7 +1229,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
         attempt++;
         if (attempt > 1) {
           logger.info(
-            `[Downloader] Mạng chập chờn. Chờ 10 giây để kiểm tra và tải lại lần ${attempt}/${maxAttempts}...`
+            `[Downloader] Mạng chập chờn. Chờ 10 giây để kiểm tra và tải lại lần ${attempt}/${maxAttempts}...`,
           );
           await new Promise((resolve) => setTimeout(resolve, 10000)); // Đợi 10 giây (10000ms)
         }
@@ -1055,7 +1241,9 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
         let waitedMinutes = 0;
         const waitingInterval = setInterval(() => {
           waitedMinutes++;
-          logger.info(`[Downloader] ⏳ Vẫn đang kiên nhẫn đợi SharePoint load file: ${rowData?.LeafName || fullUrl} ... (Đã đợi ${waitedMinutes} phút)`);
+          logger.info(
+            `[Downloader] ⏳ Vẫn đang kiên nhẫn đợi SharePoint load file: ${rowData?.LeafName || fullUrl} ... (Đã đợi ${waitedMinutes} phút)`,
+          );
         }, 60000);
 
         try {
@@ -1078,10 +1266,70 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
         downloadError = err;
         logger.warn(`[Downloader] Lỗi tải ở lần ${attempt}: ${err.message}`);
 
+        // Break early if authentication failed to prevent infinite loops and 16-minute delays
+        if (err.message && err.message.includes('Authentication required')) {
+          logger.error(`[Downloader] Lỗi xác thực SharePoint. Dừng tải, yêu cầu đăng nhập lại.`);
+          global.sharePointLoginState = {
+            required: true,
+            inProgress: false,
+            message: 'Phiên đăng nhập SharePoint đã hết hạn.',
+          };
+          try {
+            require('../../sync-manager/SyncManagerService')._broadcastSSE();
+          } catch (e) {}
+          break;
+        }
+
         // Lắp lại chốt chặn 404: Nếu máy chủ xác nhận file không tồn tại, dừng spam ngay để tiết kiệm thời gian
         if (err.message && err.message.includes('404')) {
-          logger.warn(`[Downloader] Lỗi 404 Not Found. File thực sự không còn trên máy chủ. Dừng spam.`);
+          logger.warn(
+            `[Downloader] Lỗi 404 Not Found. File thực sự không còn trên máy chủ. Dừng spam.`,
+          );
           break;
+        }
+
+        // Chốt chặn cho lỗi không thể truy cập vĩnh viễn (sau khi đã refresh token vẫn lỗi 302/401/403)
+        if (
+          err.message &&
+          err.message.includes('File có thể yêu cầu đăng nhập hoặc không tồn tại')
+        ) {
+          logger.warn(
+            `[Downloader] Không thể truy cập file (đã thử làm mới token). Đang kiểm tra xem đây là lỗi file hay lỗi đăng nhập...`,
+          );
+
+          try {
+            // Test thử xem cookie hiện tại có tải được trang chủ News hay không (giống logic API check-session)
+            const testUrl = `${process.env.BASE_URL || 'https://eoffice.saigonnewport.com.vn'}/tintuc/Pages/default.aspx`;
+            await require('../../sync-file-copy/SharePointAuthService').downloadFile(
+              testUrl,
+              this.newPool,
+              0,
+              15000,
+            );
+
+            // Nếu không bị văng lỗi -> Token vẫn ngon! -> Lỗi nằm ở bản thân file này (bị xóa/cấm)
+            logger.warn(
+              `[Downloader] Token vẫn hợp lệ! File này thực sự bị xoá hoặc phân quyền. Dừng spam và bỏ qua file.`,
+            );
+            downloadError = new Error('404 Not Found - ' + err.message); // Ép thành 404 để bỏ qua file
+            break;
+          } catch (sessionErr) {
+            // Nếu tải trang chủ cũng chết -> Token hỏng (dù auto-login báo thành công nhưng cookie không xài được)
+            logger.error(
+              `[Downloader] Token hoàn toàn vô hiệu! Đăng nhập ngầm thất bại. Yêu cầu đăng nhập thủ công.`,
+            );
+            global.sharePointLoginState = {
+              required: true,
+              inProgress: false,
+              message: 'Đăng nhập ngầm thất bại. Vui lòng đăng nhập thủ công.',
+            };
+            try {
+              const syncManager = require('../../sync-manager/SyncManagerService');
+              syncManager.pauseJob(syncJobId); // DỪNG JOB LẠI ĐỂ USER ĐĂNG NHẬP
+              syncManager._broadcastSSE();
+            } catch (e) {}
+            break;
+          }
         }
       }
     }
@@ -1096,7 +1344,9 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
       // TẠO FILE CHỨA NỘI DUNG LỖI THEO YÊU CẦU
       try {
         this.ensureLocalDirForFile(localPath);
-        const titleError = is404 ? 'Lỗi 404: File đã bị xóa khỏi SharePoint' : 'do đường truyền internet bị timeout';
+        const titleError = is404
+          ? 'Lỗi 404: File đã bị xóa khỏi SharePoint'
+          : 'do đường truyền internet bị timeout';
         const errorHtml =
           `<html><head><meta charset="utf-8"><title>Lỗi tải trang</title></head><body>` +
           `<h1>${titleError}</h1>` +
@@ -1125,6 +1375,14 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
         attempts: attempt,
       });
 
+      // Cập nhật cờ lỗi trung gian
+      await this.queryNewDbTx(
+        `UPDATE ${this.getStagingTableRef()}
+         SET MigrateErrFlg = 1, MigrateErrMess = @err
+         WHERE DocId = @DocId`,
+        { err: errMsg, DocId: docId },
+      );
+
       // XỬ LÝ ĐẶC BIỆT CHO LỖI 404: Không dừng Job, tự động chuyển sang file tiếp theo
       if (is404) {
         logger.warn(`[Downloader] Bỏ qua bài viết lỗi 404 và CHẠY TIẾP bài khác, không dừng Job.`);
@@ -1133,12 +1391,19 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
           error: errMsg,
           downloadedAt: null,
         });
-        return { action: 'skipped_404', error: errMsg };
+        throw new Error(`Bỏ qua bài viết lỗi 404: ${errMsg}`);
       }
 
-      // Thay vì dừng Job, ta thông báo bài này sẽ được thử lại song song sau.
-      logger.warn(`[Downloader] Đã chuyển bài viết ${rowData?.LeafName} sang trạng thái RETRY_WAITING. Sẽ thử lại sau.`);
-      return { action: 'retry_queued', error: errMsg };
+      // Quá số lần thử: Ném lỗi để SyncManager đưa vào job_error và skip row
+      logger.error(
+        `[Downloader] Đã chuyển bài viết ${rowData?.LeafName} sang trạng thái LỖI sau ${maxAttempts} lần tải.`,
+      );
+      await this._markDownloadResult(docId, {
+        status: 'ERROR',
+        error: errMsg,
+        downloadedAt: null,
+      });
+      throw new Error(`Quá 3 lần không tải được file: ${errMsg}`);
     }
 
     const html = buffer.toString('utf8');
@@ -1156,7 +1421,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
       docPath.endsWith('.aspx') &&
       !docPath.includes('/Forms/') &&
       !docPath.includes('SitePages/') &&
-      !docPath.includes('SitePages/') && 
+      !docPath.includes('SitePages/') &&
       !docPath.includes('SiteAssets/') &&
       !docPath.includes('_catalogs/') &&
       !docPath.toLowerCase().includes('allitems.aspx') &&
@@ -1176,7 +1441,23 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
     if (isNewsArticle) {
       logger.info(`[Parser Hook] Bắt đầu phân giải nội dung file: ${localPath}`);
       try {
-        parsedData = await this.htmlParser.parseHtmlFile(localPath);
+        // ==========================================
+        //  CÁCH CŨ: DÙNG THƯ VIỆN PARSE HTML (.aspx)
+        // ==========================================
+
+        // parsedData = await this.htmlParser.parseHtmlFile(localPath, syncJobId);
+
+        // ==========================================
+        //  CÁCH MỚI [TEST API]: LẤY DỮ LIỆU BẰNG JSON 
+        // ==========================================
+        // Nếu bạn muốn test chạy bằng JSON API, hãy comment dòng parseHtmlFile ở trên lại 
+        // và bỏ comment 5 dòng code dưới đây:
+        // 
+        const slug = path.basename(localPath, '.aspx');
+        const apiArticleData = await this.fetchArticleJsonFromApi(rowData.LeafName);
+        if (!apiArticleData) throw new Error('Không lấy được JSON từ API SharePoint cho bài: ' + rowData.LeafName);
+        parsedData = await this.htmlParser.parseSharePointApiJson(apiArticleData, slug, syncJobId);
+        // ==========================================
         if (parsedData) {
           logger.info(
             `[Parser Hook] Phân giải thành công. Tiêu đề: "${parsedData.title}" | Chủ đề: "${parsedData.topic}"`,
@@ -1200,75 +1481,139 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
             logger.info(`[Parser Hook] Đã tự động xuất file JSON thành quả: ${jsonFilePath}`);
 
             // === CHẠY ĐỒNG THỜI QUÉT VÀ TẢI ẢNH VỀ Ổ CỨNG & UPLOAD LÊN API MỚI ===
-            if (parsedData.images && Array.isArray(parsedData.images) && parsedData.images.length > 0) {
+            if (
+              parsedData.images &&
+              Array.isArray(parsedData.images) &&
+              parsedData.images.length > 0
+            ) {
               const { downloadFile } = require('../../sync-file-copy/SharePointAuthService');
               const FileUploadService = require('../../sync-file-copy/Fileuploadservice');
               const fileUploader = new FileUploadService(this.newPool);
 
-              await Promise.all(parsedData.images.map(async (img) => {
-                if (!img.fullUrl) return;
+              // === DEDUP: Chuẩn hóa URL để làm cache key (loại bỏ query string) ===
+              const normalizeImgUrl = (u) => {
+                try { return new URL(u).origin + new URL(u).pathname; } catch { return u; }
+              };
+
+              for (const img of parsedData.images) {
+                if (!img.fullUrl) continue;
+                const cacheKey = normalizeImgUrl(img.fullUrl);
+
                 try {
                   const rawBaseName = path.basename(img.fullUrl.split('?')[0]);
                   let imgFileName = rawBaseName;
-                  try { imgFileName = decodeURIComponent(rawBaseName); } catch(e) {}
-
+                  try { imgFileName = decodeURIComponent(rawBaseName); } catch (e) {}
                   const imgLocalPath = path.join(imgOutDir, imgFileName);
 
-                  logger.info(`[Image Downloader] Đang tải ảnh từ SharePoint: ${img.fullUrl}`);
-                  const imgBuffer = await downloadFile(img.fullUrl, this.newPool, 0, 60000); // Timeout 1 phút/ảnh
-
-                  if (imgBuffer && imgBuffer.length > 0) {
-                    // CHẠY SONG SONG: 1. Lưu ảnh cục bộ & 2. Upload API
-                    const saveLocalTask = (async () => {
-                      try {
-                        await fs.promises.writeFile(imgLocalPath, imgBuffer);
-                        logger.info(`[Image Downloader] Đã lưu ảnh cục bộ thành công: ${imgLocalPath}`);
-                      } catch (err) {
-                        logger.error(`[Image Downloader] ❌ Lỗi lưu ảnh cục bộ: ${err.message}`);
-                      }
-                    })();
-
-                    const uploadApiTask = (async () => {
-                      try {
-                        const uploadRes = await fileUploader.uploadToNewSystem({
-                          fileBuffer: imgBuffer,
-                          originalName: imgFileName,
-                          objectType: 'NEWS',
-                          objectId: docId // Tạm dùng DocId làm ID liên kết
-                        });
-
-                        if (uploadRes && uploadRes.file_path) {
-                          logger.info(`\n🚀🚀🚀 [API UPLOAD] ĐÃ ĐẨY ẢNH LÊN HỆ THỐNG MỚI THÀNH CÔNG! ĐƯỜNG DẪN MỚI: ${uploadRes.file_path} 🚀🚀🚀\n`);
-
-                          // THAY THẾ URL ẢNH CŨ BẰNG URL MỚI TRONG NỘI DUNG BÀI VIẾT HTML
-                          if (parsedData.content) {
-                            if (img.originalUrl) parsedData.content = parsedData.content.split(img.originalUrl).join(uploadRes.file_path);
-                            parsedData.content = parsedData.content.split(img.fullUrl).join(uploadRes.file_path);
-                          }
-
-                          // Cập nhật lại thumbnail nếu ảnh này là ảnh đại diện
-                          if (parsedData.thumbnail === img.fullUrl || parsedData.thumbnail === img.originalUrl) {
-                            parsedData.nameThumbnail = uploadRes.file_path;
-                          }
-                        }
-                      } catch (upErr) {
-                        logger.error(`[API UPLOAD] ❌ Lỗi khi đẩy ảnh lên hệ thống mới: ${upErr.message}`);
-                      }
-                    })();
-
-                    // Đợi cả 2 tiến trình (lưu file và upload) hoàn tất cùng lúc
-                    await Promise.all([saveLocalTask, uploadApiTask]);
+                  // === FIX IMAGE LOOP: Kiểm tra cache trước, tránh download trùng lặp ===
+                  const cachedResult = this._imgDownloadCache.get(cacheKey);
+                  if (cachedResult && !(cachedResult instanceof Promise)) {
+                    // Đã upload thành công trước đó -> dùng lại URL mới
+                    logger.info(`[Image Cache] ✅ Cache hit, tái sử dụng URL: ${cachedResult.viewUrl}`);
+                    const newViewUrl = cachedResult.viewUrl;
+                    if (parsedData.content) {
+                      if (img.originalUrl) parsedData.content = parsedData.content.split(img.originalUrl).join(newViewUrl);
+                      parsedData.content = parsedData.content.split(img.fullUrl).join(newViewUrl);
+                    }
+                    if (parsedData.thumbnail === img.fullUrl || parsedData.thumbnail === img.originalUrl) {
+                      parsedData.nameThumbnail = newViewUrl;
+                    }
+                    continue;
                   }
+
+                  // === IN-FLIGHT GUARD: Nếu URL đang được download bởi worker khác, đợi kết quả ===
+                  if (cachedResult instanceof Promise) {
+                    logger.info(`[Image Cache] ⏳ URL đang được download bởi worker khác, đợi kết quả: ${cacheKey}`);
+                    try {
+                      const result = await cachedResult;
+                      if (result && result.viewUrl && parsedData.content) {
+                        if (img.originalUrl) parsedData.content = parsedData.content.split(img.originalUrl).join(result.viewUrl);
+                        parsedData.content = parsedData.content.split(img.fullUrl).join(result.viewUrl);
+                      }
+                    } catch (_) { /* worker kia lỗi, bỏ qua ảnh này */ }
+                    continue;
+                  }
+
+                  // === Tạo Promise download và đăng ký vào cache ngay (in-flight) ===
+                  const downloadPromise = (async () => {
+                    logger.info(`[Image Downloader] Đang tải ảnh từ SharePoint: ${img.fullUrl}`);
+                    const imgBuffer = await downloadFile(img.fullUrl, this.newPool, 0, 60000);
+
+                    if (!imgBuffer || imgBuffer.length === 0) return null;
+
+                    // Lưu local song song với upload API
+                    const saveLocalTask = fs.promises.writeFile(imgLocalPath, imgBuffer)
+                      .then(() => logger.info(`[Image Downloader] Đã lưu ảnh cục bộ: ${imgLocalPath}`))
+                      .catch((err) => logger.error(`[Image Downloader] ❌ Lỗi lưu ảnh: ${err.message}`));
+
+                    let viewUrl = null;
+                    try {
+                      const uploadRes = await fileUploader.uploadToNewSystem({
+                        fileBuffer: imgBuffer,
+                        originalName: imgFileName,
+                        objectType: 'NEWS',
+                        objectId: docId,
+                      });
+                      if (uploadRes && (uploadRes.id || uploadRes.public_id)) {
+                        const fileId = uploadRes.id || uploadRes.public_id;
+                        const viewPrefix = (process.env.NEW_SYSTEM_VIEW_PREFIX || 'https://apigw-uat.snp.com.vn/doffice-be').replace(/\/$/, '');
+                        viewUrl = `${viewPrefix}/api/files/view/${fileId}`;
+                        logger.info(`🚀 [API UPLOAD] Thành công: ${viewUrl}`);
+                      }
+                    } catch (upErr) {
+                      logger.warn(`[API UPLOAD] ⚠️ Upload lỗi, ảnh giữ URL cũ: ${upErr.message}`);
+                    }
+
+                    await saveLocalTask;
+                    return viewUrl ? { viewUrl } : null;
+                  })();
+
+                  // Đăng ký in-flight promise vào cache
+                  this._imgDownloadCache.set(cacheKey, downloadPromise);
+
+                  let result = null;
+                  try {
+                    result = await downloadPromise;
+                  } finally {
+                    // Sau khi xong: ghi kết quả vào cache (hoặc xóa nếu lỗi)
+                    if (result) {
+                      this._imgDownloadCache.set(cacheKey, result);
+                    } else {
+                      this._imgDownloadCache.delete(cacheKey); // Cho phép retry lần sau
+                    }
+                  }
+
+                  if (result && result.viewUrl) {
+                    const newViewUrl = result.viewUrl;
+                    if (parsedData.content) {
+                      if (img.originalUrl) parsedData.content = parsedData.content.split(img.originalUrl).join(newViewUrl);
+                      parsedData.content = parsedData.content.split(img.fullUrl).join(newViewUrl);
+                    }
+                    if (parsedData.thumbnail === img.fullUrl || parsedData.thumbnail === img.originalUrl) {
+                      parsedData.nameThumbnail = newViewUrl;
+                    }
+                  }
+
                 } catch (imgErr) {
-                  logger.warn(`[Image Downloader] ❌ Lỗi khi tải ảnh ${img.fullUrl}: ${imgErr.message}`);
+                  // Xóa cache nếu lỗi để cho phép retry
+                  this._imgDownloadCache.delete(cacheKey);
+                  logger.warn(`[Image Downloader] ⚠️ Bỏ qua ảnh ${img.fullUrl} do lỗi: ${imgErr.message}`);
                 }
-              }));
+              }
+
+              // Giới hạn kích thước cache để tránh memory leak (giữ tối đa 5000 URL)
+              if (this._imgDownloadCache.size > 5000) {
+                const keysToDelete = [...this._imgDownloadCache.keys()].slice(0, 1000);
+                keysToDelete.forEach(k => this._imgDownloadCache.delete(k));
+                logger.info(`[Image Cache] 🧹 Đã dọn cache, còn lại: ${this._imgDownloadCache.size} entries.`);
+              }
 
               // Ghi đè lại file JSON để cập nhật các đường dẫn URL vừa được thay mới
               fs.writeFileSync(jsonFilePath, JSON.stringify(parsedData, null, 2), 'utf-8');
             }
           } catch (jsonErr) {
             logger.error(`[Parser Hook] Lỗi khi tạo file JSON hoặc tải ảnh: ${jsonErr.message}`);
+            throw jsonErr; // Ném lỗi lên trên
           }
 
           parsedData.DocId = docId; // Truyền DocId GUID chuẩn
@@ -1281,6 +1626,14 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
         logger.error(
           `[Parser Hook] Lỗi khi phân giải/lưu bảng trung gian cho ${docPath}: ${e.message}`,
         );
+        // Cập nhật cờ lỗi trung gian
+        await this.queryNewDbTx(
+          `UPDATE ${this.getStagingTableRef()}
+           SET MigrateErrFlg = 1, MigrateErrMess = @err
+           WHERE DocId = @DocId`,
+          { err: e.message, DocId: docId },
+        );
+        throw new Error(`Quá 3 lần không tải được tài nguyên (Ảnh/API): ${e.message}`);
       }
     } else {
       logger.warn(
@@ -1292,18 +1645,41 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
     const actionLogs = [];
     if (parsedData) {
       try {
-        await dbUtils.withTransactionRetry(this.newPool, async (trans) => {
-          const resultProd = await this.upsertToProduction(parsedData, trans);
-          actionLogs.push({ table: 'news', action: resultProd.action });
+        await dbUtils.withTransactionRetry(
+          this.newPool,
+          async (trans) => {
+            const resultProd = await this.upsertToProduction(parsedData, trans);
+            actionLogs.push({ table: 'news', action: resultProd.action });
 
-          if (parsedData.isActive && resultProd.newsId) {
-            await this.createAuditRecord(resultProd.newsId, parsedData.publishedAt, trans);
-            actionLogs.push({ table: 'audit', action: 'DUYET' });
-          }
-        }, { maxRetries: 5 });
+            if (parsedData.isActive && resultProd.newsId) {
+              await this.createAuditRecord(resultProd.newsId, parsedData.publishedAt, trans);
+              actionLogs.push({ table: 'audit', action: 'DUYET' });
+            }
+
+            // === FIX LINKING FILE: Cập nhật object_id cho các file vừa upload từ DocId sang newsId mới sinh ===
+            if (resultProd.newsId && parsedData.DocId) {
+                await this.queryNewDbTx(
+                    `UPDATE dbo.file_relations 
+                     SET object_id = CAST(@newsId AS NVARCHAR(50))
+                     WHERE object_id = @docId AND object_type IN ('news', 'NEWS')`,
+                    { newsId: String(resultProd.newsId), docId: String(parsedData.DocId) },
+                    trans
+                );
+                logger.info(`[Production Sync] Đã liên kết lại file: DocId ${parsedData.DocId} ➔ news.id ${resultProd.newsId}`);
+            }
+          },
+          { maxRetries: 5 },
+        );
       } catch (e) {
         logger.error(`[Production Sync] Failed for ${docPath} after retries: ${e.message}`);
         actionLogs.push({ action: 'failed', error: e.message });
+        await this.queryNewDbTx(
+          `UPDATE ${this.getStagingTableRef()}
+           SET MigrateErrFlg = 1, MigrateErrMess = @err
+           WHERE DocId = @DocId`,
+          { err: `Đồng bộ DB (news) thất bại: ${e.message}`, DocId: docId },
+        );
+        throw new Error(`Đồng bộ Production thất bại: ${e.message}`);
       }
     }
 
@@ -1313,6 +1689,14 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
       error: null,
       downloadedAt: new Date(),
     });
+
+    // Cập nhật cờ thành công
+    await this.queryNewDbTx(
+      `UPDATE ${this.getStagingTableRef()}
+       SET MigrateFlg = 1, MigrateErrFlg = 0, MigrateErrMess = NULL
+       WHERE DocId = @DocId`,
+      { DocId: docId },
+    );
 
     return {
       action: 'processed',
@@ -1410,7 +1794,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
                     authorCode = @authorCode,
                     publishedAt = @publishedAt,
                     status = @status,
-                    updatedAt = GETDATE(),
+                    updatedAt = @updatedAt,
                     topic = @topic,
                     nameThumbnail = @nameThumbnail,
                     tags = @tags,
@@ -1433,9 +1817,9 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
                 )
                 VALUES (
                     @title, @slug, @content, @summary, @authorName, @authorDepartment, @authorId, @authorCode,
-                    @publishedAt, @status, GETDATE(), GETDATE(), @topic, @nameThumbnail,
+                    @publishedAt, @status, @createdAt, @updatedAt, @topic, @nameThumbnail,
                     1, 0, 0, @tags, 1, @DocId, @authorId,
-                    @authorId, @authorName, GETDATE(), @submitterId, @authorName, GETDATE()
+                    @authorId, @authorName, @updatedAt, @submitterId, @authorName, @createdAt
                 );
                 SELECT SCOPE_IDENTITY() AS newsId, 'inserted' AS action;
             END
@@ -1459,6 +1843,8 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
         tags: data.tags, // Usually NVARCHAR(MAX)
         DocId: data.DocId,
         created_by: this.safeTrim(authorId, 100),
+        createdAt: data.createdAt || data.publishedAt || new Date(),
+        updatedAt: data.updatedAt || data.publishedAt || new Date(),
       },
       transaction,
     );
@@ -1477,11 +1863,11 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
             INSERT INTO dbo.audit (
                 document_id, time, user_id, display_name, role, action_code,
                 details, created_by, receiver, stage_status, curStatusCode,
-                created_at, updated_at, type_document
+                created_at, updated_at, type_document, table_backups, table_bak
             ) VALUES (
                 @newsId, @time, @userId, N'Hệ thống Migrator', 'ADMIN_NEWS', 'DUYET',
                 N'{"autoApproved":true,"reason":"Migrate từ ASPX Job"}', @userId, @userId, 'HOAN_THANH', 'PUBLISHED',
-                GETDATE(), GETDATE(), 'NEWS'
+                GETDATE(), GETDATE(), 'NEWS', 'auto_create', '1'
             );
         END
     `;
@@ -1551,7 +1937,9 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
   safeTrim(val, maxLen) {
     if (typeof val !== 'string' || !val || !maxLen) return val;
     if (val.length > maxLen) {
-      logger.warn(`[SafeTrim] Truncating string: length ${val.length} > ${maxLen}. Prefix: ${val.substring(0, 50)}`);
+      logger.warn(
+        `[SafeTrim] Truncating string: length ${val.length} > ${maxLen}. Prefix: ${val.substring(0, 50)}`,
+      );
       return val.substring(0, maxLen);
     }
     return val;
@@ -1564,29 +1952,50 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
   async retryFailedParallel(syncJobId) {
     const table = this.getStagingTableRef();
     try {
+      // === CLEANUP: Reset các row bị kẹt PROCESSING trong quá 10 phút (do tool crash giữa chừng) ===
+      try {
+        const stuckCount = await this.queryNewDb(`
+          UPDATE ${table}
+          SET DownloadStatus = NULL
+          OUTPUT INSERTED.DocId
+          WHERE DownloadStatus = 'PROCESSING'
+        `);
+        if (stuckCount && stuckCount.length > 0) {
+          logger.warn(`[RETRY] Ðã giải phóng ${stuckCount.length} row bị kẹt ở trạng thái PROCESSING từ phiên trước.`);
+        }
+      } catch (stuckErr) {
+        logger.warn(`[RETRY] Không thể reset stuck rows: ${stuckErr.message}`);
+      }
+
       const pendingRows = await this.queryNewDb(`
-        SELECT * FROM ${table} WHERE DownloadStatus = 'RETRY_WAITING'
+        SELECT * FROM ${table} WHERE DownloadStatus = 'RETRY_WAITING' AND ISNULL(MigrateErrFlg, 0) = 0
       `);
 
       if (!pendingRows || pendingRows.length === 0) return;
 
-      logger.info(`[RETRY] Phát hiện ${pendingRows.length} bài viết đang đợi thử lại. Bắt đầu xử lý song song...`);
+      logger.info(
+        `[RETRY] Phát hiện ${pendingRows.length} bài viết đang đợi thử lại. Bắt đầu xử lý song song...`,
+      );
 
       // Chia nhỏ để chạy song song (mỗi đợt 5 bài để không làm SharePoint "ngộp")
       const chunkSize = 5;
       for (let i = 0; i < pendingRows.length; i += chunkSize) {
         const chunk = pendingRows.slice(i, i + chunkSize);
-        logger.info(`[RETRY] Đang xử lý nhóm bài viết ${i + 1} -> ${Math.min(i + chunkSize, pendingRows.length)}...`);
-        
-        await Promise.all(chunk.map(async (row) => {
-          try {
-            await this.processRowData(row, syncJobId);
-          } catch (err) {
-            logger.error(`[RETRY] Thử lại thất bại cho ${row.LeafName}: ${err.message}`);
-          }
-        }));
+        logger.info(
+          `[RETRY] Đang xử lý nhóm bài viết ${i + 1} -> ${Math.min(i + chunkSize, pendingRows.length)}...`,
+        );
+
+        await Promise.all(
+          chunk.map(async (row) => {
+            try {
+              await this.processRowData(row, syncJobId);
+            } catch (err) {
+              logger.error(`[RETRY] Thử lại thất bại cho ${row.LeafName}: ${err.message}`);
+            }
+          }),
+        );
       }
-      
+
       logger.info(`[RETRY] Hoàn tất quá trình thử lại song song.`);
     } catch (err) {
       logger.error(`[RETRY] Lỗi nghiêm trọng trong quá trình retry: ${err.message}`);

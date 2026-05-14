@@ -117,27 +117,27 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
           is_creator: isCreator
         };
 
-        const updateQuery = `
-          UPDATE dbo.outgoing_assignment WITH (ROWLOCK, UPDLOCK)
-          SET stage_status = @stage_status,
-              created_at = @created_at,
-              last_audit_id = @last_audit_id,
-              receiver_unit = @receiver_unit,
-              is_creator = @is_creator
-          WHERE document_id = @document_id AND receiver = @receiver AND role_process = @role_process
-        `;
-
-        const updateResult = await this.queryNewDbTx(updateQuery, updateParams, transaction);
-        
-        // Nếu không bản ghi nào được update, thực hiện INSERT
-        if (!updateResult || updateResult.length === 0 || updateResult.rowsAffected?.[0] === 0) {
-          const insertQuery = `
+        const upsertQuery = `
+          IF EXISTS (SELECT 1 FROM dbo.outgoing_assignment WITH (UPDLOCK, HOLDLOCK) 
+                     WHERE document_id = @document_id AND receiver = @receiver AND role_process = @role_process)
+          BEGIN
+            UPDATE dbo.outgoing_assignment 
+            SET stage_status = @stage_status,
+                created_at = @created_at,
+                last_audit_id = @last_audit_id,
+                receiver_unit = @receiver_unit,
+                is_creator = @is_creator
+            WHERE document_id = @document_id AND receiver = @receiver AND role_process = @role_process
+          END
+          ELSE
+          BEGIN
             INSERT INTO dbo.outgoing_assignment 
             (document_id, receiver, role_process, stage_status, created_at, last_audit_id, receiver_unit, is_creator, table_backups)
             VALUES (@document_id, @receiver, @role_process, @stage_status, @created_at, @last_audit_id, @receiver_unit, @is_creator, 'outgoing_assignment')
-          `;
-          await this.queryNewDbTx(insertQuery, updateParams, transaction);
-        }
+          END
+        `;
+
+        await this.queryNewDbTx(upsertQuery, updateParams, transaction);
       }
 
     } catch (err) {

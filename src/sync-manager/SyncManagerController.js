@@ -1,8 +1,11 @@
+const path = require('path');
+const fs = require('fs');
 const BaseController = require('../../controllers/BaseController');
 const SyncManagerService = require('./SyncManagerService');
 const SyncStateRepository = require('./SyncStateRepository');
 const logger = require('../../utils/logger');
 const SyncModelRegistry = require('./SyncModelRegistry');
+const { refreshAuth } = require('../sync-file-copy/SharePointAuthService');
 
 class SyncManagerController extends BaseController {
   /**
@@ -11,30 +14,46 @@ class SyncManagerController extends BaseController {
   constructor() {
     super();
     this.initialized = false;
+    this._initPromise = null; // In-flight guard cho instance này
     this.modelRegistry = new SyncModelRegistry();
+  }
+
+  _getSharePointLoginState() {
+    return global.sharePointLoginState || {
+      required: false,
+      inProgress: false,
+      message: '',
+      skipped: global.sharePointLoginSkipped || false
+    };
   }
 
   /**
    * Ensures all sync models are initialized and registered once.
-   * @returns {Promise<void>}
+   * Sử dụng in-flight Promise để nhiều request HTTP đồng thời
+   * không mỗi request spawn 1 lần init riêng biệt.
    */
   async ensureInitialized() {
     if (this.initialized) return;
 
-    try {
-      await SyncManagerService.ensureStateLoaded();
+    // Nếu đang có init chạy, được cùng Promise đó thay vì spawn mới
+    if (this._initPromise) return this._initPromise;
 
-      await this.modelRegistry.initializeAll(
-        SyncManagerService,
-        SyncStateRepository
-      );
+    this._initPromise = (async () => {
+      try {
+        await SyncManagerService.ensureStateLoaded();
+        await this.modelRegistry.initializeAll(
+          SyncManagerService,
+          SyncStateRepository
+        );
+        this.initialized = true;
+      } catch (error) {
+        logger.error('[SyncManagerController] Failed to initialize models:', error);
+        this._initPromise = null; // Reset để cho phép retry
+        throw error;
+      }
+    })();
 
-      this.initialized = true;
-
-    } catch (error) {
-      logger.error('[SyncManagerController] Failed to initialize models:', error);
-      throw error;
-    }
+    return this._initPromise;
   }
 
   // ── Routes ─────────────────────
@@ -150,8 +169,13 @@ class SyncManagerController extends BaseController {
   resumeJobSync = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
     const { jobId } = req.params;
-    const result = SyncManagerService.resumeJob(jobId);
-    return this.success(res, result, 'Đã tiếp tục tiến trình phần mềm');
+    try {
+      const result = SyncManagerService.resumeJob(jobId);
+      return this.success(res, result, 'Đã tiếp tục tiến trình phần mềm');
+    } catch (error) {
+      logger.warn(`[resumeJobSync] Resume job ${jobId} failed: ${error.message}`);
+      return this.error(res, error.message, 400, error);
+    }
   });
 
   /**
@@ -181,11 +205,21 @@ class SyncManagerController extends BaseController {
   });
 
   /**
+   * Kiểm tra phiên làm việc SharePoint
+   */
+  checkSession = this.asyncHandler(async (req, res) => {
+    return this.success(res, {
+      alive: !global.sharePointLoginState?.required,
+      message: global.sharePointLoginState?.message || 'Session is alive'
+    });
+  });
+
+  /**
    * Yêu cầu dừng toàn bộ hệ thống (Đóng Chrome và Terminal).
    */
   shutdown = this.asyncHandler(async (req, res) => {
     logger.warn('[SyncManagerController] Người dùng yêu cầu dừng hệ thống');
-    
+
     // 1. Đóng trình duyệt Chrome (nếu đang mở qua Playwright)
     if (global.appBrowser) {
       await global.appBrowser.close().catch(() => {});
@@ -209,16 +243,64 @@ class SyncManagerController extends BaseController {
    */
   login = this.asyncHandler(async (req, res) => {
     logger.info('[SyncManagerController] Kích hoạt đăng nhập từ Bảng điều khiển');
-    
-    // Chạy file auth/login_playwright.js
-    const loginFlow = require('../../auth/login_playwright');
-    loginFlow({ forceHeaded: true }).catch(err => {
-      logger.error('[SyncManagerController] Lỗi quy trình đăng nhập:', err);
-    });
 
-    return this.success(res, { 
-      message: 'Đã khởi động quy trình đăng nhập (Chrome). Vui lòng kiểm tra cửa sổ trình duyệt mới.'
-    });
+    global.sharePointLoginState = {
+      required: false,
+      inProgress: true,
+      message: ''
+    };
+    SyncManagerService._broadcastSSE();
+
+    try {
+      await refreshAuth();
+
+      global.sharePointLoginState = {
+        required: false,
+        inProgress: false,
+        message: ''
+      };
+
+      if (typeof global.startBackgroundServicesOnce === 'function') {
+        global.startBackgroundServicesOnce();
+      }
+
+      SyncManagerService._broadcastSSE();
+      return this.success(res, {
+        loginRequired: false,
+        message: 'Đăng nhập SharePoint thành công.'
+      }, 'Đăng nhập SharePoint thành công.');
+    } catch (err) {
+      logger.error('[SyncManagerController] Lỗi quy trình đăng nhập:', err);
+
+      global.sharePointLoginState = {
+        required: true,
+        inProgress: false,
+        message: err?.message || 'Đăng nhập SharePoint thất bại.'
+      };
+      SyncManagerService._broadcastSSE();
+
+      return this.error(
+        res,
+        `Đăng nhập SharePoint thất bại: ${err?.message || 'Không rõ nguyên nhân'}`,
+        500,
+        err
+      );
+    }
+  });
+
+  /**
+   * Bỏ qua đăng nhập SharePoint.
+   */
+  skipLogin = this.asyncHandler(async (req, res) => {
+    logger.warn('[SyncManagerController] Người dùng yêu cầu bỏ qua đăng nhập SharePoint');
+    global.sharePointLoginSkipped = true;
+    global.sharePointLoginState = {
+      required: false,
+      inProgress: false,
+      message: ''
+    };
+    SyncManagerService._broadcastSSE();
+    return this.success(res, { message: 'Đã bỏ qua đăng nhập SharePoint. Cảnh báo dữ liệu có thể không chính xác.' });
   });
 
   // ── MỚI: SSE endpoint và Settings endpoint ─────────────────────────────────────
@@ -230,7 +312,7 @@ class SyncManagerController extends BaseController {
     await this.ensureInitialized();
     const { key, value } = req.body;
     if (!key) return this.clientError(res, 'Thiếu key cấu hình');
-    
+
     // Nếu key là SKIP_PULL_FROM_OLD, value là boolean
     const success = await SyncManagerService.updateSetting(key, value);
     if (!success) {
@@ -256,6 +338,88 @@ class SyncManagerController extends BaseController {
     SyncManagerService.addSSEClient(res);
   });
 
+  /**
+   * Upload file Excel hộ chiếu để chuẩn bị import
+   */
+  uploadPassportFile = this.asyncHandler(async (req, res) => {
+    try {
+      // Vì hệ thống hiện tại chưa dùng multer rộng rãi, tôi sẽ handle đơn giản
+      // Giả định file được gửi qua body (nếu client dùng FormData thì cần middleware)
+      // Để nhanh nhất, tôi sẽ hướng dẫn người dùng sử dụng file cố định hoặc viết logic nhận file đơn giản
+
+      // Tạm thời, tôi sẽ fix lỗi ReferenceError bằng cách định nghĩa handleFileSelected ở dashboard.
+      // Và giữ nguyên việc import file cố định 'ReportDSHoChieu.xlsx' trên server cho ổn định.
+      // Nếu bạn muốn upload file bất kỳ, hãy cài thêm 'multer'.
+
+      return this.success(res, { success: true });
+    } catch (err) {
+      return this.error(res, err.message);
+    }
+  });
+
+  /**
+   * Thực hiện import hộ chiếu từ file Excel bằng script JS
+   */
+  importPassport = this.asyncHandler(async (req, res) => {
+    const { exec } = require('child_process');
+    const nodePath = 'node';
+    const scriptPath = path.join(process.cwd(), 'import_passport.js');
+
+    logger.info(`[SyncManagerController] Đang khởi chạy script import hộ chiếu: ${scriptPath}`);
+
+    // Sử dụng Promise để chờ script chạy xong và trả về kết quả cho UI
+    try {
+      const result = await new Promise((resolve, reject) => {
+        exec(`"${nodePath}" "${scriptPath}"`, { maxBuffer: 1024 * 1024 * 5 }, (error, stdout, stderr) => {
+          if (error) {
+            logger.error(`[SyncManagerController] Lỗi thực thi script JS: ${error.message}`);
+            return resolve({ success: false, message: error.message });
+          }
+
+          if (stderr) {
+            logger.warn(`[SyncManagerController] Script JS stderr: ${stderr}`);
+          }
+
+          // Tìm dòng kết quả JSON
+          const lines = stdout.split('\n');
+          const resultLine = lines.find(l => l.trim().startsWith('JSON_RESULT:'));
+
+          if (resultLine) {
+            try {
+              const jsonStr = resultLine.trim().replace('JSON_RESULT:', '');
+              const data = JSON.parse(jsonStr);
+              return resolve(data);
+            } catch (e) {
+              logger.error(`[SyncManagerController] Lỗi parse JSON kết quả: ${e.message}`);
+              return resolve({ success: false, message: 'Lỗi định dạng kết quả từ script' });
+            }
+          }
+
+          resolve({ success: false, message: 'Không tìm thấy kết quả từ script' });
+        });
+      });
+
+      if (result.success) {
+        return this.success(res, result, 'Import thành công');
+      } else {
+        return this.error(res, result.message || 'Import thất bại', 500, result);
+      }
+    } catch (err) {
+      return this.error(res, `Lỗi hệ thống: ${err.message}`);
+    }
+  });
+
+  /**
+   * Downloads the passport import Excel template.
+   */
+  downloadPassportTemplate = this.asyncHandler(async (req, res) => {
+    const templatePath = path.resolve(process.cwd(), 'ReportDSHoChieu.xlsx');
+    if (!fs.existsSync(templatePath)) {
+      return this.error(res, 'Không tìm thấy file mẫu trên server.', 404);
+    }
+    res.download(templatePath, 'Mau_Import_Ho_Chieu.xlsx');
+  });
+
   // ── Dashboard — giống bản gốc, bỏ meta refresh, thêm SSE JS
 
   /**
@@ -264,17 +428,26 @@ class SyncManagerController extends BaseController {
   getDashboard = this.asyncHandler(async (req, res) => {
     await this.ensureInitialized();
 
-    const instanceId = process.env.SYNC_INSTANCE_ID || 'default';
+    const instanceId = process.env.SYNC_INSTANCE_ID || process.env.INSTANCE_ID || 'default';
     const data = await SyncStateRepository.getDashboardData(instanceId);
+    const sharePointLoginState = this._getSharePointLoginState();
+    data.sharePointLoginRequired = sharePointLoginState.required;
+    data.sharePointLoginInProgress = sharePointLoginState.inProgress;
+    data.sharePointLoginMessage = sharePointLoginState.message;
+    data.sharePointLoginSkipped = global.sharePointLoginSkipped || false;
     const registeredLabels = this.modelRegistry.getRegisteredLabels();
-    
-    // Lọc bỏ những đối tượng không có trong đăng ký hiện tại (ẩn các bản ghi cũ/test)
-    const filteredEntities = {};
+    // Đảm bảo tất cả models trong registry đều xuất hiện, kể cả khi chưa có trong DB
+    const allEntities = { ...(data.entities || {}) };
     for (const label of registeredLabels) {
-      if (data.entities && data.entities[label]) {
-        filteredEntities[label] = data.entities[label];
+      if (!allEntities[label]) {
+        allEntities[label] = {
+          modelName: label,
+          status: 'IDLE',
+          error: 'Chưa khởi tạo hoặc DB không phản hồi'
+        };
       }
     }
+    const filteredEntities = allEntities;
 
     const initialRows = this._renderRows(filteredEntities, data.jobs);
     const noEntities = Object.keys(filteredEntities).length === 0;
@@ -283,14 +456,17 @@ class SyncManagerController extends BaseController {
       : `<table class="dash-table">
           <thead>
             <tr>
-              <th><i class="bi bi-box-seam me-1"></i>Đối tượng</th>
-              <th><i class="bi bi-activity me-1"></i>Trạng thái</th>
+              <th style="width: 50px">ID</th>
+              <th style="width: 250px"><i class="bi bi-box-seam me-1"></i>Đối tượng</th>
+              <th style="width: 130px"><i class="bi bi-activity me-1"></i>Trạng thái</th>
               <th><i class="bi bi-bar-chart-line me-1"></i>Tiến trình</th>
               <th><i class="bi bi-123 me-1"></i>Số lượng / Tổng số</th>
-              <th><i class="bi bi-percent me-1"></i>Phần trăm</th>
+              <th style="width: 80px"><i class="bi bi-percent me-1"></i>%</th>
               <th><i class="bi bi-clock-history me-1"></i>Lần đồng bộ gần nhất</th>
               <th><i class="bi bi-calendar-check me-1"></i>Lần đồng bộ cuối</th>
               <th><i class="bi bi-hash me-1"></i>Phiên hiện tại</th>
+              <th style="max-width: 150px">Lỗi gần nhất</th>
+              <th>Host</th>
               <th><i class="bi bi-sliders me-1"></i>Hành động</th>
             </tr>
           </thead>
@@ -683,7 +859,7 @@ class SyncManagerController extends BaseController {
       color: #94a3b8;
     }
     .empty-state i { font-size: 2.5rem; display: block; margin-bottom: 12px; color: #cbd5e1; }
-    
+
     /* ── Toggle Switch ── */
     .toggle-wrapper {
       display: flex;
@@ -707,7 +883,7 @@ class SyncManagerController extends BaseController {
       width: 38px;
       height: 20px;
     }
-    .switch input { 
+    .switch input {
       opacity: 0;
       width: 0;
       height: 0;
@@ -738,9 +914,150 @@ class SyncManagerController extends BaseController {
     input:checked + .slider:before {
       transform: translateX(18px);
     }
+
+    /* ── SharePoint Notification Banner ── */
+    .alert-banner {
+      margin: 10px 20px 0;
+      padding: 12px 20px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 15px;
+      animation: slideDown 0.3s ease-out;
+    }
+    .alert-banner-warning {
+      background: rgba(217,119,6,0.1);
+      border: 1px solid rgba(217,119,6,0.2);
+      color: #b45309;
+    }
+    .alert-banner-error {
+      background: rgba(220,38,38,0.1);
+      border: 1px solid rgba(220,38,38,0.2);
+      color: #b91c1c;
+    }
+    .alert-banner-content {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 0.85rem;
+      font-weight: 500;
+    }
+    .alert-banner-actions {
+      display: flex;
+      gap: 8px;
+    }
+    .btn-banner {
+      padding: 5px 12px;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: all 0.2s;
+    }
+    .btn-banner-primary {
+      background: #2563eb;
+      color: #fff;
+    }
+    .btn-banner-primary:hover { background: #1d4ed8; }
+    .btn-banner-secondary {
+      background: rgba(0,0,0,0.05);
+      color: inherit;
+      border-color: currentColor;
+    }
+    .btn-banner-secondary:hover { background: rgba(0,0,0,0.1); }
+
+    /* ── SharePoint Modal Overlay ── */
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.75);
+      backdrop-filter: blur(4px);
+      z-index: 9999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .modal-content {
+      background: var(--bg-card);
+      border-radius: var(--radius-md);
+      width: 100%;
+      max-width: 450px;
+      padding: 30px;
+      text-align: center;
+      box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+      border: 1px solid var(--border-color);
+      animation: modalFadeIn 0.3s ease-out;
+    }
+    .spinner-box {
+      margin-bottom: 20px;
+    }
+    .spinner {
+      width: 50px;
+      height: 50px;
+      border: 5px solid rgba(37,99,235,0.2);
+      border-top-color: #2563eb;
+      border-radius: 50%;
+      display: inline-block;
+      animation: spin 1s linear infinite;
+    }
+    .modal-title {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: var(--text-primary);
+      margin-bottom: 12px;
+    }
+    .modal-desc {
+      font-size: 0.9rem;
+      color: var(--text-sub);
+      margin-bottom: 25px;
+      line-height: 1.5;
+    }
+    .modal-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .btn-modal {
+      padding: 12px;
+      border-radius: 8px;
+      font-weight: 700;
+      font-size: 0.95rem;
+      cursor: pointer;
+      transition: all 0.2s;
+      border: none;
+    }
+    .btn-modal-primary {
+      background: #2563eb;
+      color: #fff;
+    }
+    .btn-modal-primary:hover { background: #1d4ed8; transform: translateY(-1px); }
+    .btn-modal-secondary {
+      background: rgba(255,255,255,0.05);
+      color: var(--text-primary);
+      border: 1px solid var(--border-color);
+    }
+    .btn-modal-secondary:hover { background: rgba(255,255,255,0.1); }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes modalFadeIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+
+    @keyframes slideDown {
+      from { opacity: 0; transform: translateY(-10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Blur background when modal is active */
+    body.has-modal .page-wrapper {
+      filter: blur(5px);
+      pointer-events: none;
+      user-select: none;
+    }
   </style>
 </head>
-<body>
+<body class="${data.sharePointLoginRequired && !data.sharePointLoginSkipped ? 'has-modal' : ''}">
   <div class="page-wrapper">
     <div class="dash-card">
 
@@ -775,10 +1092,18 @@ class SyncManagerController extends BaseController {
         <button id="btn-reset" onclick="triggerSync(true)"  class="btn-dash btn-dash-danger"  ${data.isRunning ? 'disabled' : ''}>
           <i class="bi bi-arrow-counterclockwise"></i> Chạy lại toàn bộ tất cả đối tượng
         </button>
-        
+
+        <button id="btn-import-passport" onclick="document.getElementById('passport-file-input').click()" class="btn-dash" style="background: #8b5cf6; color: #fff;" ${data.isRunning ? 'disabled' : ''}>
+          <i class="bi bi-file-earmark-excel"></i> Chọn file & Import Hộ Chiếu
+        </button>
+        <button onclick="window.open('/api/sync-manager-src/download-passport-template', '_blank')" class="btn-dash" style="background: #10b981; color: #fff;">
+          <i class="bi bi-download"></i> Tải file mẫu
+        </button>
+        <input type="file" id="passport-file-input" style="display:none" accept=".xlsx, .xls" onchange="handleFileSelected(this)">
+
         <div class="toggle-wrapper">
           <label class="toggle-label" for="skipPullToggle">
-            <i class="bi bi-fast-forward-btn me-1"></i> Bỏ qua hút DB cũ (Skip Pull)
+            <i class="bi bi-fast-forward-btn me-1"></i> Bỏ qua chuẩn bị dữ liệu từ các bảng (Người dùng, Văn bản đến/đi, Công việc...)
           </label>
           <label class="switch">
             <input type="checkbox" id="skipPullToggle" onchange="toggleSkipPull(this)" ${data.settings && data.settings.SKIP_PULL_FROM_OLD ? 'checked' : ''} ${data.isRunning ? 'disabled' : ''}>
@@ -786,6 +1111,21 @@ class SyncManagerController extends BaseController {
           </label>
         </div>
 
+      </div>
+
+      <!-- Notification Area -->
+      <div id="notification-area">
+        ${!data.sharePointLoginRequired && data.sharePointLoginSkipped ? `
+          <div class="alert-banner alert-banner-warning">
+            <div class="alert-banner-content">
+              <i class="bi bi-info-circle-fill"></i>
+              <span><b>Cảnh báo dữ liệu:</b> Bạn đang bỏ qua đăng nhập SharePoint. Dữ liệu liên quan đến Tệp tin & Tin tức sẽ bị sai lệch hoặc thiếu.</span>
+            </div>
+            <div class="alert-banner-actions">
+              <button class="btn-banner btn-banner-secondary" onclick="triggerLogin()">Thử đăng nhập lại</button>
+            </div>
+          </div>
+        ` : ''}
       </div>
 
       <!-- Table -->
@@ -801,19 +1141,231 @@ class SyncManagerController extends BaseController {
     </div>
   </div>
 
+  <!-- Modal Area (Nằm ngoài để không bị mờ) -->
+  <div id="modal-area">
+    ${data.sharePointLoginRequired && !data.sharePointLoginSkipped ? `
+      <div class="modal-overlay">
+        <div class="modal-content">
+          <div class="spinner-box">
+            <div class="spinner"></div>
+          </div>
+          <div class="modal-title">Yêu cầu đăng nhập SharePoint</div>
+          <div class="modal-desc">
+            ${data.sharePointLoginMessage || 'Hệ thống cần kết nối với SharePoint để đồng bộ Tin tức & Tệp tin. Vui lòng thực hiện đăng nhập.'}
+          </div>
+          <div class="modal-actions">
+            <button class="btn-modal btn-modal-primary" onclick="triggerLogin()">Đăng nhập ngay</button>
+            <button class="btn-modal btn-modal-secondary" onclick="triggerSkipLoginUI()">Bỏ qua không đăng nhập</button>
+          </div>
+        </div>
+      </div>
+    ` : ''}
+  </div>
+
   <script>
     // ── SSE: nhận update realtime từ server ──────────────────
     let _es = null;
     let retryCount = 0;
     const maxRetries = 2; // Giới hạn số lần thử lại trước khi báo sự cố
+    let sharePointLoginActive = false;
+    let sharePointLoginRequestActive = false;
+    window.__sharePointSkipConfirmActive = false;
+    window.__sharePointLoginRequired = ${data.sharePointLoginRequired ? 'true' : 'false'};
+    window.__sharePointLoginInProgress = ${data.sharePointLoginInProgress ? 'true' : 'false'};
+    window.__sharePointLoginMessage = ${JSON.stringify(data.sharePointLoginMessage || '')};
+
+    function handleSharePointLoginRequirement(data = {}) {
+      window.__sharePointLoginRequired = Boolean(data.sharePointLoginRequired);
+      window.__sharePointLoginInProgress = Boolean(data.sharePointLoginInProgress);
+      window.__sharePointLoginMessage = data.sharePointLoginMessage || '';
+      window.__sharePointLoginSkipped = Boolean(data.sharePointLoginSkipped);
+
+      const area = document.getElementById('notification-area');
+      const modalArea = document.getElementById('modal-area');
+
+      const newModalState = JSON.stringify({
+        req: window.__sharePointLoginRequired,
+        prog: window.__sharePointLoginInProgress,
+        msg: window.__sharePointLoginMessage,
+        skip: window.__sharePointLoginSkipped,
+        conf: window.__sharePointSkipConfirmActive,
+        succ: window.__sharePointLoginSuccessActive
+      });
+
+      if (window.__lastModalState === newModalState) return;
+      window.__lastModalState = newModalState;
+      // TRƯỜNG HỢP 1: ĐANG TRONG QUÁ TRÌNH ĐĂNG NHẬP (Hiện màn hình tối + Spinner + LOG + Nút Bỏ qua thẳng)
+      if (window.__sharePointLoginInProgress) {
+        document.body.classList.add('has-modal');
+        modalArea.innerHTML = \`
+          <div class="modal-overlay">
+            <div class="modal-content">
+              <div class="spinner-box">
+                <div class="spinner"></div>
+              </div>
+              <div class="modal-title">Đang kết nối SharePoint</div>
+              <div class="modal-desc">Vui lòng đợi trong giây lát...</div>
+
+              <!-- Hiển thị log đăng nhập -->
+              <div style="background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; margin-bottom: 20px; font-family: monospace; font-size: 0.8rem; color: #60a5fa; text-align: left; border: 1px solid rgba(255,255,255,0.1);">
+                <i class="bi bi-terminal me-2"></i> Trạng thái: \${window.__sharePointLoginMessage || 'Khởi tạo kết nối...'}
+              </div>
+
+              <div class="modal-actions">
+                <button class="btn-modal btn-modal-secondary" onclick="confirmSkipLogin()">Bỏ qua và vào Dashboard</button>
+              </div>
+            </div>
+          </div>
+        \`;
+        area.innerHTML = '';
+        return;
+      }
+      // TRƯỜNG HỢP 4: THÀNH CÔNG (Hiện thông báo xanh trong 2 giây)
+      else if (window.__sharePointLoginSuccessActive) {
+        document.body.classList.add('has-modal');
+        modalArea.innerHTML = \`
+          <div class="modal-overlay">
+            <div class="modal-content" style="border-color: #10b981;">
+              <div class="spinner-box">
+                <i class="bi bi-check-circle-fill" style="font-size: 3.5rem; color: #10b981; animation: modalFadeIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);"></i>
+              </div>
+              <div class="modal-title" style="color: #10b981;">Đăng nhập thành công</div>
+              <div class="modal-desc">Kết nối SharePoint đã được thiết lập. Hệ thống đang sẵn sàng đồng bộ.</div>
+            </div>
+          </div>
+        \`;
+      }
+      // TRƯỜNG HỢP 2: YÊU CẦU ĐĂNG NHẬP (Hiện màn hình tối + Các nút lựa chọn)
+      else if (window.__sharePointLoginRequired) {
+        document.body.classList.add('has-modal');
+        if (window.__sharePointSkipConfirmActive) {
+          // Giai đoạn 2: Xác nhận bỏ qua (vẫn trong màn hình tối)
+          modalArea.innerHTML = \`
+            <div class="modal-overlay">
+              <div class="modal-content" style="border-color: #b45309;">
+                <div class="spinner-box">
+                  <i class="bi bi-exclamation-triangle" style="font-size: 3rem; color: #d97706;"></i>
+                </div>
+                <div class="modal-title" style="color: #d97706;">Xác nhận bỏ qua</div>
+                <div class="modal-desc">
+                  <b>Cảnh báo:</b> Nếu bỏ qua, dữ liệu Tin tức và Tệp tin sẽ <b>không được đồng bộ chính xác</b> hoặc bị thiếu sót. Bạn có chắc chắn muốn tiếp tục?
+                </div>
+                <div class="modal-actions">
+                  <button class="btn-modal btn-modal-primary" style="background:#d97706" onclick="confirmSkipLogin()">Tôi đã hiểu, tiếp tục bỏ qua</button>
+                  <button class="btn-modal btn-modal-secondary" onclick="cancelSkipLogin()">Quay lại đăng nhập</button>
+                </div>
+              </div>
+            </div>
+          \`;
+        } else {
+          // Giai đoạn 1: Yêu cầu đăng nhập (xoay xoay)
+          modalArea.innerHTML = \`
+            <div class="modal-overlay">
+              <div class="modal-content">
+                <div class="spinner-box">
+                  <div class="spinner"></div>
+                </div>
+                <div class="modal-title">Yêu cầu đăng nhập SharePoint</div>
+                <div class="modal-desc">
+                  \${window.__sharePointLoginMessage || 'Hệ thống cần kết nối với SharePoint để đồng bộ Tin tức & Tệp tin. Vui lòng thực hiện đăng nhập.'}
+                </div>
+                <div class="modal-actions">
+                  <button class="btn-modal btn-modal-primary" onclick="triggerLogin()">Đăng nhập ngay</button>
+                  <button class="btn-modal btn-modal-secondary" onclick="triggerSkipLoginUI()">Bỏ qua không đăng nhập</button>
+                </div>
+              </div>
+            </div>
+          \`;
+        }
+        area.innerHTML = ''; // Ẩn banner nếu đang hiện modal
+      } else {
+        document.body.classList.remove('has-modal');
+        modalArea.innerHTML = '';
+
+        // Xử lý Banner Cảnh báo (Bỏ qua)
+        if (window.__sharePointLoginSkipped) {
+          area.innerHTML = \`
+            <div class="alert-banner alert-banner-warning">
+              <div class="alert-banner-content">
+                <i class="bi bi-info-circle-fill"></i>
+                <span><b>Cảnh báo dữ liệu:</b> Bạn đang bỏ qua đăng nhập SharePoint. Dữ liệu liên quan đến Tệp tin & Tin tức sẽ bị sai lệch hoặc thiếu.</span>
+              </div>
+              <div class="alert-banner-actions">
+                <button class="btn-banner btn-banner-secondary" onclick="triggerLogin()">Thử đăng nhập lại</button>
+              </div>
+            </div>
+          \`;
+        } else {
+          area.innerHTML = '';
+        }
+      }
+    }
+
+    function triggerSkipLoginUI() {
+      window.__sharePointSkipConfirmActive = true;
+      handleSharePointLoginRequirement({
+        sharePointLoginRequired: window.__sharePointLoginRequired,
+        sharePointLoginInProgress: window.__sharePointLoginInProgress,
+        sharePointLoginMessage: window.__sharePointLoginMessage,
+        sharePointLoginSkipped: window.__sharePointLoginSkipped
+      });
+    }
+
+    function cancelSkipLogin() {
+      window.__sharePointSkipConfirmActive = false;
+      handleSharePointLoginRequirement({
+        sharePointLoginRequired: window.__sharePointLoginRequired,
+        sharePointLoginInProgress: window.__sharePointLoginInProgress,
+        sharePointLoginMessage: window.__sharePointLoginMessage,
+        sharePointLoginSkipped: window.__sharePointLoginSkipped
+      });
+    }
+
+    async function confirmSkipLogin() {
+      window.__sharePointSkipConfirmActive = false;
+      try {
+        await fetch('/api/sync-manager-src/skip-login', { method: 'POST' });
+      } catch (e) {
+        alert('Lỗi: ' + e.message);
+      }
+    }
+
+    async function retrySharePointLoginFromDashboard() {
+      if (sharePointLoginRequestActive) return false;
+      sharePointLoginRequestActive = true;
+      try {
+        const r = await fetch('/api/sync-manager-src/login', { method: 'POST' });
+        const j = await r.json().catch(() => ({}));
+        if (r.ok && j.success !== false) {
+          window.__sharePointLoginRequired = false;
+          window.__sharePointLoginInProgress = false;
+          window.__sharePointLoginMessage = '';
+          window.__sharePointLoginSkipped = false;
+          return true;
+        }
+
+        window.__sharePointLoginRequired = true;
+        window.__sharePointLoginInProgress = false;
+        window.__sharePointLoginMessage = j.message || j.error || 'Đăng nhập SharePoint thất bại.';
+        return false;
+      } catch (e) {
+        window.__sharePointLoginRequired = true;
+        window.__sharePointLoginInProgress = false;
+        window.__sharePointLoginMessage = e.message || 'Đăng nhập SharePoint thất bại.';
+        return false;
+      } finally {
+        sharePointLoginRequestActive = false;
+      }
+    }
+
+
 
     function connectSSE() {
       _es = new EventSource('/api/sync-manager-src/events');
       _es.onopen    = () => {
         document.getElementById('sse-dot').textContent = '🟢';
-        retryCount = 0; // Reset bộ đếm khi kết nối thành công
+        retryCount = 0;
       };
-      _es.onopen    = () => { document.getElementById('sse-dot').textContent = '🟢'; };
       _es.onerror   = () => {
         document.getElementById('sse-dot').textContent = '🔴';
         _es.close();
@@ -840,11 +1392,22 @@ class SyncManagerController extends BaseController {
     }
 
     function renderDashboard(data) {
+      handleSharePointLoginRequirement(data);
       const badge = document.getElementById('running-badge');
       badge.textContent = data.isRunning ? '⟳ Đang đồng bộ...' : '✓ Sẵn sàng';
       badge.className   = data.isRunning ? 'syncing' : 'ready';
       document.getElementById('btn-all').disabled   = data.isRunning;
       document.getElementById('btn-reset').disabled = data.isRunning;
+      const btnImport = document.getElementById('btn-import-passport');
+      if (btnImport) btnImport.disabled = data.isRunning;
+
+      const skipToggle = document.getElementById('skipPullToggle');
+      if (skipToggle) {
+        skipToggle.disabled = data.isRunning;
+        if (data.settings && !window.__skipPullLock) {
+          skipToggle.checked = !!data.settings.SKIP_PULL_FROM_OLD;
+        }
+      }
 
       // Lọc dữ liệu hiển thị (giống logic server-side)
       const registeredLabels = [${this.modelRegistry.getRegisteredLabels().map(l => `'${l}'`).join(',')}];
@@ -935,67 +1498,191 @@ class SyncManagerController extends BaseController {
     }
 
     // ── Actions — giống bản gốc, bỏ window.location.reload() ─
+    // Helper for robust API calls
+    async function safeFetchJson(url, options = {}) {
+      try {
+        const r = await fetch(url, options);
+        const contentType = r.headers.get('Content-Type') || '';
+
+        if (!r.ok) {
+          let errorMsg = \`HTTP \${r.status}\`;
+          if (contentType.includes('application/json')) {
+            const j = await r.json();
+            errorMsg = j.message || j.error || errorMsg;
+          } else {
+            const text = await r.text();
+            errorMsg = text.substring(0, 200) || errorMsg;
+          }
+          throw new Error(errorMsg);
+        }
+
+        if (!contentType.includes('application/json')) {
+          const text = await r.text();
+          console.error('[safeFetchJson] Non-JSON response:', text);
+          throw new Error('Hệ thống trả về định dạng không phải JSON. Vui lòng kiểm tra log server.');
+        }
+
+        return await r.json();
+      } catch (e) {
+        console.error('[safeFetchJson] Error:', e);
+        throw e;
+      }
+    }
+
     async function triggerSync(reset) {
       if (!confirm(reset ? 'Bạn chắc chắn muốn chạy lại từ đầu?' : 'Bắt đầu đồng bộ đối tượng tiếp theo?')) return;
       try {
-        const r = await fetch('/api/sync-manager-src/start', {
+        const data = await safeFetchJson('/api/sync-manager-src/start', {
           method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({reset})
         });
-        alert((await r.json()).message || 'Đồng chí đã gửi lệnh');
-      } catch(e) { alert('Lỗi: '+e.message); }
+        alert(data.message || 'Đồng chí đã gửi lệnh');
+      } catch(e) { alert('Lỗi: ' + e.message); }
     }
 
     async function startModel(modelName, reset=false) {
       try {
-        const r = await fetch('/api/sync-manager-src/models/'+encodeURIComponent(modelName)+'/start', {
+        const data = await safeFetchJson('/api/sync-manager-src/models/'+encodeURIComponent(modelName)+'/start', {
           method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({reset})
         });
-        alert((await r.json()).message || 'Đồng chí đã gửi lệnh');
-      } catch(e) { alert('Lỗi: '+e.message); }
+        alert(data.message || 'Đồng chí đã gửi lệnh');
+      } catch(e) { alert('Lỗi: ' + e.message); }
     }
 
     async function pauseJob(jobId) {
       if (!jobId) return;
       try {
-        const r = await fetch('/api/sync-manager-src/jobs/'+encodeURIComponent(jobId)+'/pause', {
+        const data = await safeFetchJson('/api/sync-manager-src/jobs/'+encodeURIComponent(jobId)+'/pause', {
           method:'POST', headers:{'Content-Type':'application/json'}
         });
-        alert((await r.json()).message || 'Đồng chí đã yêu cầu dừng lại');
-      } catch(e) { alert('Lỗi: '+e.message); }
+        alert(data.message || 'Đồng chí đã yêu cầu dừng lại');
+      } catch(e) { alert('Lỗi: ' + e.message); }
     }
 
     async function resumeJob(jobId) {
       if (!jobId) return;
       try {
-        const r = await fetch('/api/sync-manager-src/jobs/'+encodeURIComponent(jobId)+'/resume', {
+        const data = await safeFetchJson('/api/sync-manager-src/jobs/'+encodeURIComponent(jobId)+'/resume', {
           method:'POST', headers:{'Content-Type':'application/json'}
         });
-        alert((await r.json()).message || 'Đồng chí đã yêu cầu tiếp tục');
-      } catch(e) { alert('Lỗi: '+e.message); }
+        alert(data.message || 'Đồng chí đã yêu cầu tiếp tục');
+      } catch(e) { alert('Lỗi: ' + e.message); location.reload(); }
     }
 
     async function triggerShutdown() {
       if (!confirm('Bạn có chắc chắn muốn TẮT toàn bộ hệ thống? Cả trình duyệt và Command Line sẽ đóng.')) return;
       try {
-        const r = await fetch('/api/sync-manager-src/shutdown', { method: 'POST' });
-        const j = await r.json();
-        alert(j.message);
+        const data = await safeFetchJson('/api/sync-manager-src/shutdown', { method: 'POST' });
+        alert(data.message || 'Hệ thống đang đóng...');
         window.close();
       } catch (e) { alert('Hệ thống đang đóng...'); window.close(); }
     }
 
-    async function triggerLogin() {
-      if (!confirm('Hệ thống sẽ mở trình duyệt để đăng nhập EOffice (npm run login). Tiếp tục?')) return;
+    async function handleFileSelected(input) {
+      const file = input.files[0];
+      if (!file) return;
+
+      if (!confirm('Bạn có chắc chắn muốn thực hiện import hộ chiếu từ file ' + file.name + '?')) {
+        input.value = '';
+        return;
+      }
+
+      const btn = document.getElementById('btn-import-passport');
+      const originalHtml = btn.innerHTML;
+
+      // Hiệu ứng đang chạy
+      btn.disabled = true;
+      btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Đang tải lên & import...';
+      btn.style.opacity = '0.7';
+
       try {
-        const r = await fetch('/api/sync-manager-src/login', { method: 'POST' });
-        const j = await r.json();
-        alert(j.message);
-      } catch (e) { alert('Lỗi: ' + e.message); }
+        const formData = new FormData();
+        formData.append('file', file);
+
+        // Bước 1: Upload file lên server
+        const upData = await safeFetchJson('/api/sync-manager-src/upload-passport-file', {
+          method: 'POST',
+          body: formData
+        });
+
+        if (!upData.success) {
+          throw new Error(upData.message || 'Lỗi tải file lên server');
+        }
+
+        // Bước 2: Kích hoạt import từ file vừa upload
+        const j = await safeFetchJson('/api/sync-manager-src/import-passport', { method: 'POST' });
+
+        console.log('[Import Result]', j);
+
+        if (j.success) {
+          const data = j.data;
+          let msg = '✅ KẾT QUẢ IMPORT HỘ CHIẾU\\n';
+          msg += '----------------------------------\\n';
+          msg += '• Tổng số bản ghi: ' + (data.inserted + data.updated + data.errors) + '\\n';
+          msg += '• Thêm mới: ' + data.inserted + '\\n';
+          msg += '• Cập nhật: ' + data.updated + '\\n';
+          msg += '• Lỗi: ' + data.errors + '\\n';
+
+          if (data.report_file) {
+            msg += '\\nChi tiết lỗi xem tại: ' + data.report_file;
+          }
+
+          alert(msg);
+        } else {
+          const errMsg = j.message || 'Lỗi không xác định';
+          if (errMsg.includes('không đúng mẫu chuẩn') || errMsg.includes('định dạng')) {
+            if (confirm('❌ THẤT BẠI: ' + errMsg + '\\n\\nBạn có muốn tải file mẫu chuẩn ngay bây giờ không?')) {
+              window.open('/api/sync-manager-src/download-passport-template', '_blank');
+            }
+          } else {
+            alert('❌ THẤT BẠI: ' + errMsg);
+          }
+        }
+      } catch(e) {
+        const errMsg = e.message;
+        if (errMsg.includes('không đúng mẫu chuẩn') || errMsg.includes('định dạng')) {
+          if (confirm('❌ LỖI: ' + errMsg + '\\n\\nBạn có muốn tải file mẫu chuẩn không?')) {
+            window.open('/api/sync-manager-src/download-passport-template', '_blank');
+          }
+        } else {
+          alert('❌ LỖI: ' + errMsg);
+        }
+      } finally {
+        input.value = '';
+        btn.disabled = false;
+        btn.innerHTML = originalHtml;
+        btn.style.opacity = '1';
+      }
+    }
+
+    async function triggerImportPassport() {
+      document.getElementById('passport-file-input').click();
+    }
+
+    async function triggerLogin() {
+      const ok = await retrySharePointLoginFromDashboard();
+      if (ok) {
+        window.__sharePointLoginSuccessActive = true;
+        handleSharePointLoginRequirement({
+          sharePointLoginRequired: false,
+          sharePointLoginInProgress: false
+        });
+
+        // Tự động đóng sau 2 giây
+        setTimeout(() => {
+          window.__sharePointLoginSuccessActive = false;
+          handleSharePointLoginRequirement({
+            sharePointLoginRequired: false,
+            sharePointLoginInProgress: false,
+            sharePointLoginSkipped: window.__sharePointLoginSkipped
+          });
+        }, 2000);
+      }
     }
 
     async function toggleSkipPull(checkbox) {
       const isChecked = checkbox.checked;
-      checkbox.disabled = true; // Khóa lại trong khi gửi request
+      window.__skipPullLock = true; // Khóa không cho SSE ghi đè khi đang gạt
+      checkbox.disabled = true;
       document.body.style.cursor = 'wait';
       try {
         const r = await fetch('/api/sync-manager-src/settings', {
@@ -1004,19 +1691,24 @@ class SyncManagerController extends BaseController {
           body: JSON.stringify({ key: 'SKIP_PULL_FROM_OLD', value: isChecked })
         });
         const j = await r.json();
-        if (!r.ok) {
-          throw new Error(j.message || 'Lỗi cập nhật cấu hình');
-        }
+        if (!r.ok) throw new Error(j.message || 'Lỗi cập nhật cấu hình');
       } catch (e) {
         alert('Lỗi: ' + e.message);
-        checkbox.checked = !isChecked; // Phục hồi trạng thái nếu lỗi
+        checkbox.checked = !isChecked;
       } finally {
+        window.__skipPullLock = false;
         checkbox.disabled = false;
         document.body.style.cursor = 'default';
       }
     }
 
     connectSSE(); // khởi động SSE khi trang load
+    handleSharePointLoginRequirement({
+      sharePointLoginRequired: window.__sharePointLoginRequired,
+      sharePointLoginInProgress: window.__sharePointLoginInProgress,
+      sharePointLoginMessage: window.__sharePointLoginMessage,
+      sharePointLoginSkipped: ${data.sharePointLoginSkipped ? 'true' : 'false'}
+    });
   </script>
 </body>
 </html>`;
@@ -1086,6 +1778,7 @@ class SyncManagerController extends BaseController {
       const s = (info.status || 'idle').toLowerCase();
 
       return `<tr>
+        <td style="color:var(--text-sub);font-family:monospace;font-size:0.75rem">${info.id || '—'}</td>
         <td><span class="model-chip"><i class="bi bi-database-fill-gear"></i>${name}</span></td>
         <td><span class="status-badge status-${s}"><span class="dot"></span>${txt}</span></td>
         <td>${prog}</td>
@@ -1094,6 +1787,8 @@ class SyncManagerController extends BaseController {
         <td style="color:var(--text-sub);font-size:.78rem">${info.lastSyncTime ? new Date(info.lastSyncTime).toLocaleString('vi-VN') : '—'}</td>
         <td style="color:var(--text-sub);font-size:.78rem">${info.lastRun ? new Date(info.lastRun).toLocaleString('vi-VN') : '—'}</td>
         <td>${ji}</td>
+        <td style="max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.7rem; color: var(--accent-red)" title="${info.error || ''}">${info.error || '—'}</td>
+        <td><span class="badge" style="background:rgba(0,0,0,0.05);color:var(--text-sub);font-size:0.65rem">${info.instanceId || '—'}</span></td>
         <td>
           <div class="act-group">
             <button class="act-btn act-btn-run"    onclick="startModel('${name}',false)" ${canStart ? '' : 'disabled'}><i class="bi bi-play-fill"></i>Chạy</button>

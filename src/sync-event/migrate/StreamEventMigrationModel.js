@@ -1,6 +1,7 @@
 const MigrationHelper = require('../../helpers/MigrationHelper');
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 const { tableMappings } = require('./config');
+const { ensureTrackingColumns } = require('../../helpers/StagingQueueHelper');
 
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 
@@ -63,6 +64,13 @@ class StreamEventMigrationModel extends BaseIncrementalSyncInterface {
       const fullTableRef = `[${this.newDbName}].[${schema}].[${table}]`;
 
       console.log(`[StreamEventMigrationModel] Checking/Adding missing columns to ${fullTableRef}...`);
+
+      // Check if table exists first
+      const tableCheck = await this.queryNewDb(`SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '${table}'`);
+      if (!tableCheck || tableCheck.length === 0) {
+        console.warn(`[StreamEventMigrationModel] Target table ${table} not found. Skipping column ensure.`);
+        return;
+      }
 
       const columnsToCheck = [
         { name: '[type]', type: 'NVARCHAR(255)' },
@@ -228,6 +236,15 @@ class StreamEventMigrationModel extends BaseIncrementalSyncInterface {
           `;
           await this.queryNewDb(alterQuery);
       }
+
+      await ensureTrackingColumns(this, {
+        tableRef: stagingTableRef,
+        tableName: table,
+        schemaName: schema,
+        dbName: this.newDbName,
+        label: this.modelName,
+      });
+
       console.log(`[StreamEventMigrationModel] [ensureStagingTableExists] OK: ${stagingTableRef} is ready`);
     } catch (err) {
       console.error(`[StreamEventMigrationModel] [ensureStagingTableExists] ERROR: ${err.message}`);

@@ -1,4 +1,4 @@
-const logger = require('../../utils/logger');
+﻿const logger = require('../../utils/logger');
 const BaseIncrementalSyncInterface = require('./BaseIncrementalSyncInterface');
 
 class SyncHandlerModel {
@@ -16,10 +16,26 @@ class SyncHandlerModel {
    */
   createCountFnIncremental() {
     return async (lastTime, lastSyncId = 0) => {
-      // Nếu model có hàm getCount riêng thì ưu tiên dùng (tối ưu hơn)
-      if (typeof this.syncModel.getCount === 'function') {
-        return this.syncModel.getCount(lastTime, lastSyncId);
+      // Lấy singleton instance của SyncManagerService để kiểm tra settings
+      const syncManager = require('./SyncManagerService');
+      const skipPull = syncManager.state && syncManager.state.settings && syncManager.state.settings.SKIP_PULL_FROM_OLD === true;
+
+      // Nếu SKIP_PULL_FROM_OLD = OFF (mặc định), ta muốn đếm từ DB cũ để biết tổng số sẽ hút
+      if (!skipPull) {
+        if (typeof this.syncModel.countListFromOldDb === 'function') {
+          return this.syncModel.countListFromOldDb(lastTime, lastSyncId);
+        }
+        // Fallback cho các model cũ chưa tách countListFromOldDb
+        if (typeof this.syncModel.getCount === 'function') {
+          return this.syncModel.getCount(lastTime, lastSyncId);
+        }
+      } else {
+        // Nếu SKIP_PULL_FROM_OLD = ON, ta chỉ quan tâm những gì đang có trong staging
+        if (typeof this.syncModel.getCount === 'function') {
+          return this.syncModel.getCount(lastTime, lastSyncId);
+        }
       }
+
       const records = await this.syncModel.fetchListFromOldDb(lastTime, lastSyncId);
       return Array.isArray(records) ? records.length : 0;
     };
@@ -40,7 +56,23 @@ class SyncHandlerModel {
       }
 
       if (!preparedJobs.has(jobId)) {
-        const listResult = await this.syncModel.getList(lastTime, jobId, lastSyncId);
+        // Lấy singleton instance của SyncManagerService để kiểm tra settings
+        const syncManager = require('./SyncManagerService');
+        const skipPull = syncManager.state && syncManager.state.settings && syncManager.state.settings.SKIP_PULL_FROM_OLD === true;
+
+        let listResult = null;
+        if (skipPull) {
+          logger.info(`[SyncHandlerModel][${this.syncModel.getName ? this.syncModel.getName() : 'Unknown'}] SKIP_PULL_FROM_OLD is ON. Skipping extraction, using existing staging data.`);
+          const stagedCount = await this.syncModel.getCount(lastTime, lastSyncId);
+          listResult = {
+            totalCount: stagedCount,
+            lastSyncTime: lastTime,
+            lastSyncId: lastSyncId
+          };
+        } else {
+          listResult = await this.syncModel.getList(lastTime, jobId, lastSyncId);
+        }
+
         const resumeIndex = Number(cursor.totalProcessed || 0);
 
         // Khi Resume sau server restart, `nextIndex` bắt đầu từ số records đã xử lý (resumeIndex).
@@ -70,10 +102,48 @@ class SyncHandlerModel {
       const take = Math.min(Number(limit || 1), remaining);
 
       if (take <= 0) {
-        // ★ KHI take <= 0: XÓA preparedJobs để buộc getList() chạy lại lần sau
-        // Điều này quan trọng khi processOne() trả về {done: true} vì staging đã hết
-        // mà không phải lỗi logic - sẽ không bị infinite loop
-        logger.warn(`[SyncHandlerModel] take=${take}, total=${total}, processed=${processed} → delete preparedJobs, return empty`);
+        // ★ KHI take <= 0: Trước khi trả [] và kết thúc job, recheck actual staging count.
+        // Lý do: với CONCURRENCY > 1, nhiều virtual items có thể "lãng phí" (không claim được record
+        // vì worker khác đang giữ lock), dẫn đến totalCount bị tiêu thụ hết trước khi staging xong.
+        let stagingRemaining = 0;
+        try {
+          if (typeof this.syncModel.getStagingRemainingCount === 'function') {
+            stagingRemaining = await this.syncModel.getStagingRemainingCount();
+          }
+        } catch (recheckErr) {
+          logger.warn(`[SyncHandlerModel] getStagingRemainingCount error: ${recheckErr.message}`);
+        }
+
+        if (stagingRemaining > 0) {
+          // Staging vẫn còn records → mở rộng totalCount để tiếp tục xử lý
+          state.totalCount += stagingRemaining;
+          const extendedRemaining = Math.max(0, state.totalCount - processed);
+          const extendedTake = Math.min(Number(limit || 1), extendedRemaining);
+          logger.info(
+            `[SyncHandlerModel] Virtual items exhausted but staging still has ${stagingRemaining} remaining. ` +
+            `Extended totalCount to ${state.totalCount}, take=${extendedTake}`
+          );
+          if (extendedTake <= 0) {
+            preparedJobs.delete(jobId);
+            return [];
+          }
+          // Tiếp tục generate items với take mới
+          const syncTime = state?.syncTime || lastTime;
+          const startIndex = processed;
+          state.nextIndex += extendedTake;
+          return Array.from({ length: extendedTake }, (_, idx) => ({
+            id: startIndex + idx + 1,
+            __item_index: startIndex + idx,
+            __sync_id: Number(state?.syncId || 0),
+            __sync_time: syncTime,
+            __source_sync_time: state?.sourceTime || lastTime,
+            __source_sync_id: Number(state?.sourceId || lastSyncId || 0),
+            updated_at: syncTime
+          }));
+        }
+
+        // Staging thực sự hết → kết thúc job
+        logger.warn(`[SyncHandlerModel] take=${take}, total=${total}, processed=${processed}, stagingRemaining=${stagingRemaining} → delete preparedJobs, return empty`);
         preparedJobs.delete(jobId);
         return [];
       }

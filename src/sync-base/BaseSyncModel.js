@@ -60,7 +60,7 @@ class BaseSyncModel {
 
     logger.info(`[${this.modelName}] Starting extract phase...`);
     let totalExtracted = 0;
-    let lastSyncTime = process.env.SYNC_MIN_DATE || '9999-12-31T23:59:59.999Z';
+    let lastSyncTime = process.env.SYNC_MIN_DATE || '2999-12-31T23:59:59.999Z';
     let lastSyncId = 0;
     let hasMore = true;
 

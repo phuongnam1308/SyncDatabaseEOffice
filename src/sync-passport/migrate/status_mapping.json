@@ -1,14 +1,20 @@
 {
-  "DEFAULT": "Chờ phê duyệt",
+  "DEFAULT": "PENDING",
   "MAPPING": {
-    "Soạn thảo": "Chờ phê duyệt",
+    "Soạn thảo": "PENDING",
     "Phê duyệt": "COMPLETED",
+    "Thu hồi": "CANCELLED",
+    "Đã thu hồi": "CANCELLED",
+    "Yêu cầu thu hồi": "CANCELLED",
+    "Hủy phiếu": "CANCELLED",
     "Chờ Thủ trưởng đơn vị duyệt": "WAIT_COMMANDER",
     "Chờ thủ trưởng phê duyệt": "WAIT_COMMANDER",
-    "Chờ phê duyệt": "Chờ phê duyệt",
+    "Chờ phê duyệt": "PENDING",
     "Chờ xác nhận mượn": "WAIT_RECEIVE",
     "Chờ tiếp nhận": "WAIT_RECEIVE",
     "Chờ chỉ huy": "WAIT_COMMANDER",
-    "Chờ ký biên bản": "WAIT_SIGN"
+    "Chờ ký biên bản": "WAIT_SIGN",
+    "Đã trả": "COMPLETED",
+    "Hoàn trả": "COMPLETED"
   }
 }

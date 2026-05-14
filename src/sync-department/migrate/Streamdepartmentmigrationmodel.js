@@ -1,5 +1,14 @@
 const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncrementalSyncInterface');
 const { v4: uuidv4 } = require('uuid');
+const logger = require('../../../utils/logger');
+const {
+  claimNextStagingRow,
+  ensureTrackingColumns,
+  markRowFailed,
+  markRowSuccess,
+  startHeartbeatLoop,
+  updateHeartbeat,
+} = require('../../helpers/StagingQueueHelper');
 
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 
@@ -25,6 +34,7 @@ class StreamDepartmentMigrationModel extends BaseIncrementalSyncInterface {
     this.newDbSchema = 'dbo';
     this.newTableSync = 'dept_sync';          // Bảng trung gian staging
     this.newDbTable   = 'organization_units'; // Bảng đích
+    this.heartbeatIntervalMs = Number(process.env.HEARTBEAT_INTERVAL_MS || 30000);
   }
 
   /**
@@ -40,6 +50,8 @@ class StreamDepartmentMigrationModel extends BaseIncrementalSyncInterface {
             ALTER TABLE dbo.organization_units ADD table_backups NVARCHAR(MAX) NULL;
         IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'organization_units' AND COLUMN_NAME = 'Id_backups')
             ALTER TABLE dbo.organization_units ADD Id_backups NVARCHAR(MAX) NULL;
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'organization_units' AND COLUMN_NAME = 'tb_bak')
+            ALTER TABLE dbo.organization_units ADD tb_bak INT DEFAULT 0;
       `);
     } catch(e) {
       console.warn('[StreamDepartmentMigrationModel] Failed to auto-alter organization_units schema:', e.message);
@@ -112,6 +124,13 @@ class StreamDepartmentMigrationModel extends BaseIncrementalSyncInterface {
       END
     `;
     await this.queryNewDb(sql);
+    await ensureTrackingColumns(this, {
+      tableRef: ref,
+      tableName: this.newTableSync,
+      schemaName: this.newDbSchema,
+      dbName: this.newDbName,
+      label: this.modelName,
+    });
   }
 
   // ─── fetchListFromOldDb ───────────────────────────────────────────────────
@@ -283,21 +302,17 @@ class StreamDepartmentMigrationModel extends BaseIncrementalSyncInterface {
    * @returns {Promise<{seq_id,code,name}|null>}
    */
   async fetchOneFromStaging({ itemIndex = 0 } = {}) {
-    const rowNumber = Number(itemIndex || 0) + 1;
-    const ref       = this.getStagingTableRef();
-
-    const rows = await this.queryNewDb(
-      `
-      SELECT seq_id, code, name
-      FROM ${ref}
-      ORDER BY seq_id ASC
-      OFFSET @offset ROWS
-      FETCH NEXT 1 ROWS ONLY
-      `,
-      { offset: rowNumber - 1 }
-    );
-
-    return rows?.length ? rows[0] : null;
+    const ref = this.getStagingTableRef();
+    const row = await claimNextStagingRow(this, {
+      tableRef: ref,
+      orderBy: 'seq_id ASC',
+      owner: `pid_${process.pid}`,
+      label: this.modelName,
+    });
+    if (row) {
+      logger.info(`[${this.modelName}] [START] Processing started: seq_id=${row.seq_id}, code=${row.code}`);
+    }
+    return row;
   }
 
   // ─── processOne ───────────────────────────────────────────────────────────
@@ -321,15 +336,53 @@ class StreamDepartmentMigrationModel extends BaseIncrementalSyncInterface {
       return { syncJobId, itemIndex, processed: false, done: true };
     }
 
-    const result = await this.processRowData(rowData);
-    return {
-      syncJobId,
-      itemIndex,
-      processed: true,
-      done:      false,
-      code:      rowData.code,
-      result
-    };
+    const stopHeartbeat = startHeartbeatLoop(
+      () => this.updateHeartbeat(rowData.seq_id),
+      this.heartbeatIntervalMs,
+    );
+
+    try {
+      const result = await this.processRowData(rowData);
+      await markRowSuccess(this, {
+        tableRef: this.getStagingTableRef(),
+        keyWhere: 'seq_id = @seqId',
+        params: { seqId: rowData.seq_id },
+        rowToken: `seq_id=${rowData.seq_id}`,
+        label: this.modelName,
+      });
+      stopHeartbeat();
+      return {
+        syncJobId,
+        itemIndex,
+        processed: true,
+        done: false,
+        code: rowData.code,
+        result
+      };
+    } catch (error) {
+      stopHeartbeat();
+      await markRowFailed(this, {
+        tableRef: this.getStagingTableRef(),
+        keyWhere: 'seq_id = @seqId',
+        params: { seqId: rowData.seq_id },
+        rowToken: `seq_id=${rowData.seq_id}`,
+        errorMessage: error.message,
+        label: this.modelName,
+      });
+      throw error;
+    }
+  }
+
+  async updateHeartbeat(seqId, transaction = null) {
+    if (!seqId) return 0;
+    return updateHeartbeat(this, {
+      tableRef: this.getStagingTableRef(),
+      keyWhere: 'seq_id = @seqId',
+      params: { seqId },
+      transaction,
+      rowToken: `seq_id=${seqId}`,
+      label: this.modelName,
+    });
   }
 
   // ─── processRowData ───────────────────────────────────────────────────────
@@ -374,7 +427,7 @@ class StreamDepartmentMigrationModel extends BaseIncrementalSyncInterface {
           address, description, display_order, status,
           mpath, parentId,
           created_at, updated_at,
-          Id_backups, table_backups
+          Id_backups, table_backups, tb_bak
         )
         VALUES (
           @id, @name, @code, NULL,
@@ -382,7 +435,7 @@ class StreamDepartmentMigrationModel extends BaseIncrementalSyncInterface {
           NULL, NULL, 0, 1,
           NULL, NULL,
           @created_at, @updated_at,
-          @Id_backups, @table_backups
+          @Id_backups, @table_backups, 1
         );
         SELECT 'inserted' AS action;
       END
