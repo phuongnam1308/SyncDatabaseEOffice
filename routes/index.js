@@ -285,7 +285,7 @@ router.use('/file', FileRoutes);
 const incommingRoutes = require('../src/sync-incoming-document/route');
 router.use('/incoming', incommingRoutes);
 
-module.exports = router;
+// --- SYNC MANAGER CORE ROUTES ---
 const syncCtrl = require('../src/sync-manager/SyncManagerController');
 router.get('/sync-manager-src/dashboard', syncCtrl.getDashboard);
 router.post('/sync-manager-src/start', syncCtrl.startSync);
@@ -299,8 +299,11 @@ router.post('/sync-manager-src/settings', syncCtrl.updateSettings);
 router.post('/sync-manager-src/shutdown', syncCtrl.shutdown);
 router.post('/sync-manager-src/skip-login', syncCtrl.skipLogin);
 router.post('/sync-manager-src/check-session', syncCtrl.checkSession);
+router.post('/sync-manager-src/upload-passport-file', syncCtrl.uploadPassportFile);
 router.post('/sync-manager-src/import-passport', syncCtrl.importPassport);
+router.get('/sync-manager-src/download-passport-template', syncCtrl.downloadPassportTemplate);
 
+// --- OTHER MODULE ROUTES ---
 const SyncOutgoingRoutes = require('../src/sync-outgoing-document/route');
 router.use('/sync-outgoing', SyncOutgoingRoutes);
 
@@ -312,6 +315,5 @@ router.use('/sync-meeting-copy', SyncMeetingCopyRoutes);
 
 const SyncPassportRoutes = require('../src/sync-passport/route');
 router.use('/sync-passport', SyncPassportRoutes);
-
 
 module.exports = router;

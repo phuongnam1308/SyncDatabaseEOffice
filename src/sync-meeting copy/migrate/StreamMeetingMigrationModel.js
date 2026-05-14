@@ -61,6 +61,13 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
 
       console.log(`[StreamMeetingMigrationModel] Ensuring tables and columns exist...`);
 
+      // Check if table exists first
+      const tableCheck = await this.queryNewDb(`SELECT 1 FROM ${db}.INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '${schema}' AND TABLE_NAME = 'meetings'`);
+      if (!tableCheck || tableCheck.length === 0) {
+        console.warn(`[StreamMeetingMigrationModel] Target table meetings not found. Skipping column ensure.`);
+        return;
+      }
+
       // 1. Cửa bảng meetings
       const meetingColQuery = `
       IF NOT EXISTS (SELECT 1 FROM ${db}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'meetings' AND COLUMN_NAME = 'table_bak')
@@ -433,7 +440,9 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
         const dropOldCursorIndexQuery = `
         IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${table}_job_cursor' AND object_id = OBJECT_ID('${stagingTableRef}'))
         BEGIN
-            DROP INDEX IX_${table}_job_cursor ON ${stagingTableRef};
+            -- Sử dụng cú pháp an toàn hơn cho DROP INDEX
+            DECLARE @dropSql NVARCHAR(MAX) = 'DROP INDEX [IX_${table}_job_cursor] ON [${schema}].[${table}]';
+            EXEC sp_executesql @dropSql;
         END
         `;
         await this.queryNewDb(dropOldCursorIndexQuery);
@@ -442,8 +451,10 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
         IF NOT EXISTS (
             SELECT 1 FROM sys.indexes i
             JOIN sys.tables t ON i.object_id = t.object_id
+            JOIN sys.schemas s ON t.schema_id = s.schema_id
             WHERE i.name = 'IX_${table}_job_cursor'
               AND t.name = '${table}'
+              AND s.name = '${schema}'
         )
         BEGIN
             CREATE INDEX IX_${table}_job_cursor ON ${stagingTableRef}(stg_job_id, __sync_time, __sync_id_num, tp_ListId, SY_SyncId);

@@ -1,7 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 
-// T? d?ng nh?n di?n môi tru?ng SEA (EXE) hay Dev
+// T? d?ng nh?n di?n mï¿½i tru?ng SEA (EXE) hay Dev
 const isSeaApp = path.basename(process.execPath).toLowerCase() !== 'node.exe' && process.execPath.toLowerCase().endsWith('.exe');
 
 let chromium = null;
@@ -19,7 +19,7 @@ function getPlaywright() {
       const seaRootDir = path.dirname(process.execPath);
       const myRequire = createRequire(path.join(seaRootDir, 'index.js'));
       chromium = myRequire('playwright').chromium;
-    } catch (e) {}
+    } catch (e) { }
   }
 
   if (!chromium) {
@@ -42,9 +42,9 @@ async function loginKeycloak(options = {}) {
   const clientId = process.env.KEYCLOAK_CLIENT_ID || 'doffice';
   const username = process.env.KEYCLOAK_USERNAME || 'admin-tancang';
   const password = process.env.KEYCLOAK_PASSWORD || '@SnpAdmin2026';
-  const redirectUri = encodeURIComponent('https://apigw-uat.snp.com.vn/doffice-be/api/auth-keycloak/callback');
+  const redirectUri = encodeURIComponent('https://apigw-int.snp.com.vn/doffice-be/api/auth-keycloak/callback');
 
-  const startUrl = `https://iam-uat.snp.com.vn/realms/snp-internal/protocol/openid-connect/auth?response_type=code&client_id=${clientId}&redirect_uri=${redirectUri}&scope=openid`;
+  const startUrl = `https://iam.snp.com.vn/realms/snp-internal-2/protocol/openid-connect/auth?response_type=code&client_id=${clientId}&redirect_uri=${redirectUri}&scope=openid`;
 
   const storageStatePath = path.join(__dirname, '..', 'uploads', '.keycloak_jwt_cache');
   const headed = options.forceHeaded === true || process.env.HEADED === 'true';
@@ -78,12 +78,12 @@ async function loginKeycloak(options = {}) {
   let page;
   try {
     const launchOptions = {
-      headless: true, // Ép ch?y ng?m hoàn toàn
+      headless: true, // ï¿½p ch?y ng?m hoï¿½n toï¿½n
       executablePath: executablePath,
       args: [
-        '--headless=new', // Thêm c? headless c?a Chrome d? ?n hoàn toàn giao di?n
-        '--ignore-certificate-errors', 
-        '--no-sandbox', 
+        '--headless=new', // Thï¿½m c? headless c?a Chrome d? ?n hoï¿½n toï¿½n giao di?n
+        '--ignore-certificate-errors',
+        '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-gpu',
         '--window-size=1280,720'
@@ -101,10 +101,10 @@ async function loginKeycloak(options = {}) {
     console.log(`Navigating to Keycloak Auth...`);
     await page.goto(startUrl, { waitUntil: 'networkidle', timeout: 60000 });
 
-    // Ði?n form dang nh?p Keycloak
+    // ï¿½i?n form dang nh?p Keycloak
     console.log('Step 1: Filling login form...');
 
-    // Các selector ph? bi?n c?a Keycloak
+    // Cï¿½c selector ph? bi?n c?a Keycloak
     const userSelector = '#username';
     const passSelector = '#password';
     const loginBtnSelector = '#kc-login';
@@ -123,28 +123,28 @@ async function loginKeycloak(options = {}) {
 
     let tokenUrl = null;
     try {
-        // Ð?i URL có ch?a "token="
-        await page.waitForURL('**/*token=*', { timeout: 60000 });
-        tokenUrl = page.url();
-        console.log(`Redirected to: ${tokenUrl.split('?')[0]}...`);
+      // ï¿½?i URL cï¿½ ch?a "token="
+      await page.waitForURL('**/*token=*', { timeout: 60000 });
+      tokenUrl = page.url();
+      console.log(`Redirected to: ${tokenUrl.split('?')[0]}...`);
     } catch (e) {
-        // N?u không có token= thì th? b?t body ho?c cookie
-        console.log('Timeout waiting for URL with token=. Checking current URL...');
-        tokenUrl = page.url();
+      // N?u khï¿½ng cï¿½ token= thï¿½ th? b?t body ho?c cookie
+      console.log('Timeout waiting for URL with token=. Checking current URL...');
+      tokenUrl = page.url();
     }
 
-    // Trích xu?t token t? URL
+    // Trï¿½ch xu?t token t? URL
     const urlObj = new URL(tokenUrl);
     let token = urlObj.searchParams.get('token');
 
     if (!token) {
-        // Có th? nó n?m trong hash (fragment)
-        const hashParams = new URLSearchParams(urlObj.hash.substring(1));
-        token = hashParams.get('token');
+      // Cï¿½ th? nï¿½ n?m trong hash (fragment)
+      const hashParams = new URLSearchParams(urlObj.hash.substring(1));
+      token = hashParams.get('token');
     }
 
     if (!token) {
-        throw new Error(`Khong tim thay token trong URL tra ve: ${tokenUrl}`);
+      throw new Error(`Khong tim thay token trong URL tra ve: ${tokenUrl}`);
     }
 
     // Luu cache token
@@ -156,13 +156,13 @@ async function loginKeycloak(options = {}) {
     // Decode token de lay thoi gian het han
     let expiresAt = Date.now() + 3600 * 1000; // default 1 hour
     try {
-        const payloadBase64 = token.split('.')[1];
-        const payload = JSON.parse(Buffer.from(payloadBase64, 'base64').toString('utf8'));
-        if (payload.exp) {
-            expiresAt = payload.exp * 1000 - 60000;
-        }
+      const payloadBase64 = token.split('.')[1];
+      const payload = JSON.parse(Buffer.from(payloadBase64, 'base64').toString('utf8'));
+      if (payload.exp) {
+        expiresAt = payload.exp * 1000 - 60000;
+      }
     } catch (e) {
-        console.log('Warning: Khong the decode JWT, su dung thoi gian het han mac dinh.');
+      console.log('Warning: Khong the decode JWT, su dung thoi gian het han mac dinh.');
     }
 
     fs.writeFileSync(storageStatePath, JSON.stringify({ token, expiresAt }), 'utf8');

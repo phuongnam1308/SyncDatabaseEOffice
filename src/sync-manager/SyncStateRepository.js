@@ -202,6 +202,7 @@ class SyncStateRepository extends BaseModel {
             ? Math.min(100, Math.round((jobSynced / jobNeeded) * 100)) : 0;
 
           entities[m.model_name] = {
+            id: m.id,
             status: m.status || 'IDLE',
             lastSyncTime: m.last_sync_time,
             lastSyncId: m.last_sync_id,

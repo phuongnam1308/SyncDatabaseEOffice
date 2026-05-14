@@ -18,7 +18,7 @@ const SyncIncomingModel = require('../sync-incoming-v2/models/SyncIncomingModel'
 
 class SyncIncomingAdapter {
   constructor() {
-    this._instanceId = process.env.INSTANCE_ID || '1';
+    this._instanceId = process.env.SYNC_INSTANCE_ID || process.env.INSTANCE_ID || '1';
     this._name = `StreamIncomingV2_Instance_${this._instanceId}`;
     this._model = null;
     this._initialized = false;

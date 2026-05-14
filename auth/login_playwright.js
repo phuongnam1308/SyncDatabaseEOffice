@@ -65,6 +65,7 @@ async function login(options = {}) {
   // Tự động tìm kiếm trình duyệt có sẵn trên Windows - Ưu tiên Chrome hàng đầu
   const possiblePaths = [
     process.env.CHROME_PATH,
+    process.env.BROWSER_PATH,
     'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
     'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
     path.join(process.env.LOCALAPPDATA || '', 'Google\\Chrome\\Application\\chrome.exe'),
@@ -73,13 +74,24 @@ async function login(options = {}) {
   ].filter(Boolean);
 
   let executablePath = null;
+  console.log('[DEBUG] Searching for browser executable...');
   for (const p of possiblePaths) {
-    const cleanPath = p.replace(/"/g, '');
+    let cleanPath = p.replace(/"/g, '').trim();
+    // Handle literal double backslashes
+    if (cleanPath.includes('\\\\')) {
+      cleanPath = cleanPath.replace(/\\\\/g, '\\');
+    }
+    
+    console.log(`[DEBUG] Checking: [${cleanPath}]`);
     if (fs.existsSync(cleanPath)) {
       executablePath = cleanPath;
+      console.log(`[DEBUG] Found: [${executablePath}]`);
       break;
     }
   }
+
+  // Diagnostic: Write to a file we can definitely see
+  fs.writeFileSync('login_debug.txt', `Login script started at ${new Date().toISOString()}\nExecutable found: ${executablePath}\nCWD: ${process.cwd()}\nENV: ${JSON.stringify({CHROME_PATH: process.env.CHROME_PATH, BROWSER_PATH: process.env.BROWSER_PATH})}\n`, { flag: 'a' });
 
   console.log('--- SNP EOffice Login Tool (Playwright) ---');
   console.log(`Starting URL: ${startUrl}`);
@@ -87,7 +99,7 @@ async function login(options = {}) {
   if (executablePath) {
     console.log(`Using Browser at: ${executablePath}`);
   } else {
-    throw new Error('KHONG TIM THAY TRINH DUYET (CHROME/EDGE) TREN HE THONG!');
+    throw new Error('KHONG TIM THAY TRINH DUYET (CHROME/EDGE) TREN HE THONG! Vui lòng cài đặt Chrome hoặc cấu hình CHROME_PATH trong .env');
   }
 
   let browser;
@@ -158,15 +170,48 @@ async function login(options = {}) {
 
     // Bước 4: Chờ xác thực thành công (Quay lại trang chủ hoặc tìm dấu hiệu đã đăng nhập)
     console.log('Step 4: Waiting for authentication to complete...');
-    // Chờ cho đến khi mạng hết bận (load xong trang sau login)
-    await page.waitForLoadState('networkidle', { timeout: 600000 });
     
-    // Đợi một trong các dấu hiệu thành công xuất hiện
+    // Chờ cho đến khi mạng ổn định
+    await page.waitForLoadState('networkidle', { timeout: 300000 });
+
+    // 4.1: Kiểm tra xem có bị kẹt ở câu hỏi "Stay signed in?" (Duy trì đăng nhập) không
+    const staySignedInBtn = 'input[value="Yes"], #idSIButton9, button:has-text("Yes")';
+    if (await page.isVisible(staySignedInBtn)) {
+      console.log('Found "Stay signed in?" prompt, clicking Yes...');
+      await page.click(staySignedInBtn);
+      await page.waitForLoadState('networkidle');
+    }
+
+    // 4.2: Kiểm tra nếu có thông báo lỗi hiển thị trên trang
+    const pageError = await page.evaluate(() => {
+      const el = document.querySelector('#errorText, #loginError, .error, .alert-danger');
+      return el ? el.innerText.trim() : null;
+    });
+    if (pageError) {
+      console.warn(`[Warning] Page reported error: ${pageError}`);
+    }
+
+    // 4.3: Đợi một trong các dấu hiệu thành công xuất hiện
+    console.log('Checking for login success indicators...');
     await Promise.race([
-      page.waitForSelector('#welcomeMenuBox', { timeout: 30000 }),
-      page.waitForSelector('.aLogout', { timeout: 30000 }),
-      page.waitForURL('**/Pages/default.aspx', { timeout: 30000 })
-    ]).catch(() => console.log('Wait for success indicators timed out, checking manual status...'));
+      page.waitForSelector('#welcomeMenuBox', { timeout: 60000 }),
+      page.waitForSelector('.aLogout', { timeout: 60000 }),
+      page.waitForSelector('#SuiteNavWrapper', { timeout: 60000 }),
+      page.waitForURL('**/Pages/default.aspx', { timeout: 60000 })
+    ]).catch(() => console.log('Wait for success indicators timed out, proceeding to check cookies anyway...'));
+
+    // 4.4: Đợi một chút để cookie kịp ghi xuống context (đặc biệt là FedAuth)
+    console.log('Polling for authentication cookies...');
+    let authCookieFound = false;
+    for (let i = 0; i < 15; i++) {
+      const cookies = await context.cookies();
+      authCookieFound = cookies.some(c => c.name === 'FedAuth' || c.name === 'rtFa' || c.name.includes('Wave'));
+      if (authCookieFound) {
+        console.log('✓ Authentication cookie detected in browser context.');
+        break;
+      }
+      await page.waitForTimeout(2000);
+    }
 
     const authDir = path.dirname(path.resolve(storageStatePath));
     if (!fs.existsSync(authDir)) {
@@ -176,12 +221,12 @@ async function login(options = {}) {
 
     await context.storageState({ path: storageStatePath });
     
-    // Kiểm tra xem đã thực sự có Cookie xác thực chưa
     const state = JSON.parse(fs.readFileSync(storageStatePath, 'utf8'));
     const hasAuthCookie = state.cookies.some(c => c.name === 'FedAuth' || c.name === 'rtFa' || c.name.includes('Wave'));
     
     if (!hasAuthCookie) {
-      throw new Error('Đăng nhập hoàn tất nhưng không tìm thấy FedAuth/rtFa cookie. Có thể sai mật khẩu hoặc bị chặn.');
+      console.error('Available cookies:', state.cookies.map(c => c.name).join(', '));
+      throw new Error('Đăng nhập hoàn tất nhưng không tìm thấy FedAuth/rtFa cookie. Vui lòng kiểm tra tài khoản hoặc quyền truy cập SharePoint.');
     }
 
     console.log(`✓ Auth state saved successfully to: ${storageStatePath}`);
@@ -195,9 +240,10 @@ async function login(options = {}) {
 
   } catch (error) {
     console.error('✘ ERROR:', error.message);
-    if (browser && headed) {
-      await page.screenshot({ path: 'auth/login_error_capture.png' });
-      console.log('Error screenshot saved to auth/login_error_capture.png');
+    if (browser) {
+      const errorCapturePath = 'auth/login_error_capture.png';
+      await page.screenshot({ path: errorCapturePath });
+      console.log(`Error screenshot saved to ${errorCapturePath}`);
     }
     throw error;
   } finally {

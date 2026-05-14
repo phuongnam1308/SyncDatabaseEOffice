@@ -1047,7 +1047,7 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         }
 
         rowData.AuthorAccount = finalUserId;
-        
+
         console.log(`[StreamCarBookingMigrationModel] Using User ID: ${finalUserId}`);
 
         // Đảm bảo user có quyền (roles) cần thiết nếu chưa có
@@ -1171,7 +1171,7 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         if (Array.isArray(coordination) && coordination.length > 0) {
             console.log(`[StreamCarBookingMigrationModel] Upserting ${coordination.length} Coordination Items...`);
             let count = 0;
-            
+
             const carList = this.cachedCarIds.length > 0 ? this.cachedCarIds : ['LC-20260224035946-Q6DQ2AL8'];
             const driverList = this.cachedDriverIds.length > 0 ? this.cachedDriverIds : ['DR-20260316075949-SF8X4UZA'];
 
@@ -1183,7 +1183,7 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
                 } else {
                     finalCarId = null;
                 }
-                
+
                 // Nếu không tìm thấy xe khớp tên và tạo thất bại, chọn random 1 xe có sẵn
                 if (!finalCarId) {
                     finalCarId = carList[Math.floor(Math.random() * carList.length)];
@@ -1196,7 +1196,7 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
                 } else {
                     finalDriverId = null;
                 }
-                
+
                 // Nếu không tìm thấy tài xế khớp tên và tạo thất bại, chọn random 1 tài xế có sẵn
                 if (!finalDriverId) {
                     finalDriverId = driverList[Math.floor(Math.random() * driverList.length)];
@@ -1495,14 +1495,14 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
       const db = this.newDbName || 'app_tancang';
       const schema = 'dbo';
       const tableRef = `[${db}].[${schema}].[list_drivers]`;
-      
+
       // Kiểm tra xem đã tồn tại chưa
       const exist = await this.queryNewDbTx(`SELECT TOP 1 id FROM ${tableRef} WHERE id = @name OR full_name = @name OR full_name LIKE '%' + @name + '%'`, { name }, transaction);
       if (exist && exist.length > 0) {
           console.log(`[StreamCarBookingMigrationModel] Found Driver ID: ${name} -> ${exist[0].id}`);
           return exist[0].id;
       }
-      
+
       // Tự động tạo mới
       const { v4: uuidv4 } = require('uuid');
       const newId = uuidv4().toUpperCase();
@@ -1516,7 +1516,7 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
               1, GETDATE(), GETDATE(), 1
           )
       `, { id: newId, name }, transaction);
-      
+
       console.log(`[StreamCarBookingMigrationModel] Auto-created new Driver: "${name}" -> ${newId}`);
       return newId;
   }
@@ -1527,14 +1527,14 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
       const db = this.newDbName || 'app_tancang';
       const schema = 'dbo';
       const tableRef = `[${db}].[${schema}].[list_cars]`;
-      
+
       // Kiểm tra xem đã tồn tại chưa
       const exist = await this.queryNewDbTx(`SELECT TOP 1 id FROM ${tableRef} WHERE id = @name OR license_plate = @name OR brand = @name`, { name }, transaction);
       if (exist && exist.length > 0) {
           console.log(`[StreamCarBookingMigrationModel] Found Car ID: ${name} -> ${exist[0].id}`);
           return exist[0].id;
       }
-      
+
       // Tự động tạo mới
       const { v4: uuidv4 } = require('uuid');
       const newId = uuidv4().toUpperCase();
@@ -1546,7 +1546,7 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
               @id, @name, 'UNKNOWN', @name, 'admin', N'Sẵn sàng', 1, GETDATE(), GETDATE(), 1
           )
       `, { id: newId, name }, transaction);
-      
+
       console.log(`[StreamCarBookingMigrationModel] Auto-created new Car: "${name}" -> ${newId}`);
       return newId;
   }

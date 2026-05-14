@@ -1,4 +1,4 @@
-﻿const axios = require('axios');
+const axios = require('axios');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
@@ -219,27 +219,43 @@ async function _doRefreshAuth(pool) {
 
   // Thực hiện Login
   try {
-    const isSeaApp = process.execPath.toLowerCase().endsWith('.exe');
-    const cmd = isSeaApp ? 'node' : (process.platform === 'win32' ? 'npm.cmd' : 'npm');
-    const args = isSeaApp
-      ? [path.join(process.cwd(), 'auth', 'login_playwright.js')]
-      : ['run', 'login'];
-
     const cookieFilePath = process.env.COOKIE_FILE_PATH || path.join(process.cwd(), 'auth', 'cookie.txt');
     const mtimeBefore = fs.existsSync(cookieFilePath) ? fs.statSync(cookieFilePath).mtimeMs : 0;
+
+    const currentExec = process.execPath;
+    const isNode = currentExec.toLowerCase().includes('node.exe') || currentExec.toLowerCase().endsWith('node');
+    
+    let cmd = isNode ? currentExec : 'node';
+    let args = [path.join(process.cwd(), 'auth', 'login_playwright.js')];
+
+    logger.info(`[SharePointAuth] Executing login script: ${cmd} ${args.join(' ')} (CWD: ${process.cwd()})`);
 
     const loginSuccess = await new Promise((resolve) => {
       const child = spawn(cmd, args, {
         cwd: process.cwd(),
-        env: { ...process.env, HEADED: 'false' },
-        shell: true,
+        env: { ...process.env }, 
+        shell: false,
+        stdio: ['inherit', 'pipe', 'pipe'] // Giữ stdin inherit để an toàn, pipe stdout/err để log
       });
-      child.on('close', code => resolve(code === 0));
-      child.on('error', () => resolve(false));
+
+      let output = '';
+      child.stdout.on('data', (data) => { output += data.toString(); });
+      child.stderr.on('data', (data) => { output += data.toString(); });
+
+      child.on('close', code => {
+        if (code !== 0) {
+          logger.error(`[SharePointAuth] [${terminalName}] Login failed with code ${code}. Output:\n${output}`);
+        }
+        resolve(code === 0);
+      });
+      child.on('error', (err) => {
+        logger.error(`[SharePointAuth] [${terminalName}] Spawn error: ${err.message}`);
+        resolve(false);
+      });
     });
 
     if (!loginSuccess) {
-      throw new Error('Login process exited with non-zero code.');
+      throw new Error('Login process exited with non-zero code. Check logs for details.');
     }
 
     if (!fs.existsSync(cookieFilePath)) {

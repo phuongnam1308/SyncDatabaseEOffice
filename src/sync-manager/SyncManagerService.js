@@ -1,4 +1,4 @@
-﻿/**
+/**
  * SyncManagerService.js
  *
  * ════════════════════════════════════════════════════════════════
@@ -507,6 +507,8 @@ class SyncManagerService {
       return;
     }
 
+    logger.info(`[SyncManagerService] 📥 Đang đăng ký module vào Service: ${name}`);
+
     this.registry.set(name, {
       fetchFn,
       processFn,
@@ -770,7 +772,21 @@ class SyncManagerService {
   resumeJob(jobId) {
     const job = this.state.jobs[jobId];
     if (!job) throw new Error(`Job ${jobId} not found`);
-    if (job.status !== 'PAUSED') throw new Error(`Job ${jobId} is not paused`);
+
+    // Handle case where job status in memory is out of sync with model status
+    // If job is COMPLETED but model is PAUSED, we need to restart instead of resume
+    if (job.status === 'COMPLETED' || job.status === 'FAILED') {
+      logger.warn(`[SyncManagerService] Job ${jobId} is ${job.status}, cannot resume. Resetting model state.`);
+      const modelState = this.getModelState(job.modelName);
+      modelState.status = 'IDLE';
+      modelState.activeJobId = null;
+      this._dbUpdateModel(job.modelName, modelState);
+      throw new Error(`Job ${jobId} đã hoàn thành (${job.status}). Cần chạy lại từ đầu, không thể tiếp tục.`);
+    }
+
+    if (job.status !== 'PAUSED') {
+      throw new Error(`Job ${jobId} is not paused (currently: ${job.status})`);
+    }
 
     const modelState = this.getModelState(job.modelName);
     if (this.isModelBusy(modelState)) throw new Error(`Model ${job.modelName} is already running`);
@@ -1026,6 +1042,9 @@ class SyncManagerService {
         }
 
         if (jobFinishedEarly) {
+          // processFn returned done=true (staging was temporarily empty).
+          // Re-fetch staging to verify it's actually empty before breaking.
+          // This handles race condition where records are being processed by other concurrent tasks.
           logger.warn(
             `[SyncManagerService][${job.modelName}] processFn returned done=true; breaking fetch cycle (jobId=${job.jobId}, batchProcessed=${batchProcessed}, totalProcessed=${job.totalProcessed}, totalToSync=${job.totalToSync == null ? 'null' : Number(job.totalToSync)})`
           );

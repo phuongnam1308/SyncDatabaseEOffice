@@ -11,7 +11,7 @@ const SyncDraftDocumentModel = require('../sync-outgoing-v2/models/SyncDraftDocu
 
 class SyncDraftDocumentAdapter {
   constructor() {
-    this._instanceId = process.env.INSTANCE_ID || '1';
+    this._instanceId = process.env.SYNC_INSTANCE_ID || process.env.INSTANCE_ID || '1';
     this._name = `DraftDocument_Instance_${this._instanceId}`;
     this._model = null;
     this._initialized = false;

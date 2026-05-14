@@ -1,4 +1,4 @@
-﻿const fs = require('fs');
+const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 const cheerio = require('cheerio');
@@ -208,7 +208,7 @@ class HtmlFileMigrationModel extends BaseModel {
     const viewPrefix = (
       process.env.NEW_SYSTEM_VIEW_PREFIX || 'https://apigw-uat.snp.com.vn/doffice-be'
     ).replace(/\/$/, '');
-    const objectId = articleSlug || itemId || '9999';
+    const objectId = itemId || articleSlug || '9999'; // Ưu tiên dùng DocId (itemId) làm object_id thay vì slug
 
     // Phần mở rộng file tài liệu được hỗ trợ
     const DOC_EXTENSIONS = new Set(['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.zip', '.rar']);
@@ -445,7 +445,8 @@ class HtmlFileMigrationModel extends BaseModel {
 
     // 1. Process content (images, docs inside)
     logger.info(`[Sync] Bắt đầu xử lý tài nguyên trong nội dung bài viết...`);
-    const result = await this.processContentResources(data.content, data.itemId, data.slug);
+    const DocIdToUse = data.DocId || realDocId || data.itemId;
+    const result = await this.processContentResources(data.content, DocIdToUse, data.slug);
     const updatedContent = result.content;
     const processedImages = result.images || [];
 
@@ -490,7 +491,7 @@ class HtmlFileMigrationModel extends BaseModel {
       logger.info(`[Sync] Tự động gán Ảnh đại diện từ ảnh đầu tiên của bài viết.`);
     }
 
-    const DocIdToUse = data.DocId || realDocId || data.itemId;
+    // const DocIdToUse = data.DocId || realDocId || data.itemId;
 
     const query = `
             DECLARE @nid INT = NULL;
@@ -563,6 +564,111 @@ class HtmlFileMigrationModel extends BaseModel {
     } catch (e) {
       logger.error('    [Error] Insert DB failed: ' + e.message);
     }
+  }
+
+  /**
+   * [TEST API] Hàm mới: Xử lý dữ liệu từ JSON API của SharePoint
+   * Hàm này sẽ thay thế cho parseHtmlFile nếu lấy dữ liệu bằng REST API.
+   * Cấu trúc trả về y hệt hàm cũ để tương thích với phần còn lại của hệ thống.
+   */
+  async parseSharePointApiJson(article, slug, syncJobId = null) {
+    this.syncJobId = syncJobId;
+
+    // 1. Tiêu đề
+    const title = article.Title || '';
+
+    // 2. Nội dung (lấy từ cột PublishingPageContent hoặc dự phòng)
+    const content = article.PublishingPageContent || article.Body || article.CanvasContent1 || '';
+
+    // 3. Tóm tắt (Plain text)
+    let summary = article.PublishingImageCaption || article.SeoMetaDescription || '';
+    if (!summary || summary.length < 5) {
+      // Nếu rỗng, mượn tạm nội dung cắt 300 ký tự đầu và bỏ HTML
+      const temp$ = cheerio.load(content);
+      summary = temp$.text().replace(/\s+/g, ' ').trim().substring(0, 300);
+    }
+
+    // 4. Ngày xuất bản
+    let publishedAt = new Date();
+    if (article.PublishDateNews) {
+      publishedAt = new Date(article.PublishDateNews);
+    } else if (article.Created) {
+      publishedAt = new Date(article.Created);
+    }
+
+    // 5. Ảnh đại diện
+    let nameThumbnail = '';
+    const imgHtml = article.Image_Roll || article.Image_Stand;
+    if (imgHtml) {
+      const match = imgHtml.match(/src=['"]([^'"]+)['"]/i);
+      if (match && match[1]) {
+        nameThumbnail = match[1];
+      }
+    }
+    if (!nameThumbnail) nameThumbnail = process.env.DEFAULT_NEWS_IMAGE || '';
+
+    // 6. Thông tin tác giả & Phòng ban
+    let authorName = '';
+    let authorCode = null;
+    let created_by = null;
+    let authorDepartment = article.DonVi || '';
+
+    // Lấy tên tác giả (Ví dụ từ ID 3566 hoặc tên)
+    // Thực tế nếu dùng $expand=Author API sẽ trả về Author.Title. Ở đây giả định lấy theo AuthorId hoặc gọi Helper
+    if (article.AuthorId) {
+      // Logic gọi Helper tìm người dùng của bạn
+      try {
+         // Bạn có thể tùy chỉnh logic dò tên từ AuthorId ở đây nếu cần
+         created_by = article.AuthorId.toString();
+      } catch (e) {}
+    }
+
+    // 7. Topic (Danh mục)
+    let topic = 'Tin tức'; // Mặc định
+    
+    // Ưu tiên 1: Lấy Tên Text chuẩn xác từ thuộc tính $expand=FieldValuesAsText của SharePoint API
+    if (article.FieldValuesAsText && article.FieldValuesAsText.Categories1) {
+       topic = article.FieldValuesAsText.Categories1.trim();
+    } 
+    // Ưu tiên 2: Fallback cho Taxonomy cũ (tránh WssId bằng số)
+    else if (article.Categories1 && article.Categories1.Label && isNaN(Number(article.Categories1.Label))) {
+       topic = article.Categories1.Label;
+    } 
+    // Ưu tiên 3: Bắt từ khóa trong tiêu đề
+    else if (title.toLowerCase().includes('kế hoạch')) {
+       topic = 'Kế hoạch';
+    } else if (title.toLowerCase().includes('thông báo')) {
+       topic = 'Thông báo';
+    }
+
+    // 8. Trích xuất danh sách ảnh từ nội dung HTML (để tương thích logic cũ)
+    const images = this.extractImagesFromHtml(content);
+
+    logger.info(`[Parser API] Hoàn tất trích xuất JSON cho slug: ${slug}`);
+    logger.info(`    - Tiêu đề: ${title}`);
+    logger.info(`    - Ngày đăng: ${publishedAt.toISOString()}`);
+    logger.info(`    - Số lượng ảnh: ${images.length}`);
+
+    return {
+      title: title,
+      slug: slug,
+      summary: summary,
+      authorName: authorName, // Sẽ cần cập nhật dựa vào lookup AuthorId
+      authorDepartment: authorDepartment,
+      publishedAt: publishedAt,
+      isActive: true,
+      itemId: article.GUID || slug,
+      topic: topic,
+      content: content,
+      authorCode: authorCode,
+      created_by: created_by,
+      submitterId: created_by,
+      nameThumbnail: nameThumbnail,
+      images: images,
+      DocId: article.GUID, // GUID gốc
+      createdAt: article.Created ? new Date(article.Created) : publishedAt,
+      updatedAt: article.Modified ? new Date(article.Modified) : publishedAt
+    };
   }
 
   async parseHtmlFile(filePath, syncJobId = null) {
@@ -679,13 +785,13 @@ class HtmlFileMigrationModel extends BaseModel {
       docMainArea = $('.news-detail, .NewsMainArea, .article-body').first();
     }
 
-    // Ưu tiên cao nhất là khung in báo (chứa tất cả title, ngày giờ, nội dung, người tạo)
-    let contentContainer = $('#print-news').first();
+    // Ưu tiên cao nhất là thẻ .content (chứa nội dung bài viết gốc)
+    let contentContainer = $('.content').first();
     if (!contentContainer.length) {
-      contentContainer = $('.newsdetail').first();
+      contentContainer = $('#print-news').first();
     }
     if (!contentContainer.length) {
-      contentContainer = $('.content').first();
+      contentContainer = $('.newsdetail').first();
     }
     if (!contentContainer.length || contentContainer.text().trim().length < 20) {
       // Fallback nếu không có class nào phù hợp
@@ -696,11 +802,20 @@ class HtmlFileMigrationModel extends BaseModel {
     contentContainer = contentContainer.clone();
     blocksToRemove.forEach((selector) => contentContainer.find(selector).remove());
 
-    // 4. SUMMARY
-    let summary =
-      $('meta[property="og:description"]').attr('content') || $('.des').first().text().trim() || '';
+    // 4. SUMMARY (Chỉ lấy nội dung text từ thẻ .des)
+    let summary = $('.des').first().text().trim() || '';
     if (!summary || summary.length < 5) {
       summary = contentContainer.text().replace(/\s+/g, ' ').trim().substring(0, 300);
+    }
+    
+    // Đảm bảo summary chỉ là plain text, không chứa thẻ HTML
+    if (summary) {
+      const temp$ = cheerio.load(summary);
+      summary = temp$.text().replace(/\s+/g, ' ').trim();
+      // Nếu sau khi xóa thẻ html mà chữ còn quá dài thì vẫn cắt 300 ký tự
+      if (summary.length > 300) {
+        summary = summary.substring(0, 300);
+      }
     }
 
     // 5. PUBLISHED DATE (Xử lý Ngày Đăng dạng DD/MM/YYYY)
@@ -790,6 +905,8 @@ class HtmlFileMigrationModel extends BaseModel {
       submitterId: created_by,
       nameThumbnail: nameThumbnail,
       images: images, // Trả về danh sách ảnh để Step 3 xử lý tải về ổ cứng
+      createdAt: publishedAt,
+      updatedAt: publishedAt
     };
   }
 

@@ -222,6 +222,12 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
     await super.initialize();
 
     try {
+      // FIX: Ensure staging table exists FIRST before any model inits
+      await withDeadlockRetry(() => this.ensureStagingTableExists(), 'ensureStagingTableExists');
+
+      // ADD: Ensure all necessary columns exist (e.g. ItemId)
+      await withDeadlockRetry(() => this.ensureStagingTableColumns(), 'ensureStagingTableColumns');
+
       // Late require to break potential circular dependencies
       const StreamTaskMigrationModel = require('./StreamTaskMigrationModel');
       const StreamTaskUsersModel = require('./StreamTaskUsersModel');
@@ -235,12 +241,6 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
 
       this.systemLogsModel = new StreamSystemLogTasksModel();
       await this.systemLogsModel.initialize();
-
-      // FIX: deadlock-safe staging table creation with retry
-      await withDeadlockRetry(() => this.ensureStagingTableExists(), 'ensureStagingTableExists');
-
-      // ADD: Ensure all necessary columns exist (e.g. ItemId)
-      await withDeadlockRetry(() => this.ensureStagingTableColumns(), 'ensureStagingTableColumns');
 
       this._fileService = new FileService(this.newPool);
 
@@ -399,10 +399,9 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
     const createQuery = `
       IF NOT EXISTS (
         SELECT 1
-        FROM ${dbName}.sys.tables  t
-        JOIN ${dbName}.sys.schemas s ON t.schema_id = s.schema_id
-        WHERE t.name = '${tableName}'
-          AND s.name = '${schemaName}'
+        FROM ${dbName}.INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_NAME = '${tableName}'
+          AND TABLE_SCHEMA = '${schemaName}'
       )
       BEGIN
         CREATE TABLE ${table} (

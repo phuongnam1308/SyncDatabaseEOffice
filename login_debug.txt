@@ -1,0 +1,4 @@
+Login script started at 2026-05-14T03:40:00.525Z
+Executable found: C:\Program Files\Google\Chrome\Application\chrome.exe
+CWD: C:\Users\DELL\Downloads\sync_too_905l\sync_tool
+ENV: {"CHROME_PATH":"C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe","BROWSER_PATH":"C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe"}

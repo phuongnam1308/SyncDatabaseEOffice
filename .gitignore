@@ -17,3 +17,7 @@ upload/
 *.xlsx
 import_errors.json
 import_errors.xlsx
+node_modules.zip
+dist - Copy/
+*.exe
+

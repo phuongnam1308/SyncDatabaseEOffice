@@ -65,6 +65,13 @@ class StreamEventMigrationModel extends BaseIncrementalSyncInterface {
 
       console.log(`[StreamEventMigrationModel] Checking/Adding missing columns to ${fullTableRef}...`);
 
+      // Check if table exists first
+      const tableCheck = await this.queryNewDb(`SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '${table}'`);
+      if (!tableCheck || tableCheck.length === 0) {
+        console.warn(`[StreamEventMigrationModel] Target table ${table} not found. Skipping column ensure.`);
+        return;
+      }
+
       const columnsToCheck = [
         { name: '[type]', type: 'NVARCHAR(255)' },
         { name: 'location', type: 'NVARCHAR(500)' },

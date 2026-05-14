@@ -1,4 +1,4 @@
-﻿const logger = require('../../../utils/logger');
+const logger = require('../../../utils/logger');
 const dbUtils = require('../../../utils/dbUtils');
 const sql = require('mssql');
 const fs = require('fs');
@@ -52,66 +52,81 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
 
     // Đảm bảo bảng News chính có đầy đủ các cột cần thiết
     try {
-      await this.queryNewDb(`
-            -- 1. Đảm bảo cột tóm tắt (summary) đủ lớn để không bị truncated
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'summary')
-                ALTER TABLE dbo.news ADD summary NVARCHAR(MAX) NULL;
-            ELSE
-                ALTER TABLE dbo.news ALTER COLUMN summary NVARCHAR(MAX) NULL;
+      // Check if 'news' table exists first
+      const newsTableCheck = await this.queryNewDb(`SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'news'`);
+      if (newsTableCheck && newsTableCheck.length > 0) {
+        await this.queryNewDb(`
+              -- 1. Đảm bảo cột tóm tắt (summary) đủ lớn để không bị truncated
+              IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'summary')
+                  ALTER TABLE dbo.news ADD summary NVARCHAR(MAX) NULL;
+              ELSE
+                  ALTER TABLE dbo.news ALTER COLUMN summary NVARCHAR(MAX) NULL;
+  
+              -- 2. Đảm bảo các cột tiêu đề/tags cũng đủ lớn
+              IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'title')
+                  ALTER TABLE dbo.news ALTER COLUMN title NVARCHAR(500) NULL;
+              IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'tags')
+                  ALTER TABLE dbo.news ALTER COLUMN tags NVARCHAR(MAX) NULL;
+  
+              -- 3. Cột phòng ban tác giả
+              IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'authorDepartment')
+                  ALTER TABLE dbo.news ADD authorDepartment NVARCHAR(255) NULL;
+              ELSE
+                  ALTER TABLE dbo.news ALTER COLUMN authorDepartment NVARCHAR(255) NULL;
+  
+              -- 4. Các trường khác
+              IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'isBak')
+                  ALTER TABLE dbo.news ADD isBak INT DEFAULT 0;
+              IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'nameThumbnail')
+                  ALTER TABLE dbo.news ADD nameThumbnail NVARCHAR(500) NULL;
+              IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'topic')
+                  ALTER TABLE dbo.news ADD topic NVARCHAR(255) NULL;
+              -- 4. Cập nhật các cột ID sang NVARCHAR để tránh lỗi Conversion failed (uniqueidentifier)
+              IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'authorId' AND DATA_TYPE = 'uniqueidentifier')
+                  ALTER TABLE dbo.news ALTER COLUMN authorId NVARCHAR(100) NULL;
+              IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'DocId' AND DATA_TYPE = 'uniqueidentifier')
+                  ALTER TABLE dbo.news ALTER COLUMN DocId NVARCHAR(100) NULL;
+              IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'topic' AND DATA_TYPE = 'uniqueidentifier')
+                  ALTER TABLE dbo.news ALTER COLUMN topic NVARCHAR(255) NULL;
+              IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'reviewerId' AND DATA_TYPE = 'uniqueidentifier')
+                  ALTER TABLE dbo.news ALTER COLUMN reviewerId NVARCHAR(100) NULL;
+  
+              -- 5. Đảm bảo cột DocId tồn tại
+              IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'DocId')
+                  ALTER TABLE dbo.news ADD DocId NVARCHAR(100) NULL;
+  
+              -- 6. Cột người tạo (created_by)
+              IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'created_by')
+                  ALTER TABLE dbo.news ADD created_by NVARCHAR(100) NULL;
+  
+              -- 7. Cột mã nhân viên tác giả (authorCode)
+              IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'authorCode')
+                  ALTER TABLE dbo.news ADD authorCode NVARCHAR(255) NULL;
+          `);
+      } else {
+        logger.warn('[StreamNewsAspxPageIncrementalModel] Table "news" not found in target DB. Skipping column ensure.');
+      }
 
-            -- 2. Đảm bảo các cột tiêu đề/tags cũng đủ lớn
-            IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'title')
-                ALTER TABLE dbo.news ALTER COLUMN title NVARCHAR(500) NULL;
-            IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'tags')
-                ALTER TABLE dbo.news ALTER COLUMN tags NVARCHAR(MAX) NULL;
-
-            -- 3. Cột phòng ban tác giả
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'authorDepartment')
-                ALTER TABLE dbo.news ADD authorDepartment NVARCHAR(255) NULL;
-            ELSE
-                ALTER TABLE dbo.news ALTER COLUMN authorDepartment NVARCHAR(255) NULL;
-
-            -- 4. Các trường khác
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'isBak')
-                ALTER TABLE dbo.news ADD isBak INT DEFAULT 0;
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'nameThumbnail')
-                ALTER TABLE dbo.news ADD nameThumbnail NVARCHAR(500) NULL;
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'topic')
-                ALTER TABLE dbo.news ADD topic NVARCHAR(255) NULL;
-            -- 4. Cập nhật các cột ID sang NVARCHAR để tránh lỗi Conversion failed (uniqueidentifier)
-            IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'authorId' AND DATA_TYPE = 'uniqueidentifier')
-                ALTER TABLE dbo.news ALTER COLUMN authorId NVARCHAR(100) NULL;
-            IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'DocId' AND DATA_TYPE = 'uniqueidentifier')
-                ALTER TABLE dbo.news ALTER COLUMN DocId NVARCHAR(100) NULL;
-            IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'topic' AND DATA_TYPE = 'uniqueidentifier')
-                ALTER TABLE dbo.news ALTER COLUMN topic NVARCHAR(255) NULL;
-            IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'reviewerId' AND DATA_TYPE = 'uniqueidentifier')
-                ALTER TABLE dbo.news ALTER COLUMN reviewerId NVARCHAR(100) NULL;
-
-            -- 5. Đảm bảo cột DocId tồn tại
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'DocId')
-                ALTER TABLE dbo.news ADD DocId NVARCHAR(100) NULL;
-
-            -- 6. Cột người tạo (created_by)
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'created_by')
-                ALTER TABLE dbo.news ADD created_by NVARCHAR(100) NULL;
-
-            -- 7. Cột mã nhân viên tác giả (authorCode)
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'authorCode')
-                ALTER TABLE dbo.news ADD authorCode NVARCHAR(255) NULL;
-
-            -- 8. Đảm bảo bảng topics có các cột cần thiết cho migration
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'topics' AND COLUMN_NAME = 'tb_bak')
-                ALTER TABLE dbo.topics ADD tb_bak INT DEFAULT 0;
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'topics' AND COLUMN_NAME = 'href')
-                ALTER TABLE dbo.topics ADD href NVARCHAR(255) NULL;
-        `);
+      // Check if 'topics' table exists
+      const topicsTableCheck = await this.queryNewDb(`SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'topics'`);
+      if (topicsTableCheck && topicsTableCheck.length > 0) {
+        await this.queryNewDb(`
+              -- 8. Đảm bảo bảng topics có các cột cần thiết cho migration
+              IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'topics' AND COLUMN_NAME = 'tb_bak')
+                  ALTER TABLE dbo.topics ADD tb_bak INT DEFAULT 0;
+              IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'topics' AND COLUMN_NAME = 'href')
+                  ALTER TABLE dbo.topics ADD href NVARCHAR(255) NULL;
+          `);
+      } else {
+        logger.warn('[StreamNewsAspxPageIncrementalModel] Table "topics" not found in target DB. Skipping column ensure.');
+      }
+      
       logger.info(
-        '[StreamNewsAspxPageIncrementalModel] Schema widened (NVARCHAR(MAX)) for dbo.news.',
+        '[StreamNewsAspxPageIncrementalModel] Schema check/widening completed for dbo.news and dbo.topics.',
       );
     } catch (e) {
       logger.warn(
-        `[StreamNewsAspxPageIncrementalModel] Lỗi khi mở rộng schema bảng news: ${e.message}`,
+        `[StreamNewsAspxPageIncrementalModel] Lỗi khi mở rộng schema bảng news/topics: ${e.message}`,
       );
     }
 
@@ -1105,6 +1120,77 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
       this._processingDocIds.delete(docId);
     }
   }
+  /**
+   * [TEST API] Gọi thẳng SharePoint REST API để lấy JSON của bài viết dựa vào tên file
+   */
+  async fetchArticleJsonFromApi(leafName) {
+    const fs = require('fs');
+    const path = require('path');
+    const axios = require('axios');
+    const https = require('https');
+    const { refreshAuth } = require('../../sync-file-copy/SharePointAuthService');
+
+    const domain = process.env.SHAREPOINT_DOMAIN || 'eoffice.saigonnewport.com.vn';
+    const baseUrl = `https://${domain}/tintuc`; // Tuỳ thuộc sub-site của bạn
+    const listName = 'Pages';
+    const apiUrl = `${baseUrl}/_api/web/lists/getbytitle('${listName}')/items?$filter=FileLeafRef eq '${leafName}'`;
+
+    let cookie = '';
+    const cookiePath = path.join(process.cwd(), 'auth', 'cookie.txt');
+    if (fs.existsSync(cookiePath)) {
+      cookie = fs.readFileSync(cookiePath, 'utf8').trim();
+    }
+
+    const httpsAgent = new https.Agent({ rejectUnauthorized: false });
+
+    // Gọi lần 1
+    let response;
+    try {
+      response = await axios.get(apiUrl, {
+        httpsAgent,
+        headers: { 'Accept': 'application/json;odata=verbose', 'Cookie': cookie }
+      });
+    } catch (error) {
+      if (error.response && (error.response.status === 401 || error.response.status === 403)) {
+         logger.warn(`[API] Cookie hết hạn khi gọi API JSON. Đang làm mới Token...`);
+         await refreshAuth(this.pool);
+         cookie = fs.readFileSync(cookiePath, 'utf8').trim(); // Đọc lại cookie mới
+         response = await axios.get(apiUrl, { // Gọi lần 2
+            httpsAgent,
+            headers: { 'Accept': 'application/json;odata=verbose', 'Cookie': cookie }
+         });
+      } else {
+         throw error;
+      }
+    }
+
+    const items = response.data?.d?.results;
+    if (items && items.length > 0) {
+       const article = items[0];
+       
+       // Bước 2: Dịch Taxonomy ID (WssId) thành Tên thật (Plain Text) từ Root Site
+       const taxonomyId = article.Categories1 && article.Categories1.Label ? article.Categories1.Label : null;
+       if (taxonomyId && !isNaN(Number(taxonomyId))) {
+           try {
+               const rootUrl = `https://${domain}`;
+               const taxApiUrl = `${rootUrl}/_api/web/lists/getbytitle('TaxonomyHiddenList')/items(${taxonomyId})`;
+               const taxResponse = await axios.get(taxApiUrl, {
+                   httpsAgent,
+                   headers: { 'Accept': 'application/json;odata=verbose', 'Cookie': cookie }
+               });
+               const taxItem = taxResponse.data.d;
+               // Ghi đè số ID thành chữ
+               article.Categories1.Label = taxItem.Term || taxItem.Title || taxonomyId;
+               logger.info(`[API] Đã dịch chuyên mục ID ${taxonomyId} thành "${article.Categories1.Label}"`);
+           } catch (taxErr) {
+               logger.warn(`[API] Không thể dịch chuyên mục ID ${taxonomyId}. Lỗi: ${taxErr.message}`);
+           }
+       }
+       
+       return article;
+    }
+    return null;
+  }
 
   async processRowData(rowData, syncJobId) {
     const docId = rowData?.DocId;
@@ -1355,7 +1441,23 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
     if (isNewsArticle) {
       logger.info(`[Parser Hook] Bắt đầu phân giải nội dung file: ${localPath}`);
       try {
-        parsedData = await this.htmlParser.parseHtmlFile(localPath, syncJobId);
+        // ==========================================
+        //  CÁCH CŨ: DÙNG THƯ VIỆN PARSE HTML (.aspx)
+        // ==========================================
+
+        // parsedData = await this.htmlParser.parseHtmlFile(localPath, syncJobId);
+
+        // ==========================================
+        //  CÁCH MỚI [TEST API]: LẤY DỮ LIỆU BẰNG JSON 
+        // ==========================================
+        // Nếu bạn muốn test chạy bằng JSON API, hãy comment dòng parseHtmlFile ở trên lại 
+        // và bỏ comment 5 dòng code dưới đây:
+        // 
+        const slug = path.basename(localPath, '.aspx');
+        const apiArticleData = await this.fetchArticleJsonFromApi(rowData.LeafName);
+        if (!apiArticleData) throw new Error('Không lấy được JSON từ API SharePoint cho bài: ' + rowData.LeafName);
+        parsedData = await this.htmlParser.parseSharePointApiJson(apiArticleData, slug, syncJobId);
+        // ==========================================
         if (parsedData) {
           logger.info(
             `[Parser Hook] Phân giải thành công. Tiêu đề: "${parsedData.title}" | Chủ đề: "${parsedData.topic}"`,
@@ -1553,6 +1655,18 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
               await this.createAuditRecord(resultProd.newsId, parsedData.publishedAt, trans);
               actionLogs.push({ table: 'audit', action: 'DUYET' });
             }
+
+            // === FIX LINKING FILE: Cập nhật object_id cho các file vừa upload từ DocId sang newsId mới sinh ===
+            if (resultProd.newsId && parsedData.DocId) {
+                await this.queryNewDbTx(
+                    `UPDATE dbo.file_relations 
+                     SET object_id = CAST(@newsId AS NVARCHAR(50))
+                     WHERE object_id = @docId AND object_type IN ('news', 'NEWS')`,
+                    { newsId: String(resultProd.newsId), docId: String(parsedData.DocId) },
+                    trans
+                );
+                logger.info(`[Production Sync] Đã liên kết lại file: DocId ${parsedData.DocId} ➔ news.id ${resultProd.newsId}`);
+            }
           },
           { maxRetries: 5 },
         );
@@ -1680,7 +1794,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
                     authorCode = @authorCode,
                     publishedAt = @publishedAt,
                     status = @status,
-                    updatedAt = GETDATE(),
+                    updatedAt = @updatedAt,
                     topic = @topic,
                     nameThumbnail = @nameThumbnail,
                     tags = @tags,
@@ -1703,9 +1817,9 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
                 )
                 VALUES (
                     @title, @slug, @content, @summary, @authorName, @authorDepartment, @authorId, @authorCode,
-                    @publishedAt, @status, GETDATE(), GETDATE(), @topic, @nameThumbnail,
+                    @publishedAt, @status, @createdAt, @updatedAt, @topic, @nameThumbnail,
                     1, 0, 0, @tags, 1, @DocId, @authorId,
-                    @authorId, @authorName, GETDATE(), @submitterId, @authorName, GETDATE()
+                    @authorId, @authorName, @updatedAt, @submitterId, @authorName, @createdAt
                 );
                 SELECT SCOPE_IDENTITY() AS newsId, 'inserted' AS action;
             END
@@ -1729,6 +1843,8 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
         tags: data.tags, // Usually NVARCHAR(MAX)
         DocId: data.DocId,
         created_by: this.safeTrim(authorId, 100),
+        createdAt: data.createdAt || data.publishedAt || new Date(),
+        updatedAt: data.updatedAt || data.publishedAt || new Date(),
       },
       transaction,
     );
