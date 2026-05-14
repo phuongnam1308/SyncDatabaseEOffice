@@ -1689,35 +1689,20 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       );
       await this.logNonCriticalJobError(syncJobId, taskId, `[Workitems] ${workitemErr.message}`);
     }
-    // â”€â”€ 3. System log â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â”€â”€ 3. System log (khÃ´ng sync lá»‹ch sá»­ cÅ©) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     try {
-      const oldDocumentId = stagingRow?.VBId ? String(stagingRow.VBId).trim() : null;
-      const historyResult = oldDocumentId
-        ? await this.systemLogsModel.syncFullHistoryForTask(
-          { idTask: newTaskId, oldDocumentId, userInfo: createdBy, createdAt },
-          transaction
-        )
-        : { success: true, inserted: 0, updated: 0, total: 0 };
-
-      if (historyResult?.success && Number(historyResult.total || 0) > 0) {
-        logger.info(
-          `[log] full_history synced task=${newTaskId} total=${historyResult.total} inserted=${historyResult.inserted} updated=${historyResult.updated}`
-        );
-        totalAffected += Number(historyResult.inserted || 0) + Number(historyResult.updated || 0);
+      const logResult = await this.systemLogsModel.createLogForTask(
+        { idTask: newTaskId, userInfo: createdBy, createdAt },
+        transaction
+      );
+      if (logResult.success) {
+        logger.info(`[log] logId=${logResult.logId} created=true`);
+        totalAffected += 1;
       } else {
-        const logResult = await this.systemLogsModel.createLogForTask(
-          { idTask: newTaskId, userInfo: createdBy, createdAt },
-          transaction
-        );
-        if (logResult.success) {
-          logger.info(`[log] fallback logId=${logResult.logId} created=true`);
-          totalAffected += 1;
-        } else {
-          logger.warn(`[StreamTaskInIncrementalModel] Log creation returned success=false for task_id=${newTaskId}`, {
-            logResult
-          });
-          await this.logNonCriticalJobError(syncJobId, taskId, '[SystemLog] createLogForTask returned success=false');
-        }
+        logger.warn(`[StreamTaskInIncrementalModel] Log creation returned success=false for task_id=${newTaskId}`, {
+          logResult
+        });
+        await this.logNonCriticalJobError(syncJobId, taskId, '[SystemLog] createLogForTask returned success=false');
       }
     } catch (logErr) {
       // SUB-TABLE ERROR: Log warning only, do NOT throw
