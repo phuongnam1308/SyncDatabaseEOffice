@@ -136,7 +136,7 @@ function mapData(validDataRows) {
 
   const usageStatusMap = {
     'Đang sử dụng': 'IN_USE',
-    'Đã hết hạn':   'EXPIRED',
+    'Đã hết hạn':   'STORING',   // Hộ chiếu hết hạn → lưu trữ
     'Sắp hết hạn':  'EXPIRING_SOON',
     'Đã hoàn trả':  'RETURNED',
     'Không sử dụng':'STORING',
@@ -175,8 +175,13 @@ function mapData(validDataRows) {
         return null;
     };
 
-    const uStatus = findStatusMap(usageStatusMap, uStatusExcel)  || 'STORING';
+    let uStatus = findStatusMap(usageStatusMap, uStatusExcel) || 'STORING';
     const bStatus = findStatusMap(borrowStatusMap, bStatusExcel) || 'NOT_BORROWED';
+
+    // Nếu ngày hết hạn đã qua → bắt buộc lưu trữ (STORING), bất kể trạng thái Excel
+    if (expiryDate && expiryDate < now) {
+      uStatus = 'STORING';
+    }
 
     processed.push({
       id:               uuidv4(),
