@@ -66,7 +66,7 @@ class StreamEventMigrationModel extends BaseIncrementalSyncInterface {
       console.log(`[StreamEventMigrationModel] Checking/Adding missing columns to ${fullTableRef}...`);
 
       // Check if table exists first
-      const tableCheck = await this.queryNewDb(`SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '${table}'`);
+      const tableCheck = await this.queryNewDb(`SELECT 1 FROM [${this.newDbName}].INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '${table}'`);
       if (!tableCheck || tableCheck.length === 0) {
         console.warn(`[StreamEventMigrationModel] Target table ${table} not found. Skipping column ensure.`);
         return;
@@ -83,7 +83,7 @@ class StreamEventMigrationModel extends BaseIncrementalSyncInterface {
 
       for (const col of columnsToCheck) {
         const query = `
-          IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${table}' AND COLUMN_NAME = '${col.name.replace('[', '').replace(']', '')}')
+          IF NOT EXISTS (SELECT 1 FROM [${this.newDbName}].INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${table}' AND COLUMN_NAME = '${col.name.replace('[', '').replace(']', '')}')
           BEGIN
               ALTER TABLE ${fullTableRef} ADD ${col.name} ${col.type} NULL;
           END
@@ -93,7 +93,7 @@ class StreamEventMigrationModel extends BaseIncrementalSyncInterface {
 
       // Đảm bảo có Index cho id_sp_bak
       const indexQuery = `
-        IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${table}_id_sp_bak')
+        IF NOT EXISTS (SELECT 1 FROM [${this.newDbName}].sys.indexes i JOIN [${this.newDbName}].sys.tables t ON i.object_id = t.object_id WHERE i.name = 'IX_${table}_id_sp_bak' AND t.name = '${table}')
         BEGIN
             CREATE INDEX IX_${table}_id_sp_bak ON ${fullTableRef}(id_sp_bak);
         END
@@ -115,7 +115,7 @@ class StreamEventMigrationModel extends BaseIncrementalSyncInterface {
 
       // 1. Tạo bảng cơ bản nếu chưa có
       const createQuery = `
-      IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '${schema}' AND TABLE_NAME = '${table}')
+      IF NOT EXISTS (SELECT 1 FROM [${this.newDbName}].INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '${schema}' AND TABLE_NAME = '${table}')
       BEGIN
           CREATE TABLE ${stagingTableRef} (
               [SY_SyncId] INT IDENTITY(1,1) PRIMARY KEY,
@@ -218,18 +218,9 @@ class StreamEventMigrationModel extends BaseIncrementalSyncInterface {
           { name: 'Name', type: 'NVARCHAR(MAX)' }
       ];
 
-
-
-
-
-
-
-
-
-
       for (const col of columnsToAdd) {
           const alterQuery = `
-          IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${table}' AND TABLE_SCHEMA = '${schema}' AND COLUMN_NAME = '${col.name}')
+          IF NOT EXISTS (SELECT 1 FROM [${this.newDbName}].INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${table}' AND TABLE_SCHEMA = '${schema}' AND COLUMN_NAME = '${col.name}')
           BEGIN
               ALTER TABLE ${stagingTableRef} ADD [${col.name}] ${col.type} NULL;
           END
