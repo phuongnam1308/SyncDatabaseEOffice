@@ -366,78 +366,7 @@ class Extractor extends BaseExtractor {
     }
   }
 
-  /**
-   * Sync batch of rows to staging table using IF EXISTS UPDATE ... ELSE INSERT
-   * (matching the original StreamOutgoingIncrementalModel approach)
-   */
-  async syncBatchToStaging(rows, instanceId, transaction = null) {
-    if (!Array.isArray(rows) || rows.length === 0) {
-      return { stagedCount: 0 };
-    }
 
-    const stagingTable = this.getStagingTableName(instanceId);
-    const internalColumns = new Set(['MigrateFlg', 'MigrateErrFlg', 'MigrateErrMess', '_sync_time_val', '_sync_id_val']);
-
-    const columns = Object.keys(rows[0] || {}).filter(col => !String(col).startsWith('__') && !internalColumns.has(col));
-    if (!columns.length) {
-      return { stagedCount: 0 };
-    }
-
-    if (!columns.includes('ID')) {
-      throw new Error('Staging sync requires source column "ID"');
-    }
-
-    const safeColumns = columns.map(col => this.sanitizeColumnName(col));
-    const nonIdColumns = columns.filter(col => col !== 'ID');
-    const safeNonIdColumns = nonIdColumns.map(col => this.sanitizeColumnName(col));
-
-    const request = transaction || this.newPool.request();
-
-    for (const row of rows) {
-      const rawId = row?.ID;
-      if (rawId == null || String(rawId).trim() === '') {
-        throw new Error('Row ID is required for staging');
-      }
-
-      const updateClause = safeNonIdColumns
-        .map((columnName, idx) => `${columnName} = @${nonIdColumns[idx]}`)
-        .join(', ');
-
-      const query = `
-        IF EXISTS (SELECT 1 FROM ${stagingTable} WHERE ID = @ID)
-        BEGIN
-          ${nonIdColumns.length > 0 ? `
-          UPDATE ${stagingTable}
-          SET ${updateClause},
-              MigrateFlg = 0,
-              MigrateErrFlg = 0,
-              MigrateErrMess = NULL
-          WHERE ID = @ID;` : `
-          UPDATE ${stagingTable}
-          SET MigrateFlg = 0,
-              MigrateErrFlg = 0,
-              MigrateErrMess = NULL
-          WHERE ID = @ID;`}
-        END
-        ELSE
-        BEGIN
-          INSERT INTO ${stagingTable} (${safeColumns.join(', ')})
-          VALUES (${columns.map((column) => `@${column}`).join(', ')});
-        END
-      `;
-
-      const subRequest = transaction ? transaction.request() : this.newPool.request();
-      for (const column of columns) {
-        subRequest.input(column, row[column]);
-      }
-      
-      await subRequest.query(query);
-      logger.info(`  └─ [Staging] ID: ${rawId} | Action: ${safeNonIdColumns.length > 0 ? 'UPSERT' : 'INSERT'}`);
-    }
-
-    logger.info(`[${this.modelName}] Synced ${rows.length} rows to staging table ${stagingTable}`);
-    return { stagedCount: rows.length };
-  }
 }
 
 module.exports = Extractor;

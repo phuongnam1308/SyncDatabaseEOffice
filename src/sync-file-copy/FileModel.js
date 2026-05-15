@@ -20,37 +20,37 @@ class FileModel extends BaseModel {
     try {
       const dbName = process.env.NEW_DB_NAME;
       await this.queryDb(`
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'nguoikyvanban')
+        IF NOT EXISTS (SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'nguoikyvanban')
             ALTER TABLE ${dbName}.dbo.${this.newTable} ADD nguoikyvanban NVARCHAR(MAX) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'id_bak')
+        IF NOT EXISTS (SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'id_bak')
             ALTER TABLE ${dbName}.dbo.${this.newTable} ADD id_bak NVARCHAR(MAX) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'table_bak')
+        IF NOT EXISTS (SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'table_bak')
             ALTER TABLE ${dbName}.dbo.${this.newTable} ADD table_bak NVARCHAR(MAX) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'type_doc')
+        IF NOT EXISTS (SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'type_doc')
             ALTER TABLE ${dbName}.dbo.${this.newTable} ADD type_doc NVARCHAR(MAX) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'isBak')
+        IF NOT EXISTS (SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'isBak')
             ALTER TABLE ${dbName}.dbo.${this.newTable} ADD isBak NVARCHAR(MAX) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'isNumbered')
+        IF NOT EXISTS (SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'isNumbered')
             ALTER TABLE ${dbName}.dbo.${this.newTable} ADD isNumbered TINYINT DEFAULT 0 NOT NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'typeSize')
+        IF NOT EXISTS (SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'typeSize')
             ALTER TABLE ${dbName}.dbo.${this.newTable} ADD typeSize NVARCHAR(100) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'is_important')
+        IF NOT EXISTS (SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'is_important')
             ALTER TABLE ${dbName}.dbo.${this.newTable} ADD is_important BIT DEFAULT 0 NOT NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'file_type')
+        IF NOT EXISTS (SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'file_type')
             ALTER TABLE ${dbName}.dbo.${this.newTable} ADD file_type NVARCHAR(100) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'version')
+        IF NOT EXISTS (SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'version')
             ALTER TABLE ${dbName}.dbo.${this.newTable} ADD version VARCHAR(100) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'is_signed_file')
+        IF NOT EXISTS (SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'is_signed_file')
             ALTER TABLE ${dbName}.dbo.${this.newTable} ADD is_signed_file BIGINT NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'number_of_signed_file')
+        IF NOT EXISTS (SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'number_of_signed_file')
             ALTER TABLE ${dbName}.dbo.${this.newTable} ADD number_of_signed_file BIGINT NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'storage_path')
+        IF NOT EXISTS (SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'storage_path')
             ALTER TABLE ${dbName}.dbo.${this.newTable} ADD storage_path NVARCHAR(255) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'storage_type')
+        IF NOT EXISTS (SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'storage_type')
             ALTER TABLE ${dbName}.dbo.${this.newTable} ADD storage_type VARCHAR(100) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'status')
+        IF NOT EXISTS (SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.newTable}' AND COLUMN_NAME = 'status')
             ALTER TABLE ${dbName}.dbo.${this.newTable} ADD status INT NULL;
-      `, {}, transaction);
+      `, {}, this.newPool ? null : transaction);
       this._ensureColumnsDone = true;
     } catch(err) {
       logger.warn(`[FileModel] ensureColumns failed: ${err.message}`);
@@ -192,6 +192,7 @@ class FileModel extends BaseModel {
           isNumbered, typeSize, id_bak, table_bak, type_doc, isBak,
           nguoikyvanban, is_important, file_type
         )
+        OUTPUT inserted.id
         VALUES (
           @file_name, @file_path, @mime_type, @file_size, @description, @is_directory,
           @parent_id, @created_by,
@@ -202,12 +203,11 @@ class FileModel extends BaseModel {
           @isNumbered, @typeSize, @id_bak, @table_bak, @type_doc, @isBak,
           @nguoikyvanban, @is_important, @file_type
         );
-        -- Trả về id vừa được SQL Server tự sinh
-        SELECT SCOPE_IDENTITY() AS new_id;
+
       `;
 
       const rows = await this.queryDb(query, this._mapParams(record), transaction);
-      return { action: 'inserted', newId: rows?.[0]?.new_id ?? null };
+      return { action: 'inserted', newId: rows?.[0]?.id ?? null };
     } catch (error) {
       logger.error('[FileModel] Lỗi insert:', error);
       throw error;

@@ -86,7 +86,7 @@ class UpsertHandler {
       this._syncAuditModel.push(model);
     }
 
-    this._fileService = new FileService();
+    this._fileService = new FileService(this.newPool);
     logger.info(`[UpsertHandler] Initialized with ${this._syncAuditModel.length} audit models`);
   }
 
@@ -145,8 +145,20 @@ class UpsertHandler {
       }));
     }
 
+    // Step 1.5: Ensure FileService has a valid Keycloak token BEFORE opening the SQL transaction.
+    // If the token is expired, Playwright will take 5-10 seconds to fetch a new one. 
+    // Doing this inside the transaction would cause SQL timeout.
+    if (this._fileService && typeof this._fileService._getNewSystemToken === 'function') {
+      try {
+        await this._fileService._getNewSystemToken();
+      } catch (err) {
+        logger.warn(`[UpsertHandler] Failed to pre-fetch API token: ${err.message}`);
+      }
+    }
+
     // Step 2: Try processing entire batch in a single transaction
     let batchSuccess = true;
+    const successfulDocs = [];
     try {
       await dbUtils.withTransactionRetry(this.newPool, async (transaction) => {
         for (const oldRecord of records) {
@@ -158,20 +170,31 @@ class UpsertHandler {
           const documentId = docResult.documentId;
           const drafter = docResult.drafter;
 
-          const preparedFiles = preparedFilesMap.get(oldRecord.ID) || [];
-          await this._applyPreparedFiles(preparedFiles, oldRecord, {
-            id: documentId,
-            type_doc: 1,
-            drafter
-          }, transaction);
-
           const isNew = docResult.action === 'INSERT' || docResult.action === 'inserted';
           await this._processAudits(oldRecord, documentId, id, drafter, transaction, isNew);
           await this._processHtmlComments(oldRecord, documentId, id, transaction);
+          
+          successfulDocs.push({ oldRecord, docResult });
         }
       });
-      // If success, all records succeeded
-      records.forEach(r => successIds.push(r.ID));
+      // If success, process files outside transaction and mark as succeeded
+      for (const { oldRecord, docResult } of successfulDocs) {
+        successIds.push(oldRecord.ID);
+        const preparedFiles = preparedFilesMap.get(oldRecord.ID) || [];
+        
+        // Memory optimization: Clear from map immediately so GC can reclaim buffers
+        preparedFilesMap.delete(oldRecord.ID);
+
+        try {
+          await this._applyPreparedFiles(preparedFiles, oldRecord, {
+            id: docResult.documentId,
+            type_doc: 1,
+            drafter: docResult.drafter
+          });
+        } catch (fileErr) {
+          logger.warn(`[UpsertHandler] File upload failed for ${docResult.documentId}: ${fileErr.message}`);
+        }
+      }
     } catch (batchError) {
       logger.error(`[UpsertHandler] Batch transaction failed, falling back to sequential processing: ${batchError.message}`);
       batchSuccess = false;
@@ -181,25 +204,39 @@ class UpsertHandler {
     if (!batchSuccess) {
       for (const oldRecord of records) {
         try {
+          let currentDocResult = null;
           await dbUtils.withTransactionRetry(this.newPool, async (transaction) => {
             const id = String(oldRecord?.ID || '').trim();
             const docResult = await this._processDocument(oldRecord, transaction);
             if (!docResult || docResult.affected === 0) return;
 
+            currentDocResult = docResult;
             const documentId = docResult.documentId;
             const drafter = docResult.drafter;
-
-            const preparedFiles = preparedFilesMap.get(oldRecord.ID) || [];
-            await this._applyPreparedFiles(preparedFiles, oldRecord, {
-              id: documentId,
-              type_doc: 1,
-              drafter
-            }, transaction);
 
             const isNew = docResult.action === 'INSERT' || docResult.action === 'inserted';
             await this._processAudits(oldRecord, documentId, id, drafter, transaction, isNew);
             await this._processHtmlComments(oldRecord, documentId, id, transaction);
           });
+          
+          // Files outside transaction
+          if (currentDocResult && currentDocResult.affected > 0) {
+            const preparedFiles = preparedFilesMap.get(oldRecord.ID) || [];
+            
+            // Memory optimization: Clear from map immediately
+            preparedFilesMap.delete(oldRecord.ID);
+
+            try {
+              await this._applyPreparedFiles(preparedFiles, oldRecord, {
+                id: currentDocResult.documentId,
+                type_doc: 1,
+                drafter: currentDocResult.drafter
+              });
+            } catch (fileErr) {
+              logger.warn(`[UpsertHandler] File upload failed for ${currentDocResult.documentId}: ${fileErr.message}`);
+            }
+          }
+          
           successIds.push(oldRecord.ID);
         } catch (singleError) {
           logger.error(`[UpsertHandler] Fallback failed for ID=${oldRecord.ID}: ${singleError.message}`);
