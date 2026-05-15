@@ -116,9 +116,9 @@ class OutgoingMapper {
     const category = oldRecord.Category || '';
 
     if (sourceTable) {
-       // Lấy phần định danh sau dấu gạch dưới cuối cùng (ví dụ: LuanChuyenVanBan_TCMT -> TCMT)
-       const parts = sourceTable.split('_');
-       suffix = parts.length > 1 ? parts[parts.length - 1] : 'DI';
+      // Lấy phần định danh sau dấu gạch dưới cuối cùng (ví dụ: LuanChuyenVanBan_TCMT -> TCMT)
+      const parts = sourceTable.split('_');
+      suffix = parts.length > 1 ? parts[parts.length - 1] : 'DI';
     } else if (category.includes('TCT')) {
       suffix = 'TCT';
     } else if (category.includes('ĐV')) {
@@ -158,6 +158,7 @@ class OutgoingMapper {
       vieweds: viewedsStr,
       created_at: createdAt,
       updated_at: updatedAt,
+      document_date: promulgationDate ?? createdAt ?? updatedAt, // Bổ sung document_date cho Văn bản đi
       text_symbols: textSymbols,
       replaced: this.helper.mapBit(0),
       tb_bak: this.helper.mapBit(1),

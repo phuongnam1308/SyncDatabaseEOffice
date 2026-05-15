@@ -14,6 +14,7 @@ class SyncOutgoingV3Adapter {
     this._name = `StreamOutgoingV3_Instance_${this._instanceId}`;
     this._model = null;
     this._initialized = false;
+    this.isBatchSync = true; // Đánh dấu đây là module xử lý theo lô để SyncHandlerModel điều chỉnh hiển thị Dashboard
   }
 
   /**
@@ -77,8 +78,9 @@ class SyncOutgoingV3Adapter {
    * Implement countListFromOldDb - required for dashboard in Full Sync mode
    */
   async countListFromOldDb(lastSyncTime, lastSyncId = 0) {
-    if (!this._model || !this._model.extractor) return 0;
-    return this._model.extractor.countListFromOldDb(lastSyncTime, lastSyncId);
+    // Để hiển thị đúng tổng số record trên Dashboard (x/Total), 
+    // ta cần trả về tổng của cả Staging và Source DB giống như getCount.
+    return this.getCount(lastSyncTime, lastSyncId);
   }
 
   /**

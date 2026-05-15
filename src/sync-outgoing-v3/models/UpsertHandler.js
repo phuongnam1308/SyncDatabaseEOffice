@@ -306,7 +306,8 @@ class UpsertHandler {
         external_receiving_unit, internal_receiving_dept, id_outgoing_bak,
         bpmn_version, type_of_process, type_doc, know_receivers, vieweds,
         sign_type, from_create_draf, replaced, tb_bak, table_backups,
-        internal_receiving_dept_old, processor, files, stage_status
+        internal_receiving_dept_old, processor, files, stage_status,
+        document_date
       ) VALUES (
         @document_id, @status_code, @sender_unit, @drafter, @document_type,
         @urgency_level, @private_level, @document_field, @report_signer,
@@ -319,7 +320,8 @@ class UpsertHandler {
         @external_receiving_unit, @internal_receiving_dept, @id_outgoing_bak,
         @bpmn_version, @type_of_process, @type_doc, @know_receivers, @vieweds,
         @sign_type, @from_create_draf, @replaced, @tb_bak, @table_backups,
-        @internal_receiving_dept_old, @processor, @files, @stage_status
+        @internal_receiving_dept_old, @processor, @files, @stage_status,
+        @document_date
       )
     `;
 
@@ -376,7 +378,8 @@ class UpsertHandler {
       internal_receiving_dept_old: record.internal_receiving_dept_old,
       processor: record.processor ?? null,
       files: record.files ?? null,
-      stage_status: record.stage_status
+      stage_status: record.stage_status,
+      document_date: record.document_date
     };
 
     await this.queryNewDbTx(query, params, transaction);
@@ -430,7 +433,8 @@ class UpsertHandler {
         stage_status = @stage_status,
         know_receivers = @know_receivers,
         vieweds = @vieweds,
-        id_outgoing_bak = @id_outgoing_bak
+        id_outgoing_bak = @id_outgoing_bak,
+        document_date = @document_date
       WHERE id_outgoing_bak = @id_outgoing_bak
     `;
 
@@ -459,7 +463,8 @@ class UpsertHandler {
       stage_status: record.stage_status,
       know_receivers: record.know_receivers,
       vieweds: record.vieweds,
-      id_outgoing_bak: record.id_outgoing_bak
+      id_outgoing_bak: record.id_outgoing_bak,
+      document_date: record.document_date
     }, transaction);
   }
 

@@ -1043,11 +1043,12 @@ class SyncAuditModel extends BaseModel {
             curStatusCode = @curStatusCode_${index},
             [role] = @role_${index},
             type_document = @type_document_${index},
-            updated_at = GETDATE()
+            updated_at = @updated_at_${index}
           WHERE id = @id_${index};
         `;
         
         params[`id_${index}`] = id;
+        params[`updated_at_${index}`] = data.time || new Date();
         params[`document_id_${index}`] = data.document_id;
         params[`display_name_${index}`] = data.display_name ?? null;
         params[`action_code_${index}`] = data.action_code ?? null;
