@@ -223,10 +223,18 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
 
     try {
       // FIX: Ensure staging table exists FIRST before any model inits
-      await withDeadlockRetry(() => this.ensureStagingTableExists(), 'ensureStagingTableExists');
+      try {
+        await withDeadlockRetry(() => this.ensureStagingTableExists(), 'ensureStagingTableExists');
+      } catch (err) {
+        logger.error(`[StreamTaskOutIncrementalModel] ensureStagingTableExists WARN (non-fatal): ${err.message}`);
+      }
 
       // ADD: Ensure all necessary columns exist (e.g. ItemId)
-      await withDeadlockRetry(() => this.ensureStagingTableColumns(), 'ensureStagingTableColumns');
+      try {
+        await withDeadlockRetry(() => this.ensureStagingTableColumns(), 'ensureStagingTableColumns');
+      } catch (err) {
+        logger.error(`[StreamTaskOutIncrementalModel] ensureStagingTableColumns WARN (non-fatal): ${err.message}`);
+      }
 
       // Late require to break potential circular dependencies
       const StreamTaskMigrationModel = require('./StreamTaskMigrationModel');
@@ -282,7 +290,7 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
       );
     } catch (error) {
       logger.error('[StreamTaskOutIncrementalModel.initialize]', error);
-      throw error;
+      // DO NOT throw error to allow model registration
     }
   }
 

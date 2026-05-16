@@ -238,16 +238,24 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
 
     try {
       // FIX: Ensure staging table exists FIRST before any column checks or model inits
-      await withDeadlockRetry(
-        () => this.ensureStagingTableExists(),
-        'ensureStagingTableExists'
-      );
+      try {
+        await withDeadlockRetry(
+          () => this.ensureStagingTableExists(),
+          'ensureStagingTableExists'
+        );
+      } catch (err) {
+        logger.error(`[StreamTaskInIncrementalModel] ensureStagingTableExists WARN (non-fatal): ${err.message}`);
+      }
 
       // ADD: Ensure all necessary columns exist (e.g. ItemId)
-      await withDeadlockRetry(
-        () => this.ensureStagingTableColumns(),
-        'ensureStagingTableColumns'
-      );
+      try {
+        await withDeadlockRetry(
+          () => this.ensureStagingTableColumns(),
+          'ensureStagingTableColumns'
+        );
+      } catch (err) {
+        logger.error(`[StreamTaskInIncrementalModel] ensureStagingTableColumns WARN (non-fatal): ${err.message}`);
+      }
 
       // Late require to break potential circular dependencies
       const StreamTaskMigrationModel = require('./StreamTaskMigrationModel');
@@ -313,7 +321,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       logger.info('[StreamTaskInIncrementalModel] Initialized with transaction-based aggregate processing');
     } catch (error) {
       logger.error('[StreamTaskInIncrementalModel.initialize]', error);
-      throw error;
+      // DO NOT throw error to allow model registration
     }
   }
 
