@@ -93,7 +93,12 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
             IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '${schema}' AND TABLE_NAME = '${table}' AND COLUMN_NAME = 'source_db')
             BEGIN
                 ALTER TABLE ${stagingTableRef} ADD [source_db] NVARCHAR(255) NULL;
-                IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${table}_ID') DROP INDEX IX_${table}_ID ON ${stagingTableRef};
+                IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${table}_ID' AND object_id = OBJECT_ID('${stagingTableRef}')) 
+                BEGIN
+                    DECLARE @dropSqlID NVARCHAR(MAX) = 'DROP INDEX [IX_${table}_ID] ON [${schema}].[${table}]';
+                    EXEC sp_executesql @dropSqlID;
+                END
+
                 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${table}_ID_Source')
                     CREATE UNIQUE INDEX IX_${table}_ID_Source ON ${stagingTableRef}([ID], [source_db]);
             END

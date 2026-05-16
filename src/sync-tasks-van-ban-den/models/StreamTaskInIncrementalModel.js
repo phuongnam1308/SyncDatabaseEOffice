@@ -31,6 +31,7 @@ const DEADLOCK_ERROR_NUMBER = 1205;
 const LOCK_TIMEOUT_ERROR_NUMBER = 1222;
 const OLD_DB_CONNECT_MAX_RETRIES = Number(process.env.OLD_DB_CONNECT_MAX_RETRIES || 4);
 const OLD_DB_CONNECT_BASE_DELAY_MS = Number(process.env.OLD_DB_CONNECT_BASE_DELAY_MS || 1000);
+const TASK_IN_PIPELINE_MODE = String(process.env.TASK_IN_PIPELINE_MODE || 'old_to_staging').trim().toLowerCase();
 
 // â”€â”€ Reuse detectFileType tá»« outgoing (copy nguyÃªn, khÃ´ng import cross-module) â”€â”€
 function detectFileType(buffer) {
@@ -80,6 +81,27 @@ function sleep(ms) {
 }
 
 /**
+ * Convert values to stable staging params (staging columns are NVARCHAR-based).
+ * This prevents mssql from inferring DateTime and failing on edge dates like 9999-12-31.
+ * @param {any} value
+ * @returns {any}
+ */
+function normalizeStagingParamValue(value) {
+  if (value === undefined) return null;
+  if (value === null) return null;
+
+  // Keep primitive numbers/booleans as-is for lightweight binding.
+  if (typeof value === 'number' || typeof value === 'boolean') return value;
+
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return null;
+    return value.toISOString();
+  }
+
+  return value;
+}
+
+/**
  * Returns true when the error originates from a SQL Server deadlock (error 1205).
  * @param {Error} err
  * @returns {boolean}
@@ -100,11 +122,15 @@ function isDeadlockError(err) {
  */
 function isRetryableLockError(err) {
   const msg = String(err?.message || '').toLowerCase();
+  const code = String(err?.code || err?.originalError?.code || '').toUpperCase();
   return (
     isDeadlockError(err) ||
     err?.number === LOCK_TIMEOUT_ERROR_NUMBER ||
     err?.originalError?.info?.number === LOCK_TIMEOUT_ERROR_NUMBER ||
-    msg.includes('lock request time out')
+    code === 'ETIMEOUT' ||
+    msg.includes('lock request time out') ||
+    msg.includes('request failed to complete in') ||
+    msg.includes('timeout')
   );
 }
 
@@ -211,6 +237,18 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     await super.initialize();
 
     try {
+      // FIX: Ensure staging table exists FIRST before any column checks or model inits
+      await withDeadlockRetry(
+        () => this.ensureStagingTableExists(),
+        'ensureStagingTableExists'
+      );
+
+      // ADD: Ensure all necessary columns exist (e.g. ItemId)
+      await withDeadlockRetry(
+        () => this.ensureStagingTableColumns(),
+        'ensureStagingTableColumns'
+      );
+
       // Late require to break potential circular dependencies
       const StreamTaskMigrationModel = require('./StreamTaskMigrationModel');
       const StreamTaskUsersModel = require('./StreamTaskUsersModel');
@@ -237,18 +275,6 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
           'MigrateErrFlg': 'NVARCHAR(MAX) NULL',
           'MigrateErrMess': 'NVARCHAR(MAX) NULL'
         }
-      );
-
-      // FIX: use deadlock-safe staging table creation with retry
-      await withDeadlockRetry(
-        () => this.ensureStagingTableExists(),
-        'ensureStagingTableExists'
-      );
-
-      // ADD: Ensure all necessary columns exist (e.g. ItemId)
-      await withDeadlockRetry(
-        () => this.ensureStagingTableColumns(),
-        'ensureStagingTableColumns'
       );
 
       this._fileService = new FileService(this.newPool);
@@ -493,10 +519,9 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     const createQuery = `
       IF NOT EXISTS (
         SELECT 1
-        FROM ${dbName}.sys.tables  t
-        JOIN ${dbName}.sys.schemas s ON t.schema_id = s.schema_id
-        WHERE t.name   = '${tableName}'
-          AND s.name   = '${schemaName}'
+        FROM ${dbName}.INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_NAME = '${tableName}'
+          AND TABLE_SCHEMA = '${schemaName}'
       )
       BEGIN
         CREATE TABLE ${table} (
@@ -923,6 +948,11 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       `[StreamTaskIn][syncOldToStaging] start rows=${rows.length} cols=${columns.length} firstId=${rows[0]?.ID ?? 'NA'} lastId=${rows[rows.length - 1]?.ID ?? 'NA'}`
     );
 
+    const lockTimeoutMs = Number(process.env.STAGING_LOCK_TIMEOUT_MS || 8000);
+    const updateClause = safeNonIdColumns
+      .map((columnName, idx) => `${columnName} = @${nonIdColumns[idx]}`)
+      .join(', ');
+
     let idx = 0;
     let skippedCount = 0;
     for (const row of rows) {
@@ -934,51 +964,30 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
 
       const params = {};
       for (const column of columns) {
-        params[column] = row[column];
+        params[column] = normalizeStagingParamValue(row[column]);
       }
 
-      const updateClause = safeNonIdColumns
-        .map((columnName, idx) => `${columnName} = @${nonIdColumns[idx]}`)
-        .join(', ');
-
       const query = `
-        SET LOCK_TIMEOUT 8000;
-        ${nonIdColumns.length > 0
-          ? `
-        UPDATE tgt WITH (UPDLOCK, ROWLOCK)
-        SET ${updateClause}
-        FROM ${stagingTableRef} tgt
-        WHERE tgt.ID = @ID;
-        `
-          : `
-        UPDATE tgt WITH (UPDLOCK, ROWLOCK)
-        SET ID = ID
-        FROM ${stagingTableRef} tgt
-        WHERE tgt.ID = @ID;
-        `}
-
-        IF @@ROWCOUNT = 0
-        BEGIN
-          BEGIN TRY
-            INSERT INTO ${stagingTableRef} (${safeColumns.join(', ')})
-            VALUES (${columns.map((column) => `@${column}`).join(', ')});
-          END TRY
-          BEGIN CATCH
-            IF ERROR_NUMBER() IN (2601, 2627)
-            BEGIN
-              ${nonIdColumns.length > 0
-          ? `UPDATE tgt WITH (UPDLOCK, ROWLOCK)
-                   SET ${updateClause}
-                   FROM ${stagingTableRef} tgt
-                   WHERE tgt.ID = @ID;`
-          : `SELECT 1 AS noop;`}
-            END
-            ELSE
-            BEGIN
-              THROW;
-            END
-          END CATCH
-        END
+        SET LOCK_TIMEOUT ${Number.isFinite(lockTimeoutMs) && lockTimeoutMs > 0 ? lockTimeoutMs : 8000};
+        BEGIN TRY
+          INSERT INTO ${stagingTableRef} (${safeColumns.join(', ')})
+          VALUES (${columns.map((column) => `@${column}`).join(', ')});
+        END TRY
+        BEGIN CATCH
+          IF ERROR_NUMBER() IN (2601, 2627)
+          BEGIN
+            ${nonIdColumns.length > 0
+              ? `UPDATE tgt WITH (ROWLOCK)
+                 SET ${updateClause}
+                 FROM ${stagingTableRef} tgt
+                 WHERE tgt.ID = @ID;`
+              : `SELECT 1 AS noop;`}
+          END
+          ELSE
+          BEGIN
+            THROW;
+          END
+        END CATCH
       `;
 
       try {
@@ -1038,6 +1047,10 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
 
     const batchSize = Number(process.env.STAGING_FETCH_BATCH_SIZE || 100);
     const stagingTableRef = this.getStagingTableRef();
+    const pipelineMode = TASK_IN_PIPELINE_MODE === 'staging_only' ? 'staging_only' : 'old_to_staging';
+    if (pipelineMode !== TASK_IN_PIPELINE_MODE) {
+      logger.warn(`[StreamTaskIn] Invalid TASK_IN_PIPELINE_MODE="${TASK_IN_PIPELINE_MODE}", fallback to "old_to_staging"`);
+    }
 
     const envStartDate = process.env.SYNC_START_DATE ? new Date(process.env.SYNC_START_DATE).toISOString() : null;
     const envEndDate = process.env.SYNC_END_DATE ? new Date(process.env.SYNC_END_DATE).toISOString() : null;
@@ -1064,6 +1077,41 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       }, 'cleanup stale task_sync');
     } catch (cleanupErr) {
       logger.warn(`[StreamTaskIn] Cleanup stale records failed: ${cleanupErr.message}`);
+    }
+
+    if (pipelineMode === 'staging_only') {
+      logger.info(
+        `[StreamTaskIn] Pipeline mode=staging_only: skip fetch OLD DB, process directly from staging ${stagingTableRef}`
+      );
+
+      const pendingRes = await this.queryNewDb(`
+        SELECT COUNT(1) AS cnt
+        FROM ${stagingTableRef}
+        WHERE ISNULL(MigrateFlg, 0) = 0
+          AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) >= @startDate OR @startDate IS NULL)
+          AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) <= @endDate OR @endDate IS NULL)
+      `, {
+        startDate: envStartDate,
+        endDate: envEndDate
+      });
+      const pendingCount = Number(pendingRes?.[0]?.cnt || 0);
+
+      await this.queryNewDb(`UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`, {
+        total: pendingCount,
+        jobId: syncJobId
+      });
+
+      logger.info(`[StreamTaskIn] staging_only pending=${pendingCount} (range: ${envStartDate || 'ALL'} -> ${envEndDate || 'ALL'})`);
+      return {
+        syncJobId,
+        rows: [],
+        totalCount: pendingCount,
+        stagedCount: 0,
+        sourceLastSyncTime: normalizedLastSyncTime,
+        sourceLastSyncId: normalizedLastSyncId,
+        lastSyncTime: normalizedLastSyncTime,
+        lastSyncId: normalizedLastSyncId
+      };
     }
 
     // 1. Äáº¿m tá»•ng vÃ  cáº­p nháº­t Dashboard
@@ -1699,35 +1747,20 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       );
       await this.logNonCriticalJobError(syncJobId, taskId, `[Workitems] ${workitemErr.message}`);
     }
-    // â”€â”€ 3. System log â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â”€â”€ 3. System log (khÃ´ng sync lá»‹ch sá»­ cÅ©) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     try {
-      const oldDocumentId = stagingRow?.VBId ? String(stagingRow.VBId).trim() : null;
-      const historyResult = oldDocumentId
-        ? await this.systemLogsModel.syncFullHistoryForTask(
-          { idTask: newTaskId, oldDocumentId, userInfo: createdBy, createdAt },
-          transaction
-        )
-        : { success: true, inserted: 0, updated: 0, total: 0 };
-
-      if (historyResult?.success && Number(historyResult.total || 0) > 0) {
-        logger.info(
-          `[log] full_history synced task=${newTaskId} total=${historyResult.total} inserted=${historyResult.inserted} updated=${historyResult.updated}`
-        );
-        totalAffected += Number(historyResult.inserted || 0) + Number(historyResult.updated || 0);
+      const logResult = await this.systemLogsModel.createLogForTask(
+        { idTask: newTaskId, userInfo: createdBy, createdAt },
+        transaction
+      );
+      if (logResult.success) {
+        logger.info(`[log] logId=${logResult.logId} created=true`);
+        totalAffected += 1;
       } else {
-        const logResult = await this.systemLogsModel.createLogForTask(
-          { idTask: newTaskId, userInfo: createdBy, createdAt },
-          transaction
-        );
-        if (logResult.success) {
-          logger.info(`[log] fallback logId=${logResult.logId} created=true`);
-          totalAffected += 1;
-        } else {
-          logger.warn(`[StreamTaskInIncrementalModel] Log creation returned success=false for task_id=${newTaskId}`, {
-            logResult
-          });
-          await this.logNonCriticalJobError(syncJobId, taskId, '[SystemLog] createLogForTask returned success=false');
-        }
+        logger.warn(`[StreamTaskInIncrementalModel] Log creation returned success=false for task_id=${newTaskId}`, {
+          logResult
+        });
+        await this.logNonCriticalJobError(syncJobId, taskId, '[SystemLog] createLogForTask returned success=false');
       }
     } catch (logErr) {
       // SUB-TABLE ERROR: Log warning only, do NOT throw

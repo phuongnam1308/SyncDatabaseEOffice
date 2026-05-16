@@ -1596,21 +1596,44 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
         requesterId = defaultVanthuId;
       }
 
-      // 2. Resolve Passport ID
+      // 2. Resolve Passport ID & Number
       let passportId = null;
+      let passportNumber = null;
+      let delegationLeader = null;
+      
+      const nameFromRequest = rowData.AuthorFullName || rowData.AuthorName || '';
+      const cleanName = nameFromRequest.split(' - ')[0].trim();
+
       try {
+        let passportRow = null;
+        
+        // Ưu tiên 1: Tìm theo user_id đã được resolve
         if (requesterId) {
-          const passportRows = await this.queryNewDbTx(
-            `SELECT TOP 1 id FROM passports WHERE user_id = @userId AND is_deleted = 0`,
+          const rows = await this.queryNewDbTx(
+            `SELECT TOP 1 id, passport_number, user_id FROM passports WHERE user_id = @userId AND is_deleted = 0`,
             { userId: requesterId },
             transaction
           );
-          if (passportRows?.length) {
-            passportId = passportRows[0].id;
-          }
+          if (rows?.length) passportRow = rows[0];
+        }
+
+        // Ưu tiên 2: Tìm theo tên rút gọn (Vũ Việt Hải - VP -> Vũ Việt Hải)
+        if (!passportRow && cleanName) {
+          const rowsByName = await this.queryNewDbTx(
+            `SELECT TOP 1 id, passport_number, user_id FROM passports WHERE full_name = @name AND is_deleted = 0`,
+            { name: cleanName },
+            transaction
+          );
+          if (rowsByName?.length) passportRow = rowsByName[0];
+        }
+
+        if (passportRow) {
+          passportId = passportRow.id;
+          passportNumber = passportRow.passport_number;
+          delegationLeader = passportRow.user_id;
         }
       } catch (e) {
-        logger.warn(`[StreamPassportMigrationModel] [ID=${recordId}] Error resolving passport_id: ${e.message}`);
+        logger.warn(`[StreamPassportMigrationModel] [ID=${recordId}] Error resolving passport info: ${e.message}`);
       }
 
       // 3. Map Status & Metadata
@@ -1660,6 +1683,8 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
         trip_content: ntext2Value || null,             // lưu riêng vào trip_content
         passport_type: 'ORDINARY',                     // fix cứng khi migrate
         passport_id: passportId,                       // gắn ID hộ chiếu tìm được
+        passport_number: passportNumber,               // Số hộ chiếu
+        delegation_leader: delegationLeader,           // Người dẫn đoàn (chủ hộ chiếu)
       };
 
       // Reason logic
@@ -1745,6 +1770,8 @@ class StreamPassportMigrationModel extends BaseIncrementalSyncInterface {
       sharepoint_item_id:     externalKeyValue,
       source_db:              rawData.source_db || null,
       passport_id:            rawData.passport_id || null,
+      passport_number:        rawData.passport_number || null,
+      delegation_leader:      rawData.delegation_leader || null,
       tb_bak:                 1,  // 1 = đồng bộ từ SharePoint
     };
 

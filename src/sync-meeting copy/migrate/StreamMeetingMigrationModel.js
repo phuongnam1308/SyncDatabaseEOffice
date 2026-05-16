@@ -40,14 +40,19 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
    * Override initialize: kết nối DB xong tự động tạo bảng staging nếu chưa có.
    */
   async initialize() {
-    console.log(`[StreamMeetingMigrationModel] Initializing...`);
-    await super.initialize();
-    await this.ensureStagingTableExists();
-    await this.ensureMeetingsColumnsExist();
-    await this.ensureMeetingParticipantsTableExists();
-    await this.ensureDefaultRoomExists();
-    await this.ensureAuditTableExists();
-    console.log(`[StreamMeetingMigrationModel] Initialization complete.`);
+    try {
+      console.log(`[StreamMeetingMigrationModel] Initializing...`);
+      await super.initialize();
+      await this.ensureStagingTableExists();
+      await this.ensureMeetingsColumnsExist();
+      await this.ensureMeetingParticipantsTableExists();
+      await this.ensureDefaultRoomExists();
+      await this.ensureAuditTableExists();
+      console.log(`[StreamMeetingMigrationModel] Initialization complete.`);
+    } catch (error) {
+      console.error(`[StreamMeetingMigrationModel] ❌ Initialization failed: ${error.message}`);
+      // Do not re-throw to allow model registration on dashboard
+    }
   }
 
 
@@ -60,6 +65,13 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
       const roomsTable = `[${db}].[${schema}].[meeting_rooms]`;
 
       console.log(`[StreamMeetingMigrationModel] Ensuring tables and columns exist...`);
+
+      // Check if table exists first
+      const tableCheck = await this.queryNewDb(`SELECT 1 FROM ${db}.INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '${schema}' AND TABLE_NAME = 'meetings'`);
+      if (!tableCheck || tableCheck.length === 0) {
+        console.warn(`[StreamMeetingMigrationModel] Target table meetings not found. Skipping column ensure.`);
+        return;
+      }
 
       // 1. Cửa bảng meetings
       const meetingColQuery = `
@@ -96,8 +108,29 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
       IF NOT EXISTS (SELECT 1 FROM ${db}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'meetings' AND COLUMN_NAME = 'sharepoint_item_id')
           ALTER TABLE ${meetingsTable} ADD [sharepoint_item_id] NVARCHAR(255) NULL;
 
-      IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_meetings_id_sp_bak')
+      IF NOT EXISTS (SELECT 1 FROM ${db}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'meetings' AND COLUMN_NAME = 'duration_seconds')
+          ALTER TABLE ${meetingsTable} ADD [duration_seconds] INT NULL;
+
+      IF NOT EXISTS (SELECT 1 FROM ${db}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'meetings' AND COLUMN_NAME = 'assigned_seat_by')
+          ALTER TABLE ${meetingsTable} ADD [assigned_seat_by] NVARCHAR(100) NULL;
+
+      IF NOT EXISTS (SELECT 1 FROM ${db}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'meetings' AND COLUMN_NAME = 'recurrence_id')
+          ALTER TABLE ${meetingsTable} ADD [recurrence_id] UNIQUEIDENTIFIER NULL;
+
+      IF NOT EXISTS (SELECT 1 FROM ${db}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'meetings' AND COLUMN_NAME = 'chairman_type')
+          ALTER TABLE ${meetingsTable} ADD [chairman_type] VARCHAR(10) NULL;
+
+      IF NOT EXISTS (SELECT 1 FROM ${db}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'meetings' AND COLUMN_NAME = 'secretary_type')
+          ALTER TABLE ${meetingsTable} ADD [secretary_type] VARCHAR(10) NULL;
+
+      IF NOT EXISTS (SELECT 1 FROM ${db}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'meetings' AND COLUMN_NAME = 'google_calendar_processed_by_cron')
+          ALTER TABLE ${meetingsTable} ADD [google_calendar_processed_by_cron] BIT NULL;
+
+      IF NOT EXISTS (SELECT 1 FROM [${db}].sys.indexes WHERE name = 'IX_meetings_id_sp_bak')
           CREATE INDEX IX_meetings_id_sp_bak ON ${meetingsTable}(id_sp_bak);
+
+      IF NOT EXISTS (SELECT 1 FROM [${db}].sys.indexes WHERE name = 'IX_meetings_meeting_date')
+          CREATE INDEX IX_meetings_meeting_date ON ${meetingsTable}(meeting_date);
       `;
 
 
@@ -129,6 +162,9 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
       BEGIN
           IF NOT EXISTS (SELECT 1 FROM ${db}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'meeting_units' AND COLUMN_NAME = 'id_bak')
               ALTER TABLE ${unitsTable} ADD id_bak nvarchar(255) NULL;
+
+          IF NOT EXISTS (SELECT 1 FROM [${db}].sys.indexes WHERE name = 'IX_meeting_units_id_bak')
+              CREATE INDEX IX_meeting_units_id_bak ON ${unitsTable}(id_bak);
       END
       `;
       await this.queryNewDb(unitsTableQuery);
@@ -153,8 +189,20 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
               layout_seats int NULL,
               layout_blocks int NULL,
               total_seating int NULL,
-              id_sp_bak nvarchar(255) NULL
+              id_sp_bak nvarchar(255) NULL,
+              layout_col_wing int NULL,
+              layout_row_bottom int NULL,
+              tb_bak int NULL
           );
+      END
+      ELSE
+      BEGIN
+          IF NOT EXISTS (SELECT 1 FROM ${db}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'meeting_rooms' AND COLUMN_NAME = 'layout_col_wing')
+              ALTER TABLE ${roomsTable} ADD layout_col_wing int NULL;
+          IF NOT EXISTS (SELECT 1 FROM ${db}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'meeting_rooms' AND COLUMN_NAME = 'layout_row_bottom')
+              ALTER TABLE ${roomsTable} ADD layout_row_bottom int NULL;
+          IF NOT EXISTS (SELECT 1 FROM ${db}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'meeting_rooms' AND COLUMN_NAME = 'tb_bak')
+              ALTER TABLE ${roomsTable} ADD tb_bak int NULL;
       END
       `;
       await this.queryNewDb(roomsTableQuery);
@@ -246,8 +294,36 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
               reject_reason nvarchar(1000) COLLATE SQL_Latin1_General_CP1_CI_AS NULL,
               unit_id nvarchar(100) COLLATE SQL_Latin1_General_CP1_CI_AS NULL,
               user_type varchar(10) COLLATE SQL_Latin1_General_CP1_CI_AS NULL,
+              google_email nvarchar(255) NULL,
+              google_calendar_event_id nvarchar(255) NULL,
+              google_calendar_sync_status nvarchar(50) NULL,
+              google_calendar_sync_error nvarchar(MAX) NULL,
+              google_calendar_sync_at datetime2 NULL,
+              google_calendar_synced bit NULL,
+              google_calendar_hidden bit NULL,
+              google_event_id nvarchar(255) NULL,
               CONSTRAINT PK_meeting_participants PRIMARY KEY (id)
           );
+      END
+      ELSE
+      BEGIN
+          -- Bổ sung các cột thiếu nếu bảng đã tồn tại
+          IF NOT EXISTS (SELECT 1 FROM [${db}].INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'meeting_participants' AND COLUMN_NAME = 'google_email')
+              ALTER TABLE ${participantsTable} ADD google_email nvarchar(255) NULL;
+          IF NOT EXISTS (SELECT 1 FROM [${db}].INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'meeting_participants' AND COLUMN_NAME = 'google_calendar_event_id')
+              ALTER TABLE ${participantsTable} ADD google_calendar_event_id nvarchar(255) NULL;
+          IF NOT EXISTS (SELECT 1 FROM [${db}].INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'meeting_participants' AND COLUMN_NAME = 'google_calendar_sync_status')
+              ALTER TABLE ${participantsTable} ADD google_calendar_sync_status nvarchar(50) NULL;
+          IF NOT EXISTS (SELECT 1 FROM [${db}].INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'meeting_participants' AND COLUMN_NAME = 'google_calendar_sync_error')
+              ALTER TABLE ${participantsTable} ADD google_calendar_sync_error nvarchar(MAX) NULL;
+          IF NOT EXISTS (SELECT 1 FROM [${db}].INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'meeting_participants' AND COLUMN_NAME = 'google_calendar_sync_at')
+              ALTER TABLE ${participantsTable} ADD google_calendar_sync_at datetime2 NULL;
+          IF NOT EXISTS (SELECT 1 FROM [${db}].INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'meeting_participants' AND COLUMN_NAME = 'google_calendar_synced')
+              ALTER TABLE ${participantsTable} ADD google_calendar_synced bit NULL;
+          IF NOT EXISTS (SELECT 1 FROM [${db}].INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'meeting_participants' AND COLUMN_NAME = 'google_calendar_hidden')
+              ALTER TABLE ${participantsTable} ADD google_calendar_hidden bit NULL;
+          IF NOT EXISTS (SELECT 1 FROM [${db}].INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'meeting_participants' AND COLUMN_NAME = 'google_event_id')
+              ALTER TABLE ${participantsTable} ADD google_event_id nvarchar(255) NULL;
       END
       `;
       await this.queryNewDb(createQuery);
@@ -255,9 +331,9 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
       const addForeignKeyQuery = `
       IF NOT EXISTS (
           SELECT 1
-          FROM sys.foreign_keys
+          FROM [${db}].sys.foreign_keys
           WHERE name = 'fk_participant_unit'
-            AND parent_object_id = OBJECT_ID('${db}.${schema}.meeting_participants')
+            AND parent_object_id = OBJECT_ID('[${db}].[${schema}].[meeting_participants]')
       )
       BEGIN
           ALTER TABLE ${participantsTable}
@@ -268,7 +344,7 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
       await this.queryNewDb(addForeignKeyQuery);
 
       const unitIndexQuery = `
-      IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_participant_unit' AND object_id = OBJECT_ID('${db}.${schema}.meeting_participants'))
+      IF NOT EXISTS (SELECT 1 FROM [${db}].sys.indexes WHERE name = 'idx_participant_unit' AND object_id = OBJECT_ID('[${db}].[${schema}].[meeting_participants]'))
       BEGIN
           CREATE NONCLUSTERED INDEX idx_participant_unit ON ${participantsTable}(meeting_unit_id);
       END
@@ -276,9 +352,14 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
       await this.queryNewDb(unitIndexQuery);
 
       const unitIdIndexQuery = `
-      IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_participant_unit_id' AND object_id = OBJECT_ID('${db}.${schema}.meeting_participants'))
+      IF NOT EXISTS (SELECT 1 FROM [${db}].sys.indexes WHERE name = 'idx_participant_unit_id' AND object_id = OBJECT_ID('[${db}].[${schema}].[meeting_participants]'))
       BEGIN
           CREATE NONCLUSTERED INDEX idx_participant_unit_id ON ${participantsTable}(unit_id);
+      END
+
+      IF NOT EXISTS (SELECT 1 FROM [${db}].sys.indexes WHERE name = 'IX_meeting_participants_user_id')
+      BEGIN
+          CREATE NONCLUSTERED INDEX IX_meeting_participants_user_id ON ${participantsTable}(user_id);
       END
       `;
       await this.queryNewDb(unitIdIndexQuery);
@@ -348,7 +429,14 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
       { name: 'tp_ListId', type: 'NVARCHAR(255)' },
       { name: 'float1', type: 'FLOAT' },
       { name: 'float2', type: 'FLOAT' },
-      { name: 'DocumentTitle', type: 'NVARCHAR(MAX)' }
+      { name: 'DocumentTitle', type: 'NVARCHAR(MAX)' },
+      { name: 'ThoiLuongGiay', type: 'INT' },
+      { name: 'DocumentID', type: 'NVARCHAR(255)' },
+      { name: 'DocumentStatus', type: 'NVARCHAR(100)' },
+      { name: 'DocumentStatusText', type: 'NVARCHAR(MAX)' },
+      { name: 'LinkedItemID', type: 'NVARCHAR(255)' },
+      { name: 'DocumentCreatedDate', type: 'DATETIME2' },
+      { name: 'Organizer', type: 'NVARCHAR(500)' }
     ];
   }
 
@@ -413,17 +501,17 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
         }
 
         const dropLegacyIndexQuery = `
-        IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${table}_ID' AND object_id = OBJECT_ID('${stagingTableRef}'))
+        IF EXISTS (SELECT 1 FROM [${db}].sys.indexes i JOIN [${db}].sys.tables t ON i.object_id = t.object_id JOIN [${db}].sys.schemas s ON t.schema_id = s.schema_id WHERE i.name = 'IX_${table}_ID' AND t.name = '${table}' AND s.name = '${schema}')
             DROP INDEX IX_${table}_ID ON ${stagingTableRef};
-        IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${table}_job_ID' AND object_id = OBJECT_ID('${stagingTableRef}'))
+        IF EXISTS (SELECT 1 FROM [${db}].sys.indexes i JOIN [${db}].sys.tables t ON i.object_id = t.object_id JOIN [${db}].sys.schemas s ON t.schema_id = s.schema_id WHERE i.name = 'IX_${table}_job_ID' AND t.name = '${table}' AND s.name = '${schema}')
             DROP INDEX IX_${table}_job_ID ON ${stagingTableRef};
-        IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${table}_job_list_ID' AND object_id = OBJECT_ID('${stagingTableRef}'))
+        IF EXISTS (SELECT 1 FROM [${db}].sys.indexes i JOIN [${db}].sys.tables t ON i.object_id = t.object_id JOIN [${db}].sys.schemas s ON t.schema_id = s.schema_id WHERE i.name = 'IX_${table}_job_list_ID' AND t.name = '${table}' AND s.name = '${schema}')
             DROP INDEX IX_${table}_job_list_ID ON ${stagingTableRef};
         `;
         await this.queryNewDb(dropLegacyIndexQuery);
 
         const indexQuery = `
-        IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${table}_job_list_ID_source' AND object_id = OBJECT_ID('${stagingTableRef}'))
+        IF NOT EXISTS (SELECT 1 FROM [${db}].sys.indexes i JOIN [${db}].sys.tables t ON i.object_id = t.object_id JOIN [${db}].sys.schemas s ON t.schema_id = s.schema_id WHERE i.name = 'IX_${table}_job_list_ID_source' AND t.name = '${table}' AND s.name = '${schema}')
         BEGIN
             CREATE UNIQUE INDEX IX_${table}_job_list_ID_source ON ${stagingTableRef}(stg_job_id, source_db, tp_ListId, ID);
         END
@@ -431,19 +519,30 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
         await this.queryNewDb(indexQuery);
 
         const dropOldCursorIndexQuery = `
-        IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${table}_job_cursor' AND object_id = OBJECT_ID('${stagingTableRef}'))
+        IF EXISTS (
+            SELECT 1 FROM [${db}].sys.indexes i
+            JOIN [${db}].sys.tables t ON i.object_id = t.object_id
+            JOIN [${db}].sys.schemas s ON t.schema_id = s.schema_id
+            WHERE i.name = 'IX_${table}_job_cursor'
+              AND t.name = '${table}'
+              AND s.name = '${schema}'
+        )
         BEGIN
-            DROP INDEX IX_${table}_job_cursor ON ${stagingTableRef};
+            -- Sử dụng cú pháp an toàn hơn cho DROP INDEX
+            DECLARE @dropSql NVARCHAR(MAX) = 'DROP INDEX [IX_${table}_job_cursor] ON ' + '${stagingTableRef}';
+            EXEC sp_executesql @dropSql;
         END
         `;
         await this.queryNewDb(dropOldCursorIndexQuery);
 
         const syncCursorIndexQuery = `
         IF NOT EXISTS (
-            SELECT 1 FROM sys.indexes i
-            JOIN sys.tables t ON i.object_id = t.object_id
+            SELECT 1 FROM [${db}].sys.indexes i
+            JOIN [${db}].sys.tables t ON i.object_id = t.object_id
+            JOIN [${db}].sys.schemas s ON t.schema_id = s.schema_id
             WHERE i.name = 'IX_${table}_job_cursor'
               AND t.name = '${table}'
+              AND s.name = '${schema}'
         )
         BEGIN
             CREATE INDEX IX_${table}_job_cursor ON ${stagingTableRef}(stg_job_id, __sync_time, __sync_id_num, tp_ListId, SY_SyncId);
@@ -467,7 +566,7 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
 
     console.log(`[StreamMeetingMigrationModel] Checking/Creating Audit table: ${table}`);
     const createAuditTable = `
-    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '${table}' AND TABLE_SCHEMA = '${schema}')
+    IF NOT EXISTS (SELECT 1 FROM [${db}].INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '${table}' AND TABLE_SCHEMA = '${schema}')
     BEGIN
         CREATE TABLE ${tableRef} (id bigint IDENTITY(1,1) PRIMARY KEY);
     END
@@ -508,7 +607,7 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
 
     for (const col of auditCols) {
       const query = `
-      IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${table}' AND COLUMN_NAME = '${col.name}')
+      IF NOT EXISTS (SELECT 1 FROM [${db}].INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${table}' AND TABLE_SCHEMA = '${schema}' AND COLUMN_NAME = '${col.name}')
       BEGIN
           ALTER TABLE ${tableRef} ADD [${col.name}] ${col.type} ${col.nullable || 'NULL'};
       END

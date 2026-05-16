@@ -245,6 +245,30 @@ app.get('/health', (req, res) => {
   res.json({ status: 'OK' });
 });
 
+/**
+ * Global Error Handler for API
+ */
+// 404 for API
+app.use('/api', (req, res) => {
+  res.status(404).json({ 
+    success: false, 
+    message: `API route not found: ${req.originalUrl}` 
+  });
+});
+
+// Final Error Handler
+app.use((err, req, res, next) => {
+  const statusCode = err.status || 500;
+  logger.error(`[GlobalError] ${err.message}${err.stack ? '\n' + err.stack : ''}`);
+  
+  // Trả về JSON cho tất cả các lỗi để tránh "Unexpected token <" ở frontend
+  res.status(statusCode).json({
+    success: false,
+    message: err.message || 'Hệ thống gặp sự cố nội bộ',
+    error: isProduction ? undefined : err.stack
+  });
+});
+
 async function bootstrapAfterServerStart(url) {
   // Chủ động đăng nhập SharePoint ngay khi ứng dụng khởi động.
   // Chỉ sau khi login xong mới bật scheduler và session refresher để tránh race.
@@ -263,9 +287,8 @@ async function bootstrapAfterServerStart(url) {
       );
       logger.error('❌ Không thể đăng nhập SharePoint khi khởi động:', loginErr);
       logger.warn(
-        '⏸️ Tạm hoãn khởi động CronSyncScheduler và SessionRefresher vì login chưa thành công.',
+        '⚠️ Tiếp tục khởi động các tác vụ nền (CronSyncScheduler). Lưu ý: Một số module cần SharePoint có thể sẽ lỗi khi chạy.',
       );
-      return;
     }
   }
 

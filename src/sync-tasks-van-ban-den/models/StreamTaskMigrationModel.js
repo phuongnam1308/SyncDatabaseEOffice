@@ -124,6 +124,13 @@ class StreamTaskMigrationModel extends BaseModel {
       const dbName = this.newDbName;
       const tableName = this.newDbTable;
 
+      // Check if table exists first
+      const tableCheck = await this.queryNewDb(`SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '${tableName}'`);
+      if (!tableCheck || tableCheck.length === 0) {
+        logger.warn(`[StreamTaskMigrationModel] Target table ${tableName} not found in target DB. Skipping column ensure.`);
+        return;
+      }
+
       // Danh sách các cột quan trọng cần có trong bảng [task]
       const requiredColumns = [
         { name: 'id_task_bak', type: 'NVARCHAR(255)' },

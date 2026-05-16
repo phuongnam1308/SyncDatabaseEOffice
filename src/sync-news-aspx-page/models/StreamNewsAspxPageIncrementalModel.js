@@ -52,66 +52,81 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
 
     // Đảm bảo bảng News chính có đầy đủ các cột cần thiết
     try {
-      await this.queryNewDb(`
-            -- 1. Đảm bảo cột tóm tắt (summary) đủ lớn để không bị truncated
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'summary')
-                ALTER TABLE dbo.news ADD summary NVARCHAR(MAX) NULL;
-            ELSE
-                ALTER TABLE dbo.news ALTER COLUMN summary NVARCHAR(MAX) NULL;
+      // Check if 'news' table exists first
+      const newsTableCheck = await this.queryNewDb(`SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'news'`);
+      if (newsTableCheck && newsTableCheck.length > 0) {
+        await this.queryNewDb(`
+              -- 1. Đảm bảo cột tóm tắt (summary) đủ lớn để không bị truncated
+              IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'summary')
+                  ALTER TABLE dbo.news ADD summary NVARCHAR(MAX) NULL;
+              ELSE
+                  ALTER TABLE dbo.news ALTER COLUMN summary NVARCHAR(MAX) NULL;
+  
+              -- 2. Đảm bảo các cột tiêu đề/tags cũng đủ lớn
+              IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'title')
+                  ALTER TABLE dbo.news ALTER COLUMN title NVARCHAR(500) NULL;
+              IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'tags')
+                  ALTER TABLE dbo.news ALTER COLUMN tags NVARCHAR(MAX) NULL;
+  
+              -- 3. Cột phòng ban tác giả
+              IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'authorDepartment')
+                  ALTER TABLE dbo.news ADD authorDepartment NVARCHAR(255) NULL;
+              ELSE
+                  ALTER TABLE dbo.news ALTER COLUMN authorDepartment NVARCHAR(255) NULL;
+  
+              -- 4. Các trường khác
+              IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'isBak')
+                  ALTER TABLE dbo.news ADD isBak INT DEFAULT 0;
+              IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'nameThumbnail')
+                  ALTER TABLE dbo.news ADD nameThumbnail NVARCHAR(500) NULL;
+              IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'topic')
+                  ALTER TABLE dbo.news ADD topic NVARCHAR(255) NULL;
+              -- 4. Cập nhật các cột ID sang NVARCHAR để tránh lỗi Conversion failed (uniqueidentifier)
+              IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'authorId' AND DATA_TYPE = 'uniqueidentifier')
+                  ALTER TABLE dbo.news ALTER COLUMN authorId NVARCHAR(100) NULL;
+              IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'DocId' AND DATA_TYPE = 'uniqueidentifier')
+                  ALTER TABLE dbo.news ALTER COLUMN DocId NVARCHAR(100) NULL;
+              IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'topic' AND DATA_TYPE = 'uniqueidentifier')
+                  ALTER TABLE dbo.news ALTER COLUMN topic NVARCHAR(255) NULL;
+              IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'reviewerId' AND DATA_TYPE = 'uniqueidentifier')
+                  ALTER TABLE dbo.news ALTER COLUMN reviewerId NVARCHAR(100) NULL;
+  
+              -- 5. Đảm bảo cột DocId tồn tại
+              IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'DocId')
+                  ALTER TABLE dbo.news ADD DocId NVARCHAR(100) NULL;
+  
+              -- 6. Cột người tạo (created_by)
+              IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'created_by')
+                  ALTER TABLE dbo.news ADD created_by NVARCHAR(100) NULL;
+  
+              -- 7. Cột mã nhân viên tác giả (authorCode)
+              IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'authorCode')
+                  ALTER TABLE dbo.news ADD authorCode NVARCHAR(255) NULL;
+          `);
+      } else {
+        logger.warn('[StreamNewsAspxPageIncrementalModel] Table "news" not found in target DB. Skipping column ensure.');
+      }
 
-            -- 2. Đảm bảo các cột tiêu đề/tags cũng đủ lớn
-            IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'title')
-                ALTER TABLE dbo.news ALTER COLUMN title NVARCHAR(500) NULL;
-            IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'tags')
-                ALTER TABLE dbo.news ALTER COLUMN tags NVARCHAR(MAX) NULL;
-
-            -- 3. Cột phòng ban tác giả
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'authorDepartment')
-                ALTER TABLE dbo.news ADD authorDepartment NVARCHAR(255) NULL;
-            ELSE
-                ALTER TABLE dbo.news ALTER COLUMN authorDepartment NVARCHAR(255) NULL;
-
-            -- 4. Các trường khác
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'isBak')
-                ALTER TABLE dbo.news ADD isBak INT DEFAULT 0;
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'nameThumbnail')
-                ALTER TABLE dbo.news ADD nameThumbnail NVARCHAR(500) NULL;
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'topic')
-                ALTER TABLE dbo.news ADD topic NVARCHAR(255) NULL;
-            -- 4. Cập nhật các cột ID sang NVARCHAR để tránh lỗi Conversion failed (uniqueidentifier)
-            IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'authorId' AND DATA_TYPE = 'uniqueidentifier')
-                ALTER TABLE dbo.news ALTER COLUMN authorId NVARCHAR(100) NULL;
-            IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'DocId' AND DATA_TYPE = 'uniqueidentifier')
-                ALTER TABLE dbo.news ALTER COLUMN DocId NVARCHAR(100) NULL;
-            IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'topic' AND DATA_TYPE = 'uniqueidentifier')
-                ALTER TABLE dbo.news ALTER COLUMN topic NVARCHAR(255) NULL;
-            IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'reviewerId' AND DATA_TYPE = 'uniqueidentifier')
-                ALTER TABLE dbo.news ALTER COLUMN reviewerId NVARCHAR(100) NULL;
-
-            -- 5. Đảm bảo cột DocId tồn tại
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'DocId')
-                ALTER TABLE dbo.news ADD DocId NVARCHAR(100) NULL;
-
-            -- 6. Cột người tạo (created_by)
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'created_by')
-                ALTER TABLE dbo.news ADD created_by NVARCHAR(100) NULL;
-
-            -- 7. Cột mã nhân viên tác giả (authorCode)
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'news' AND COLUMN_NAME = 'authorCode')
-                ALTER TABLE dbo.news ADD authorCode NVARCHAR(255) NULL;
-
-            -- 8. Đảm bảo bảng topics có các cột cần thiết cho migration
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'topics' AND COLUMN_NAME = 'tb_bak')
-                ALTER TABLE dbo.topics ADD tb_bak INT DEFAULT 0;
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'topics' AND COLUMN_NAME = 'href')
-                ALTER TABLE dbo.topics ADD href NVARCHAR(255) NULL;
-        `);
+      // Check if 'topics' table exists
+      const topicsTableCheck = await this.queryNewDb(`SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'topics'`);
+      if (topicsTableCheck && topicsTableCheck.length > 0) {
+        await this.queryNewDb(`
+              -- 8. Đảm bảo bảng topics có các cột cần thiết cho migration
+              IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'topics' AND COLUMN_NAME = 'tb_bak')
+                  ALTER TABLE dbo.topics ADD tb_bak INT DEFAULT 0;
+              IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'topics' AND COLUMN_NAME = 'href')
+                  ALTER TABLE dbo.topics ADD href NVARCHAR(255) NULL;
+          `);
+      } else {
+        logger.warn('[StreamNewsAspxPageIncrementalModel] Table "topics" not found in target DB. Skipping column ensure.');
+      }
+      
       logger.info(
-        '[StreamNewsAspxPageIncrementalModel] Schema widened (NVARCHAR(MAX)) for dbo.news.',
+        '[StreamNewsAspxPageIncrementalModel] Schema check/widening completed for dbo.news and dbo.topics.',
       );
     } catch (e) {
       logger.warn(
-        `[StreamNewsAspxPageIncrementalModel] Lỗi khi mở rộng schema bảng news: ${e.message}`,
+        `[StreamNewsAspxPageIncrementalModel] Lỗi khi mở rộng schema bảng news/topics: ${e.message}`,
       );
     }
 

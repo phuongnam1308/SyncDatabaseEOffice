@@ -1,0 +1,82 @@
+# Bảng đích và các trường hiện có trong src/sync-meeting copy
+
+## 1. Bảng [meetings] (Bảng chính lưu lịch họp)
+- id (uniqueidentifier): Khóa chính
+- id_sp_bak (nvarchar(255)): Lưu ID từ SharePoint để đồng bộ/đối soát
+- table_bak (int): Flag đánh dấu nguồn dữ liệu (thường là 1)
+- sharepoint_version (nvarchar(50)): Phiên bản từ SharePoint
+- title (nvarchar(MAX)): Tiêu đề cuộc họp
+- content (nvarchar(MAX)): Nội dung/Mô tả cuộc họp
+- meeting_date (date): Ngày họp
+- meeting_time (nvarchar(100)): Giờ họp (ví dụ: 08:00-09:00)
+- meeting_mode (nvarchar(50)): Chế độ (OFFLINE, ONLINE, HYBRID)
+- priority (nvarchar(50)): Độ ưu tiên (tb, cao, ...)
+- conclusion (nvarchar(MAX)): Kết luận cuộc họp
+- direct_command (nvarchar(MAX)): Chỉ đạo trực tiếp
+- meeting_state (nvarchar(50)): Trạng thái cuộc họp (DU_KIEN, KET_THUC, ...)
+- status (nvarchar(50)): Trạng thái quy trình (1, 2, 3...)
+- status_code (int): Mã trạng thái đồng bộ (APPROVED=3, ...)
+- chairman_id (nvarchar(100)): ID người chủ trì
+- secretary_id (nvarchar(100)): ID thư ký
+- room_ids (nvarchar(MAX)): Danh sách ID phòng họp
+- organizational_unit (nvarchar(100)): Đơn vị tổ chức
+- created_at, updated_at (datetime2): Thời gian tạo/cập nhật
+
+## 2. Bảng [meeting_units] (Đơn vị tham gia họp)
+- id (uniqueidentifier): Khóa chính
+- id_bak (nvarchar(255)): ID đối soát đơn vị từ SP
+- meeting_id (uniqueidentifier): FK liên kết bảng meetings
+- unit_id (nvarchar(100)): ID đơn vị
+- unit_state (nvarchar(30)): Trạng thái đơn vị (PENDING, ...)
+- accept_join (bit): Chấp nhận tham gia
+- assign_participants (bit): Phân công người tham gia
+- seat_participants (bit): Sắp xếp chỗ ngồi
+- prepare_documents (bit): Chuẩn bị tài liệu
+- room_id (nvarchar(100)): ID phòng (nếu họp tại đơn vị)
+
+## 3. Bảng [meeting_participants] (Cá nhân tham gia họp)
+- id (uniqueidentifier): Khóa chính
+- meeting_unit_id (uniqueidentifier): FK liên kết meeting_units
+- user_id (nvarchar(100)): ID người dùng
+- participant_role (varchar(100)): Vai trò (CHAIRMAN, SECRETARY, MEMBER, ...)
+- participant_state (varchar(30)): Trạng thái (PENDING, RECEIVED, ...)
+- attendance_state (varchar(30)): Trạng thái điểm danh
+
+## 4. Bảng [meeting_rooms] (Danh mục phòng họp)
+- id (nvarchar(100)): Khóa chính
+- name (nvarchar(255)): Tên phòng
+- location (nvarchar(MAX)): Vị trí
+- capacity (int): Sức chứa
+- id_sp_bak (nvarchar(255)): ID đối soát từ SP
+
+---
+# BẢN LOG TỔNG HỢP THAY ĐỔI SCHEMA (FINAL)
+Ngày phân tích: 2026-05-15
+
+Dưới đây là danh sách toàn bộ các trường đã được xác định là thiếu so với DiOffice và đã được tích hợp vào code khởi tạo tự động.
+
+## 1. Bảng [meetings] (Đã bổ sung 6 trường)
+- `duration_seconds` (int): Thời lượng họp
+- `assigned_seat_by` (nvarchar(100)): Người xếp chỗ
+- `recurrence_id` (uniqueidentifier): ID lịch lặp
+- `chairman_type`, `secretary_type` (varchar(10)): Phân loại đối tượng
+- `google_calendar_processed_by_cron` (bit): Trạng thái đồng bộ Google
+
+## 2. Bảng [meeting_participants] (Đã bổ sung 8 trường Google)
+- Các trường: `google_email`, `google_calendar_event_id`, `google_calendar_sync_status`, `google_calendar_sync_error`, `google_calendar_sync_at`, `google_calendar_synced`, `google_calendar_hidden`, `google_event_id`.
+
+## 3. Bảng [meeting_rooms] (Đã bổ sung 3 trường)
+- `layout_col_wing`, `layout_row_bottom` (int): Cấu hình sơ đồ
+- `tb_bak` (int): ID đối soát nguồn
+
+## 4. Bảng Staging [meeting_sync_staging] (Đã bổ sung 7 trường)
+- `ThoiLuongGiay` (int)
+- `DocumentID`, `DocumentStatus`, `DocumentStatusText`, `LinkedItemID`
+- `DocumentCreatedDate` (datetime2)
+- `Organizer` (nvarchar(500))
+
+---
+# TRẠNG THÁI TRIỂN KHAI
+- **Code**: Đã cập nhật `StreamMeetingMigrationModel.js`. Các lệnh `ALTER TABLE` được đặt trong khối `IF NOT EXISTS` để đảm bảo an toàn.
+- **Dữ liệu**: Không thực hiện `INSERT` dữ liệu trong bước này.
+- **Mapping**: Sẵn sàng để cấu hình ánh xạ dữ liệu từ Staging sang bảng chính.

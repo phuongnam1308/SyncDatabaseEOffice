@@ -96,24 +96,24 @@ const MODEL_DEFINITIONS = [
     section: 'realtime',
     ModelClass: StreamMeetingCopyMigrationModel,
   },
-  // {
-  //   key: 'STREAM_EVENT_MIGRATION',
-  //   label: 'Đồng bộ lịch sự kiện',
-  //   section: 'realtime',
-  //   ModelClass: StreamEventMigrationModel,
-  // },
-  // {
-  //   key: 'STREAM_TGD_SCHEDULE_MIGRATION',
-  //   label: 'Đồng bộ lịch trực ban TGĐ',
-  //   section: 'realtime',
-  //   ModelClass: StreamTgdScheduleMigrationModel,
-  // },
-  // {
-  //   key: 'STREAM_MISSION_MIGRATION',
-  //   label: 'Đồng bộ lịch công tác',
-  //   section: 'realtime',
-  //   ModelClass: StreamMissionMigrationModel,
-  // },
+  {
+    key: 'STREAM_EVENT_MIGRATION',
+    label: 'Đồng bộ lịch sự kiện',
+    section: 'realtime',
+    ModelClass: StreamEventMigrationModel,
+  },
+  {
+    key: 'STREAM_TGD_SCHEDULE_MIGRATION',
+    label: 'Đồng bộ lịch trực ban TGĐ',
+    section: 'realtime',
+    ModelClass: StreamTgdScheduleMigrationModel,
+  },
+  {
+    key: 'STREAM_MISSION_MIGRATION',
+    label: 'Đồng bộ lịch công tác',
+    section: 'realtime',
+    ModelClass: StreamMissionMigrationModel,
+  },
   {
     key: 'STREAM_CAR_BOOKING_MIGRATION',
     label: 'Đồng bộ lịch đặt xe',
@@ -330,24 +330,33 @@ class SyncModelRegistry {
 
     // ── BƯỚC 2: Khởi tạo model và đăng ký handler ────────────────────────────
     try {
-      logger.debug(`[SyncModelRegistry] Init: ${key}`);
+      logger.info(`[SyncModelRegistry] 🔄 Đang khởi tạo module: ${key} (${label})`);
 
       const instance = new ModelClass();
-      await instance.initialize();
+      
+      // Store in registry early (even if initialize fails later)
+      // This ensures it shows up on the dashboard.
+      this._registry.set(key, {
+        definition: { ...def, key, label },
+        instance,
+        handler: null // Will be set if registration succeeds
+      });
+
+      if (typeof instance.initialize === 'function') {
+        await instance.initialize();
+      }
 
       const handler = new SyncHandlerModel(instance);
       await handler.registerHandlers(syncManagerService, label);
 
-      this._registry.set(key, {
-        definition: { ...def, key, label },
-        instance,
-        handler
-      });
+      // Update registry with the successful handler
+      this._registry.get(key).handler = handler;
 
-      logger.debug(`[SyncModelRegistry] ok ${key}`);
+      logger.info(`[SyncModelRegistry] ✅ Khởi tạo thành công: ${key}`);
     } catch (error) {
-      logger.error(`[SyncModelRegistry] fail ${key}: ${error.message}`);
-      throw error;
+      logger.error(`[SyncModelRegistry] ❌ Khởi tạo THẤT BẠI: ${key}. Lỗi: ${error.message}`);
+      // Don't re-throw, so other models can continue
+      // and this one stays in registry (added above) to be visible on dashboard.
     }
   }
 }
