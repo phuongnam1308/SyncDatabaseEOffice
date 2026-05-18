@@ -67,7 +67,7 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
         `;
         
         await this.queryNewDb(alterQuery, {});
-        logger.info('Added id_user_bak column to task_users table');
+        //logger.info('Added id_user_bak column to task_users table');
       }
     } catch (err) {
       logger.error('ensureTaskUsersTableColumns failed:', err.message);
@@ -125,7 +125,7 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
           updateAt: mapped.update_at
         }, transaction);
 
-        logger.info(`[StreamTaskUsersModel] Updated task_user ${mapped.id_user_bak}`);
+        //logger.info(`[StreamTaskUsersModel] Updated task_user ${mapped.id_user_bak}`);
         return { action: 'updated', id_user_bak: mapped.id_user_bak, taskId: mapped.task_id };
       } else {
         // 3b. Insert new - WITH ALL 8 COLUMNS
@@ -162,7 +162,7 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
           throw new Error(msg);
         }
 
-        logger.info(`[StreamTaskUsersModel] Inserted task_user ${mapped.id_user_bak} with id=${newId}`);
+       // logger.info(`[StreamTaskUsersModel] Inserted task_user ${mapped.id_user_bak} with id=${newId}`);
         return { action: 'inserted', id_user_bak: mapped.id_user_bak, taskId: mapped.task_id, newId };
       }
     } catch (error) {
@@ -249,9 +249,9 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
       return 'participant';
     };
     const role = mapPriority(this.helper.safeString(roleRaw));
-    logger.info(
-      `[StreamTaskUsersModel][role-map] TaskId=${rawRecord?.TaskId || rawRecord?.taskId || 'N/A'} UserId=${rawRecord?.UserId || 'N/A'} UserFieldId=${rawRecord?.UserFieldId || 'N/A'} UserFieldName="${roleRaw || ''}" -> role="${role}"`
-    );
+    // logger.info(
+    //   `[StreamTaskUsersModel][role-map] TaskId=${rawRecord?.TaskId || rawRecord?.taskId || 'N/A'} UserId=${rawRecord?.UserId || 'N/A'} UserFieldId=${rawRecord?.UserFieldId || 'N/A'} UserFieldName="${roleRaw || ''}" -> role="${role}"`
+    // );
     // Use provided override or try to extract from rawRecord, fallback to generated ID
     const userBackupId = userBackupIdOverride || String(rawRecord.ID || '').trim() || this._generateUUID();
 
