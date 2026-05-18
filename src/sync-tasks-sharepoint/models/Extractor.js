@@ -59,6 +59,19 @@ class Extractor {
 
   async runExtract() {
     let totalExtracted = 0;
+    let totalItems = 0;
+
+    // 1. Lấy tổng số lượng bản ghi trước (Pre-emptive ItemCount)
+    try {
+      const countUrl = `${this.siteUrl}/_api/web/lists(guid'${this.listId}')/ItemCount`;
+      const countBuffer = await downloadFile(countUrl, this.newPool);
+      const countData = JSON.parse(countBuffer.toString());
+      totalItems = countData.d?.ItemCount || countData.value || 0;
+      logger.info(`[${this.modelName}] Total items on SharePoint: ${totalItems}`);
+    } catch (countErr) {
+      logger.warn(`[${this.modelName}] Could not pre-retrieve ItemCount (will run without percentage progress): ${countErr.message}`);
+    }
+
     // Thêm $expand và $select để lấy tên người dùng (Title) thay vì chỉ lấy ID
     const expandFields = 'Author,Editor,AssignedTo,TheoDoiCongViec';
     const selectFields = '*,Author/Title,Editor/Title,AssignedTo/Title,TheoDoiCongViec/Title';
@@ -78,13 +91,14 @@ class Extractor {
         totalExtracted += items.length;
 
         nextUrl = data.d?.__next || data['odata.nextLink'] || null;
-        logger.info(`[${this.modelName}] Extracted ${items.length} items. Total: ${totalExtracted}`);
         
-        // // LIMIT FOR TESTING: Stop after 500 items
-        // if (totalExtracted >= 500) {
-        //   logger.info(`[${this.modelName}] Reached testing limit of 500. Stopping extraction.`);
-        //   break;
-        // }
+        // Hiển thị phần trăm tiến trình trực quan
+        if (totalItems > 0) {
+          const percent = ((totalExtracted / totalItems) * 100).toFixed(2);
+          logger.info(`[${this.modelName}] Extracted ${items.length} items. Progress: ${totalExtracted} / ${totalItems} (${percent}%)`);
+        } else {
+          logger.info(`[${this.modelName}] Extracted ${items.length} items. Total: ${totalExtracted}`);
+        }
       } catch (err) {
         logger.error(`[${this.modelName}] Extraction failed at URL ${nextUrl}: ${err.message}`);
         throw err;
