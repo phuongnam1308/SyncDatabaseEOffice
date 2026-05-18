@@ -340,7 +340,6 @@ class StreamTaskMigrationModel extends BaseModel {
         );
         
         const currentTaskId = Number(existing[0].id);
-        await this.resolveParentBackfillByBakId(backupId, currentTaskId, transaction);
         logger.info(`[StreamTaskMigrationModel.processSingleRecord] Updated task ${backupId}`);
         return { action: 'updated', idTaskBak: backupId, newTaskId: existing[0].id };
       } else {
@@ -415,7 +414,6 @@ class StreamTaskMigrationModel extends BaseModel {
           throw new Error(msg);
         }
         
-        await this.resolveParentBackfillByBakId(backupId, Number(newId), transaction);
         logger.info(`[StreamTaskMigrationModel.processSingleRecord] Inserted task ${backupId} with new ID ${newId}`);
         return { action: 'inserted', idTaskBak: backupId, newTaskId: newId, createdBy: mapped.created_by, createdAt: mapped.created_at };
       }
