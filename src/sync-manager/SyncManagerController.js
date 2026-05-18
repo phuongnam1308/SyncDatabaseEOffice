@@ -1086,10 +1086,10 @@ class SyncManagerController extends BaseController {
 
       <!-- Action bar -->
       <div class="action-bar">
-        <button id="btn-all"   onclick="triggerSync(false)" class="btn-dash btn-dash-primary" ${data.isRunning ? 'disabled' : ''}>
+        <button id="btn-all"   onclick="triggerSync(false)" class="btn-dash btn-dash-primary">
           <i class="bi bi-play-fill"></i> Chạy tất cả các đối tượng
         </button>
-        <button id="btn-reset" onclick="triggerSync(true)"  class="btn-dash btn-dash-danger"  ${data.isRunning ? 'disabled' : ''}>
+        <button id="btn-reset" onclick="triggerSync(true)"  class="btn-dash btn-dash-danger">
           <i class="bi bi-arrow-counterclockwise"></i> Chạy lại toàn bộ tất cả đối tượng
         </button>
 
@@ -1396,8 +1396,8 @@ class SyncManagerController extends BaseController {
       const badge = document.getElementById('running-badge');
       badge.textContent = data.isRunning ? '⟳ Đang đồng bộ...' : '✓ Sẵn sàng';
       badge.className   = data.isRunning ? 'syncing' : 'ready';
-      document.getElementById('btn-all').disabled   = data.isRunning;
-      document.getElementById('btn-reset').disabled = data.isRunning;
+      document.getElementById('btn-all').disabled   = false;
+      document.getElementById('btn-reset').disabled = false;
       const btnImport = document.getElementById('btn-import-passport');
       if (btnImport) btnImport.disabled = data.isRunning;
 
@@ -1441,10 +1441,10 @@ class SyncManagerController extends BaseController {
       let ms = (info.status||'IDLE').toUpperCase();
       const js = cur ? String(cur.status||'').toUpperCase() : null;
 
-      const canStart  = ['IDLE','COMPLETED','FAILED','CRASHED'].includes(ms);
+      const canStart  = true; // Luôn luôn hiện sáng theo yêu cầu người dùng
       const canPause  = js === 'RUNNING' || js === 'RESUMING';
-      const canResume = ms === 'PAUSED' || js === 'PAUSED';
-      const rid       = canResume ? ((cur && cur.jobId) || info.activeJobId || '') : '';
+      const canResume = !['RUNNING', 'RESUMING', 'PAUSE_REQUESTED'].includes(js || ''); // Chỉ hiện khi không đang chạy
+      const rid       = (cur && cur.jobId) || info.activeJobId || '';
 
       const mapVN = {
         'IDLE': 'Sẵn sàng', 'RUNNING': 'Đang chạy', 'RESUMING': 'Đang tiếp tục',
@@ -1488,10 +1488,10 @@ class SyncManagerController extends BaseController {
         <td>\${ji}</td>
         <td>
           <div class="act-group">
-            <button class="act-btn act-btn-run"    onclick="startModel('\${name}',false)" \${canStart?'':'disabled'}><i class="bi bi-play-fill"></i>Chạy</button>
-            <button class="act-btn act-btn-reset"  onclick="startModel('\${name}',true)"  \${canStart?'':'disabled'}><i class="bi bi-arrow-counterclockwise"></i>Lại</button>
-            <button class="act-btn act-btn-pause"  onclick="pauseJob('\${cur?cur.jobId:''}')"  \${canPause?'':'disabled'}><i class="bi bi-pause-fill"></i>Dừng</button>
-            <button class="act-btn act-btn-resume" onclick="resumeJob('\${rid}')"              \${canResume?'':'disabled'}><i class="bi bi-skip-forward-fill"></i>Tiếp</button>
+            <button class="act-btn act-btn-run"    onclick="startModel('\${name}',false, this)" \${canStart?'':'disabled'}><i class="bi bi-play-fill"></i>Chạy</button>
+            <button class="act-btn act-btn-reset"  onclick="startModel('\${name}',true, this)"  \${canStart?'':'disabled'}><i class="bi bi-arrow-counterclockwise"></i>Lại</button>
+            <button class="act-btn act-btn-pause"  onclick="pauseJob('\${cur?cur.jobId:''}', this)"  \${canPause?'':'disabled'}><i class="bi bi-pause-fill"></i>Dừng</button>
+            <button class="act-btn act-btn-resume" onclick="resumeJob('\${rid}', this)"              \${canResume?'':'disabled'}><i class="bi bi-skip-forward-fill"></i>Tiếp</button>
           </div>
         </td>
       </tr>\`;
@@ -1539,33 +1539,70 @@ class SyncManagerController extends BaseController {
       } catch(e) { alert('Lỗi: ' + e.message); }
     }
 
-    async function startModel(modelName, reset=false) {
+    async function startModel(modelName, reset=false, btn) {
+      if (btn) {
+        btn.disabled = true;
+        btn.style.opacity = '0.5';
+        btn.innerHTML = '<i class="bi bi-hourglass-split"></i>...';
+      }
       try {
         const data = await safeFetchJson('/api/sync-manager-src/models/'+encodeURIComponent(modelName)+'/start', {
           method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({reset})
         });
         alert(data.message || 'Đồng chí đã gửi lệnh');
-      } catch(e) { alert('Lỗi: ' + e.message); }
+      } catch(e) { 
+        alert('Lỗi: ' + e.message); 
+        if (btn) {
+          btn.disabled = false;
+          btn.style.opacity = '1';
+          btn.innerHTML = reset ? '<i class="bi bi-arrow-counterclockwise"></i>Lại' : '<i class="bi bi-play-fill"></i>Chạy';
+        }
+      }
     }
 
-    async function pauseJob(jobId) {
+    async function pauseJob(jobId, btn) {
       if (!jobId) return;
+      if (btn) {
+        btn.disabled = true;
+        btn.style.opacity = '0.5';
+        btn.innerHTML = '<i class="bi bi-hourglass-split"></i>...';
+      }
       try {
         const data = await safeFetchJson('/api/sync-manager-src/jobs/'+encodeURIComponent(jobId)+'/pause', {
           method:'POST', headers:{'Content-Type':'application/json'}
         });
         alert(data.message || 'Đồng chí đã yêu cầu dừng lại');
-      } catch(e) { alert('Lỗi: ' + e.message); }
+      } catch(e) { 
+        alert('Lỗi: ' + e.message);
+        if (btn) {
+          btn.disabled = false;
+          btn.style.opacity = '1';
+          btn.innerHTML = '<i class="bi bi-pause-fill"></i>Dừng';
+        }
+      }
     }
 
-    async function resumeJob(jobId) {
+    async function resumeJob(jobId, btn) {
       if (!jobId) return;
+      if (btn) {
+        btn.disabled = true;
+        btn.style.opacity = '0.5';
+        btn.innerHTML = '<i class="bi bi-hourglass-split"></i>...';
+      }
       try {
         const data = await safeFetchJson('/api/sync-manager-src/jobs/'+encodeURIComponent(jobId)+'/resume', {
           method:'POST', headers:{'Content-Type':'application/json'}
         });
         alert(data.message || 'Đồng chí đã yêu cầu tiếp tục');
-      } catch(e) { alert('Lỗi: ' + e.message); location.reload(); }
+      } catch(e) { 
+        alert('Lỗi: ' + e.message); 
+        if (btn) {
+          btn.disabled = false;
+          btn.style.opacity = '1';
+          btn.innerHTML = '<i class="bi bi-skip-forward-fill"></i>Tiếp';
+        }
+        location.reload(); 
+      }
     }
 
     async function triggerShutdown() {
@@ -1741,10 +1778,10 @@ class SyncManagerController extends BaseController {
       let ms = (info.status || 'IDLE').toUpperCase();
       const js = cur ? String(cur.status || '').toUpperCase() : null;
 
-      const canStart = ['IDLE', 'COMPLETED', 'FAILED', 'CRASHED'].includes(ms);
+      const canStart = true; // Luôn luôn hiện sáng theo yêu cầu người dùng
       const canPause = js === 'RUNNING' || js === 'RESUMING';
-      const canResume = ms === 'PAUSED' || js === 'PAUSED';
-      const rid = canResume ? ((cur && cur.jobId) || info.activeJobId || '') : '';
+      const canResume = !['RUNNING', 'RESUMING', 'PAUSE_REQUESTED'].includes(js || ''); // Chỉ hiện khi không đang chạy
+      const rid = (cur && cur.jobId) || info.activeJobId || '';
 
       const mapVN = {
         'IDLE': 'Sẵn sàng', 'RUNNING': 'Đang chạy', 'RESUMING': 'Đang tiếp tục',

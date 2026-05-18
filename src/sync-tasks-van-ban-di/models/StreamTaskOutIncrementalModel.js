@@ -598,6 +598,14 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
     });
   }
 
+  async resetErrors() {
+    const stagingTableRef = this.getStagingTableRef();
+    return resetErrorRows(this, {
+      tableRef: stagingTableRef,
+      label: this.modelName,
+    });
+  }
+
   /**
    * Tải các file đính kèm của Task (Văn bản đi) từ SharePoint về bộ nhớ (NGOÀI giao dịch SQL).
    */
@@ -883,7 +891,7 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
         IF EXISTS (SELECT 1 FROM ${stagingTableRef} WHERE ID = @ID)
         BEGIN
           ${nonIdColumns.length > 0
-          ? `UPDATE ${stagingTableRef} SET ${updateClause} WHERE ID = @ID;`
+          ? `UPDATE ${stagingTableRef} SET ${updateClause} WHERE ID = @ID AND ISNULL(MigrateFlg, 0) <> 1;`
           : `SELECT 1 AS noop;`
         }
         END
@@ -947,21 +955,33 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
       `[StreamTaskOut] Tổng số bản ghi cần sync: ${totalCount} (LastTime: ${normalizedLastSyncTime}, LastId: ${normalizedLastSyncId})`,
     );
 
+    // Lấy số lượng đã sync thành công để trừ đi (theo yêu cầu skip bản ghi đã chạy)
+    let alreadySyncedCount = 0;
+    try {
+      const syncedRes = await this.queryNewDb(`
+        SELECT COUNT(1) AS cnt FROM ${stagingTableRef}
+        WHERE ISNULL(MigrateFlg, 0) = 1
+          AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) >= @startDate OR @startDate IS NULL)
+          AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) <= @endDate   OR @endDate IS NULL)
+      `, {
+        startDate: process.env.SYNC_START_DATE || null,
+        endDate: process.env.SYNC_END_DATE || null
+      });
+      alreadySyncedCount = Number(syncedRes?.[0]?.cnt || 0);
+    } catch (e) {}
+
+    const displayTotal = Math.max(0, totalCount - alreadySyncedCount);
+
     await this.queryNewDb(
       `
       UPDATE sync_jobs
-      SET total_to_sync =
-        CASE
-          WHEN ISNULL(total_to_sync, 0) > @total THEN ISNULL(total_to_sync, 0)
-          WHEN ISNULL(total_processed, 0) > @total THEN ISNULL(total_processed, 0)
-          ELSE @total
-        END
+      SET total_to_sync = @total
       WHERE job_id = @jobId
-      `,
+    `,
       {
-        total: totalCount,
+        total: displayTotal,
         jobId: syncJobId,
-      }
+      },
     );
 
     const numIterations = Math.ceil(totalCount / batchSize);

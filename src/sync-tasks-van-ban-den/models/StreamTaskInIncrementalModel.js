@@ -13,6 +13,7 @@ const {
   markRowFailed,
   markRowSuccess,
   releaseStaleClaims,
+  resetErrorRows,
   startHeartbeatLoop,
   updateHeartbeat,
 } = require('../../helpers/StagingQueueHelper');
@@ -988,7 +989,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
               ? `UPDATE tgt WITH (ROWLOCK)
                  SET ${updateClause}
                  FROM ${stagingTableRef} tgt
-                 WHERE tgt.ID = @ID;`
+                 WHERE tgt.ID = @ID AND ISNULL(tgt.MigrateFlg, 0) <> 1;`
               : `SELECT 1 AS noop;`}
           END
           ELSE
@@ -1150,8 +1151,25 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       logger.warn(`[StreamTaskIn][count-staging] failed: ${diagErr.message}`);
     }
 
+    // Láº¥y sá»‘ lÆ°á»£ng Ä‘Ã£ sync thÃ nh cÃ´ng Ä‘á»ƒ trá»« Ä‘i (theo yÃªu cáº§u skip báº£n ghi Ä‘Ã£ cháº¡y)
+    let alreadySyncedCount = 0;
+    try {
+      const syncedRes = await this.queryNewDb(`
+        SELECT COUNT(1) AS cnt FROM ${stagingTableRef}
+        WHERE ISNULL(MigrateFlg, 0) = 1
+          AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) >= @startDate OR @startDate IS NULL)
+          AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) <= @endDate   OR @endDate IS NULL)
+      `, {
+        startDate: envStartDate,
+        endDate: envEndDate
+      });
+      alreadySyncedCount = Number(syncedRes?.[0]?.cnt || 0);
+    } catch (e) {}
+
+    const displayTotal = Math.max(0, totalCount - alreadySyncedCount);
+
     await this.queryNewDb(`UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`, {
-      total: totalCount,
+      total: displayTotal,
       jobId: syncJobId
     });
 
@@ -1331,6 +1349,13 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       params: { ID: rowId },
       transaction,
       rowToken: `ID=${rowId}`,
+    });
+  }
+
+  async resetErrors() {
+    const stagingTableRef = this.getStagingTableRef();
+    return resetErrorRows(this, {
+      tableRef: stagingTableRef,
       label: this.modelName,
     });
   }

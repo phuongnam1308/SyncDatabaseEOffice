@@ -41,6 +41,11 @@ class BaseIncrementalSyncInterface extends BaseModel {
   async fetchOneFromStaging(_context = {}) {
     // This method is optional
   }
+
+  async resetErrors() {
+    // This method is optional
+    return 0;
+  }
 }
 
 module.exports = BaseIncrementalSyncInterface;

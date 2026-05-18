@@ -1,0 +1,165 @@
+[
+  {
+    "id": "0af60d1b-e597-4929-8d35-467209a4b8a3",
+    "name": "NGUOI_SOAN_LICH",
+    "roleCode": "NGUOI_SOAN_LICH",
+    "permissions": [
+      "LICHCANHAN",
+      "LICHCONGTY",
+      "SOANLICHHOP",
+      "LICHCANHANCHOXN",
+      "LICHPHONGBAN",
+      "LICHCANHANTHAMGIA",
+      "thongKeLichHop",
+      "LICHCHODUYET",
+      "SOANLICHDADUYET",
+      "LICHTUCHOID",
+      "lichbihuycb"
+    ],
+    "users": [
+      "9cc1fccc-0ccb-4305-9cab-f701aa70e54c",
+      "6915f3aa7e39c2ba33cef98d",
+      "f2d92a70-b3ba-432b-b70b-311e57e11c64",
+      "ea1c73eb-9462-48a0-8cd4-6da3521aeef7",
+      "9d1b462a-8033-4fa5-8110-ddb53c1992ca",
+      "2916a5f3-2dd9-4f82-8741-ef957454f904",
+      "cd51a8be-f79d-460c-914e-a43fe0f62d06",
+      "b243d70a-c26e-42e1-92f3-71ca4e0d5de1",
+      "4b977301-242c-407b-8f83-e3ff2e463f04",
+      "4f367e1d-d7de-4b85-b022-d2c06a196590",
+      "69362d9c018821f01f83d1a9",
+      "69363351018821f01f83d415",
+      "5447558e-63aa-4109-829a-e743a1c37c27",
+      "69362975018821f01f83cd2f",
+      "693631e9018821f01f83d3b3",
+      "693632f8018821f01f83d3f4",
+      "82396ee7-cbd0-47ef-817a-46f2c5f8c72f",
+      "6936347a018821f01f83d477",
+      "fc4d5d18-81cb-4638-9be5-8565dd07c823",
+      "5939ac42-f03a-40c8-8dda-c9dbae2b6b36",
+      "410c1d9c-4580-4c26-b3fa-ada170d7cb15",
+      "d3577b5a-9173-4313-98ea-a129bbba4e3e",
+      "69363416018821f01f83d456",
+      "69362ee0018821f01f83d237",
+      "69362e4e018821f01f83d215"
+    ]
+  },
+  {
+    "id": "15a5092e-308e-4262-8a82-d249aec0ef27",
+    "name": "NGUOI_THAM_GIA",
+    "roleCode": "NGUOI_THAM_GIA",
+    "permissions": [
+      "LICHCONGTY",
+      "LICHCANHAN",
+      "LICHCANHANCHOXN",
+      "LICHPHONGBAN",
+      "LICHCANHANTHAMGIA",
+      "thongKeLichHop",
+      "LICHCANHANKHONGTG",
+      "LICHCANHANUYQUYEN"
+    ],
+    "users": [
+      "6938eb538dd2e333f55078c1",
+      "6936329a018821f01f83d3d4",
+      "693632f8018821f01f83d3f4",
+      "69363554018821f01f83d4b9",
+      "69362d9c018821f01f83d1a9",
+      "69362e4e018821f01f83d215",
+      "6916e348235126dfe342854b",
+      "6916f6cc235126dfe3429527",
+      "6936347a018821f01f83d477",
+      "ed9f42d7-d2b4-4c00-9f7f-e0998cfe3002",
+      "410c1d9c-4580-4c26-b3fa-ada170d7cb15",
+      "6915f3aa7e39c2ba33cef98d",
+      "cd51a8be-f79d-460c-914e-a43fe0f62d06",
+      "46f98528-5cb2-49cf-90c8-274df2d3739b",
+      "69362ee0018821f01f83d237",
+      "ea1c73eb-9462-48a0-8cd4-6da3521aeef7",
+      "6915f3247e39c2ba33cef8c0",
+      "9d1b462a-8033-4fa5-8110-ddb53c1992ca",
+      "5939ac42-f03a-40c8-8dda-c9dbae2b6b36",
+      "2916a5f3-2dd9-4f82-8741-ef957454f904",
+      "69281962213f38bebc802aaa"
+    ]
+  },
+  {
+    "id": "e636b0c4-adb9-403c-9172-3bc3f471775f",
+    "name": "DON_VI_THAM_GIA",
+    "roleCode": "DON_VI_THAM_GIA",
+    "permissions": [
+      "LICHCANXULY",
+      "LICHCANHAN",
+      "LICHCONGTY",
+      "LICHCANHANCHOXN",
+      "LICHPHONGBAN",
+      "LICHCANHANTHAMGIA",
+      "thongKeLichHop",
+      "LICHCANHANKHONGTG",
+      "LICHCANHANUYQUYEN",
+      "LICHHOANTHANHXL",
+      "LICCHDANGXULY"
+    ],
+    "users": [
+      "69362975018821f01f83cd2f",
+      "69363416018821f01f83d456",
+      "69256ba13be9ed795d4a3a2b",
+      "6938eb548dd2e333f550792d",
+      "6915f2387e39c2ba33cef79a",
+      "bbffe649-d59f-4dd0-b35b-b8930a3f221d",
+      "6938eb548dd2e333f5507a5e",
+      "c00334aa-500a-48a1-bf04-0426be9e6f11",
+      "85fb6ce3-a63c-4a8a-95d1-1c44e553efaf",
+      "f2d92a70-b3ba-432b-b70b-311e57e11c64",
+      "d3577b5a-9173-4313-98ea-a129bbba4e3e",
+      "bd97f40e-c9a1-4b07-a147-e134f12a1b30",
+      "b8f190da-70d0-4cf2-b290-a25c2ae31154",
+      "693631e9018821f01f83d3b3"
+    ]
+  },
+  {
+    "id": "e341729f-e2e1-4053-951b-f9f4a6819b27",
+    "name": "BAN_QUAN_LY_PHONG_HOP",
+    "roleCode": "BAN_QUAN_LY_PHONG_HOP",
+    "permissions": [
+      "PHEDUYETLICHHOPCHO",
+      "dsthietbiphonghop",
+      "chuaganvitrigd",
+      "Daganvitrichongoigd",
+      "LICHCONGTY",
+      "LICHCANHAN",
+      "LICHCANHANCHOXN",
+      "LICHBANLANHDAO",
+      "taodutaoqlp",
+      "LICHDONVI",
+      "TAOLICHHOP",
+      "LICHCANHANTHAMGIA",
+      "thongKeLichHop",
+      "LICHTOANBOPHONGBAN",
+      "LICHCANHANKHONGTG",
+      "LICHCANHANUYQUYEN",
+      "LICHHOPCB",
+      "LICHHOPHUY",
+      "CHUAPHEDUYET",
+      "KHONGPHEDUYET",
+      "dangxulyganvitringoi"
+    ],
+    "users": [
+      "99bf3990-10e2-41a8-825b-1e504c879994",
+      "da5819ea-0778-42b2-acf5-28f20b3a8bd9"
+    ]
+  },
+  {
+    "id": "f73018ba-b30d-486e-a250-1f38dd38c8f7",
+    "name": "ADMIN",
+    "roleCode": "ADMIN",
+    "permissions": [
+      "thongKeLichHop",
+      "LICHTOANBOPHONGBAN",
+      "LICHCONGTYBANLANHDAO",
+      "LICHCANHANBANLANHDAO"
+    ],
+    "users": [
+      "ea1c73eb-9462-48a0-8cd4-6da3521aeef7"
+    ]
+  }
+]

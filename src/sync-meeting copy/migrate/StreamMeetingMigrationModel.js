@@ -4,7 +4,15 @@ const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncremental
 const { tableMappings } = require('./config');
 const mapping = require('./mapping.json');
 const requiredRoles = require('./required_process_roles.json');
-
+const {
+  claimNextStagingRow,
+  ensureTrackingColumns,
+  markRowFailed,
+  markRowSuccess,
+  startHeartbeatLoop,
+  updateHeartbeat,
+  resetErrorRows,
+} = require('../../helpers/StagingQueueHelper');
 
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 
@@ -69,6 +77,14 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     }
 
     console.log(`[StreamMeetingMigrationModel] ✅ Khởi tạo thành công: STREAM_MEETING_COPY_MIGRATION`);
+  }
+
+  async resetErrors() {
+    const stagingTableRef = this.getStagingTableRef();
+    return resetErrorRows(this, {
+      tableRef: stagingTableRef,
+      label: this.modelName,
+    });
   }
 
 
@@ -912,7 +928,7 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
       BEGIN
           UPDATE ${stagingTableRef}
           SET ${updateSet}, __sync_time = @__sync_time, __sync_id_num = @__sync_id_num, MigrateFlg = @MigrateFlg, MigrateErrFlg = @MigrateErrFlg, MigrateErrMess = NULL
-          WHERE [stg_job_id] = @stg_job_id AND [source_db] = @source_db AND [tp_ListId] = @tp_ListId AND [ID] = @ID
+          WHERE [stg_job_id] = @stg_job_id AND [source_db] = @source_db AND [tp_ListId] = @tp_ListId AND [ID] = @ID AND ISNULL(MigrateFlg, 0) <> 1
       END
       ELSE
       BEGIN
@@ -1013,10 +1029,22 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
       }
     }
 
+    // Lấy số lượng đã sync thành công để trừ đi (theo yêu cầu skip bản ghi đã chạy)
+    let alreadySyncedCount = 0;
+    try {
+      const syncedRes = await this.queryNewDb(`
+        SELECT COUNT(1) AS cnt FROM ${stagingTableRef}
+        WHERE ISNULL(MigrateFlg, 0) = 1
+      `);
+      alreadySyncedCount = Number(syncedRes?.[0]?.cnt || 0);
+    } catch (e) {}
+
+    const displayTotal = Math.max(0, totalCount - alreadySyncedCount);
+
     await this.queryNewDb(
       `UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`,
       {
-        total: totalStagedCount,
+        total: displayTotal,
         jobId: syncJobId
       }
     );
