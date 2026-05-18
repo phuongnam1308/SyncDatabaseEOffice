@@ -4,7 +4,15 @@ const BaseIncrementalSyncInterface = require('../../sync-manager/BaseIncremental
 const { tableMappings } = require('./config');
 const mapping = require('./mapping.json');
 const requiredRoles = require('./required_process_roles.json');
-
+const {
+  claimNextStagingRow,
+  ensureTrackingColumns,
+  markRowFailed,
+  markRowSuccess,
+  startHeartbeatLoop,
+  updateHeartbeat,
+  resetErrorRows,
+} = require('../../helpers/StagingQueueHelper');
 
 const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 
@@ -43,16 +51,40 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     try {
       console.log(`[StreamMeetingMigrationModel] Initializing...`);
       await super.initialize();
-      await this.ensureStagingTableExists();
-      await this.ensureMeetingsColumnsExist();
-      await this.ensureMeetingParticipantsTableExists();
-      await this.ensureDefaultRoomExists();
-      await this.ensureAuditTableExists();
-      console.log(`[StreamMeetingMigrationModel] Initialization complete.`);
     } catch (error) {
-      console.error(`[StreamMeetingMigrationModel] ❌ Initialization failed: ${error.message}`);
-      // Do not re-throw to allow model registration on dashboard
+      console.error(`[StreamMeetingMigrationModel] ❌ super.initialize() failed: ${error.message}`);
+      // Do not re-throw — allow model to register on dashboard
+      return;
     }
+
+    // Run each setup step independently so one failure doesn't block the others
+    const steps = [
+      { name: 'ensureStagingTableExists',             fn: () => this.ensureStagingTableExists() },
+      { name: 'ensureMeetingsColumnsExist',            fn: () => this.ensureMeetingsColumnsExist() },
+      { name: 'ensureMeetingParticipantsTableExists',  fn: () => this.ensureMeetingParticipantsTableExists() },
+      { name: 'ensureDefaultRoomExists',               fn: () => this.ensureDefaultRoomExists() },
+      { name: 'ensureAuditTableExists',                fn: () => this.ensureAuditTableExists() },
+    ];
+
+    for (const step of steps) {
+      try {
+        await step.fn();
+        console.log(`[StreamMeetingMigrationModel] ✅ ${step.name} OK`);
+      } catch (error) {
+        console.error(`[StreamMeetingMigrationModel] ⚠️  ${step.name} WARN (non-fatal): ${error.message}`);
+        // Non-fatal — continue initializing remaining steps
+      }
+    }
+
+    console.log(`[StreamMeetingMigrationModel] ✅ Khởi tạo thành công: STREAM_MEETING_COPY_MIGRATION`);
+  }
+
+  async resetErrors() {
+    const stagingTableRef = this.getStagingTableRef();
+    return resetErrorRows(this, {
+      tableRef: stagingTableRef,
+      label: this.modelName,
+    });
   }
 
 
@@ -366,8 +398,8 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
 
       console.log(`[StreamMeetingMigrationModel] [ensureMeetingParticipantsTableExists] OK`);
     } catch (err) {
-      console.error(`[StreamMeetingMigrationModel] [ensureMeetingParticipantsTableExists] ERROR: ${err.message}`);
-      throw err;
+      // Non-fatal: log warning but do NOT re-throw so initialize() can continue
+      console.error(`[StreamMeetingMigrationModel] [ensureMeetingParticipantsTableExists] ERROR (non-fatal): ${err.message}`);
     }
   }
 
@@ -451,112 +483,141 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
    * Tự động tạo bảng staging `meeting_sync_staging` trong DB mới nếu chưa tồn tại.
    */
     async ensureStagingTableExists() {
+    const stagingTableRef = this.getStagingTableRef();
+    console.log(`[StreamMeetingMigrationModel] [ensureStagingTableExists] Checking/Creating staging table: ${stagingTableRef}`);
+    const db = this.newDbName || 'app_tancang';
+    const schema = this.newDbSchema || 'dbo';
+    const table = this.newTableSync;
+
+    // 1. Tạo bảng staging nếu chưa tồn tại
+    await this.queryNewDb(`
+      IF NOT EXISTS (
+        SELECT 1 FROM [${db}].INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_SCHEMA = '${schema}' AND TABLE_NAME = '${table}'
+      )
+      BEGIN
+        CREATE TABLE ${stagingTableRef} (
+          [SY_SyncId]      INT IDENTITY(1,1) PRIMARY KEY,
+          [__sync_time]    DATETIME2 NULL,
+          [__sync_id_num]  BIGINT NULL
+        );
+      END
+    `);
+
+    // 2. Bổ sung các cột dữ liệu + source_db
+    const columnsToAdd = this.getStagingColumnDefinitions();
+    if (!columnsToAdd.some(c => c.name === 'source_db')) {
+      columnsToAdd.push({ name: 'source_db', type: 'NVARCHAR(255)' });
+    }
+    for (const col of columnsToAdd) {
       try {
-        const stagingTableRef = this.getStagingTableRef();
-        console.log(`[StreamMeetingMigrationModel] Checking/Creating staging table: ${stagingTableRef}`);
-        const db = this.newDbName || 'app_tancang';
-        const schema = this.newDbSchema || 'dbo';
-        const table = this.newTableSync;
-
-        const createQuery = `
-        IF NOT EXISTS (SELECT 1 FROM [${db}].INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '${schema}' AND TABLE_NAME = '${table}')
-        BEGIN
-            CREATE TABLE ${stagingTableRef} (
-                [SY_SyncId] INT IDENTITY(1,1) PRIMARY KEY,
-                [__sync_time] DATETIME2 NULL,
-                [__sync_id_num] BIGINT NULL
-            );
-        END
-        `;
-        await this.queryNewDb(createQuery);
-
-        const columnsToAdd = this.getStagingColumnDefinitions();
-        // Thêm cột source_db cho đa site
-        if (!columnsToAdd.some(c => c.name === 'source_db')) {
-          columnsToAdd.push({ name: 'source_db', type: 'NVARCHAR(255)' });
-        }
-
-        for (const col of columnsToAdd) {
-            const alterQuery = `
-            IF NOT EXISTS (
-                SELECT 1
-                FROM [${db}].INFORMATION_SCHEMA.COLUMNS
-                WHERE TABLE_NAME = '${table}' AND TABLE_SCHEMA = '${schema}' AND COLUMN_NAME = '${col.name}'
-            )
-            BEGIN
-                ALTER TABLE ${stagingTableRef} ADD [${col.name}] ${col.type} NULL;
-            END
-            `;
-            await this.queryNewDb(alterQuery);
-        }
-
-        // Flags chuẩn cho sync-manager
-        const flags = [
-          { name: 'MigrateFlg', type: 'INT' },
-          { name: 'MigrateErrFlg', type: 'INT' },
-          { name: 'MigrateErrMess', type: 'NVARCHAR(MAX)' }
-        ];
-        for (const flag of flags) {
-          await this.queryNewDb(`IF NOT EXISTS (SELECT 1 FROM [${db}].INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${table}' AND TABLE_SCHEMA = '${schema}' AND COLUMN_NAME = '${flag.name}') ALTER TABLE ${stagingTableRef} ADD [${flag.name}] ${flag.type} NULL;`);
-        }
-
-        const dropLegacyIndexQuery = `
-        IF EXISTS (SELECT 1 FROM [${db}].sys.indexes i JOIN [${db}].sys.tables t ON i.object_id = t.object_id JOIN [${db}].sys.schemas s ON t.schema_id = s.schema_id WHERE i.name = 'IX_${table}_ID' AND t.name = '${table}' AND s.name = '${schema}')
-            DROP INDEX IX_${table}_ID ON ${stagingTableRef};
-        IF EXISTS (SELECT 1 FROM [${db}].sys.indexes i JOIN [${db}].sys.tables t ON i.object_id = t.object_id JOIN [${db}].sys.schemas s ON t.schema_id = s.schema_id WHERE i.name = 'IX_${table}_job_ID' AND t.name = '${table}' AND s.name = '${schema}')
-            DROP INDEX IX_${table}_job_ID ON ${stagingTableRef};
-        IF EXISTS (SELECT 1 FROM [${db}].sys.indexes i JOIN [${db}].sys.tables t ON i.object_id = t.object_id JOIN [${db}].sys.schemas s ON t.schema_id = s.schema_id WHERE i.name = 'IX_${table}_job_list_ID' AND t.name = '${table}' AND s.name = '${schema}')
-            DROP INDEX IX_${table}_job_list_ID ON ${stagingTableRef};
-        `;
-        await this.queryNewDb(dropLegacyIndexQuery);
-
-        const indexQuery = `
-        IF NOT EXISTS (SELECT 1 FROM [${db}].sys.indexes i JOIN [${db}].sys.tables t ON i.object_id = t.object_id JOIN [${db}].sys.schemas s ON t.schema_id = s.schema_id WHERE i.name = 'IX_${table}_job_list_ID_source' AND t.name = '${table}' AND s.name = '${schema}')
-        BEGIN
-            CREATE UNIQUE INDEX IX_${table}_job_list_ID_source ON ${stagingTableRef}(stg_job_id, source_db, tp_ListId, ID);
-        END
-        `;
-        await this.queryNewDb(indexQuery);
-
-        const dropOldCursorIndexQuery = `
-        IF EXISTS (
-            SELECT 1 FROM [${db}].sys.indexes i
-            JOIN [${db}].sys.tables t ON i.object_id = t.object_id
-            JOIN [${db}].sys.schemas s ON t.schema_id = s.schema_id
-            WHERE i.name = 'IX_${table}_job_cursor'
-              AND t.name = '${table}'
-              AND s.name = '${schema}'
-        )
-        BEGIN
-            -- Sử dụng cú pháp an toàn hơn cho DROP INDEX
-            DECLARE @dropSql NVARCHAR(MAX) = 'DROP INDEX [IX_${table}_job_cursor] ON ' + '${stagingTableRef}';
-            EXEC sp_executesql @dropSql;
-        END
-        `;
-        await this.queryNewDb(dropOldCursorIndexQuery);
-
-        const syncCursorIndexQuery = `
-        IF NOT EXISTS (
-            SELECT 1 FROM [${db}].sys.indexes i
-            JOIN [${db}].sys.tables t ON i.object_id = t.object_id
-            JOIN [${db}].sys.schemas s ON t.schema_id = s.schema_id
-            WHERE i.name = 'IX_${table}_job_cursor'
-              AND t.name = '${table}'
-              AND s.name = '${schema}'
-        )
-        BEGIN
-            CREATE INDEX IX_${table}_job_cursor ON ${stagingTableRef}(stg_job_id, __sync_time, __sync_id_num, tp_ListId, SY_SyncId);
-        END
-        `;
-        await this.queryNewDb(syncCursorIndexQuery);
-
-        console.log(`[StreamMeetingMigrationModel] [ensureStagingTableExists] OK: ${stagingTableRef} is ready`);
-
-      } catch (err) {
-        console.error(`[StreamMeetingMigrationModel] [ensureStagingTableExists] ERROR: ${err.message}`);
-        throw err;
+        await this.queryNewDb(`
+          IF NOT EXISTS (
+            SELECT 1 FROM [${db}].INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_NAME = '${table}' AND TABLE_SCHEMA = '${schema}' AND COLUMN_NAME = '${col.name}'
+          )
+          BEGIN
+            ALTER TABLE ${stagingTableRef} ADD [${col.name}] ${col.type} NULL;
+          END
+        `);
+      } catch (colErr) {
+        console.warn(`[StreamMeetingMigrationModel] [ensureStagingTableExists] WARN adding column ${col.name}: ${colErr.message}`);
       }
     }
+
+    // 3. Bổ sung cột flags chuẩn sync-manager
+    const flags = [
+      { name: 'MigrateFlg',    type: 'INT' },
+      { name: 'MigrateErrFlg', type: 'INT' },
+      { name: 'MigrateErrMess', type: 'NVARCHAR(MAX)' }
+    ];
+    for (const flag of flags) {
+      try {
+        await this.queryNewDb(`
+          IF NOT EXISTS (
+            SELECT 1 FROM [${db}].INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_NAME = '${table}' AND TABLE_SCHEMA = '${schema}' AND COLUMN_NAME = '${flag.name}'
+          )
+          BEGIN
+            ALTER TABLE ${stagingTableRef} ADD [${flag.name}] ${flag.type} NULL;
+          END
+        `);
+      } catch (flagErr) {
+        console.warn(`[StreamMeetingMigrationModel] [ensureStagingTableExists] WARN adding flag ${flag.name}: ${flagErr.message}`);
+      }
+    }
+
+    // 4. Drop các legacy index (bỏ qua lỗi nếu không tồn tại)
+    const legacyIndexes = [
+      `IX_${table}_ID`,
+      `IX_${table}_job_ID`,
+      `IX_${table}_job_list_ID`,
+      `IX_${table}_job_cursor`,
+    ];
+    for (const idxName of legacyIndexes) {
+      try {
+        await this.queryNewDb(`
+          IF EXISTS (
+            SELECT 1
+            FROM [${db}].sys.indexes i
+            JOIN [${db}].sys.tables t ON i.object_id = t.object_id
+            JOIN [${db}].sys.schemas s ON t.schema_id = s.schema_id
+            WHERE i.name = '${idxName}' AND t.name = '${table}' AND s.name = '${schema}'
+          )
+          BEGIN
+            DROP INDEX [${idxName}] ON ${stagingTableRef};
+          END
+        `);
+        console.log(`[StreamMeetingMigrationModel] [ensureStagingTableExists] Dropped legacy index ${idxName} (if existed)`);
+      } catch (dropErr) {
+        console.warn(`[StreamMeetingMigrationModel] [ensureStagingTableExists] WARN dropping index ${idxName}: ${dropErr.message}`);
+      }
+    }
+
+    // 5. Tạo unique index chính (idempotent)
+    try {
+      await this.queryNewDb(`
+        IF NOT EXISTS (
+          SELECT 1
+          FROM [${db}].sys.indexes i
+          JOIN [${db}].sys.tables t ON i.object_id = t.object_id
+          JOIN [${db}].sys.schemas s ON t.schema_id = s.schema_id
+          WHERE i.name = 'IX_${table}_job_list_ID_source'
+            AND t.name = '${table}' AND s.name = '${schema}'
+        )
+        BEGIN
+          CREATE UNIQUE INDEX [IX_${table}_job_list_ID_source]
+            ON ${stagingTableRef}(stg_job_id, source_db, tp_ListId, ID);
+        END
+      `);
+      console.log(`[StreamMeetingMigrationModel] [ensureStagingTableExists] Unique index IX_${table}_job_list_ID_source ready`);
+    } catch (uidxErr) {
+      console.warn(`[StreamMeetingMigrationModel] [ensureStagingTableExists] WARN creating unique index: ${uidxErr.message}`);
+    }
+
+    // 6. Tạo cursor index (idempotent)
+    try {
+      await this.queryNewDb(`
+        IF NOT EXISTS (
+          SELECT 1
+          FROM [${db}].sys.indexes i
+          JOIN [${db}].sys.tables t ON i.object_id = t.object_id
+          JOIN [${db}].sys.schemas s ON t.schema_id = s.schema_id
+          WHERE i.name = 'IX_${table}_job_cursor'
+            AND t.name = '${table}' AND s.name = '${schema}'
+        )
+        BEGIN
+          CREATE INDEX [IX_${table}_job_cursor]
+            ON ${stagingTableRef}(stg_job_id, __sync_time, __sync_id_num, tp_ListId, SY_SyncId);
+        END
+      `);
+      console.log(`[StreamMeetingMigrationModel] [ensureStagingTableExists] Cursor index IX_${table}_job_cursor ready`);
+    } catch (cidxErr) {
+      console.warn(`[StreamMeetingMigrationModel] [ensureStagingTableExists] WARN creating cursor index: ${cidxErr.message}`);
+    }
+
+    console.log(`[StreamMeetingMigrationModel] [ensureStagingTableExists] ✅ Staging table ${stagingTableRef} is ready`);
+  }
 
   async ensureAuditTableExists() {
     const db = this.newDbName || 'app_tancang';
@@ -867,7 +928,7 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
       BEGIN
           UPDATE ${stagingTableRef}
           SET ${updateSet}, __sync_time = @__sync_time, __sync_id_num = @__sync_id_num, MigrateFlg = @MigrateFlg, MigrateErrFlg = @MigrateErrFlg, MigrateErrMess = NULL
-          WHERE [stg_job_id] = @stg_job_id AND [source_db] = @source_db AND [tp_ListId] = @tp_ListId AND [ID] = @ID
+          WHERE [stg_job_id] = @stg_job_id AND [source_db] = @source_db AND [tp_ListId] = @tp_ListId AND [ID] = @ID AND ISNULL(MigrateFlg, 0) <> 1
       END
       ELSE
       BEGIN
@@ -968,10 +1029,22 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
       }
     }
 
+    // Lấy số lượng đã sync thành công để trừ đi (theo yêu cầu skip bản ghi đã chạy)
+    let alreadySyncedCount = 0;
+    try {
+      const syncedRes = await this.queryNewDb(`
+        SELECT COUNT(1) AS cnt FROM ${stagingTableRef}
+        WHERE ISNULL(MigrateFlg, 0) = 1
+      `);
+      alreadySyncedCount = Number(syncedRes?.[0]?.cnt || 0);
+    } catch (e) {}
+
+    const displayTotal = Math.max(0, totalCount - alreadySyncedCount);
+
     await this.queryNewDb(
       `UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`,
       {
-        total: totalStagedCount,
+        total: displayTotal,
         jobId: syncJobId
       }
     );

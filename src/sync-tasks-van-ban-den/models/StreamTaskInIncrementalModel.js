@@ -13,6 +13,7 @@ const {
   markRowFailed,
   markRowSuccess,
   releaseStaleClaims,
+  resetErrorRows,
   startHeartbeatLoop,
   updateHeartbeat,
 } = require('../../helpers/StagingQueueHelper');
@@ -238,16 +239,24 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
 
     try {
       // FIX: Ensure staging table exists FIRST before any column checks or model inits
-      await withDeadlockRetry(
-        () => this.ensureStagingTableExists(),
-        'ensureStagingTableExists'
-      );
+      try {
+        await withDeadlockRetry(
+          () => this.ensureStagingTableExists(),
+          'ensureStagingTableExists'
+        );
+      } catch (err) {
+        logger.error(`[StreamTaskInIncrementalModel] ensureStagingTableExists WARN (non-fatal): ${err.message}`);
+      }
 
       // ADD: Ensure all necessary columns exist (e.g. ItemId)
-      await withDeadlockRetry(
-        () => this.ensureStagingTableColumns(),
-        'ensureStagingTableColumns'
-      );
+      try {
+        await withDeadlockRetry(
+          () => this.ensureStagingTableColumns(),
+          'ensureStagingTableColumns'
+        );
+      } catch (err) {
+        logger.error(`[StreamTaskInIncrementalModel] ensureStagingTableColumns WARN (non-fatal): ${err.message}`);
+      }
 
       // Late require to break potential circular dependencies
       const StreamTaskMigrationModel = require('./StreamTaskMigrationModel');
@@ -313,7 +322,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       logger.info('[StreamTaskInIncrementalModel] Initialized with transaction-based aggregate processing');
     } catch (error) {
       logger.error('[StreamTaskInIncrementalModel.initialize]', error);
-      throw error;
+      // DO NOT throw error to allow model registration
     }
   }
 
@@ -980,7 +989,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
               ? `UPDATE tgt WITH (ROWLOCK)
                  SET ${updateClause}
                  FROM ${stagingTableRef} tgt
-                 WHERE tgt.ID = @ID;`
+                 WHERE tgt.ID = @ID AND ISNULL(tgt.MigrateFlg, 0) <> 1;`
               : `SELECT 1 AS noop;`}
           END
           ELSE
@@ -1142,8 +1151,25 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       logger.warn(`[StreamTaskIn][count-staging] failed: ${diagErr.message}`);
     }
 
+    // Láº¥y sá»‘ lÆ°á»£ng Ä‘Ã£ sync thÃ nh cÃ´ng Ä‘á»ƒ trá»« Ä‘i (theo yÃªu cáº§u skip báº£n ghi Ä‘Ã£ cháº¡y)
+    let alreadySyncedCount = 0;
+    try {
+      const syncedRes = await this.queryNewDb(`
+        SELECT COUNT(1) AS cnt FROM ${stagingTableRef}
+        WHERE ISNULL(MigrateFlg, 0) = 1
+          AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) >= @startDate OR @startDate IS NULL)
+          AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) <= @endDate   OR @endDate IS NULL)
+      `, {
+        startDate: envStartDate,
+        endDate: envEndDate
+      });
+      alreadySyncedCount = Number(syncedRes?.[0]?.cnt || 0);
+    } catch (e) {}
+
+    const displayTotal = Math.max(0, totalCount - alreadySyncedCount);
+
     await this.queryNewDb(`UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`, {
-      total: totalCount,
+      total: displayTotal,
       jobId: syncJobId
     });
 
@@ -1323,6 +1349,13 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       params: { ID: rowId },
       transaction,
       rowToken: `ID=${rowId}`,
+    });
+  }
+
+  async resetErrors() {
+    const stagingTableRef = this.getStagingTableRef();
+    return resetErrorRows(this, {
+      tableRef: stagingTableRef,
       label: this.modelName,
     });
   }

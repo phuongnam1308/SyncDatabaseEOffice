@@ -15,38 +15,57 @@ class SyncHandlerModel {
    * @returns {(lastTime: string, lastSyncId?: number) => Promise<number>}
    */
   createCountFnIncremental() {
-    return async (lastTime, lastSyncId = 0) => {
+    // DEFAULT_SYNC_TIME dùng khi full resync: hút từ đầu lịch sử
+    const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
+
+    // opts: { forceFullSync, syncMode } — được truyền từ SyncManagerService.runJob()
+    return async (lastTime, lastSyncId = 0, opts = {}) => {
       // Lấy singleton instance của SyncManagerService để kiểm tra settings
       const syncManager = require('./SyncManagerService');
       const skipPull = syncManager.state && syncManager.state.settings && syncManager.state.settings.SKIP_PULL_FROM_OLD === true;
 
-      // Nếu SKIP_PULL_FROM_OLD = OFF (mặc định), ta muốn đếm từ DB cũ để biết tổng số sẽ hút
+      // Xác định chế độ đếm:
+      // - forceFullSync=true → dùng DEFAULT_SYNC_TIME để đếm tất cả bản ghi (past + future)
+      // - forceFullSync=false → dùng lastTime để chỉ đếm bản ghi mới (incremental)
+      const forceFullSync = opts.forceFullSync !== false; // mặc định true khi không truyền
+      const effectiveTime = forceFullSync ? DEFAULT_SYNC_TIME : lastTime;
+      const effectiveSyncId = forceFullSync ? 0 : lastSyncId;
+
+      const modelLabel = this.syncModel.getName ? this.syncModel.getName() : (this.syncModel.modelName || 'Unknown');
+
+      if (forceFullSync) {
+        const logger = require('../../utils/logger');
+        logger.info(`[SyncHandlerModel][${modelLabel}] countFn: FULL RESYNC mode — dùng DEFAULT_SYNC_TIME thay vì ${lastTime}`);
+      }
+
+      // Nếu SKIP_PULL_FROM_OLD = OFF (mặc định), đếm từ DB cũ
       if (!skipPull) {
         if (typeof this.syncModel.countListFromOldDb === 'function') {
-          return this.syncModel.countListFromOldDb(lastTime, lastSyncId);
+          return this.syncModel.countListFromOldDb(effectiveTime, effectiveSyncId);
         }
         // Fallback cho các model cũ chưa tách countListFromOldDb
         if (typeof this.syncModel.getCount === 'function') {
-          return this.syncModel.getCount(lastTime, lastSyncId);
+          return this.syncModel.getCount(effectiveTime, effectiveSyncId);
         }
       } else {
-        // Nếu SKIP_PULL_FROM_OLD = ON, ta chỉ quan tâm những gì đang có trong staging
+        // Nếu SKIP_PULL_FROM_OLD = ON, chỉ quan tâm những gì đang có trong staging
         if (typeof this.syncModel.getCount === 'function') {
-          return this.syncModel.getCount(lastTime, lastSyncId);
+          return this.syncModel.getCount(effectiveTime, effectiveSyncId);
         }
       }
 
-      const records = await this.syncModel.fetchListFromOldDb(lastTime, lastSyncId);
+      const records = await this.syncModel.fetchListFromOldDb(effectiveTime, effectiveSyncId);
       return Array.isArray(records) ? records.length : 0;
     };
   }
 
   /**
-   * Builds a fetch function that prepares one staged job snapshot then emits virtual items by batch.
-   * @returns {(lastTime: string, limit: number, _offset: number, cursor?: object) => Promise<object[]>}
+   * @returns {(lastTime: string, limit: number, _offset: number, cursor: object) => Promise<object[]>}
    */
   createFetchFnIncremental() {
     const preparedJobs = new Map();
+    // DEFAULT_SYNC_TIME dùng khi full resync
+    const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 
     return async (lastTime, limit, _offset, cursor = {}) => {
       const jobId = cursor.jobId;
@@ -55,43 +74,66 @@ class SyncHandlerModel {
         throw new Error('[SyncHandlerModel] cursor.jobId is required for incremental model');
       }
 
+      // Đọc flag từ cursor (do SyncManagerService.runJob() truyền xuống)
+      // forceFullSync=true → gọi getList(DEFAULT_SYNC_TIME) để hút toàn bộ past records
+      // forceFullSync=false (hoặc không có) → dùng lastTime như cũ (incremental)
+      const forceFullSync = cursor.forceFullSync !== false; // mặc định true
+      const effectiveTime = forceFullSync ? DEFAULT_SYNC_TIME : lastTime;
+      const effectiveSyncId = forceFullSync ? 0 : lastSyncId;
+
       if (!preparedJobs.has(jobId)) {
         // Lấy singleton instance của SyncManagerService để kiểm tra settings
         const syncManager = require('./SyncManagerService');
         const skipPull = syncManager.state && syncManager.state.settings && syncManager.state.settings.SKIP_PULL_FROM_OLD === true;
+        const logger = require('../../utils/logger');
 
         let listResult = null;
         if (skipPull) {
-          logger.info(`[SyncHandlerModel][${this.syncModel.getName ? this.syncModel.getName() : 'Unknown'}] SKIP_PULL_FROM_OLD is ON. Skipping extraction, using existing staging data.`);
-          const stagedCount = await this.syncModel.getCount(lastTime, lastSyncId);
+          const modelLabel = this.syncModel.getName ? this.syncModel.getName() : (this.syncModel.modelName || 'Unknown');
+          logger.info(`[SyncHandlerModel][${modelLabel}] SKIP_PULL_FROM_OLD is ON. Skipping extraction, using existing staging data.`);
+          const stagedCount = await this.syncModel.getCount(effectiveTime, effectiveSyncId);
           listResult = {
             totalCount: stagedCount,
-            lastSyncTime: lastTime,
-            lastSyncId: lastSyncId
+            lastSyncTime: effectiveTime,
+            lastSyncId: effectiveSyncId
           };
         } else {
-          listResult = await this.syncModel.getList(lastTime, jobId, lastSyncId);
+          // Gọi getList với effectiveTime:
+          // - forceFullSync=true → effectiveTime = DEFAULT_SYNC_TIME → hút từ đầu
+          // - forceFullSync=false → effectiveTime = lastTime → chỉ hút mới
+          const modelLabel = this.syncModel.getName ? this.syncModel.getName() : (this.syncModel.modelName || 'Unknown');
+          if (forceFullSync) {
+            logger.info(
+              `[SyncHandlerModel][${modelLabel}] 🔄 fetchFn: FULL RESYNC — getList(DEFAULT_SYNC_TIME) thay vì getList(${lastTime})`
+            );
+          } else {
+            logger.info(
+              `[SyncHandlerModel][${modelLabel}] ⬆️ fetchFn: INCREMENTAL — getList(${effectiveTime})`
+            );
+          }
+          listResult = await this.syncModel.getList(effectiveTime, jobId, effectiveSyncId);
         }
 
         const resumeIndex = Number(cursor.totalProcessed || 0);
 
         // Khi Resume sau server restart, `nextIndex` bắt đầu từ số records đã xử lý (resumeIndex).
-        // Tuy nhiên `listResult.totalCount` là số `pendingCount` thực tế CẦN XỬ LÝ TRONG STAGING ở thời điểm hiện tại.
+        // Tuy nhiên `listResult.totalCount` là số `pendingCount` thực tế CẦN XẬ LÝ TRONG STAGING ở thời điểm hiện tại.
         // Do đó tổng `totalCount` trong context của preparedJobs phải là (pendingCount + resumeIndex)
         // để đảm bảo `remaining = totalCount - processed = pendingCount`.
         const pendingCount = Number(listResult?.totalCount ?? listResult?.stagedCount ?? 0);
 
         preparedJobs.set(jobId, {
           totalCount: pendingCount + resumeIndex,
-          syncTime: listResult?.lastSyncTime || lastTime,
-          syncId: Number(listResult?.lastSyncId || lastSyncId || 0),
-          sourceTime: listResult?.sourceLastSyncTime || lastTime,
-          sourceId: Number(listResult?.sourceLastSyncId || lastSyncId || 0),
+          syncTime: listResult?.lastSyncTime || effectiveTime,
+          syncId: Number(listResult?.lastSyncId || effectiveSyncId || 0),
+          sourceTime: listResult?.sourceLastSyncTime || effectiveTime,
+          sourceId: Number(listResult?.sourceLastSyncId || effectiveSyncId || 0),
           nextIndex: resumeIndex
         });
-        logger.info(`[SyncHandlerModel] getList() → pendingCount=${pendingCount}, jobId=${jobId}`);
+        const logger2 = require('../../utils/logger');
+        logger2.info(`[SyncHandlerModel] getList() → pendingCount=${pendingCount}, forceFullSync=${forceFullSync}, jobId=${jobId}`);
         if (resumeIndex > 0) {
-          logger.info(`[SyncHandlerModel] Resuming jobId=${jobId}: nextIndex restored to ${resumeIndex}`);
+          logger2.info(`[SyncHandlerModel] Resuming jobId=${jobId}: nextIndex restored to ${resumeIndex}`);
         }
       }
 

@@ -272,6 +272,40 @@ async function releaseStaleClaims(model, options = {}) {
   return affected;
 }
 
+async function resetErrorRows(model, options = {}) {
+  const {
+    tableRef,
+    extraWhere = '',
+    params = {},
+    label,
+  } = options;
+
+  const whereClause = extraWhere ? `\n        AND (${extraWhere})` : '';
+  const rows = await model.queryNewDb(
+    `
+      UPDATE ${tableRef} WITH (ROWLOCK)
+      SET MigrateFlg = 0,
+          MigrateErrFlg = 0,
+          MigrateErrMess = N'Manual Reset - Retrying',
+          processing_owner = NULL,
+          processing_started_at = NULL,
+          processing_heartbeat_at = NULL
+      WHERE MigrateFlg = 3${whereClause};
+
+      SELECT @@ROWCOUNT AS affected;
+    `,
+    params,
+  );
+
+  const affected = Number(rows?.[0]?.affected || 0);
+  if (affected > 0) {
+    logger.info(
+      `[${toLogLabel(model, label)}] [RESET] Errors reset for retry: count=${affected}`,
+    );
+  }
+  return affected;
+}
+
 function startHeartbeatLoop(updateFn, intervalMs = DEFAULT_HEARTBEAT_INTERVAL_MS) {
   if (!intervalMs || intervalMs <= 0) {
     return () => {};
@@ -292,6 +326,7 @@ module.exports = {
   markRowFailed,
   markRowSuccess,
   releaseStaleClaims,
+  resetErrorRows,
   startHeartbeatLoop,
   trimErrorMessage,
   updateHeartbeat,

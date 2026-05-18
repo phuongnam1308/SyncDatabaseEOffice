@@ -14,3 +14,27 @@ Login script started at 2026-05-14T10:18:04.855Z
 Executable found: C:\Program Files\Google\Chrome\Application\chrome.exe
 CWD: C:\Users\DELL\Downloads\sync_too_905l\sync_tool
 ENV: {"CHROME_PATH":"C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe","BROWSER_PATH":"C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe"}
+Login script started at 2026-05-15T09:36:13.562Z
+Executable found: C:\Program Files\Google\Chrome\Application\chrome.exe
+CWD: C:\Users\DELL\Downloads\sync_too_905l\sync_tool
+ENV: {"CHROME_PATH":"C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe","BROWSER_PATH":"C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe"}
+Login script started at 2026-05-15T09:46:13.613Z
+Executable found: C:\Program Files\Google\Chrome\Application\chrome.exe
+CWD: C:\Users\DELL\Downloads\sync_too_905l\sync_tool
+ENV: {"CHROME_PATH":"C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe","BROWSER_PATH":"C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe"}
+Login script started at 2026-05-15T09:56:13.763Z
+Executable found: C:\Program Files\Google\Chrome\Application\chrome.exe
+CWD: C:\Users\DELL\Downloads\sync_too_905l\sync_tool
+ENV: {"CHROME_PATH":"C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe","BROWSER_PATH":"C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe"}
+Login script started at 2026-05-15T10:09:13.284Z
+Executable found: C:\Program Files\Google\Chrome\Application\chrome.exe
+CWD: C:\Users\DELL\Downloads\sync_too_905l\sync_tool
+ENV: {"CHROME_PATH":"C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe","BROWSER_PATH":"C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe"}
+Login script started at 2026-05-15T10:09:58.622Z
+Executable found: C:\Program Files\Google\Chrome\Application\chrome.exe
+CWD: C:\Users\DELL\Downloads\sync_too_905l\sync_tool
+ENV: {"CHROME_PATH":"C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe","BROWSER_PATH":"C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe"}
+Login script started at 2026-05-15T10:19:58.869Z
+Executable found: C:\Program Files\Google\Chrome\Application\chrome.exe
+CWD: C:\Users\DELL\Downloads\sync_too_905l\sync_tool
+ENV: {"CHROME_PATH":"C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe","BROWSER_PATH":"C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe"}

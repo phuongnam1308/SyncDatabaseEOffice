@@ -1,0 +1,56 @@
+{
+  "oldTable": "AllUserData",
+  "oldSchema": "dbo",
+  "oldDatabase": "WSS_Content_eoffice_khkd",
+  "oldUserDatabase": "WSS_Content_eoffice_khkd",
+  "listIds": [
+    "A769253C-E2D8-4188-AEF5-8841D04F42AE",
+    "B0F4D2C4-D65B-42AB-A37A-9D45118A2A2C",
+    "360585BB-EDDA-4990-B293-AA097594B073"
+  ],
+  "externalKey": "id_sp_bak",
+  "newTable": "meetings",
+  "newSchema": "dbo",
+  "newDatabase": "app_tancang",
+  "fieldMapping": {
+    "ID": "id_sp_bak",
+    "Title": "title",
+    "StartDate": "meeting_date",
+    "Location": "room_ids",
+    "Description": "content",
+    "AuthorAccount": "created_by",
+    "tp_Created": "created_at",
+    "tp_Modified": "updated_at"
+  },
+  "defaults": {
+    "TABLE_BAK": 1,
+    "MEETING_TYPE": "NB",
+    "MEETING_MODE": "OFFLINE",
+    "MEETING_PRIORITY": "tb",
+    "STATUS": "1",
+    "STATUS_CODE": "APPROVED",
+    "MEETING_STATE": "FINISHED",
+    "TIMEZONE": "Asia/Ho_Chi_Minh",
+    "DEFAULT_TITLE": "Lịch họp (Sync)",
+    "BPMN_VERSION": "QUY_TRINH_LICH_HOP",
+    "CHAIRMAN_ID": "1ac3c6f5-a1f6-40bb-8546-37082b092cfd",
+    "ORG_UNIT": "68afbee3cb36081f0bbbef2edvdb",
+    "USER_ID": "1ac3c6f5-a1f6-40bb-8546-37082b092cfd"
+  },
+  "room_default": {
+    "id": "20260309094941-3NVZ18O6",
+    "name": "Hội trường a",
+    "location": "a",
+    "capacity": 500,
+    "status": 3,
+    "stage": 1,
+    "available_from": "2026-03-09 16:48:12.574",
+    "created_at": "2026-03-09 09:49:41.741",
+    "updated_at": "2026-03-30 15:53:00.000",
+    "layout_type": "hoi_truong",
+    "layout_rows": 5,
+    "layout_seats": 10,
+    "layout_blocks": 1,
+    "total_seating": 50
+  }
+}

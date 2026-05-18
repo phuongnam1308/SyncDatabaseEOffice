@@ -541,7 +541,14 @@ class SyncManagerService {
     const now = this.now();
     const reset = Boolean(options.reset);
 
+    // forceFullSync: mặc định true
+    // - true  → full resync từ DEFAULT_SYNC_TIME (hút lại toàn bộ past records)
+    // - false → incremental (chỉ lấy bản ghi mới hơn lastSyncTime hiện tại)
+    // Bấm "Chạy" hoặc "Lại" đều mặc định full resync trừ khi truyền tường minh false.
+    const forceFullSync = options.forceFullSync !== false; // default true
+
     if (reset) {
+      // Reset hoàn toàn: xóa cursor và bộ đếm
       modelState.lastSyncTime = null;
       modelState.lastSyncId = 0;
       modelState.totalSynced = 0;
@@ -558,6 +565,12 @@ class SyncManagerService {
       heartbeatAt: now,
       pauseRequested: false,
       reset,
+      // --- FULL RESYNC FLAG ---
+      // forceFullSync=true → fetchFn sẽ gọi getList(DEFAULT_SYNC_TIME) bất kể lastSyncTime
+      // forceFullSync=false → fetchFn dùng lastSyncTime để chỉ lấy bản ghi mới (incremental)
+      forceFullSync,
+      syncMode: forceFullSync ? 'full' : 'incremental',
+      // Cursor: luôn giữ lastSyncTime thực để sau khi full sync xong cập nhật đúng
       batchSize: parseInt(options.batchSize || this.batchSize, 10),
       lastSyncTime: modelState.lastSyncTime || DEFAULT_SYNC_TIME,
       lastSyncId: modelState.lastSyncId || 0,
@@ -784,8 +797,9 @@ class SyncManagerService {
       throw new Error(`Job ${jobId} đã hoàn thành (${job.status}). Cần chạy lại từ đầu, không thể tiếp tục.`);
     }
 
-    if (job.status !== 'PAUSED') {
-      throw new Error(`Job ${jobId} is not paused (currently: ${job.status})`);
+    const resumableStatuses = ['PAUSED', 'FAILED', 'CRASHED', 'ERROR'];
+    if (!resumableStatuses.includes(job.status)) {
+      throw new Error(`Job ${jobId} is not in a resumable state (currently: ${job.status})`);
     }
 
     const modelState = this.getModelState(job.modelName);
@@ -896,14 +910,14 @@ class SyncManagerService {
 
     const modelState = this.getModelState(job.modelName);
 
+    const isResuming = job.status === 'RESUMING';
+
     if (job.status === 'RESUMING') {
       job.status = 'RUNNING';
       modelState.status = 'RUNNING';
       this._dbUpdateModel(job.modelName, modelState);
       // Reset totalToSync để countFn/getList được gọi lại sau restart,
       // cập nhật số pending thực tế thay vì dùng giá trị cũ từ DB.
-      // Nếu không reset, vòng for có thể thoát sớm vì offset >= totalToSync_cũ
-      // trong khi còn nhiều records chưa xử lý trong staging.
       job.totalToSync = null;
       logger.info(`[SyncManagerService][${job.modelName}] RESUMING: reset totalToSync để rebuild snapshot từ staging.`);
     }
@@ -911,12 +925,48 @@ class SyncManagerService {
     let cursorTime = job.lastSyncTime || modelState.lastSyncTime || DEFAULT_SYNC_TIME;
     let cursorId = Number(job.lastSyncId || modelState.lastSyncId || 0);
 
+    // Xác định forceFullSync: nếu job có flag → dùng nó; nếu không (job cũ/resume) → false
+    const forceFullSync = job.forceFullSync === true;
+    
+    // THÊM: Nếu là Full Resync VÀ không phải đang Resume → reset các bản ghi lỗi
+    if (forceFullSync && !isResuming) {
+      try {
+        const modelRegistry = require('./SyncModelRegistry');
+        const entry = modelRegistry.get(job.modelName);
+        if (entry && entry.instance && typeof entry.instance.resetErrors === 'function') {
+          const resetCount = await entry.instance.resetErrors();
+          if (resetCount > 0) {
+            logger.info(`[SyncManagerService][${job.modelName}] 🔄 Reset ${resetCount} error records in staging for retry.`);
+          }
+        }
+      } catch (resetErr) {
+        logger.warn(`[SyncManagerService][${job.modelName}] Auto-reset errors failed: ${resetErr.message}`);
+      }
+      
+      logger.info(
+        `[SyncManagerService][${job.modelName}] 🔄 FULL RESYNC mode: bỏ qua lastSyncTime, ` +
+        `hút toàn bộ bản ghi từ DEFAULT_SYNC_TIME (jobId=${job.jobId})`
+      );
+    } else {
+      logger.info(
+        `[SyncManagerService][${job.modelName}] ⬆️ INCREMENTAL mode: ` +
+        `cursorTime=${cursorTime} (jobId=${job.jobId})`
+      );
+    }
+
     try {
       // Đếm tổng bản ghi cần sync (để tính %)
+      // Khi forceFullSync=true → countFn nhận DEFAULT_SYNC_TIME để đếm toàn bộ
       if (job.totalToSync == null && typeof handlers.countFn === 'function') {
         try {
-          job.totalToSync = await handlers.countFn(cursorTime, cursorId);
-          logger.info(`[SyncManagerService][${job.modelName}] Total to sync: ${job.totalToSync}`);
+          job.totalToSync = await handlers.countFn(cursorTime, cursorId, {
+            forceFullSync,
+            syncMode: job.syncMode
+          });
+          logger.info(
+            `[SyncManagerService][${job.modelName}] Total to sync: ${job.totalToSync} ` +
+            `(mode=${job.syncMode || 'full'})`
+          );
         } catch (countError) {
           logger.error(`[SyncManagerService][${job.modelName}] Count remaining failed:`, countError);
           job.totalToSync = null;
@@ -945,7 +995,11 @@ class SyncManagerService {
           lastSyncId: cursorId,
           // Cần thiết để SyncHandlerModel phục hồi nextIndex đúng sau server restart (Resume)
           totalProcessed: job.totalProcessed || 0,
-          settings: this.state.settings
+          settings: this.state.settings,
+          // --- FULL RESYNC FLAG truyền vào fetchFn ---
+          // SyncHandlerModel sẽ dùng DEFAULT_SYNC_TIME thay vì lastSyncTime khi flag này là true
+          forceFullSync,
+          syncMode: job.syncMode
         });
         fetchTimer.stop(records?.length);
 
