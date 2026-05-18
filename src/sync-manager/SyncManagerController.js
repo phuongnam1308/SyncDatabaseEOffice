@@ -1409,6 +1409,21 @@ class SyncManagerController extends BaseController {
         }
       }
 
+      // Kiểm tra job vừa khởi chạy xem có kết thúc ngay với tổng=0 không
+      if (window.__pendingJobIds && window.__pendingJobIds.size > 0) {
+        for (const [jobId, job] of Object.entries(data.jobs || {})) {
+          if (
+            window.__pendingJobIds.has(jobId) &&
+            job.status === 'COMPLETED' &&
+            Number(job.totalToSync || 0) === 0 &&
+            Number(job.totalProcessed || 0) === 0
+          ) {
+            window.__pendingJobIds.delete(jobId);
+            showToast('<b>✅ Đã đồng bộ hết rồi!</b><br>Không có bản ghi mới cần xử lý.', '#2563eb', 6000);
+          }
+        }
+      }
+
       // Lọc dữ liệu hiển thị (giống logic server-side)
       const registeredLabels = [${this.modelRegistry.getRegisteredLabels().map(l => `'${l}'`).join(',')}];
       const filteredEntities = {};
@@ -1488,8 +1503,8 @@ class SyncManagerController extends BaseController {
         <td>\${ji}</td>
         <td>
           <div class="act-group">
-            <button class="act-btn act-btn-run"    onclick="startModel('\${name}',false, this)" \${canStart?'':'disabled'}><i class="bi bi-play-fill"></i>Chạy</button>
-            <button class="act-btn act-btn-reset"  onclick="startModel('\${name}',true, this)"  \${canStart?'':'disabled'}><i class="bi bi-arrow-counterclockwise"></i>Lại</button>
+            <button class="act-btn act-btn-run"    onclick="startModel('\${name}',false,this,'\${ms}')" \${canPause?'style="opacity:0.45;cursor:not-allowed;" disabled':''} \${canStart?'':'disabled'}><i class="bi bi-play-fill"></i>Chạy</button>
+            <button class="act-btn act-btn-reset"  onclick="startModel('\${name}',true,this,'\${ms}')"  \${canStart?'':'disabled'}><i class="bi bi-arrow-counterclockwise"></i>Lại</button>
             <button class="act-btn act-btn-pause"  onclick="pauseJob('\${cur?cur.jobId:''}', this)"  \${canPause?'':'disabled'}><i class="bi bi-pause-fill"></i>Dừng</button>
             <button class="act-btn act-btn-resume" onclick="resumeJob('\${rid}', this)"              \${canResume?'':'disabled'}><i class="bi bi-skip-forward-fill"></i>Tiếp</button>
           </div>
@@ -1539,7 +1554,96 @@ class SyncManagerController extends BaseController {
       } catch(e) { alert('Lỗi: ' + e.message); }
     }
 
-    async function startModel(modelName, reset=false, btn) {
+    // Hiện modal xác nhận trước khi chạy (khi đang ở trạng thái cần cảnh báo)
+    function showSyncConfirm(onConfirm) {
+      const overlay = document.createElement('div');
+      overlay.id = '__sync-confirm-overlay';
+      overlay.style.cssText = [
+        'position:fixed;inset:0;z-index:9999',
+        'background:rgba(15,23,42,0.6)',
+        'backdrop-filter:blur(4px)',
+        'display:flex;align-items:center;justify-content:center',
+        'animation:modalFadeIn 0.2s ease'
+      ].join(';');
+      overlay.innerHTML =
+        '<div style="background:#1e2a3b;border:1.5px solid rgba(245,158,11,0.6);border-radius:16px;' +
+        'padding:36px 40px;max-width:440px;width:90%;box-shadow:0 24px 64px rgba(0,0,0,0.5);' +
+        'text-align:center;animation:modalFadeIn 0.25s cubic-bezier(.175,.885,.32,1.275);">' +
+          '<div style="font-size:3rem;margin-bottom:12px;">\u26a0\ufe0f</div>' +
+          '<div style="font-size:1.1rem;font-weight:700;color:#f59e0b;margin-bottom:14px;line-height:1.4">' +
+            '\u0110\u1ed3ng ch\u00ed \u01a1i !' +
+          '</div>' +
+          '<div style="font-size:0.88rem;color:#cbd5e1;line-height:1.7;margin-bottom:28px;">' +
+            'T\u00f4i s\u1ebd th\u1ef1c hi\u1ec7n \u0111\u1ed3ng b\u1ed9 l\u1ea1i c\u00e1c b\u1ea3n ghi ' +
+            'Tôi sẽ thực hiện đồng bộ lại các bản ghi ' +
+            '<strong style="color:#fbbf24">chưa đồng bộ</strong> và ' +
+            '<strong style="color:#f87171">bị lỗi</strong>.<br>' +
+            'Đồng chí có chắc chắn sẽ tiếp tục chứ?' +
+          '</div>' +
+          '<div style="display:flex;gap:12px;justify-content:center;">' +
+            '<button id="__sync-confirm-yes" style="' +
+              'background:linear-gradient(135deg,#2563eb,#1d4ed8);' +
+              'color:#fff;border:none;border-radius:8px;' +
+              'padding:10px 28px;font-size:0.85rem;font-weight:600;' +
+              'cursor:pointer;transition:all 0.18s;">' +
+              '✅ Tiếp tục' +
+            '</button>' +
+            '<button id="__sync-confirm-no" style="' +
+              'background:rgba(255,255,255,0.08);' +
+              'color:#94a3b8;border:1px solid rgba(255,255,255,0.12);' +
+              'border-radius:8px;padding:10px 28px;' +
+              'font-size:0.85rem;font-weight:600;' +
+              'cursor:pointer;transition:all 0.18s;">' +
+              '\u274c \u1ede l\u1ea1i' +
+            '</button>' +
+          '</div>' +
+        '</div>';
+      document.body.appendChild(overlay);
+      const close = function() { overlay.remove(); };
+      overlay.querySelector('#__sync-confirm-yes').onclick = function() { close(); onConfirm(); };
+      overlay.querySelector('#__sync-confirm-no').onclick = close;
+      overlay.addEventListener('click', function(e) { if (e.target === overlay) close(); });
+    }
+
+    // Hiện toast thông báo nhanh
+    function showToast(msg, color, duration) {
+      var t = document.createElement('div');
+      t.style.cssText = 'position:fixed;bottom:28px;left:50%;transform:translateX(-50%);' +
+        'z-index:99999;padding:14px 28px;border-radius:10px;' +
+        'font-size:0.88rem;font-weight:600;color:#fff;' +
+        'box-shadow:0 8px 32px rgba(0,0,0,0.4);' +
+        'background:' + (color || '#1e40af') + ';max-width:90%;text-align:center;' +
+        'pointer-events:none;';
+      t.innerHTML = msg;
+      document.body.appendChild(t);
+      setTimeout(function() {
+        t.style.transition = 'opacity 0.4s';
+        t.style.opacity = '0';
+        setTimeout(function() { t.remove(); }, 400);
+      }, duration || 3200);
+    }
+
+    async function startModel(modelName, reset, btn, currentStatus) {
+      reset = reset === true || reset === 'true';
+      var statusUp = String(currentStatus || '').toUpperCase();
+
+      // Đang chạy → không cho chạy thêm, hiện toast cảnh báo
+      if (!reset && (statusUp === 'RUNNING' || statusUp === 'RESUMING')) {
+        return; // Nút đã mờ, không làm gì thêm
+      }
+
+      // Tạm dừng / Lỗi → hiện dialog xác nhận trước khi chạy lại
+      var needsConfirm = ['PAUSED','PAUSE_REQUESTED','FAILED','CRASHED','ERROR'];
+      if (!reset && needsConfirm.indexOf(statusUp) >= 0) {
+        showSyncConfirm(function() { _doStartModel(modelName, reset, btn); });
+        return;
+      }
+
+      // IDLE / COMPLETED / unknown → chạy ngay
+      _doStartModel(modelName, reset, btn);
+    }
+
+    async function _doStartModel(modelName, reset, btn) {
       if (btn) {
         btn.disabled = true;
         btn.style.opacity = '0.5';
@@ -1549,9 +1653,15 @@ class SyncManagerController extends BaseController {
         const data = await safeFetchJson('/api/sync-manager-src/models/'+encodeURIComponent(modelName)+'/start', {
           method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({reset})
         });
-        alert(data.message || 'Đồng chí đã gửi lệnh');
-      } catch(e) { 
-        alert('Lỗi: ' + e.message); 
+        // Lưu jobId để renderDashboard theo dõi nếu job kết thúc với tổng = 0
+        const jobId = data && data.data && data.data.jobId;
+        if (jobId) {
+          window.__pendingJobIds = window.__pendingJobIds || new Set();
+          window.__pendingJobIds.add(jobId);
+        }
+        showToast('<b>✅ Đồng bộ đã được khởi chạy!</b>', '#15803d');
+      } catch(e) {
+        showToast('<b>❌ Lỗi:</b> ' + e.message, '#b91c1c');
         if (btn) {
           btn.disabled = false;
           btn.style.opacity = '1';
@@ -1828,8 +1938,8 @@ class SyncManagerController extends BaseController {
         <td><span class="badge" style="background:rgba(0,0,0,0.05);color:var(--text-sub);font-size:0.65rem">${info.instanceId || '—'}</span></td>
         <td>
           <div class="act-group">
-            <button class="act-btn act-btn-run"    onclick="startModel('${name}',false)" ${canStart ? '' : 'disabled'}><i class="bi bi-play-fill"></i>Chạy</button>
-            <button class="act-btn act-btn-reset"  onclick="startModel('${name}',true)"  ${canStart ? '' : 'disabled'}><i class="bi bi-arrow-counterclockwise"></i>Lại</button>
+            <button class="act-btn act-btn-run"    onclick="startModel('${name}',false,this,'${ms}')" ${canPause ? 'style="opacity:0.45;cursor:not-allowed;" disabled' : ''} ${canStart ? '' : 'disabled'}><i class="bi bi-play-fill"></i>Chạy</button>
+            <button class="act-btn act-btn-reset"  onclick="startModel('${name}',true,this,'${ms}')"  ${canStart ? '' : 'disabled'}><i class="bi bi-arrow-counterclockwise"></i>Lại</button>
             <button class="act-btn act-btn-pause"  onclick="pauseJob('${cur ? cur.jobId : ''}')"  ${canPause ? '' : 'disabled'}><i class="bi bi-pause-fill"></i>Dừng</button>
             <button class="act-btn act-btn-resume" onclick="resumeJob('${rid}')"                  ${canResume ? '' : 'disabled'}><i class="bi bi-skip-forward-fill"></i>Tiếp</button>
           </div>

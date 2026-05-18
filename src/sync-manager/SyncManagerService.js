@@ -541,11 +541,11 @@ class SyncManagerService {
     const now = this.now();
     const reset = Boolean(options.reset);
 
-    // forceFullSync: mặc định true
+    // forceFullSync: mặc định là false nếu không bấm "Lại"
     // - true  → full resync từ DEFAULT_SYNC_TIME (hút lại toàn bộ past records)
     // - false → incremental (chỉ lấy bản ghi mới hơn lastSyncTime hiện tại)
-    // Bấm "Chạy" hoặc "Lại" đều mặc định full resync trừ khi truyền tường minh false.
-    const forceFullSync = options.forceFullSync !== false; // default true
+    // Bấm "Lại" (reset=true) sẽ kích hoạt full resync.
+    const forceFullSync = reset || options.forceFullSync === true;
 
     if (reset) {
       // Reset hoàn toàn: xóa cursor và bộ đếm
@@ -672,7 +672,11 @@ class SyncManagerService {
    * @returns {number}
    */
   extractRecordId(record) {
-    const raw = record.__sync_id || record.id || record.ID || record.document_id || 0;
+    if (record.__sync_id !== undefined && record.__sync_id !== null) {
+      const parsed = Number(record.__sync_id);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+    const raw = record.id || record.ID || record.document_id || 0;
     const parsed = Number(raw);
     return Number.isFinite(parsed) ? parsed : 0;
   }
@@ -717,22 +721,22 @@ class SyncManagerService {
     if (!this.registry.has(modelName)) throw new Error(`Model ${modelName} is not registered`);
 
     const modelState = this.getModelState(modelName);
-    const resumeIfPaused = options.resumeIfPaused === true && !Boolean(options.reset);
+    const isReset = Boolean(options.reset);
     if (this.isModelBusy(modelState)) throw new Error(`Model ${modelName} is already running`);
-    if (modelState.status === 'PAUSED' && modelState.activeJobId) {
-      if (resumeIfPaused) {
-        const pausedJob = this.state.jobs[modelState.activeJobId];
-        if (!pausedJob) {
-          throw new Error(`Model ${modelName} has paused active job ${modelState.activeJobId}, but job state is missing`);
-        }
-        if (pausedJob.status !== 'PAUSED') {
-          throw new Error(
-            `Model ${modelName} has active job ${pausedJob.jobId} with status ${pausedJob.status}, cannot auto-resume`
-          );
-        }
+
+    // Khi model đang PAUSED và có activeJobId:
+    // - Nếu reset=true  → bỏ qua trạng thái paused, tạo job mới từ đầu (fall-through)
+    // - Nếu reset=false → tự động resume job đã pause (không cần nhấn nút Resume riêng)
+    if (modelState.status === 'PAUSED' && modelState.activeJobId && !isReset) {
+      const pausedJob = this.state.jobs[modelState.activeJobId];
+      if (pausedJob && pausedJob.status === 'PAUSED') {
+        logger.info(`[startModel] Model ${modelName} is PAUSED — auto-resuming job ${pausedJob.jobId}`);
         return this.resumeJob(pausedJob.jobId);
       }
-      throw new Error(`Model ${modelName} is paused. Resume the paused job first.`);
+      // Job state mất hoặc không đúng trạng thái → tiếp tục tạo job mới
+      logger.warn(`[startModel] Model ${modelName} has stale PAUSED state (job=${modelState.activeJobId}), creating new job`);
+      modelState.status = 'IDLE';
+      modelState.activeJobId = null;
     }
 
     const job = this.createJob(modelName, options);
@@ -955,25 +959,17 @@ class SyncManagerService {
     }
 
     try {
-      // Đếm tổng bản ghi cần sync (để tính %)
-      // Khi forceFullSync=true → countFn nhận DEFAULT_SYNC_TIME để đếm toàn bộ
-      if (job.totalToSync == null && typeof handlers.countFn === 'function') {
-        try {
-          job.totalToSync = await handlers.countFn(cursorTime, cursorId, {
-            forceFullSync,
-            syncMode: job.syncMode
-          });
-          logger.info(
-            `[SyncManagerService][${job.modelName}] Total to sync: ${job.totalToSync} ` +
-            `(mode=${job.syncMode || 'full'})`
-          );
-        } catch (countError) {
-          logger.error(`[SyncManagerService][${job.modelName}] Count remaining failed:`, countError);
-          job.totalToSync = null;
-        }
+      // Reset tất cả counter về 0 ngay lập tức → dashboard hiển thị "0/0" (fresh start)
+      // getList() sẽ chạy bên trong fetchFn (offset=0) và cập nhật total_to_sync đúng
+      if (job.totalToSync == null) {
+        job.totalToSync = 0;
+        job.totalProcessed = 0;
+        job.totalSuccess = 0;
+        job.totalErrors = 0;
         this.updateSyncLogFromJob(job);
         this.saveState();
-        this._dbUpdateJob(job); // ghi totalToSync lên DB
+        this._dbUpdateJob(job); // ghi 0/0 lên DB ngay lập tức
+        logger.info(`[SyncManagerService][${job.modelName}] Counters reset to 0 — total_to_sync will be refreshed after getList()`);
       }
 
       // 2 vòng for: Outer loop theo batch size, Inner loop xử lý từng bản ghi
@@ -1001,6 +997,37 @@ class SyncManagerService {
           syncMode: job.syncMode
         });
         fetchTimer.stop(records?.length);
+
+        // Sau fetchFn() đầu tiên (gọi getList() → ghi fresh total_to_sync vào DB),
+        // đọc lại từ DB và cập nhật job.totalToSync trong memory để các _dbUpdateJob()
+        // sau đó không ghi đè bằng giá trị cũ từ countFn().
+        if (offset === 0) {
+          try {
+            const freshRows = await SyncStateRepository.findOneJobById(job.jobId);
+            const freshTotal = freshRows?.[0]?.total_to_sync;
+            if (freshTotal != null) {
+              const newTotal = Number(freshTotal);
+              job.totalToSync = newTotal;
+              logger.info(
+                `[SyncManagerService][${job.modelName}] totalToSync refreshed after getList: ${newTotal}`
+              );
+              // Broadcast SSE ngay để dashboard thoát khỏi trạng thái "0/0"
+              this.updateSyncLogFromJob(job);
+              this.saveState();
+              this._dbUpdateJob(job);
+            }
+          } catch (refreshErr) {
+            logger.warn(`[SyncManagerService][${job.modelName}] Failed to refresh totalToSync: ${refreshErr.message}`);
+          }
+
+          // Nếu total = 0 → đã đồng bộ hết, không có gì để xử lý → complete ngay
+          if (job.totalToSync === 0) {
+            logger.info(`[SyncManagerService][${job.modelName}] total_to_sync=0: already fully synced. Completing job.`);
+            job.alreadySynced = true; // flag để frontend hiển thị thông báo
+            this.completeJob(job);
+            return;
+          }
+        }
 
         if (!records || records.length === 0) break;
 
