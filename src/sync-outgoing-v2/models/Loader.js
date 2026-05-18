@@ -49,8 +49,6 @@ class Loader extends BaseLoader {
    */
   async fetchOneFromStaging(instanceId) {
     const stagingTable = this.getStagingTableName(instanceId);
-    const startDate = process.env.SYNC_START_DATE || null;
-    const endDate = process.env.SYNC_END_DATE || null;
 
     try {
       // Count available records

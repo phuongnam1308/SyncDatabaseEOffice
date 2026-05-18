@@ -364,7 +364,7 @@ class SyncAuditModel extends BaseModel {
         ${sortTimeExpr} AS __sync_sort_time,
         TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), src.ID))), '')) AS __sync_sort_id
       FROM ${this.oldDbSchema}.[${tableName}] src
-      WHERE LTRIM(RTRIM(CONVERT(nvarchar(255), src.VBId))) = @oldDocumentId
+      WHERE src.VBId = @oldDocumentId
       ${categoryFilter}
       ${minDateFilter}
     `);
@@ -416,7 +416,7 @@ class SyncAuditModel extends BaseModel {
         const query = `
           SELECT *, N'${tableName}' as __source_table
           FROM ${this.oldDbSchema}.[${tableName}]
-          WHERE LTRIM(RTRIM(CONVERT(nvarchar(255), VBId))) = @oldDocumentId
+          WHERE VBId = @oldDocumentId
           ${categoryFilter}
           ${minDateFilter}
         `;
@@ -591,51 +591,77 @@ class SyncAuditModel extends BaseModel {
         return keyA.localeCompare(keyB);
       });
 
-      // 3. Lặp qua từng bản ghi audit đã được chuyển đổi
+      // ── TỐI ƯU HÓA TÌM KIẾM THEO BATCH ──
+      // Lấy toàn bộ audit đã có của document_id này trong 1 query duy nhất
+      // để tránh N+1 query problem khi lặp qua _getExistingAudit.
+      const existingAuditsRows = await this.queryNewDbTx(
+        `SELECT id, [time], receiver, receiver_unit
+         FROM ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} WITH (NOLOCK)
+         WHERE document_id = @document_id`,
+        { document_id: documentId },
+        transaction
+      );
+      
+      const existingAuditsList = Array.isArray(existingAuditsRows) ? existingAuditsRows : [];
+      
+      // Phân loại bản ghi thành nhóm cần INSERT và nhóm cần UPDATE
+      const toInsert = [];
+      const toUpdate = [];
+
       for (const audit of audits) {
         if (!audit) continue;
 
+        let matchedId = null;
+        if (audit.document_id && audit.time) {
+            const timeA = new Date(audit.time).getTime();
+            
+            // Priority 1: Tìm theo receiver
+            if (audit.receiver !== undefined) {
+                const match = existingAuditsList.find(r => {
+                    const rTime = new Date(r.time).getTime();
+                    return rTime === timeA && ((audit.receiver === null && r.receiver === null) || r.receiver === audit.receiver);
+                });
+                if (match) matchedId = match.id;
+            }
+            
+            // Priority 2: Tìm theo receiver_unit (fallback)
+            if (!matchedId && audit.receiver_unit !== undefined) {
+                const match = existingAuditsList.find(r => {
+                    const rTime = new Date(r.time).getTime();
+                    return rTime === timeA && ((audit.receiver_unit === null && r.receiver_unit === null) || r.receiver_unit === audit.receiver_unit);
+                });
+                if (match) matchedId = match.id;
+            }
+        }
+
+        if (matchedId) {
+            toUpdate.push({ audit, id: matchedId });
+        } else {
+            toInsert.push(audit);
+        }
+      }
+
+      // 3. Xử lý Update hàng loạt
+      if (toUpdate.length > 0) {
         try {
-          // 4. Kiểm tra xem bản ghi audit này đã tồn tại trong CSDL mới chưa
-          const existed = await this._getExistingAudit(audit, transaction);
-
-          let auditId;
-          if (existed) {
-            // 5a. Nếu đã tồn tại, cập nhật lại thông tin
-            auditId = await this._update(audit, existed.id, transaction);
-            updated++;
-          } else {
-            // 5b. Nếu chưa tồn tại, thêm mới
-            auditId = await this._insert(audit, transaction);
-            inserted++;
-            // Lưu kết quả để subclass sử dụng
-          }
-          results.push({ audit, id: auditId });
-
-          /*
-          // 5c. Cập nhật status_code cho bảng văn bản tương ứng
-          // NOTE: Tắt ở bước này để tránh Deadlock khi xử lý hàng loạt bước luân chuyển.
-          // Trạng thái sẽ được UpsertHandler cập nhật một lần duy nhất ở cuối.
-          if (audit.status_code && audit.document_id) {
-            await this._updateDocumentStatusCode(
-              audit.document_id,
-              audit.type_document,
-              audit.status_code,
-              transaction
-            );
-          }
-          */
+            const updateResults = await this._updateMany(toUpdate, transaction);
+            updated += updateResults.length;
+            results.push(...updateResults);
         } catch (auditErr) {
-          // BẮT BUỘC: Nếu là lỗi Deadlock hoặc các lỗi có thể retry, phải throw ra ngoài
-          // để withTransactionRetry ở vòng ngoài có thể thực hiện thử lại.
-          if (isRetryableSqlError(auditErr)) {
-            throw auditErr;
-          }
+            if (isRetryableSqlError(auditErr)) throw auditErr;
+            logger.warn(`[AuditSyncModel] UPDATE MANY failed table=${this.oldDbTable} ID=${rawRecord?.ID}: ${auditErr.message}`);
+        }
+      }
 
-          logger.warn(
-            `[AuditSyncModel.processSingleRecord] single audit failed table=${this.oldDbTable} ID=${rawRecord?.ID}: ${auditErr.message}`
-          );
-          // Không throw lỗi thường ở đây để các bản ghi audit khác trong cùng văn bản vẫn được xử lý
+      // 4. Xử lý Insert hàng loạt
+      if (toInsert.length > 0) {
+        try {
+            const insertResults = await this._insertMany(toInsert, transaction);
+            inserted += insertResults.length;
+            results.push(...insertResults);
+        } catch (auditErr) {
+            if (isRetryableSqlError(auditErr)) throw auditErr;
+            logger.warn(`[AuditSyncModel] INSERT MANY failed table=${this.oldDbTable} ID=${rawRecord?.ID}: ${auditErr.message}`);
         }
       }
 
@@ -895,6 +921,167 @@ class SyncAuditModel extends BaseModel {
 
     return existingId;
   }
+
+  /**
+   * Chèn hàng loạt bản ghi audit mới vào CSDL mới (Bulk Insert).
+   * @param {Array} items - Mảng dữ liệu audit cần chèn.
+   * @param {object} transaction - Đối tượng transaction.
+   * @private
+   */
+  async _insertMany(items, transaction) {
+    if (!items || items.length === 0) return [];
+    
+    // Giới hạn chunk size để tránh lỗi quá 2100 parameters của SQL Server (23 params/record -> tối đa ~90 record/chunk)
+    const chunkSize = 80;
+    const results = [];
+    
+    for (let i = 0; i < items.length; i += chunkSize) {
+      const chunk = items.slice(i, i + chunkSize);
+      
+      let query = `INSERT INTO ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} WITH (ROWLOCK) (
+        document_id, [time], user_id, display_name, action_code, details, origin_id, created_by, receiver, receiver_unit, group_, roleProcess, [action], stage_status, created_at, updated_at, type_document, table_backups, status_code, bpmn_version, type_of_process, curStatusCode, [role]
+      ) OUTPUT INSERTED.id VALUES `;
+      
+      const params = {};
+      const valuesClauses = [];
+      
+      chunk.forEach((data, index) => {
+        const receiver = this._normalizeArrayField(data.receiver, 100);
+        const receiverUnit = this._normalizeArrayField(data.receiver_unit, 100);
+        
+        valuesClauses.push(`(
+          @document_id_${index}, @time_${index}, @user_id_${index}, @display_name_${index}, @action_code_${index}, @details_${index}, @origin_id_${index}, @created_by_${index}, @receiver_${index}, @receiver_unit_${index}, @group__${index}, @roleProcess_${index}, @action_${index}, @stage_status_${index}, @created_at_${index}, @updated_at_${index}, @type_document_${index}, @table_backups_${index}, @status_code_${index}, @bpmn_version_${index}, @type_of_process_${index}, @curStatusCode_${index}, @role_${index}
+        )`);
+        
+        params[`document_id_${index}`] = data.document_id;
+        params[`time_${index}`] = data.time;
+        params[`user_id_${index}`] = data.user_id ?? null;
+        params[`display_name_${index}`] = data.display_name ?? null;
+        params[`action_code_${index}`] = data.action_code ?? null;
+        params[`details_${index}`] = data.details ?? null;
+        params[`origin_id_${index}`] = data.origin_id ?? null;
+        params[`created_by_${index}`] = data.created_by ?? null;
+        params[`receiver_${index}`] = receiver;
+        params[`receiver_unit_${index}`] = receiverUnit;
+        params[`group__${index}`] = this._normalizeTextField(data.group_, 100);
+        params[`roleProcess_${index}`] = data.roleProcess ?? null;
+        params[`action_${index}`] = this._normalizeTextField(data.action, 255);
+        params[`stage_status_${index}`] = data.stage_status ?? null;
+        params[`created_at_${index}`] = data.time ?? new Date();
+        params[`updated_at_${index}`] = data.time ?? new Date();
+        params[`type_document_${index}`] = data.type_document;
+        params[`table_backups_${index}`] = data.table_backups || this.oldDbTable;
+        params[`status_code_${index}`] = data.status_code ?? null;
+        params[`bpmn_version_${index}`] = data.bpmn_version ?? null;
+        params[`type_of_process_${index}`] = data.type_of_process ?? null;
+        params[`curStatusCode_${index}`] = data.curStatusCode ?? null;
+        params[`role_${index}`] = data.role ?? null;
+      });
+      
+      query += valuesClauses.join(', ');
+      
+      const rows = await this.queryNewDbTx(query, params, transaction);
+      
+      // Map generated IDs back to the original audits.
+      // SQL Server OUTPUT typically returns in the same order as VALUES
+      if (Array.isArray(rows) && rows.length === chunk.length) {
+        chunk.forEach((data, index) => {
+          results.push({ audit: data, id: rows[index].id });
+        });
+      }
+    }
+    
+    if (results.length > 0) {
+      logger.info(`[SyncAuditModel] Bulk inserted ${results.length} audit rows successfully for table=${this.oldDbTable}`);
+    }
+    
+    return results;
+  }
+
+  /**
+   * Cập nhật hàng loạt bản ghi audit đã tồn tại trong CSDL mới (Bulk Update).
+   * @param {Array} items - Mảng chứa { audit, id }.
+   * @param {object} transaction - Đối tượng transaction.
+   * @private
+   */
+  async _updateMany(items, transaction) {
+    if (!items || items.length === 0) return [];
+    
+    // Giới hạn chunk size để tránh lỗi vượt quá 2100 parameters
+    const chunkSize = 80;
+    const results = [];
+    
+    for (let i = 0; i < items.length; i += chunkSize) {
+      const chunk = items.slice(i, i + chunkSize);
+      
+      let query = '';
+      const params = {};
+      
+      chunk.forEach((item, index) => {
+        const data = item.audit;
+        const id = item.id;
+        const receiver = this._normalizeArrayField(data.receiver, 100);
+        const receiverUnit = this._normalizeArrayField(data.receiver_unit, 100);
+        
+        query += `
+          UPDATE ${process.env.NEW_DB_NAME}.${this.newDbSchema}.${this.newDbTable} WITH (ROWLOCK)
+          SET
+            document_id = @document_id_${index},
+            display_name = @display_name_${index},
+            action_code = @action_code_${index},
+            details = @details_${index},
+            created_by = @created_by_${index},
+            receiver = @receiver_${index},
+            receiver_unit = @receiver_unit_${index},
+            group_ = @group__${index},
+            roleProcess = @roleProcess_${index},
+            [action] = @action_${index},
+            stage_status = @stage_status_${index},
+            status_code = @status_code_${index},
+            bpmn_version = @bpmn_version_${index},
+            type_of_process = @type_of_process_${index},
+            curStatusCode = @curStatusCode_${index},
+            [role] = @role_${index},
+            type_document = @type_document_${index},
+            updated_at = @updated_at_${index}
+          WHERE id = @id_${index};
+        `;
+        
+        params[`id_${index}`] = id;
+        params[`updated_at_${index}`] = data.time || new Date();
+        params[`document_id_${index}`] = data.document_id;
+        params[`display_name_${index}`] = data.display_name ?? null;
+        params[`action_code_${index}`] = data.action_code ?? null;
+        params[`details_${index}`] = data.details ?? null;
+        params[`created_by_${index}`] = data.created_by ?? null;
+        params[`receiver_${index}`] = receiver;
+        params[`receiver_unit_${index}`] = receiverUnit;
+        params[`group__${index}`] = this._normalizeTextField(data.group_, 100);
+        params[`roleProcess_${index}`] = data.roleProcess ?? null;
+        params[`action_${index}`] = this._normalizeTextField(data.action, 255);
+        params[`stage_status_${index}`] = data.stage_status ?? null;
+        params[`status_code_${index}`] = data.status_code ?? null;
+        params[`bpmn_version_${index}`] = data.bpmn_version ?? null;
+        params[`type_of_process_${index}`] = data.type_of_process ?? null;
+        params[`curStatusCode_${index}`] = data.curStatusCode ?? null;
+        params[`role_${index}`] = data.role ?? null;
+        params[`type_document_${index}`] = data.type_document;
+      });
+      
+      await this.queryNewDbTx(query, params, transaction);
+      
+      chunk.forEach(item => {
+        results.push({ audit: item.audit, id: item.id });
+      });
+    }
+    
+    if (results.length > 0) {
+      logger.info(`[SyncAuditModel] Bulk updated ${results.length} audit rows successfully for table=${this.oldDbTable}`);
+    }
+    
+    return results;
+  }
+
 
   /**
    * Chuyển đổi (map) một bản ghi thô từ CSDL cũ sang cấu trúc dữ liệu của CSDL mới.

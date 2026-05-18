@@ -181,6 +181,7 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
     this.oldDbTable = 'TaskVBDi'; // ← VĂN BẢN ĐI
     this.newDbSchema = 'dbo';
     this.newTableSync = 'task_sync_out'; // ← staging riêng cho VBĐi
+    this.isBatchSync = true; // Mark as batch sync module for high performance
 
     // Internal data models
     this.taskModel = null;
@@ -1191,12 +1192,89 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
   // ═══════════════════════════════════════════════════════════════
 
   /**
-   * Processes one staged item for a sync job inside a DB transaction.
-   * Retries the entire transaction on deadlock (SQL error 1205).
-   *
-   * @param {string} syncJobId
-   * @param {object} [options]
-   * @returns {Promise<object>}
+   * Fetches a batch of unclaimed records from staging table using thread-safe row locks.
+   */
+  async fetchBatchFromStaging(workerId, batchSize = 50) {
+    const stagingTable = this.getStagingTableRef();
+    try {
+      const query = `
+        UPDATE TOP (@batchSize) ${stagingTable} WITH (UPDLOCK, READPAST, ROWLOCK)
+        SET MigrateFlg = 2,
+            MigrateErrMess = 'Processing Batch...',
+            processing_owner = @owner,
+            processing_started_at = SYSUTCDATETIME(),
+            processing_heartbeat_at = SYSUTCDATETIME()
+        OUTPUT inserted.*
+        WHERE ISNULL(MigrateFlg, 0) = 0
+          AND ISNULL(MigrateErrFlg, 0) = 0
+          AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) >= @startDate OR @startDate IS NULL)
+          AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) <= @endDate OR @endDate IS NULL);
+      `;
+
+      const result = await this.newPool.request()
+        .input('batchSize', batchSize)
+        .input('owner', workerId)
+        .input('startDate', process.env.SYNC_START_DATE || null)
+        .input('endDate', process.env.SYNC_END_DATE || null)
+        .query(query);
+
+      return result.recordset || [];
+    } catch (error) {
+      logger.error(`[StreamTaskOut] fetchBatchFromStaging failed: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Marks a list of row IDs as successfully migrated.
+   */
+  async markBatchSuccess(rowIds) {
+    if (!rowIds || rowIds.length === 0) return;
+    const stagingTable = this.getStagingTableRef();
+    const idList = rowIds.map(id => `'${id}'`).join(',');
+    const query = `
+      UPDATE ${stagingTable} WITH (ROWLOCK)
+      SET MigrateFlg = 1,
+          MigrateErrFlg = 0,
+          MigrateErrMess = NULL,
+          processing_owner = NULL,
+          processing_started_at = NULL,
+          processing_heartbeat_at = NULL
+      WHERE ID IN (${idList})
+    `;
+    await this.queryNewDb(query);
+  }
+
+  /**
+   * Marks a list of records as failed with their individual errors.
+   */
+  async markBatchFailed(failedRecords) {
+    if (!failedRecords || failedRecords.length === 0) return;
+    const stagingTable = this.getStagingTableRef();
+    const request = this.newPool.request();
+    let queryParts = [];
+    
+    failedRecords.forEach((item, index) => {
+      queryParts.push(`
+        UPDATE ${stagingTable} WITH (ROWLOCK)
+        SET MigrateFlg = 3,
+            MigrateErrFlg = 1,
+            MigrateErrMess = @err${index},
+            processing_owner = NULL,
+            processing_started_at = NULL,
+            processing_heartbeat_at = NULL
+        WHERE ID = @id${index};
+      `);
+      request.input(`id${index}`, item.id);
+      request.input(`err${index}`, String(item.error || 'Unknown error').substring(0, 4000));
+    });
+
+    await request.query(queryParts.join('\n'));
+  }
+
+  /**
+   * processOne - entry point delegated by SyncManagerService.
+   * Processes a batch of records inside withDeadlockRetry to maintain system stability.
    */
   async processOne(syncJobId, options = {}) {
     if (!syncJobId) {
@@ -1208,209 +1286,145 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
     }
 
     return withDeadlockRetry(
-      () => this._processOneAttempt(syncJobId, options),
-      `processOne syncJobId=${syncJobId}`,
+      () => this._processBatchAttempt(syncJobId, options),
+      `processBatch syncJobId=${syncJobId}`
     );
   }
 
   /**
-   * Single attempt of processOne — extracted so withDeadlockRetry can re-run it cleanly.
-   * @private
+   * Batch processing logic with parallel file download and sequential recovery fallback.
    */
-  async _processOneAttempt(syncJobId, options = {}) {
+  async _processBatchAttempt(syncJobId, options = {}) {
     const itemIndex = Number(options?.itemIndex ?? -1);
-    let step = 'getSyncJobState';
-    let jobState;
-    try {
-      jobState = await this.getSyncJobState(syncJobId);
-    } catch (error) {
-      throw error;
+    const batchSize = Number(process.env.BATCH_SIZE || 50);
+
+    // 1. Fetch batch
+    const rows = await this.fetchBatchFromStaging(syncJobId, batchSize);
+
+    if (!rows || rows.length === 0) {
+      await this.finalizeProcessingCursor(syncJobId);
+      return {
+        syncJobId,
+        processed: false,
+        done: true
+      };
     }
 
-    let rowData = null;
+    logger.info(`[StreamTaskOut] [START] Processing batch of ${rows.length} records. ItemIndex=${itemIndex}`);
+
+    // 2. Parallel file preparing (OUTSIDE SQL transaction to reduce lock duration)
+    const concurrency = 5;
+    const preparedFilesMap = new Map();
+    for (let i = 0; i < rows.length; i += concurrency) {
+      const chunk = rows.slice(i, i + concurrency);
+      await Promise.all(
+        chunk.map(async (row) => {
+          try {
+            const files = await this.prepareTaskFilesFromSharePoint(row);
+            preparedFilesMap.set(row.ID, files);
+          } catch (err) {
+            logger.warn(`[StreamTaskOut] prepareFiles failed for ID=${row.ID}: ${err.message}`);
+            preparedFilesMap.set(row.ID, []);
+          }
+        })
+      );
+    }
+
+    const successIds = [];
+    const failedRecords = [];
+    const successfulDocs = [];
+
+    // 3. Try whole-batch processing inside a single SQL transaction for top speed
+    let batchSuccess = true;
     let transaction = null;
-    let stopHeartbeat = null;
-
     try {
-      const stagingTableRef = this.getStagingTableRef();
-      try {
-        await this.resetStaleProcessingRows({
-          startDate: process.env.SYNC_START_DATE || null,
-          endDate: process.env.SYNC_END_DATE || null,
-        });
-      } catch (_) { }
-
-      step = 'fetchOneFromStaging';
-      rowData = await this.fetchOneFromStaging({ itemIndex, workerId: syncJobId });
-
-      if (!rowData) {
-        try {
-          const stagingTableRef = this.getStagingTableRef();
-          const diagNoRow = await this.queryNewDb(
-            `
-            SELECT
-              SUM(CASE WHEN ISNULL(MigrateFlg, 0) = 0 AND ISNULL(MigrateErrFlg, 0) = 0 THEN 1 ELSE 0 END) AS pending_all_range,
-              SUM(CASE WHEN ISNULL(MigrateFlg, 0) = 0 AND ISNULL(MigrateErrFlg, 0) = 0
-                         AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) >= @startDate OR @startDate IS NULL)
-                         AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) <= @endDate   OR @endDate IS NULL)
-                       THEN 1 ELSE 0 END) AS pending_in_range
-            FROM ${stagingTableRef}
-            `,
-            {
-              startDate: process.env.SYNC_START_DATE || null,
-              endDate: process.env.SYNC_END_DATE || null
-            }
-          );
-          const pendingAll = Number(diagNoRow?.[0]?.pending_all_range || 0);
-          const pendingInRange = Number(diagNoRow?.[0]?.pending_in_range || 0);
-          logger.info(
-            `[StreamTaskOut][DIAG] fetchOneFromStaging returned null: itemIndex=${itemIndex}, pending_all_range=${pendingAll}, pending_in_range=${pendingInRange}, range=${process.env.SYNC_START_DATE || 'ALL'}→${process.env.SYNC_END_DATE || 'ALL'}`
-          );
-
-          // Show a small snapshot of candidates that SHOULD be pickable by this worker.
-          const sampleRows = await this.queryNewDb(
-            `
-            SELECT TOP 5
-              ID, Created, Modified, MigrateFlg, MigrateErrFlg
-            FROM ${stagingTableRef}
-            WHERE ISNULL(MigrateFlg, 0) = 0
-              AND ISNULL(MigrateErrFlg, 0) = 0
-              AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) >= @startDate OR @startDate IS NULL)
-              AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) <= @endDate   OR @endDate IS NULL)
-            ORDER BY TRY_CONVERT(datetime2, Modified) DESC,
-                     TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')) DESC
-            `,
-            {
-              startDate: process.env.SYNC_START_DATE || null,
-              endDate: process.env.SYNC_END_DATE || null
-            }
-          );
-          logger.info(
-            `[StreamTaskOut][DIAG] null-pick sample itemIndex=${itemIndex}: ${JSON.stringify(sampleRows || [])}`
-          );
-        } catch (_) { }
-        if (!this._finishedLogged) {
-          logger.info(`[StreamTaskOut] No more data in staging for job ${syncJobId}`);
-          this._finishedLogged = true;
-        }
-        await this.finalizeProcessingCursor(syncJobId);
-        try {
-          const doneDiag = await this.queryNewDb(
-            `
-            SELECT
-              SUM(CASE WHEN ISNULL(MigrateFlg, 0) = 0 AND ISNULL(MigrateErrFlg, 0) = 0 THEN 1 ELSE 0 END) AS pending_all_range,
-              SUM(CASE WHEN ISNULL(MigrateFlg, 0) = 1 THEN 1 ELSE 0 END) AS success_all_range,
-              SUM(CASE WHEN ISNULL(MigrateFlg, 0) = 2 THEN 1 ELSE 0 END) AS processing_all_range,
-              SUM(CASE WHEN ISNULL(MigrateErrFlg, 0) = 1 THEN 1 ELSE 0 END) AS error_all_range
-            FROM ${stagingTableRef}
-            `
-          );
-          const d = doneDiag?.[0] || {};
-          logger.warn(
-            `[StreamTaskOut][DONE_DIAG] job=${syncJobId} completed-without-pick: pending=${Number(d.pending_all_range || 0)}, success=${Number(d.success_all_range || 0)}, processing=${Number(d.processing_all_range || 0)}, errors=${Number(d.error_all_range || 0)}`
-          );
-        } catch (_) { }
-        return {
-          syncJobId,
-          processed: false,
-          done: true
-        };
-      }
-
-      const rowId = rowData.ID || null;
-      const current = Number(jobState?.total_processed || 0) + 1;
-      logger.info(
-        `[StreamTaskOut][DIAG] start processing row: itemIndex=${itemIndex}, rowId=${rowId}, nextProcessedCounter=${current}`
-      );
-      logger.info(
-        `[StreamTaskOut][FLOW] staging->task begin: rowId=${rowId}, created=${rowData?.Created || 'NULL'}, modified=${rowData?.Modified || 'NULL'}, vbId=${rowData?.VBId || 'NULL'}`
-      );
-
-      // --- BƯỚC MỚI: Tải file từ SharePoint (NGOÀI giao dịch SQL) ---
-      step = 'prepareTaskFilesFromSharePoint';
-      const preparedFiles = await this.prepareTaskFilesFromSharePoint(rowData);
-      stopHeartbeat = startHeartbeatLoop(
-        () => this.updateHeartbeat(rowId),
-        this.heartbeatIntervalMs,
-      );
-
-      step = 'beginTransaction';
       transaction = new sql.Transaction(this.newPool);
       await transaction.begin();
 
-      step = 'processRowData';
-      const result = await this.processRowData(rowData, { transaction, preparedFiles });
-      logger.info(
-        `[StreamTaskOut][FLOW] staging->task result: rowId=${rowId}, action=${result?.action || 'N/A'}, affected=${result?.affected || 0}`
-      );
+      for (const row of rows) {
+        const preparedFiles = preparedFilesMap.get(row.ID) || [];
+        const result = await this.processRowData(row, { transaction, preparedFiles });
+        successfulDocs.push({ row, result });
+      }
 
-      // Update counters in sync_jobs
-      step = 'updateSyncJobsCounter';
-      await this.queryNewDbTx(
-        `UPDATE sync_jobs
-         SET total_processed = ISNULL(total_processed, 0) + 1,
-             total_success   = ISNULL(total_success, 0) + 1
-         WHERE job_id = @syncJobId`,
-        { syncJobId },
-        transaction
-      );
-
-      // Mark staging row as processed successfully
-      step = 'markStagingProcessed';
-      await markRowSuccess(this, {
-        tableRef: stagingTableRef,
-        keyWhere: 'ID = @ID',
-        params: { ID: rowId },
-        transaction,
-        rowToken: `ID=${rowId}`,
-        label: this.modelName,
-      });
-
-      step = 'commitTransaction';
       await transaction.commit();
-      if (stopHeartbeat) {
-        stopHeartbeat();
-        stopHeartbeat = null;
-      }
 
-      return {
-        syncJobId,
-        processed: true,
-        done: false,
-        rowId,
-        result
-      };
-    } catch (error) {
-      if (stopHeartbeat) {
-        stopHeartbeat();
-        stopHeartbeat = null;
+      for (const { row } of successfulDocs) {
+        successIds.push(row.ID);
       }
+    } catch (batchError) {
+      batchSuccess = false;
+      logger.error(`[StreamTaskOut] Batch transaction failed, falling back to sequential: ${batchError.message}`);
       if (transaction) {
         try {
-          await transaction.rollback().catch(() => { });
-        } catch (rollbackError) { }
+          await transaction.rollback().catch(() => {});
+        } catch (_) {}
       }
-
-      if (rowData && rowData.ID) {
-        try {
-          step = 'markStagingError';
-          const stagingTableRef = this.getStagingTableRef();
-          await markRowFailed(this, {
-            tableRef: stagingTableRef,
-            keyWhere: 'ID = @ID',
-            params: { ID: rowData.ID },
-            rowToken: `ID=${rowData.ID}`,
-            errorMessage: error.message,
-            label: this.modelName,
-          });
-        } catch (updateErr) { }
-      }
-
-      logger.error(
-        `[StreamTaskOut._processOneAttempt] Failed at step=${step}, row ID=${rowData?.ID || 'N/A'}, itemIndex=${itemIndex}: ${error.message}`
-      );
-      throw error;
     }
+
+    // 4. Sequential fallback to isolate and identify failed records independently
+    if (!batchSuccess) {
+      for (const row of rows) {
+        try {
+          const preparedFiles = preparedFilesMap.get(row.ID) || [];
+          let docResult = null;
+
+          await dbUtils.withTransactionRetry(this.newPool, async (tx) => {
+            docResult = await this.processRowData(row, { transaction: tx, preparedFiles });
+          }, { maxRetries: 3 });
+
+          if (docResult) {
+            successIds.push(row.ID);
+          }
+        } catch (singleError) {
+          logger.error(`[StreamTaskOut] Sequential fallback failed for ID=${row.ID}: ${singleError.message}`);
+          failedRecords.push({ id: row.ID, error: singleError.message });
+        }
+      }
+    }
+
+    // 4.5. Bulk backfill parent relationships for the whole batch
+    if (successIds.length > 0) {
+      try {
+        await this.taskModel.resolveParentRelation();
+      } catch (parentErr) {
+        logger.warn(`[StreamTaskOut] Parent relation bulk mapping warning: ${parentErr.message}`);
+      }
+    }
+
+    // 5. Update Staging state & Sync Job state
+    if (successIds.length > 0) {
+      await this.markBatchSuccess(successIds);
+      await this.queryNewDb(
+        `UPDATE sync_jobs
+         SET total_processed = ISNULL(total_processed, 0) + @count,
+             total_success   = ISNULL(total_success, 0) + @count
+         WHERE job_id = @syncJobId`,
+        { count: successIds.length, syncJobId }
+      );
+    }
+
+    if (failedRecords.length > 0) {
+      await this.markBatchFailed(failedRecords);
+      await this.queryNewDb(
+        `UPDATE sync_jobs
+         SET total_processed = ISNULL(total_processed, 0) + @count,
+             total_errors    = ISNULL(total_errors, 0) + @count
+         WHERE job_id = @syncJobId`,
+        { count: failedRecords.length, syncJobId }
+      );
+    }
+
+    logger.info(
+      `[StreamTaskOut] Batch finished: total=${rows.length}, success=${successIds.length}, failed=${failedRecords.length}`
+    );
+
+    return {
+      syncJobId,
+      processed: true,
+      done: false,
+      affected: successIds.length
+    };
   }
 
   /**

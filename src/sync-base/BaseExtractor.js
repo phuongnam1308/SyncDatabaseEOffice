@@ -169,7 +169,42 @@ class BaseExtractor {
   }
 
   /**
-   * Sync batch of rows to staging table
+   * Lấy và cache kiểu dữ liệu của các cột trong bảng Staging
+   */
+  async _getStagingColumnTypes(stagingTable) {
+    if (!this._schemaCache) this._schemaCache = {};
+    if (this._schemaCache[stagingTable]) return this._schemaCache[stagingTable];
+
+    const schemaQuery = `
+      SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_NAME = @tableName
+    `;
+    const result = await this.newPool.request()
+      .input('tableName', sql.NVarChar, stagingTable)
+      .query(schemaQuery);
+
+    const typeMap = {};
+    result.recordset.forEach(col => {
+      let typeStr = col.DATA_TYPE.toUpperCase();
+      if (['VARCHAR', 'NVARCHAR', 'CHAR', 'NCHAR'].includes(typeStr)) {
+        if (col.CHARACTER_MAXIMUM_LENGTH === -1) {
+          typeStr += '(MAX)';
+        } else {
+          typeStr += `(${col.CHARACTER_MAXIMUM_LENGTH})`;
+        }
+      } else if (['DECIMAL', 'NUMERIC'].includes(typeStr)) {
+        typeStr += '(38,10)'; // Safe fallback
+      }
+      typeMap[col.COLUMN_NAME] = typeStr;
+    });
+
+    this._schemaCache[stagingTable] = typeMap;
+    return typeMap;
+  }
+
+  /**
+   * Sync batch of rows to staging table using OPENJSON
    * @param {object[]} rows - Rows to sync
    * @param {string} instanceId - Instance ID for staging table
    * @param {object} [transaction] - Optional transaction
@@ -181,61 +216,72 @@ class BaseExtractor {
     }
 
     const stagingTable = this.getStagingTableName(instanceId);
-    const columns = Object.keys(rows[0] || {}).filter(col => !String(col).startsWith('__'));
-    const nonIdColumns = columns.filter(col => col !== 'ID');
-
-    const safeColumns = columns.map(col => this.sanitizeColumnName(col));
-    const safeNonIdColumns = nonIdColumns.map(col => this.sanitizeColumnName(col));
-
-    // Build column lists for INSERT
-    const insertColumns = safeColumns.join(', ');
-    const updateSetClause = safeNonIdColumns.map(col => `${col} = SRC.${col}`).join(', ');
-
-    // Build VALUES clause with parameter names
-    const valuesClauses = rows.map((row, rowIdx) => {
-      const colRefs = safeColumns.map((col, colIdx) => `@p${rowIdx}_${colIdx}`).join(', ');
-      return `SELECT ${colRefs}`;
-    }).join(' UNION ALL ');
-
-    // Build parameter object
-    const params = {};
-    rows.forEach((row, rowIdx) => {
-      columns.forEach((col, colIdx) => {
-        params[`p${rowIdx}_${colIdx}`] = row[col];
-      });
-    });
-
-    const query = `
-      ;WITH source_data AS (
-        ${valuesClauses}
-      )
-      MERGE ${stagingTable} AS tgt
-      USING source_data AS src
-      ON tgt.ID = src.ID
-      WHEN MATCHED THEN
-        UPDATE SET ${updateSetClause}
-      WHEN NOT MATCHED THEN
-        INSERT (${insertColumns}) VALUES (${safeColumns.map((_, i) => `SRC.@p_*`.replace('*', i)).join(', ')});
-    `.replace(/\.\ @p_\*/g, (match) => match);
-
-    // Actually build the proper query
-    const upsertQuery = `
-      MERGE ${stagingTable} AS tgt
-      USING (${valuesClauses}) AS src
-      ON tgt.ID = src.ID
-      WHEN MATCHED THEN
-        UPDATE SET ${updateSetClause}
-      WHEN NOT MATCHED THEN
-        INSERT (${insertColumns}) VALUES (${safeColumns.map((_, i) => `src.@p${i}`).join(', ')});
-    `;
-
+    
     try {
-      const request = (transaction || this.newPool.request());
-      const result = await request.query(upsertQuery);
-      logger.info(`[${this.modelName}] Synced ${rows.length} rows to staging table ${stagingTable}`);
+      // 1. Get column types for OPENJSON WITH clause
+      const typeMap = await this._getStagingColumnTypes(stagingTable);
+
+      // 2. Extract valid columns
+      const columns = Object.keys(rows[0] || {}).filter(col => !String(col).startsWith('__'));
+      const nonIdColumns = columns.filter(col => col !== 'ID');
+
+      const safeColumns = columns.map(col => this.sanitizeColumnName(col));
+      const safeNonIdColumns = nonIdColumns.map(col => this.sanitizeColumnName(col));
+
+      // 3. Build OPENJSON WITH clause
+      const withDeclarations = safeColumns.map(col => {
+        const type = typeMap[col] || 'NVARCHAR(MAX)'; // fallback if not found in schema
+        return `[${col}] ${type} '$.${col}'`;
+      }).join(',\n        ');
+
+      // 4. Build MERGE clauses
+      const insertColumns = safeColumns.map(c => `[${c}]`).join(', ');
+      const insertValues = safeColumns.map(c => `src.[${c}]`).join(', ');
+      let updateSetClause = safeNonIdColumns.map(c => `[${c}] = src.[${c}]`).join(', ');
+      
+      // Always reset staging flags on UPDATE so that modified records get re-processed
+      if (updateSetClause) {
+        updateSetClause += `, [MigrateFlg] = 0, [MigrateErrFlg] = 0, [MigrateErrMess] = NULL`;
+      } else {
+        updateSetClause = `[MigrateFlg] = 0, [MigrateErrFlg] = 0, [MigrateErrMess] = NULL`;
+      }
+
+      // 5. Create JSON string from rows
+      const cleanRows = rows.map(row => {
+        const cleanRow = {};
+        columns.forEach(col => {
+          cleanRow[col] = row[col];
+        });
+        return cleanRow;
+      });
+      const jsonData = JSON.stringify(cleanRows);
+
+      // 6. Final SQL using OPENJSON
+      const upsertQuery = `
+        MERGE ${stagingTable} AS tgt
+        USING (
+          SELECT * FROM OPENJSON(@jsonData)
+          WITH (
+            ${withDeclarations}
+          )
+        ) AS src
+        ON tgt.ID = src.ID
+        WHEN MATCHED THEN
+          UPDATE SET ${updateSetClause}
+        WHEN NOT MATCHED THEN
+          INSERT (${insertColumns}) VALUES (${insertValues});
+      `;
+
+      // 7. Execute
+      const request = transaction ? transaction.request() : this.newPool.request();
+      await request
+        .input('jsonData', sql.NVarChar(sql.MAX), jsonData)
+        .query(upsertQuery);
+
+      logger.info(`[${this.modelName}] Synced ${rows.length} rows to staging table ${stagingTable} via OPENJSON`);
       return { stagedCount: rows.length };
     } catch (error) {
-      logger.error(`[${this.modelName}] Failed to sync batch to staging: ${error.message}`);
+      logger.error(`[${this.modelName}] Failed to sync batch to staging via OPENJSON: ${error.message}`);
       throw error;
     }
   }

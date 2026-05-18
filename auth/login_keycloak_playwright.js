@@ -107,7 +107,7 @@ async function loginKeycloak(options = {}) {
     // C�c selector ph? bi?n c?a Keycloak
     const userSelector = '#username';
     const passSelector = '#password';
-    const loginBtnSelector = '#kc-login';
+    const loginBtnSelector = '#kc-login, input[type="submit"], button[type="submit"], input[name="login"]';
 
     await page.waitForSelector(userSelector, { state: 'visible', timeout: 30000 });
     await page.fill(userSelector, username);
@@ -123,28 +123,52 @@ async function loginKeycloak(options = {}) {
 
     let tokenUrl = null;
     try {
-      // �?i URL c� ch?a "token="
-      await page.waitForURL('**/*token=*', { timeout: 60000 });
+      // Đợi URL có chứa "token=" hoặc chuyển hướng về trang chủ
+      await page.waitForURL('**/*(token=*|dashboardPageBoss)*', { timeout: 15000 }).catch(() => {});
+      await page.waitForTimeout(2000); // Đợi thêm 2s để frontend lưu Cookie/LocalStorage
       tokenUrl = page.url();
       console.log(`Redirected to: ${tokenUrl.split('?')[0]}...`);
     } catch (e) {
-      // N?u kh�ng c� token= th� th? b?t body ho?c cookie
+      // N?u khng c token= th th? b?t body ho?c cookie
       console.log('Timeout waiting for URL with token=. Checking current URL...');
       tokenUrl = page.url();
     }
 
-    // Tr�ch xu?t token t? URL
+    // 1. Trch xu?t token t? URL
     const urlObj = new URL(tokenUrl);
     let token = urlObj.searchParams.get('token');
 
     if (!token) {
-      // C� th? n� n?m trong hash (fragment)
+      // C th? n n?m trong hash (fragment)
       const hashParams = new URLSearchParams(urlObj.hash.substring(1));
       token = hashParams.get('token');
     }
 
+    // 2. Tm trong Cookies
     if (!token) {
-      throw new Error(`Khong tim thay token trong URL tra ve: ${tokenUrl}`);
+      const cookies = await context.cookies();
+      const tokenCookie = cookies.find(c => 
+        c.name.toLowerCase() === 'token' || 
+        c.name.toLowerCase() === 'access_token' || 
+        c.name.toLowerCase() === 'jwt'
+      );
+      if (tokenCookie) {
+        token = tokenCookie.value;
+        console.log('Token found in Cookies.');
+      }
+    }
+
+    // 3. Tm trong LocalStorage / SessionStorage
+    if (!token) {
+      token = await page.evaluate(() => {
+        return localStorage.getItem('token') || localStorage.getItem('access_token') || localStorage.getItem('jwt') ||
+               sessionStorage.getItem('token') || sessionStorage.getItem('access_token') || sessionStorage.getItem('jwt');
+      });
+      if (token) console.log('Token found in Web Storage.');
+    }
+
+    if (!token) {
+      throw new Error(`Khong tim thay token trong URL tra ve hoac Cookies: ${tokenUrl}`);
     }
 
     // Luu cache token

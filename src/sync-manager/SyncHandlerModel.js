@@ -141,7 +141,12 @@ class SyncHandlerModel {
       const total = Number(state?.totalCount || 0);
       const processed = Number(state?.nextIndex || 0);
       const remaining = Math.max(0, total - processed);
-      const take = Math.min(Number(limit || 1), remaining);
+
+      // Chỉ áp dụng logic "Virtual Item đại diện cho Batch" nếu model có cờ isBatchSync
+      const isBatch = this.syncModel.isBatchSync === true;
+      const take = isBatch 
+        ? Math.min(Number(process.env.SYNC_CONCURRENCY || 3), Math.ceil(remaining / limit)) 
+        : Math.min(Number(limit || 1), remaining);
 
       if (take <= 0) {
         // ★ KHI take <= 0: Trước khi trả [] và kết thúc job, recheck actual staging count.
@@ -192,7 +197,11 @@ class SyncHandlerModel {
 
       const syncTime = state?.syncTime || lastTime;
       const startIndex = processed;
-      state.nextIndex += take;
+      
+      // Quan trọng: Tăng nextIndex theo 'limit' nếu là lô, ngược lại tăng theo 'take'
+      state.nextIndex += isBatch 
+        ? Math.min(limit, remaining) 
+        : take;
 
       return Array.from({ length: take }, (_, idx) => ({
         id: startIndex + idx + 1,

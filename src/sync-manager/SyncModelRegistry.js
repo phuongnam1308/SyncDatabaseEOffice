@@ -3,6 +3,7 @@ const SyncHandlerModel = require('./SyncHandlerModel');
 
 const OutGoingDocumentModel = require('../sync-outgoing-document/models/StreamOutgoingIncrementalModel');
 const SyncOutgoingAdapter = require('./SyncOutgoingAdapter'); // v2 adapter with instance staging tables
+const SyncOutgoingV3Adapter = require('./SyncOutgoingV3Adapter'); // v3 adapter with batch processing
 const SyncIncomingAdapter = require('./SyncIncomingAdapter'); // NEW: v2 adapter for incoming documents
 const SyncDraftDocumentAdapter = require('./SyncDraftDocumentAdapter'); // NEW: draft document adapter
 const SyncUnitDraftAdapter = require('./SyncUnitDraftAdapter'); // Unit draft from SharePoint List
@@ -13,6 +14,7 @@ const StreamMeetingMigrationModel = require('../sync-meeting/migrate/StreamMeeti
 const IncomingDocumentModel = require('../sync-incoming-document/models/StreamIncomingIncrementalModel');
 const StreamDepartmentMigrationModel = require('../sync-department/migrate/StreamDepartmentMigrationModel');
 const StreamNewsAspxPageIncrementalModel = require('../sync-news-aspx-page/models/StreamNewsAspxPageIncrementalModel');
+const SyncTaskSharePointAdapter = require('./SyncTaskSharePointAdapter');
 
 // 5 Specialized Sync Modules
 const StreamMeetingCopyMigrationModel = require('../sync-meeting copy/migrate/StreamMeetingMigrationModel');
@@ -34,6 +36,12 @@ const MODEL_DEFINITIONS = [
     label: 'Đồng bộ văn bản đi v2',
     section: 'realtime',
     ModelClass: SyncOutgoingAdapter
+  },
+  {
+    key: 'STREAM_OUTGOING_V3',
+    label: 'Đồng bộ văn bản đi v3 (Batch)',
+    section: 'realtime',
+    ModelClass: SyncOutgoingV3Adapter
   },
   {
     key: 'STREAM_DRAFT_DOCUMENT',
@@ -118,6 +126,12 @@ const MODEL_DEFINITIONS = [
     label: 'Đồng bộ phiếu mượn hộ chiếu',
     section: 'realtime',
     ModelClass: StreamPassportMigrationModel,
+  },
+  {
+    key: 'STREAM_TASK_SHAREPOINT',
+    label: 'Đồng bộ công việc (SharePoint API)',
+    section: 'realtime',
+    ModelClass: SyncTaskSharePointAdapter
   },
 ];
 
@@ -284,8 +298,10 @@ class SyncModelRegistry {
       'STREAM_TASK_INCOMING_INCREMENTAL',
       'STREAM_TASK_OUTGOING_INCREMENTAL',
       'STREAM_OUTGOING_V2',
+      'STREAM_OUTGOING_V3',
       'STREAM_DRAFT_DOCUMENT',
-      'STREAM_UNIT_DRAFT'
+      'STREAM_UNIT_DRAFT',
+      'STREAM_TASK_SHAREPOINT'
     ];
     const isParallelModule = parallelModules.includes(key);
 
