@@ -14,6 +14,7 @@ const StreamMeetingMigrationModel = require('../sync-meeting/migrate/StreamMeeti
 const IncomingDocumentModel = require('../sync-incoming-document/models/StreamIncomingIncrementalModel');
 const StreamDepartmentMigrationModel = require('../sync-department/migrate/StreamDepartmentMigrationModel');
 const StreamNewsAspxPageIncrementalModel = require('../sync-news-aspx-page/models/StreamNewsAspxPageIncrementalModel');
+const SyncTaskSharePointAdapter = require('./SyncTaskSharePointAdapter');
 
 // 5 Specialized Sync Modules
 const StreamMeetingCopyMigrationModel = require('../sync-meeting copy/migrate/StreamMeetingMigrationModel');
@@ -125,6 +126,12 @@ const MODEL_DEFINITIONS = [
     label: 'Đồng bộ phiếu mượn hộ chiếu',
     section: 'realtime',
     ModelClass: StreamPassportMigrationModel,
+  },
+  {
+    key: 'STREAM_TASK_SHAREPOINT',
+    label: 'Đồng bộ công việc (SharePoint API)',
+    section: 'realtime',
+    ModelClass: SyncTaskSharePointAdapter
   },
 ];
 
@@ -293,7 +300,8 @@ class SyncModelRegistry {
       'STREAM_OUTGOING_V2',
       'STREAM_OUTGOING_V3',
       'STREAM_DRAFT_DOCUMENT',
-      'STREAM_UNIT_DRAFT'
+      'STREAM_UNIT_DRAFT',
+      'STREAM_TASK_SHAREPOINT'
     ];
     const isParallelModule = parallelModules.includes(key);
 

@@ -316,4 +316,7 @@ router.use('/sync-meeting-copy', SyncMeetingCopyRoutes);
 const SyncPassportRoutes = require('../src/sync-passport/route');
 router.use('/sync-passport', SyncPassportRoutes);
 
+const SharePointTaskRoutes = require('../src/sync-tasks-sharepoint/route');
+router.use('/sync-tasks-sharepoint', SharePointTaskRoutes);
+
 module.exports = router;

@@ -315,11 +315,13 @@ async function downloadFile(url, pool = null, retryCount = 0, timeoutMs = 120000
     throw new Error(`404 Not Found (cached permanent fail): ${url}`);
   }
 
-  // === FAST PATH: Đã có buffer trong cache ===
-  const cached = _downloadCache.get(cacheKey);
-  if (cached instanceof Buffer) {
-    logger.debug(`[SharePointAuth] Cache hit: ${cacheKey}`);
-    return cached;
+  // === FAST PATH: Đã có buffer trong cache (Bỏ qua với gọi API) ===
+  if (!url.includes('/_api/')) {
+    const cached = _downloadCache.get(cacheKey);
+    if (cached instanceof Buffer) {
+      logger.debug(`[SharePointAuth] Cache hit: ${cacheKey}`);
+      return cached;
+    }
   }
 
   // === Lấy cookie (memory → DB → file) ===
@@ -366,7 +368,7 @@ async function downloadFile(url, pool = null, retryCount = 0, timeoutMs = 120000
     maxRedirects: 0,
     headers: {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept': '*/*',
+      'Accept': url.includes('/_api/') ? 'application/json;odata=verbose' : '*/*', //Nếu có chứa /_api/ thì accept là json, ngược lại là */*
       'Cookie': cookie || '',
     },
     validateStatus: () => true,
@@ -440,8 +442,8 @@ async function downloadFile(url, pool = null, retryCount = 0, timeoutMs = 120000
   // === THÀNH CÔNG ===
   const buffer = Buffer.from(response.data);
 
-  // Lưu vào cache (chỉ với file nhỏ hơn 5MB để tránh OOM)
-  if (buffer.length < 5 * 1024 * 1024) {
+  // Lưu vào cache (chỉ với file nhỏ hơn 5MB và KHÔNG PHẢI là API)
+  if (buffer.length < 5 * 1024 * 1024 && !url.includes('/_api/')) {
     _downloadCache.set(cacheKey, buffer);
     // Dọn cache nếu quá lớn
     if (_downloadCache.size > DOWNLOAD_CACHE_MAX) {
