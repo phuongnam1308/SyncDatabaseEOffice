@@ -27,7 +27,7 @@ class SyncHandlerModel {
       // Xác định chế độ đếm:
       // - forceFullSync=true → dùng DEFAULT_SYNC_TIME để đếm tất cả bản ghi (past + future)
       // - forceFullSync=false → dùng lastTime để chỉ đếm bản ghi mới (incremental)
-      const forceFullSync = opts.forceFullSync !== false; // mặc định true khi không truyền
+      const forceFullSync = opts.forceFullSync === true; // mặc định false khi không truyền
       const effectiveTime = forceFullSync ? DEFAULT_SYNC_TIME : lastTime;
       const effectiveSyncId = forceFullSync ? 0 : lastSyncId;
 
@@ -77,7 +77,7 @@ class SyncHandlerModel {
       // Đọc flag từ cursor (do SyncManagerService.runJob() truyền xuống)
       // forceFullSync=true → gọi getList(DEFAULT_SYNC_TIME) để hút toàn bộ past records
       // forceFullSync=false (hoặc không có) → dùng lastTime như cũ (incremental)
-      const forceFullSync = cursor.forceFullSync !== false; // mặc định true
+      const forceFullSync = cursor.forceFullSync === true; // mặc định false
       const effectiveTime = forceFullSync ? DEFAULT_SYNC_TIME : lastTime;
       const effectiveSyncId = forceFullSync ? 0 : lastSyncId;
 

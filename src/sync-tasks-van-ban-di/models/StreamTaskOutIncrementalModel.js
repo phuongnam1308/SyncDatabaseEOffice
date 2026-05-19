@@ -224,18 +224,10 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
 
     try {
       // FIX: Ensure staging table exists FIRST before any model inits
-      try {
-        await withDeadlockRetry(() => this.ensureStagingTableExists(), 'ensureStagingTableExists');
-      } catch (err) {
-        logger.error(`[StreamTaskOutIncrementalModel] ensureStagingTableExists WARN (non-fatal): ${err.message}`);
-      }
+      await withDeadlockRetry(() => this.ensureStagingTableExists(), 'ensureStagingTableExists');
 
       // ADD: Ensure all necessary columns exist (e.g. ItemId)
-      try {
-        await withDeadlockRetry(() => this.ensureStagingTableColumns(), 'ensureStagingTableColumns');
-      } catch (err) {
-        logger.error(`[StreamTaskOutIncrementalModel] ensureStagingTableColumns WARN (non-fatal): ${err.message}`);
-      }
+      await withDeadlockRetry(() => this.ensureStagingTableColumns(), 'ensureStagingTableColumns');
 
       // Late require to break potential circular dependencies
       const StreamTaskMigrationModel = require('./StreamTaskMigrationModel');
@@ -291,7 +283,7 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
       );
     } catch (error) {
       logger.error('[StreamTaskOutIncrementalModel.initialize]', error);
-      // DO NOT throw error to allow model registration
+      throw error;
     }
   }
 
@@ -406,16 +398,13 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
 
     // Create only if not exists — no DROP → no Sch-M lock race
     const createQuery = `
-      IF NOT EXISTS (
-        SELECT 1
-        FROM ${dbName}.INFORMATION_SCHEMA.TABLES
-        WHERE TABLE_NAME = '${tableName}'
-          AND TABLE_SCHEMA = '${schemaName}'
-      )
+      IF OBJECT_ID('${table}', 'U') IS NULL
       BEGIN
         CREATE TABLE ${table} (
           -- Source columns (raw from TaskVBDi / old DB)
           ID                     NVARCHAR(255)   NOT NULL,
+          source_db              NVARCHAR(255)   NULL,
+          stg_job_id             NVARCHAR(255)   NULL,
           VBId                   NVARCHAR(MAX)   NULL,
           DepartmentId           NVARCHAR(MAX)   NULL,
           ParentId               NVARCHAR(MAX)   NULL,
@@ -484,6 +473,8 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
 
     // Danh sách các cột cần check (theo schema chuẩn ở ensureStagingTableExists)
     const requiredColumns = [
+      { name: 'source_db', type: 'NVARCHAR(255)' },
+      { name: 'stg_job_id', type: 'NVARCHAR(255)' },
       { name: 'VBId', type: 'NVARCHAR(MAX)' },
       { name: 'DepartmentId', type: 'NVARCHAR(MAX)' },
       { name: 'ParentId', type: 'NVARCHAR(MAX)' },
@@ -595,14 +586,6 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
       params: { ID: rowId },
       transaction,
       rowToken: `ID=${rowId}`,
-      label: this.modelName,
-    });
-  }
-
-  async resetErrors() {
-    const stagingTableRef = this.getStagingTableRef();
-    return resetErrorRows(this, {
-      tableRef: stagingTableRef,
       label: this.modelName,
     });
   }
@@ -888,11 +871,14 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
         .map((columnName, idx) => `${columnName} = @${nonIdColumns[idx]}`)
         .join(', ');
 
+      const hasSourceDb = columns.includes('source_db');
+      const whereClause = hasSourceDb ? "ID = @ID AND ISNULL(source_db, '') = ISNULL(@source_db, '')" : "ID = @ID";
+
       const query = `
-        IF EXISTS (SELECT 1 FROM ${stagingTableRef} WHERE ID = @ID)
+        IF EXISTS (SELECT 1 FROM ${stagingTableRef} WHERE ${whereClause})
         BEGIN
           ${nonIdColumns.length > 0
-          ? `UPDATE ${stagingTableRef} SET ${updateClause} WHERE ID = @ID AND ISNULL(MigrateFlg, 0) <> 1;`
+          ? `UPDATE ${stagingTableRef} SET ${updateClause} WHERE ${whereClause};`
           : `SELECT 1 AS noop;`
         }
         END
@@ -956,33 +942,21 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
       `[StreamTaskOut] Tổng số bản ghi cần sync: ${totalCount} (LastTime: ${normalizedLastSyncTime}, LastId: ${normalizedLastSyncId})`,
     );
 
-    // Lấy số lượng đã sync thành công để trừ đi (theo yêu cầu skip bản ghi đã chạy)
-    let alreadySyncedCount = 0;
-    try {
-      const syncedRes = await this.queryNewDb(`
-        SELECT COUNT(1) AS cnt FROM ${stagingTableRef}
-        WHERE ISNULL(MigrateFlg, 0) = 1
-          AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) >= @startDate OR @startDate IS NULL)
-          AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) <= @endDate   OR @endDate IS NULL)
-      `, {
-        startDate: process.env.SYNC_START_DATE || null,
-        endDate: process.env.SYNC_END_DATE || null
-      });
-      alreadySyncedCount = Number(syncedRes?.[0]?.cnt || 0);
-    } catch (e) {}
-
-    const displayTotal = Math.max(0, totalCount - alreadySyncedCount);
-
     await this.queryNewDb(
       `
       UPDATE sync_jobs
-      SET total_to_sync = @total
+      SET total_to_sync =
+        CASE
+          WHEN ISNULL(total_to_sync, 0) > @total THEN ISNULL(total_to_sync, 0)
+          WHEN ISNULL(total_processed, 0) > @total THEN ISNULL(total_processed, 0)
+          ELSE @total
+        END
       WHERE job_id = @jobId
-    `,
+      `,
       {
-        total: displayTotal,
+        total: totalCount,
         jobId: syncJobId,
-      },
+      }
     );
 
     const numIterations = Math.ceil(totalCount / batchSize);
