@@ -3438,7 +3438,7 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
 
       const newResult = await this.queryNewDbTx(newDbQuery, { val: trimmed }, transaction);
       if (newResult?.length) {
-        logger.info(`[getUserDisplayName] Found in New DB: "${trimmed}" -> "${newResult[0].name}"`);
+        //logger.info(`[getUserDisplayName] Found in New DB: "${trimmed}" -> "${newResult[0].name}"`);
         return newResult[0].name;
       }
 
@@ -3456,7 +3456,7 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
         const oldResult = await this.queryOldDb(oldDbQuery, { val: trimmed });
         if (oldResult?.length) {
           const name = this.safeString(oldResult[0].FullName);
-          logger.info(`[getUserDisplayName] Found in Old DB: "${trimmed}" -> "${name}"`);
+          //logger.info(`[getUserDisplayName] Found in Old DB: "${trimmed}" -> "${name}"`);
           return name;
         }
       }

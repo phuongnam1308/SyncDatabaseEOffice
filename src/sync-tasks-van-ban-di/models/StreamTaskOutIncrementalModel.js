@@ -1344,15 +1344,21 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
       await transaction.begin();
 
       for (const row of rows) {
-        const preparedFiles = preparedFilesMap.get(row.ID) || [];
-        const result = await this.processRowData(row, { transaction, preparedFiles });
+        const result = await this.processRowData(row, { transaction, preparedFiles: [] });
         successfulDocs.push({ row, result });
       }
 
       await transaction.commit();
 
-      for (const { row } of successfulDocs) {
+      for (const { row, result } of successfulDocs) {
         successIds.push(row.ID);
+        const preparedFiles = preparedFilesMap.get(row.ID) || [];
+        preparedFilesMap.delete(row.ID); // GC optimization
+        try {
+          await this.applyPreparedTaskFiles(preparedFiles, result.newTaskId, row, null);
+        } catch (fileErr) {
+          logger.warn(`[StreamTaskOut] File upload failed for task ${result.newTaskId}: ${fileErr.message}`);
+        }
       }
     } catch (batchError) {
       batchSuccess = false;
@@ -1368,15 +1374,21 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
     if (!batchSuccess) {
       for (const row of rows) {
         try {
-          const preparedFiles = preparedFilesMap.get(row.ID) || [];
           let docResult = null;
 
           await dbUtils.withTransactionRetry(this.newPool, async (tx) => {
-            docResult = await this.processRowData(row, { transaction: tx, preparedFiles });
+            docResult = await this.processRowData(row, { transaction: tx, preparedFiles: [] });
           }, { maxRetries: 3 });
 
           if (docResult) {
             successIds.push(row.ID);
+            const preparedFiles = preparedFilesMap.get(row.ID) || [];
+            preparedFilesMap.delete(row.ID); // GC optimization
+            try {
+              await this.applyPreparedTaskFiles(preparedFiles, docResult.newTaskId, row, null);
+            } catch (fileErr) {
+              logger.warn(`[StreamTaskOut] File upload failed for task ${docResult.newTaskId}: ${fileErr.message}`);
+            }
           }
         } catch (singleError) {
           logger.error(`[StreamTaskOut] Sequential fallback failed for ID=${row.ID}: ${singleError.message}`);
@@ -1496,6 +1508,7 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
     return {
       action: res?.action || 'upsert',
       idTaskBak: backupId,
+      newTaskId: res?.newTaskId,
       affected,
     };
   }
@@ -1536,7 +1549,6 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
     }
 
     const newTaskId = taskResult.newTaskId;
-    logger.info(`[SYNC OK] task ID=${taskId} → new_id=${newTaskId} action=${taskResult.action}`);
     totalAffected += 1;
     counters.task += 1;
 
@@ -1564,7 +1576,6 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
             if (userResult && userResult.action !== 'skipped') {
               totalAffected += 1;
               counters.usersInsertedOrUpdated += 1;
-              logger.info(`[user] userId=${userRow.UserId} action=${userResult?.action}`);
             }
           } catch (userErr) {
             counters.warnings += 1;
@@ -1590,11 +1601,10 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
       stage = 'systemLog.create';
       const logResult = await this.systemLogsModel.createLogForTask(
         { idTask: newTaskId, userInfo: createdBy, createdAt },
-        transaction,
+        null, // Run outside main transaction to prevent deadlock aborts
       );
 
       if (logResult.success) {
-        logger.info(`[log] logId=${logResult.logId} created=true`);
         totalAffected += 1;
         counters.logsCreated += 1;
       } else {
@@ -1615,13 +1625,7 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
       );
     }
 
-    // ── 4. File + Comment sync via linked outgoing document ───────
     const vbId = stagingRow?.VBId ? String(stagingRow.VBId).trim() : null;
-
-    // ── 4a. Ghi dữ liệu file đính kèm vào Database ──────────────
-    stage = 'files.applyPreparedTaskFiles';
-    await this.applyPreparedTaskFiles(preparedFiles, newTaskId, stagingRow, transaction);
-    counters.filesApplied += Array.isArray(preparedFiles) ? preparedFiles.length : 0;
 
     // ── 4b. Comment sync ───────────────────────────────────────
     if (vbId) {
@@ -1643,9 +1647,6 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
                 transaction,
               );
               if (!result) continue;
-              logger.info(
-                `[AggregateSync][Comment] table=${commentModel?.oldDbTable} taskId=${taskId} newTaskId=${newTaskId} inserted=${result?.inserted || 0} updated=${result?.updated || 0}`,
-              );
               totalAffected += Number(result.inserted || 0);
               totalAffected += Number(result.updated || 0);
               counters.commentInsertedOrUpdated += Number(result.inserted || 0);
@@ -1666,9 +1667,7 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
       }
     }
 
-    logger.info(
-      `[StreamTaskOut][AGG_SUMMARY] taskIdBak=${taskId}, newTaskId=${newTaskId}, action=${taskResult.action}, task=${counters.task}, users=${counters.usersInsertedOrUpdated}, logs=${counters.logsCreated}, files=${counters.filesApplied}, comments=${counters.commentInsertedOrUpdated}, warnings=${counters.warnings}, totalAffected=${Math.max(1, totalAffected)}`
-    );
+    // Removed high-frequency row-by-row AGG_SUMMARY log
 
     return {
       action: taskResult.action,

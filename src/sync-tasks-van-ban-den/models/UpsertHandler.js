@@ -100,7 +100,7 @@ class UpsertHandler {
                 createdAt,
                 userInfo: createdBy
               },
-              transaction
+              null // Run outside main transaction to prevent deadlocks
             )
             : { success: true, inserted: 0, updated: 0, total: 0 };
 
@@ -114,7 +114,7 @@ class UpsertHandler {
                 userInfo: createdBy,
                 note: `Auto sync from TaskVBDen ID=${taskId}`
               },
-              transaction
+              null // Run outside main transaction to prevent deadlocks
             );
             affected += 1;
           }

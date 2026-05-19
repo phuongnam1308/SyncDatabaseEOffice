@@ -340,7 +340,7 @@ class StreamTaskMigrationModel extends BaseModel {
         );
         
         const currentTaskId = Number(existing[0].id);
-        logger.info(`[StreamTaskMigrationModel.processSingleRecord] Updated task ${backupId}`);
+        // logger.info(`[StreamTaskMigrationModel.processSingleRecord] Updated task ${backupId}`);
         return { action: 'updated', idTaskBak: backupId, newTaskId: existing[0].id };
       } else {
         // 3b. Insert new - WITH ALL COLUMNS + SCOPE_IDENTITY VERIFICATION
@@ -414,7 +414,7 @@ class StreamTaskMigrationModel extends BaseModel {
           throw new Error(msg);
         }
         
-        logger.info(`[StreamTaskMigrationModel.processSingleRecord] Inserted task ${backupId} with new ID ${newId}`);
+        // logger.info(`[StreamTaskMigrationModel.processSingleRecord] Inserted task ${backupId} with new ID ${newId}`);
         return { action: 'inserted', idTaskBak: backupId, newTaskId: newId, createdBy: mapped.created_by, createdAt: mapped.created_at };
       }
     } catch (error) {
