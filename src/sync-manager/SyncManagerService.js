@@ -1087,8 +1087,8 @@ class SyncManagerService {
           batchProcessed += affected;
           if (res.success) {
             batchSuccess += affected;
-            const recordTime = this.extractRecordTime(res.record);
-            const recordId = this.extractRecordId(res.record);
+            const recordTime = res.result?.lastSyncTime || this.extractRecordTime(res.record);
+            const recordId = (res.result && res.result.lastSyncId) ? res.result.lastSyncId : this.extractRecordId(res.record);
             if (recordTime && this.compareCursor(recordTime, recordId, cursorTime, cursorId) !== 0) {
               cursorTime = recordTime;
               cursorId = recordId;

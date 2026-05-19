@@ -45,7 +45,7 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
    */
   async initialize() {
     await super.initialize();
-    await this.ensureStagingTableExists();
+    // await this.ensureStagingTableExists();
   }
 
   /**

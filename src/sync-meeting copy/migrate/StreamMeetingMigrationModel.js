@@ -43,11 +43,11 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     try {
       console.log(`[StreamMeetingMigrationModel] Initializing...`);
       await super.initialize();
-      await this.ensureStagingTableExists();
-      await this.ensureMeetingsColumnsExist();
-      await this.ensureMeetingParticipantsTableExists();
-      await this.ensureDefaultRoomExists();
-      await this.ensureAuditTableExists();
+      // await this.ensureStagingTableExists();
+      // await this.ensureMeetingsColumnsExist();
+      // await this.ensureMeetingParticipantsTableExists();
+      // await this.ensureDefaultRoomExists();
+      // await this.ensureAuditTableExists();
       console.log(`[StreamMeetingMigrationModel] Initialization complete.`);
     } catch (error) {
       console.error(`[StreamMeetingMigrationModel] ❌ Initialization failed: ${error.message}`);

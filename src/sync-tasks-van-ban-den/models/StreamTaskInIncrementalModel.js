@@ -289,10 +289,10 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
 
     try {
       // FIX: Ensure staging table exists FIRST before any column checks or model inits
-      await withDeadlockRetry(() => this.ensureStagingTableExists(), 'ensureStagingTableExists');
+      // await withDeadlockRetry(() => this.ensureStagingTableExists(), 'ensureStagingTableExists');
 
       // ADD: Ensure all necessary columns exist (e.g. ItemId)
-      await withDeadlockRetry(() => this.ensureStagingTableColumns(), 'ensureStagingTableColumns');
+      // await withDeadlockRetry(() => this.ensureStagingTableColumns(), 'ensureStagingTableColumns');
 
       // Late require to break potential circular dependencies
       const StreamTaskMigrationModel = require('./StreamTaskMigrationModel');
@@ -312,11 +312,11 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       const helper = new MigrationHelper(this.queryNewDbTx.bind(this), this.queryOldDb.bind(this));
 
       // FIX (Self-healing): Ensure technical columns exist in staging table
-      await helper.ensureColumnsExist(this.newDbName, this.newTableSync, {
-        MigrateFlg: 'NVARCHAR(MAX) NULL',
-        MigrateErrFlg: 'NVARCHAR(MAX) NULL',
-        MigrateErrMess: 'NVARCHAR(MAX) NULL',
-      });
+      // await helper.ensureColumnsExist(this.newDbName, this.newTableSync, {
+      //   MigrateFlg: 'NVARCHAR(MAX) NULL',
+      //   MigrateErrFlg: 'NVARCHAR(MAX) NULL',
+      //   MigrateErrMess: 'NVARCHAR(MAX) NULL',
+      // });
 
       this._fileService = new FileService(this.newPool);
 
@@ -328,6 +328,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       await baseCommentModel.initialize();
 
       // Äáº£m báº£o 2 cá»™t backup tá»“n táº¡i trong document_comments
+      /*
       await baseCommentModel.queryNewDb(`
         IF NOT EXISTS (
           SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
@@ -343,6 +344,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
           ALTER TABLE ${process.env.NEW_DB_NAME}.dbo.document_comments
             ADD table_bak NVARCHAR(255) NULL;
       `);
+      */
 
       this._syncCommentModel = COMMENT_TABLES.map((table) => {
         const model = new SyncCommentModel(table);
@@ -724,7 +726,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       logger.info('[StreamTaskInIncrementalModel] task_sync dropped for rebuild');
 
       // Re-use ensureStagingTableExists to create fresh
-      await this.ensureStagingTableExists();
+      // await this.ensureStagingTableExists();
     }, 'rebuildStagingTable');
   }
 

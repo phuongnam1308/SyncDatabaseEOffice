@@ -224,10 +224,10 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
 
     try {
       // FIX: Ensure staging table exists FIRST before any model inits
-      await withDeadlockRetry(() => this.ensureStagingTableExists(), 'ensureStagingTableExists');
+      // await withDeadlockRetry(() => this.ensureStagingTableExists(), 'ensureStagingTableExists');
 
       // ADD: Ensure all necessary columns exist (e.g. ItemId)
-      await withDeadlockRetry(() => this.ensureStagingTableColumns(), 'ensureStagingTableColumns');
+      // await withDeadlockRetry(() => this.ensureStagingTableColumns(), 'ensureStagingTableColumns');
 
       // Late require to break potential circular dependencies
       const StreamTaskMigrationModel = require('./StreamTaskMigrationModel');
@@ -254,6 +254,7 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
       await baseCommentModel.initialize();
 
       // Đảm bảo 2 cột backup tồn tại trong document_comments (dùng chung với In model)
+      /*
       await baseCommentModel.queryNewDb(`
         IF NOT EXISTS (
           SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
@@ -268,7 +269,8 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
         )
           ALTER TABLE ${process.env.NEW_DB_NAME}.dbo.document_comments
             ADD table_bak NVARCHAR(255) NULL;
-      `); // Kết thúc chuỗi SQL trước khi gọi logger
+      `);
+      */ // Kết thúc chuỗi SQL trước khi gọi logger
       logger.debug('[StreamTaskOutIncrementalModel] Comment backup columns ensured.');
 
       this._syncCommentModel = COMMENT_TABLES.map((table) => {
@@ -555,7 +557,7 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
       await this.queryNewDb(dropQuery);
       logger.info('[StreamTaskOutIncrementalModel] task_sync_out dropped for rebuild');
 
-      await this.ensureStagingTableExists();
+      // await this.ensureStagingTableExists();
     }, 'rebuildStagingTable');
   }
 

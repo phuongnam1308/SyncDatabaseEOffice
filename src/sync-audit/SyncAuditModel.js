@@ -163,8 +163,8 @@ class SyncAuditModel extends BaseModel {
         }
 
         if (sqlScript) {
-          await this.queryNewDb(sqlScript);
-          logger.info('[SyncAuditModel] Global audit schema check/migration completed once (optimized).');
+          // await this.queryNewDb(sqlScript);
+          logger.info('[SyncAuditModel] Global audit schema check/migration skipped.');
         }
 
       } catch (err) {

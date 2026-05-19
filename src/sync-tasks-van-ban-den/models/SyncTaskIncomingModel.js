@@ -36,7 +36,7 @@ class SyncTaskIncomingModel {
     this.extractor.oldPool = this.oldPool;
     this.extractor.newPool = this.newPool;
     await this.extractor.initialize();
-    await this.extractor.ensureStagingTableExists(this.instanceId);
+    // await this.extractor.ensureStagingTableExists(this.instanceId);
 
     this.loader = new Loader(this.newPool, this.oldPool);
     await this.loader.initialize();

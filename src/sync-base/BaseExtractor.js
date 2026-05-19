@@ -221,9 +221,12 @@ class BaseExtractor {
       // 1. Get column types for OPENJSON WITH clause
       const typeMap = await this._getStagingColumnTypes(stagingTable);
 
-      // 2. Extract valid columns
-      const columns = Object.keys(rows[0] || {}).filter(col => !String(col).startsWith('__'));
-      const nonIdColumns = columns.filter(col => col !== 'ID');
+      const excludeColumnsLower = new Set(['migrateflg', 'migrateerrflg', 'migrateerrmess']);
+      const columns = Object.keys(rows[0] || {}).filter(col => {
+        const lower = String(col).toLowerCase();
+        return !lower.startsWith('__') && !excludeColumnsLower.has(lower);
+      });
+      const nonIdColumns = columns.filter(col => String(col).toLowerCase() !== 'id');
 
       const safeColumns = columns.map(col => this.sanitizeColumnName(col));
       const safeNonIdColumns = nonIdColumns.map(col => this.sanitizeColumnName(col));

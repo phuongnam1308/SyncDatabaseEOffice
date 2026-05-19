@@ -12,7 +12,7 @@ class Extractor {
 
   async initialize(newPool) {
     this.newPool = newPool;
-    await this.ensureStagingTableExists();
+    // await this.ensureStagingTableExists();
   }
 
   async ensureStagingTableExists() {

@@ -54,7 +54,7 @@ class SyncUnitDraftModel extends BaseSyncModel {
     this.extractor.newPool = this.newPool;
 
     // Ensure staging table exists
-    await this.extractor.ensureStagingTableExists(instanceId);
+    // await this.extractor.ensureStagingTableExists(instanceId);
 
     logger.info(`[${this.modelName}] Initialized with instanceId=${instanceId}`);
     logger.info(`[${this.modelName}] Sites configured:`, this.extractor.sites.map(s => s.name).join(', '));
