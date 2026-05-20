@@ -164,7 +164,7 @@ class SyncAuditModel extends BaseModel {
 
         if (sqlScript) {
           await this.queryNewDb(sqlScript);
-          logger.info('[SyncAuditModel] Global audit schema check/migration completed once (optimized).');
+          // logger.info('[SyncAuditModel] Global audit schema check/migration completed once (optimized).');
         }
 
       } catch (err) {
@@ -917,7 +917,7 @@ class SyncAuditModel extends BaseModel {
       transaction
     );
 
-    logger.info(`[SyncAuditModel] Updated audit row successfully: doc=${data.document_id} originId=${data.origin_id} table=${this.oldDbTable}`);
+    // logger.info(`[SyncAuditModel] Updated audit row successfully: doc=${data.document_id} originId=${data.origin_id} table=${this.oldDbTable}`);
 
     return existingId;
   }
@@ -991,9 +991,9 @@ class SyncAuditModel extends BaseModel {
       }
     }
     
-    if (results.length > 0) {
-      logger.info(`[SyncAuditModel] Bulk inserted ${results.length} audit rows successfully for table=${this.oldDbTable}`);
-    }
+    // if (results.length > 0) {
+    //   logger.info(`[SyncAuditModel] Bulk inserted ${results.length} audit rows successfully for table=${this.oldDbTable}`);
+    // }
     
     return results;
   }

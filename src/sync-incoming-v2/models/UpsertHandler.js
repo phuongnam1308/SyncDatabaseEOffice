@@ -505,12 +505,12 @@ class UpsertHandler {
 
           try {
             const result = await model.processSingleRecord(rawAudit, documentId, transaction, drafter);
-            if (result) {
-              logger.info(
-                `[UpsertHandler:Incoming][Audit] table=${tableName} documentId=${documentId} ` +
-                `inserted=${result?.inserted || 0} updated=${result?.updated || 0}`
-              );
-            }
+            // if (result) {
+            //   logger.info(
+            //     `[UpsertHandler:Incoming][Audit] table=${tableName} documentId=${documentId} ` +
+            //     `inserted=${result?.inserted || 0} updated=${result?.updated || 0}`
+            //   );
+            // }
           } catch (auditErr) {
             if (dbUtils.isRetryableSqlError(auditErr)) throw auditErr;
             logger.warn(`[UpsertHandler:Incoming][Audit] Error table=${tableName}: ${auditErr.message}`);
@@ -585,7 +585,7 @@ class UpsertHandler {
         table_backups: 'auto_create'
       }, transaction);
 
-      logger.info(`[UpsertHandler:Incoming][AutoAudit] Created initial CREATE audit for documentId=${documentId}`);
+      // logger.info(`[UpsertHandler:Incoming][AutoAudit] Created initial CREATE audit for documentId=${documentId}`);
     } catch (autoAuditErr) {
       if (dbUtils.isRetryableSqlError(autoAuditErr)) throw autoAuditErr;
       logger.warn(`[UpsertHandler:Incoming][AutoAudit] Failed for documentId=${documentId}: ${autoAuditErr.message}`);

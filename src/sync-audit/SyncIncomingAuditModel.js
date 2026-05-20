@@ -219,8 +219,8 @@ class SyncIncomingAuditModel extends SyncAuditModel {
         }, transaction);
       }
     }
-    logger.info(`[SyncIncomingAuditModel] Sync current_state success: doc=${document_id}`);
-    logger.info(`[SyncIncomingAuditModel] Sync current_state success: doc=${document_id} status=${stage_status}`);
+    // logger.info(`[SyncIncomingAuditModel] Sync current_state success: doc=${document_id}`);
+    // logger.info(`[SyncIncomingAuditModel] Sync current_state success: doc=${document_id} status=${stage_status}`);
   }
 
   // ---------------------------------------------------------------------------
