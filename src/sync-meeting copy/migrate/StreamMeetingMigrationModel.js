@@ -43,11 +43,11 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     try {
       console.log(`[StreamMeetingMigrationModel] Initializing...`);
       await super.initialize();
-      await this.ensureStagingTableExists();
-      await this.ensureMeetingsColumnsExist();
-      await this.ensureMeetingParticipantsTableExists();
-      await this.ensureDefaultRoomExists();
-      await this.ensureAuditTableExists();
+      // await this.ensureStagingTableExists();
+      // await this.ensureMeetingsColumnsExist();
+      // await this.ensureMeetingParticipantsTableExists();
+      // await this.ensureDefaultRoomExists();
+      // await this.ensureAuditTableExists();
       console.log(`[StreamMeetingMigrationModel] Initialization complete.`);
     } catch (error) {
       console.error(`[StreamMeetingMigrationModel] ❌ Initialization failed: ${error.message}`);
@@ -692,7 +692,7 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
 
     // 3. Keyword Match (H hardened)
     if (discoveredIds.length === 0) {
-      const keywords = ['Lịch họp', 'Đăng ký họp'];
+      const keywords = ['Lịch họp', 'Đăng ký họp', 'Lịchhọp', 'Lịch công tác'];
       const patterns = keywords.map(k => `tp_Title LIKE N'%${k}%'`).join(' OR ');
       const query = `
           SELECT tp_ID, tp_Title

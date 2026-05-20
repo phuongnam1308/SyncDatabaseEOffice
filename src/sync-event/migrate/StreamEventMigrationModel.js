@@ -52,8 +52,8 @@ class StreamEventMigrationModel extends BaseIncrementalSyncInterface {
     // 🔥 Cache Source Schema to prevent "Invalid column name" errors
     await this.cacheSourceSchema();
 
-    await this.ensureStagingTableExists();
-    await this.ensureTargetColumnsExist();
+    // await this.ensureStagingTableExists();
+    // await this.ensureTargetColumnsExist();
     console.log(`[StreamEventMigrationModel] Initialization complete.`);
   }
 

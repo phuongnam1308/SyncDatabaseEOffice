@@ -17,75 +17,16 @@ class Extractor extends BaseExtractor {
   }
 
   /**
-   * Get cursor comparison direction
-   * Outgoing uses ASC (incremental sync, older to newer)
-   */
-  getCursorDirection() {
-    return 'ASC';
-  }
-
-  /**
-   * Get SQL expression that normalizes source sync time.
-   * Since the old DB format is strictly 'yyyy-MM-dd HH:mm:ss.fff', we use style 121
-   * for the fastest and most optimal conversion.
-   */
-  getSyncTimeExpression() {
-    return `
-      ISNULL(
-        TRY_CONVERT(datetime2, Modified, 121),
-        ISNULL(
-          TRY_CONVERT(datetime2, Created, 121),
-          '1753-01-01'
-        )
-      )
-    `;
-  }
-
-  /**
-   * Get the last successfully extracted record's cursor from the staging table.
-   * Finds the maximum __sync_time and __sync_id of records already in staging.
-   */
-  async getLastSyncCursor(instanceId) {
-    const stagingTable = this.getStagingTableName(instanceId);
-    try {
-      const query = `
-        SELECT TOP 1 __sync_time, __sync_id
-        FROM ${stagingTable}
-        WHERE __sync_time IS NOT NULL AND __sync_id IS NOT NULL
-        ORDER BY __sync_time DESC, __sync_id DESC
-      `;
-      const result = await this.newPool.request().query(query);
-      if (result.recordset?.length > 0) {
-        const row = result.recordset[0];
-        return {
-          time: row.__sync_time ? new Date(row.__sync_time).toISOString() : null,
-          id: Number(row.__sync_id || 0)
-        };
-      }
-    } catch (error) {
-      logger.warn(`[${this.modelName}] getLastSyncCursor failed or staging table does not exist: ${error.message}`);
-    }
-    return { time: null, id: 0 };
-  }
-
-  /**
-   * Get initial sync time (earliest time) for ASC sync
-   */
-  getInitialSyncTime() {
-    return process.env.SYNC_MIN_DATE || '1753-01-01T00:00:00.000Z';
-  }
-
-  /**
    * Helper to get effective sync time handling epoch reset
    */
   _getEffectiveSyncTime(lastSyncTime) {
-    const defaultSyncTime = this.getInitialSyncTime();
+    const defaultSyncTime = '2999-12-31T23:59:59.999Z';
     const lastSyncDate = new Date(lastSyncTime);
     const isDateValid = !isNaN(lastSyncDate.getTime());
     const isValidTime = lastSyncTime && 
                         lastSyncTime !== '1970-01-01T00:00:00.000Z' &&
                         isDateValid &&
-                        lastSyncDate.getFullYear() > 1753;
+                        lastSyncDate.getFullYear() > 2000;
     
     return isValidTime ? lastSyncTime : defaultSyncTime;
   }
@@ -103,10 +44,10 @@ class Extractor extends BaseExtractor {
         AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
         AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
         AND (
-          ${syncTimeExpr} > @lastSyncTime
+          ${syncTimeExpr} < @lastSyncTime
           OR (
             ${syncTimeExpr} = @lastSyncTime
-            AND TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')) > @lastSyncId
+            AND TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')) < @lastSyncId
           )
         )
         AND ${syncTimeExpr} >= @syncMinDate
@@ -157,16 +98,16 @@ class Extractor extends BaseExtractor {
           ISNULL(__sync_id_num, 0) AS __sync_id,
           ROW_NUMBER() OVER (
             ORDER BY
-              __sync_time ASC,
-              ISNULL(__sync_id_num, 0) ASC,
-              ID ASC
+              __sync_time DESC,
+              ISNULL(__sync_id_num, 9223372036854775807) DESC,
+              ID DESC
           ) AS __page_rn
         FROM source_rows
         WHERE (
-          __sync_time > @lastSyncTime
+          __sync_time < @lastSyncTime
           OR (
             __sync_time = @lastSyncTime
-            AND ISNULL(__sync_id_num, 0) > @lastSyncId
+            AND ISNULL(__sync_id_num, 9223372036854775807) < @lastSyncId
           )
         )
         AND __sync_time >= @syncMinDate
@@ -231,10 +172,10 @@ class Extractor extends BaseExtractor {
       SELECT COUNT(1) AS total
       FROM source_rows
       WHERE (
-        __sync_time > @lastSyncTime
+        __sync_time < @lastSyncTime
         OR (
           __sync_time = @lastSyncTime
-          AND ISNULL(__sync_id_num, 0) > @lastSyncId
+          AND ISNULL(__sync_id_num, 9223372036854775807) < @lastSyncId
         )
       )
       AND __sync_time >= @syncMinDate
@@ -425,78 +366,7 @@ class Extractor extends BaseExtractor {
     }
   }
 
-  /**
-   * Sync batch of rows to staging table using IF EXISTS UPDATE ... ELSE INSERT
-   * (matching the original StreamOutgoingIncrementalModel approach)
-   */
-  async syncBatchToStaging(rows, instanceId, transaction = null) {
-    if (!Array.isArray(rows) || rows.length === 0) {
-      return { stagedCount: 0 };
-    }
 
-    const stagingTable = this.getStagingTableName(instanceId);
-    const internalColumns = new Set(['MigrateFlg', 'MigrateErrFlg', 'MigrateErrMess', '_sync_time_val', '_sync_id_val']);
-
-    const columns = Object.keys(rows[0] || {}).filter(col => !String(col).startsWith('__') && !internalColumns.has(col));
-    if (!columns.length) {
-      return { stagedCount: 0 };
-    }
-
-    if (!columns.includes('ID')) {
-      throw new Error('Staging sync requires source column "ID"');
-    }
-
-    const safeColumns = columns.map(col => this.sanitizeColumnName(col));
-    const nonIdColumns = columns.filter(col => col !== 'ID');
-    const safeNonIdColumns = nonIdColumns.map(col => this.sanitizeColumnName(col));
-
-    const request = transaction || this.newPool.request();
-
-    for (const row of rows) {
-      const rawId = row?.ID;
-      if (rawId == null || String(rawId).trim() === '') {
-        throw new Error('Row ID is required for staging');
-      }
-
-      const updateClause = safeNonIdColumns
-        .map((columnName, idx) => `${columnName} = @${nonIdColumns[idx]}`)
-        .join(', ');
-
-      const query = `
-        IF EXISTS (SELECT 1 FROM ${stagingTable} WHERE ID = @ID)
-        BEGIN
-          ${nonIdColumns.length > 0 ? `
-          UPDATE ${stagingTable}
-          SET ${updateClause},
-              MigrateFlg = 0,
-              MigrateErrFlg = 0,
-              MigrateErrMess = NULL
-          WHERE ID = @ID;` : `
-          UPDATE ${stagingTable}
-          SET MigrateFlg = 0,
-              MigrateErrFlg = 0,
-              MigrateErrMess = NULL
-          WHERE ID = @ID;`}
-        END
-        ELSE
-        BEGIN
-          INSERT INTO ${stagingTable} (${safeColumns.join(', ')})
-          VALUES (${columns.map((column) => `@${column}`).join(', ')});
-        END
-      `;
-
-      const subRequest = transaction ? transaction.request() : this.newPool.request();
-      for (const column of columns) {
-        subRequest.input(column, row[column]);
-      }
-      
-      await subRequest.query(query);
-      logger.info(`  └─ [Staging] ID: ${rawId} | Action: ${safeNonIdColumns.length > 0 ? 'UPSERT' : 'INSERT'}`);
-    }
-
-    logger.info(`[${this.modelName}] Synced ${rows.length} rows to staging table ${stagingTable}`);
-    return { stagedCount: rows.length };
-  }
 }
 
 module.exports = Extractor;

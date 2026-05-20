@@ -23,7 +23,7 @@ class FileRelationsModel extends BaseModel {
       
       // 1. Kiểm tra và tạo bảng chính file_relations nếu chưa có
       await this.queryDb(`
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '${this.mainTable}')
+        IF NOT EXISTS (SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '${this.mainTable}')
         BEGIN
             CREATE TABLE ${dbName}.dbo.${this.mainTable} (
                 id BIGINT IDENTITY(1,1) PRIMARY KEY,
@@ -35,25 +35,25 @@ class FileRelationsModel extends BaseModel {
                 is_certified_copy INT DEFAULT 0
             );
         END
-      `, {}, transaction);
+      `, {}, this.newPool ? null : transaction);
 
       // 2. Kiểm tra và bổ sung các cột missing cho bảng chính
       await this.queryDb(`
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.mainTable}' AND COLUMN_NAME = 'is_certified_copy')
+        IF NOT EXISTS (SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.mainTable}' AND COLUMN_NAME = 'is_certified_copy')
             ALTER TABLE ${dbName}.dbo.${this.mainTable} ADD is_certified_copy INT DEFAULT 0 NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.mainTable}' AND COLUMN_NAME = 'object_id_bak')
+        IF NOT EXISTS (SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.mainTable}' AND COLUMN_NAME = 'object_id_bak')
             ALTER TABLE ${dbName}.dbo.${this.mainTable} ADD object_id_bak NVARCHAR(MAX) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.mainTable}' AND COLUMN_NAME = 'file_id_bak')
+        IF NOT EXISTS (SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.mainTable}' AND COLUMN_NAME = 'file_id_bak')
             ALTER TABLE ${dbName}.dbo.${this.mainTable} ADD file_id_bak NVARCHAR(MAX) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.mainTable}' AND COLUMN_NAME = 'table_bak')
+        IF NOT EXISTS (SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.mainTable}' AND COLUMN_NAME = 'table_bak')
             ALTER TABLE ${dbName}.dbo.${this.mainTable} ADD table_bak NVARCHAR(MAX) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.mainTable}' AND COLUMN_NAME = 'type_doc')
+        IF NOT EXISTS (SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.mainTable}' AND COLUMN_NAME = 'type_doc')
             ALTER TABLE ${dbName}.dbo.${this.mainTable} ADD type_doc NVARCHAR(MAX) NULL;
-      `, {}, transaction);
+      `, {}, this.newPool ? null : transaction);
 
       // 3. Kiểm tra và tạo bảng staging file_relations2 nếu chưa có
       await this.queryDb(`
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '${this.stagingTable}')
+        IF NOT EXISTS (SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '${this.stagingTable}')
         BEGIN
             CREATE TABLE ${dbName}.dbo.${this.stagingTable} (
                 id BIGINT IDENTITY(1,1) PRIMARY KEY,
@@ -69,21 +69,21 @@ class FileRelationsModel extends BaseModel {
                 type_doc NVARCHAR(MAX) NULL
             );
         END
-      `, {}, transaction);
+      `, {}, this.newPool ? null : transaction);
 
       // 4. Kiểm tra và bổ sung các cột missing cho bảng staging (phòng hờ bảng đã có nhưng thiếu cột)
       await this.queryDb(`
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.stagingTable}' AND COLUMN_NAME = 'object_id_bak')
+        IF NOT EXISTS (SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.stagingTable}' AND COLUMN_NAME = 'object_id_bak')
             ALTER TABLE ${dbName}.dbo.${this.stagingTable} ADD object_id_bak NVARCHAR(MAX) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.stagingTable}' AND COLUMN_NAME = 'file_id_bak')
+        IF NOT EXISTS (SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.stagingTable}' AND COLUMN_NAME = 'file_id_bak')
             ALTER TABLE ${dbName}.dbo.${this.stagingTable} ADD file_id_bak NVARCHAR(MAX) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.stagingTable}' AND COLUMN_NAME = 'file_id_bak2')
+        IF NOT EXISTS (SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.stagingTable}' AND COLUMN_NAME = 'file_id_bak2')
             ALTER TABLE ${dbName}.dbo.${this.stagingTable} ADD file_id_bak2 NVARCHAR(MAX) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.stagingTable}' AND COLUMN_NAME = 'table_bak')
+        IF NOT EXISTS (SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.stagingTable}' AND COLUMN_NAME = 'table_bak')
             ALTER TABLE ${dbName}.dbo.${this.stagingTable} ADD table_bak NVARCHAR(MAX) NULL;
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.stagingTable}' AND COLUMN_NAME = 'type_doc')
+        IF NOT EXISTS (SELECT 1 FROM ${dbName}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${this.stagingTable}' AND COLUMN_NAME = 'type_doc')
             ALTER TABLE ${dbName}.dbo.${this.stagingTable} ADD type_doc NVARCHAR(MAX) NULL;
-      `, {}, transaction);
+      `, {}, this.newPool ? null : transaction);
 
       this._ensureColumnsDone = true;
     } catch(err) {

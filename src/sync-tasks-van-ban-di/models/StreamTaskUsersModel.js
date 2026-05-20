@@ -153,7 +153,7 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
           updateAt: mapped.update_at
         }, transaction);
 
-        logger.info(`[StreamTaskUsersModel] Updated task_user ${mapped.id_user_bak}`);
+        // logger.info(`[StreamTaskUsersModel] Updated task_user ${mapped.id_user_bak}`);
         return { action: 'updated', id_user_bak: mapped.id_user_bak, taskId: mapped.task_id };
       } else {
         // 3b. Insert new - WITH ALL 8 COLUMNS
@@ -190,7 +190,7 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
           throw new Error(msg);
         }
 
-        logger.info(`[StreamTaskUsersModel] Inserted task_user ${mapped.id_user_bak} with id=${newId}`);
+        // logger.info(`[StreamTaskUsersModel] Inserted task_user ${mapped.id_user_bak} with id=${newId}`);
         return { action: 'inserted', id_user_bak: mapped.id_user_bak, taskId: mapped.task_id, newId };
       }
     } catch (error) {

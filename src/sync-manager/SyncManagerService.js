@@ -973,7 +973,8 @@ class SyncManagerService {
       }
 
       // 2 vòng for: Outer loop theo batch size, Inner loop xử lý từng bản ghi
-      for (let offset = 0; offset < (job.totalToSync || Infinity); offset += job.batchSize) {
+      // 2 vòng for: Outer loop theo tiến trình thực tế, Inner loop xử lý song song các lô/bản ghi
+      for (let offset = 0; offset < (job.totalToSync || Infinity); ) {
         if (job.pauseRequested) { this.markJobPaused(job); return; }
 
         const now = this.now();
@@ -1080,11 +1081,14 @@ class SyncManagerService {
         const processedResults = await processTasks();
 
         for (const res of processedResults) {
-          batchProcessed += 1;
+          // Lấy số lượng bản ghi thực tế đã xử lý (mặc định là 1 nếu không báo cáo affected)
+          const affected = (res.result && typeof res.result.affected === 'number') ? res.result.affected : 1;
+          
+          batchProcessed += affected;
           if (res.success) {
-            batchSuccess += 1;
-            const recordTime = this.extractRecordTime(res.record);
-            const recordId = this.extractRecordId(res.record);
+            batchSuccess += affected;
+            const recordTime = res.result?.lastSyncTime || this.extractRecordTime(res.record);
+            const recordId = (res.result && res.result.lastSyncId) ? res.result.lastSyncId : this.extractRecordId(res.record);
             if (recordTime && this.compareCursor(recordTime, recordId, cursorTime, cursorId) !== 0) {
               cursorTime = recordTime;
               cursorId = recordId;
@@ -1098,6 +1102,10 @@ class SyncManagerService {
 
         job.totalProcessed += batchProcessed;
         job.totalSuccess += batchSuccess;
+        
+        // Quan trọng: Tiến tới offset tiếp theo dựa trên số lượng THỰC TẾ đã xử lý
+        offset += batchProcessed;
+
         job.lastSyncTime = cursorTime;
         job.lastSyncId = cursorId;
 
@@ -1132,7 +1140,8 @@ class SyncManagerService {
           break;
         }
 
-        if (records.length < job.batchSize) break;
+        // Điều kiện dừng: Nếu không còn bản ghi nào được xử lý trong vòng lặp này
+        if (batchProcessed === 0) break;
       }
       this.completeJob(job);
     } catch (error) {
