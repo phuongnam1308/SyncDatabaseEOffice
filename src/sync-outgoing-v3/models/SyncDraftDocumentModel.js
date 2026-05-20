@@ -52,7 +52,7 @@ class SyncDraftDocumentModel extends BaseSyncModel {
     this.extractor.newPool = this.newPool;
 
     // Ensure staging table exists
-    // await this.extractor.ensureStagingTableExists(instanceId);
+    await this.extractor.ensureStagingTableExists(instanceId);
 
     // Initialize upsert handler with pools
     this.upsertHandler = new DraftDocumentUpsertHandler(this.newPool, this.oldPool);

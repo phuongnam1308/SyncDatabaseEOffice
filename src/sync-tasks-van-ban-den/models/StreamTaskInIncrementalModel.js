@@ -1587,256 +1587,120 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
 
     logger.info(`[StreamTaskIn] [START] Processing batch of ${rows.length} records. ItemIndex=${itemIndex}`);
 
+    const stagingTableRef = this.getStagingTableRef();
     try {
-      const stagingTableRef = this.getStagingTableRef();
 
-      step = 'fetchOneFromStaging';
-      rowData = await this.fetchOneFromStaging();
 
-      if (!rowData) {
-        // Only log if we were actually expecting data (totalProcessed > 0 tells us we worked)
-        // or just make it silent if we've already logged once.
-        if (!this._finishedLogged) {
-          logger.info(`[StreamTaskIn] No more data in staging for job ${syncJobId}`);
-          const expected = Number(jobState?.total_to_sync || 0);
-          const processed = Number(jobState?.total_processed || 0);
-          if (expected > processed) {
-            logger.warn(
-              `[StreamTaskIn][gap] processed=${processed}/${expected}, missing=${expected - processed}`,
-            );
-          }
-          try {
-            const diag = await this.queryNewDb(
-              `
-              SELECT
-                COUNT(1) AS pending_total,
-                SUM(CASE WHEN ISNULL(MigrateErrFlg, 0) = 1 THEN 1 ELSE 0 END) AS pending_err,
-                SUM(CASE WHEN ISNULL(MigrateErrFlg, 0) = 0 THEN 1 ELSE 0 END) AS pending_clean
-              FROM ${stagingTableRef}
-              WHERE ISNULL(MigrateFlg, 0) = 0
-                AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) >= @startDate OR @startDate IS NULL)
-                AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) <= @endDate OR @endDate IS NULL)
-            `,
-              {
-                startDate: process.env.SYNC_START_DATE || null,
-                endDate: process.env.SYNC_END_DATE || null,
-              },
-            );
-            const d = diag?.[0] || {};
-            logger.info(
-              `[StreamTaskIn][diag] pending_total=${Number(d.pending_total || 0)}, pending_clean=${Number(d.pending_clean || 0)}, pending_err=${Number(d.pending_err || 0)}`,
-            );
 
-            const samplePending = await this.queryNewDb(
-              `
-              SELECT TOP (20) ID, Created, Modified, MigrateFlg, MigrateErrFlg, MigrateErrMess
-              FROM ${stagingTableRef}
-              WHERE ISNULL(MigrateFlg, 0) = 0
-                AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) >= @startDate OR @startDate IS NULL)
-                AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) <= @endDate OR @endDate IS NULL)
-              ORDER BY TRY_CONVERT(datetime2, Modified) DESC,
-                       TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(ID)), '')) DESC
-            `,
-              {
-                startDate: process.env.SYNC_START_DATE || null,
-                endDate: process.env.SYNC_END_DATE || null,
-              },
-            );
-            if (Array.isArray(samplePending) && samplePending.length > 0) {
-              logger.warn(`[StreamTaskIn][pending-sample] ${JSON.stringify(samplePending)}`);
-            }
 
-            const sampleError = await this.queryNewDb(
-              `
-              SELECT TOP (20) ID, Created, Modified, MigrateFlg, MigrateErrFlg, MigrateErrMess
-              FROM ${stagingTableRef}
-              WHERE ISNULL(MigrateErrFlg, 0) = 1
-                AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) >= @startDate OR @startDate IS NULL)
-                AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) <= @endDate OR @endDate IS NULL)
-              ORDER BY TRY_CONVERT(datetime2, Modified) DESC,
-                       TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(ID)), '')) DESC
-            `,
-              {
-                startDate: process.env.SYNC_START_DATE || null,
-                endDate: process.env.SYNC_END_DATE || null,
-              },
-            );
-            if (Array.isArray(sampleError) && sampleError.length > 0) {
-              logger.warn(`[StreamTaskIn][error-sample] ${JSON.stringify(sampleError)}`);
-            }
-          } catch (diagErr) {
-            logger.warn(`[StreamTaskIn][diag] failed: ${diagErr.message}`);
-          }
-          this._finishedLogged = true;
+      const successIds = [];
+      const failedRecords = [];
+
+      // Pre-download files from SharePoint (outside SQL transaction)
+      step = 'prepareTaskFilesFromSharePoint';
+      const preparedFilesMap = new Map();
+      for (const row of rows) {
+        try {
+          const files = await this.prepareTaskFilesFromSharePoint(row);
+          preparedFilesMap.set(row.ID, files);
+        } catch (fileErr) {
+          logger.warn(`[StreamTaskIn] File prepare failed for ID=${row.ID}: ${fileErr.message}`);
+          preparedFilesMap.set(row.ID, []);
         }
-        await this.finalizeProcessingCursor(syncJobId);
-        return {
-          syncJobId,
-          processed: false,
-          done: true,
-        };
       }
 
-      const rowId = rowData.ID || null;
-      const current = Number(jobState?.total_processed || 0) + 1;
-      logger.info(
-        `[${this.modelName}] [START] Processing started: ID=${rowId}, nextProcessedCounter=${current}`,
-      );
-      // --- BÆ¯á»šC Má»šI: Táº£i file tá»« SharePoint (NGOÃ€I giao dá»‹ch SQL) ---
-      step = 'prepareTaskFilesFromSharePoint';
-      const preparedFiles = await this.prepareTaskFilesFromSharePoint(rowData);
       stopHeartbeat = startHeartbeatLoop(
-        () => this.updateHeartbeat(rowId),
+        () => this.updateHeartbeat(rows[0]?.ID),
         this.heartbeatIntervalMs,
       );
-    }
 
-    const successIds = [];
-    const failedRecords = [];
-    const successfulDocs = [];
-
-    // 3. Try whole-batch processing inside a single SQL transaction for top speed
-    let batchSuccess = true;
-    let transaction = null;
-    try {
-      transaction = new sql.Transaction(this.newPool);
-      await transaction.begin();
-
+      // 3. Sequential processing per row
       for (const row of rows) {
-        const result = await this.processRowData(row, { transaction, preparedFiles: [], syncJobId });
-        successfulDocs.push({ row, result });
+        try {
+          let docResult = null;
+          await dbUtils.withTransactionRetry(this.newPool, async (tx) => {
+            docResult = await this.processRowData(row, {
+              transaction: tx,
+              preparedFiles: preparedFilesMap.get(row.ID) || [],
+              syncJobId,
+            });
+          }, { maxRetries: 3 });
+
+          if (docResult) {
+            successIds.push(row.ID);
+            try {
+              await this.applyPreparedTaskFiles(
+                preparedFilesMap.get(row.ID) || [],
+                docResult.newTaskId,
+                row,
+                null,
+              );
+            } catch (fileErr) {
+              logger.warn(`[StreamTaskIn] File upload failed for task ${docResult.newTaskId}: ${fileErr.message}`);
+            }
+          }
+        } catch (singleError) {
+          logger.error(`[StreamTaskIn] Row processing failed for ID=${row.ID}: ${singleError.message}`);
+          failedRecords.push({ id: row.ID, error: singleError.message });
+        }
       }
 
-      // Update counters in sync_jobs
-      step = 'updateSyncJobsCounter';
-      await this.queryNewDbTx(
-        `UPDATE sync_jobs
-         SET total_processed = ISNULL(total_processed, 0) + 1,
-             total_success   = ISNULL(total_success, 0) + 1
-         WHERE job_id = @syncJobId`,
-        { syncJobId },
-        transaction,
+      // 4. Parent relation bulk backfill
+      if (successIds.length > 0) {
+        try {
+          await this.taskModel.resolveParentRelation();
+        } catch (parentErr) {
+          logger.warn(`[StreamTaskIn] Parent relation bulk mapping warning: ${parentErr.message}`);
+        }
+      }
+
+      // 5. Update staging state & sync job counters
+      if (successIds.length > 0) {
+        await this.markBatchSuccess(successIds);
+        await this.queryNewDb(
+          `UPDATE sync_jobs
+           SET total_processed = ISNULL(total_processed, 0) + @count,
+               total_success   = ISNULL(total_success, 0) + @count
+           WHERE job_id = @syncJobId`,
+          { count: successIds.length, syncJobId }
+        );
+      }
+
+      if (failedRecords.length > 0) {
+        await this.markBatchFailed(failedRecords);
+        await this.queryNewDb(
+          `UPDATE sync_jobs
+           SET total_processed = ISNULL(total_processed, 0) + @count,
+               total_errors    = ISNULL(total_errors, 0) + @count
+           WHERE job_id = @syncJobId`,
+          { count: failedRecords.length, syncJobId }
+        );
+      }
+
+      logger.info(
+        `[StreamTaskIn] Batch finished: total=${rows.length}, success=${successIds.length}, failed=${failedRecords.length}`
       );
-
-      // Mark staging row as processed successfully
-      step = 'markStagingProcessed';
-      await markRowSuccess(this, {
-        tableRef: stagingTableRef,
-        keyWhere: 'ID = @ID',
-        params: { ID: rowId },
-        transaction,
-        rowToken: `ID=${rowId}`,
-        label: this.modelName,
-      });
-
-      step = 'commitTransaction';
-      await transaction.commit();
 
       return {
         syncJobId,
         processed: true,
         done: false,
-        rowId,
-        result,
+        affected: successIds.length
       };
     } catch (error) {
       if (stopHeartbeat) {
         stopHeartbeat();
         stopHeartbeat = null;
       }
-    } catch (batchError) {
-      batchSuccess = false;
-      logger.error(`[StreamTaskIn] Batch transaction failed, falling back to sequential: ${batchError.message}`);
-      if (transaction) {
-        try {
-          await transaction.rollback().catch(() => {});
-        } catch (rollbackError) {}
-      }
-
-      if (rowData && rowData.ID) {
-        try {
-          step = 'markStagingError';
-            rowToken: `ID=${rowData.ID}`,
-            errorMessage: error.message,
-            label: this.modelName,
-          });
-        } catch (updateErr) {}
-      }
-
       logger.error(
-        `[StreamTaskIn._processOneAttempt] Failed at step=${step}, row ID=${rowData?.ID || 'N/A'}: ${error.message}`,
+        `[StreamTaskIn._processBatchAttempt] Failed at step=${step}: ${error.message}`,
       );
       throw error;
-    }
-
-    // 4. Sequential fallback to isolate and identify failed records independently
-    if (!batchSuccess) {
-      for (const row of rows) {
-        try {
-          let docResult = null;
-
-          await dbUtils.withTransactionRetry(this.newPool, async (tx) => {
-            docResult = await this.processRowData(row, { transaction: tx, preparedFiles: [], syncJobId });
-          }, { maxRetries: 3 });
-          if (docResult) {
-            successIds.push(row.ID);
-            const preparedFiles = preparedFilesMap.get(row.ID) || [];
-            preparedFilesMap.delete(row.ID); // GC optimization
-            try {
-              await this.applyPreparedTaskFiles(preparedFiles, docResult.newTaskId, row, null);
-            } catch (fileErr) {
-              logger.warn(`[StreamTaskIn] File upload failed for task ${docResult.newTaskId}: ${fileErr.message}`);
-            }
-          }
-        } catch (singleError) {
-          logger.error(`[StreamTaskIn] Sequential fallback failed for ID=${row.ID}: ${singleError.message}`);
-          failedRecords.push({ id: row.ID, error: singleError.message });
-        }
+    } finally {
+      if (stopHeartbeat) {
+        stopHeartbeat();
       }
     }
-
-    // 4.5. Bulk backfill parent relationships for the whole batch
-    if (successIds.length > 0) {
-      try {
-        await this.taskModel.resolveParentRelation();
-      } catch (parentErr) {
-        logger.warn(`[StreamTaskIn] Parent relation bulk mapping warning: ${parentErr.message}`);
-      }
-    }
-
-    // 5. Update Staging state & Sync Job state
-    if (successIds.length > 0) {
-      await this.markBatchSuccess(successIds);
-      await this.queryNewDb(
-        `UPDATE sync_jobs
-         SET total_processed = ISNULL(total_processed, 0) + @count,
-             total_success   = ISNULL(total_success, 0) + @count
-         WHERE job_id = @syncJobId`,
-        { count: successIds.length, syncJobId }
-      );
-    }
-
-    if (failedRecords.length > 0) {
-      await this.markBatchFailed(failedRecords);
-      await this.queryNewDb(
-        `UPDATE sync_jobs
-         SET total_processed = ISNULL(total_processed, 0) + @count,
-             total_errors    = ISNULL(total_errors, 0) + @count
-         WHERE job_id = @syncJobId`,
-        { count: failedRecords.length, syncJobId }
-      );
-    }
-
-    logger.info(
-      `[StreamTaskIn] Batch finished: total=${rows.length}, success=${successIds.length}, failed=${failedRecords.length}`
-    );
-
-    return {
-      syncJobId,
-      processed: true,
-      done: false,
-      affected: successIds.length
-    };
   }
 
   /**
