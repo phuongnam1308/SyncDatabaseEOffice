@@ -114,13 +114,17 @@ class SyncUnitDraftModel extends BaseSyncModel {
     }
 
     let totalExtracted = 0;
-    let lastSyncTime = '2999-12-31T23:59:59.999Z';
-    let lastSyncId = 0;
+    
+    // Get last sync cursor from staging table to support incremental resume (ASC)
+    const lastCursor = await this.extractor.getLastSyncCursor(this.instanceId);
+    let lastSyncTime = lastCursor.time || this.extractor.getInitialSyncTime();
+    let lastSyncId = lastCursor.id || 0;
     let hasMore = true;
 
     // Update extractor to only use sites with data
     this.extractor.sites = sitesWithData;
     logger.info(`[${this.modelName}] Will sync from:`, sitesWithData.map(s => `${s.name} (${s.itemCount})`).join(', '));
+    logger.info(`[${this.modelName}] Resuming extraction from cursor: time=${lastSyncTime}, id=${lastSyncId}`);
 
     while (hasMore && !this.shouldStop) {
       try {
@@ -141,7 +145,7 @@ class SyncUnitDraftModel extends BaseSyncModel {
         // Update cursor to last row in batch
         const lastRow = batch[batch.length - 1];
         lastSyncTime = lastRow.__sync_time;
-        lastSyncId = lastRow.ID;
+        lastSyncId = lastRow.__sync_id || lastRow.ID;
 
         logger.info(`[${this.modelName}] Extracted ${totalExtracted} records...`);
 

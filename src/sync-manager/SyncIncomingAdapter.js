@@ -97,20 +97,33 @@ class SyncIncomingAdapter {
     let extractedCount = 0;
     let hasMore = true;
 
-    // Default to min date (ASC ordering starts from oldest)
-    const DEFAULT_SYNC_TIME = '1753-01-01T00:00:00.000Z';
+    // Get last sync cursor from staging table to support incremental resume (ASC)
+    const lastCursor = await this._model.extractor.getLastSyncCursor(this._instanceId);
+    let cursorTime = lastCursor.time;
+    let cursorId = lastCursor.id || 0;
 
-    // Handle max date (2100-01-01) or invalid as "reset" - use default (1753) for ASC sync
-    const lastSyncDate = new Date(lastSyncTime);
-    const isDateValid = !isNaN(lastSyncDate.getTime());
-    const isValidTime = lastSyncTime && 
-                        lastSyncTime !== '2100-01-01T00:00:00.000Z' &&
-                        isDateValid &&
-                        lastSyncDate.getFullYear() > 1900 &&
-                        lastSyncDate.getFullYear() < 2100; // Reasonable range
+    // If staging has no cursor, fallback to lastSyncTime passed by manager, or getInitialSyncTime
+    if (!cursorTime) {
+      const lastSyncDate = new Date(lastSyncTime);
+      const isDateValid = !isNaN(lastSyncDate.getTime());
+      const isValidTime = lastSyncTime && 
+                          lastSyncTime !== '1970-01-01T00:00:00.000Z' &&
+                          lastSyncTime !== '2100-01-01T00:00:00.000Z' &&
+                          isDateValid &&
+                          lastSyncDate.getFullYear() > 1753 &&
+                          lastSyncDate.getFullYear() < 2100; // Reasonable range
 
-    let cursorTime = isValidTime ? lastSyncTime : DEFAULT_SYNC_TIME;
-    let cursorId = Number(lastSyncId || 0);
+      cursorTime = isValidTime ? lastSyncTime : this._model.extractor.getInitialSyncTime();
+      cursorId = isValidTime ? Number(lastSyncId || 0) : 0;
+    }
+
+    // TEMPORARY FOR TEST: Force cursorTime to be at least May 18, 2026
+    const minTestTime = '2026-01-10T00:00:00.000Z';
+    if (!cursorTime || new Date(cursorTime) < new Date(minTestTime)) {
+      logger.info(`[SyncIncomingAdapter] TEMPORARY: forcing cursorTime to ${minTestTime} for test`);
+      cursorTime = minTestTime;
+      cursorId = 0;
+    }
 
     logger.info(
       `[SyncIncomingAdapter] getList start: cursorTime=${cursorTime}, lastSyncId=${cursorId} ` +
@@ -143,7 +156,7 @@ class SyncIncomingAdapter {
 
         const lastRow = batch[batch.length - 1];
         cursorTime = lastRow.__sync_time;
-        cursorId = lastRow.__sync_id;
+        cursorId = lastRow.__sync_id || lastRow.ID;
 
         if (batch.length < batchSize) {
           hasMore = false;
@@ -175,12 +188,16 @@ class SyncIncomingAdapter {
   async fetchListFromOldDb(lastSyncTime, lastSyncId = 0, limit = null, offset = 0) {
     const batchSize = Number(limit) || Number(process.env.STAGING_FETCH_BATCH_SIZE || 1000);
     const effectiveOffset = Number(offset) || 0;
-    // Incoming: default to min date (1753)
-    const DEFAULT_SYNC_TIME = '1753-01-01T00:00:00.000Z';
+    
+    const lastSyncDate = new Date(lastSyncTime);
+    const isDateValid = !isNaN(lastSyncDate.getTime());
     const isValidTime = lastSyncTime && 
+                        lastSyncTime !== '1970-01-01T00:00:00.000Z' &&
                         lastSyncTime !== '2100-01-01T00:00:00.000Z' &&
-                        lastSyncTime !== '1970-01-01T00:00:00.000Z';
-    const effectiveSyncTime = isValidTime ? lastSyncTime : DEFAULT_SYNC_TIME;
+                        isDateValid &&
+                        lastSyncDate.getFullYear() > 1753;
+                        
+    const effectiveSyncTime = isValidTime ? lastSyncTime : this._model.extractor.getInitialSyncTime();
 
     const rows = await this._model.extractor.fetchBatchFromOldDb(
       effectiveSyncTime,

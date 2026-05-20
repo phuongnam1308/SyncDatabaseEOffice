@@ -58,20 +58,73 @@ class Extractor extends BaseExtractor {
   }
 
   /**
-   * getSyncTimeExpression - incoming dùng COALESCE với nhiều format hơn
-   * vì VanBanDen có thể lưu date dạng DD/MM/YYYY (style 105) hoặc ISO.
+   * Get SQL expression that normalizes source sync time.
+   * Since the old DB format is strictly 'yyyy-MM-dd HH:mm:ss.fff', we use style 121
+   * for the fastest and most optimal conversion.
    */
   getSyncTimeExpression() {
     return `
-      COALESCE(
-        TRY_CONVERT(datetime2, Modified, 105),
-        TRY_CONVERT(datetime2, Created, 105),
-        TRY_CONVERT(datetime2, Modified, 120),
-        TRY_CONVERT(datetime2, Created, 120),
-        TRY_CONVERT(datetime2, Modified),
-        TRY_CONVERT(datetime2, Created)
+      ISNULL(
+        TRY_CONVERT(datetime2, Modified, 121),
+        ISNULL(
+          TRY_CONVERT(datetime2, Created, 121),
+          '1753-01-01'
+        )
       )
     `.trim();
+  }
+
+  /**
+   * Get SQL expression that safely normalizes and converts the partition column (NgayDen) to datetime2.
+   * Prioritizes Created and Modified first (using style 121), and falls back to NgayDen with style checks.
+   * Prevents crash if the legacy columns contain malformed or empty strings.
+   */
+  getPartitionColumnExpression() {
+    return `
+      COALESCE(
+        TRY_CONVERT(datetime2, [Created], 121),
+        TRY_CONVERT(datetime2, [Modified], 121),
+        TRY_CONVERT(datetime2, [${this.partitionColumn}], 105),
+        TRY_CONVERT(datetime2, [${this.partitionColumn}], 120),
+        TRY_CONVERT(datetime2, [${this.partitionColumn}], 121),
+        TRY_CONVERT(datetime2, [${this.partitionColumn}])
+      )
+    `.trim();
+  }
+
+  /**
+   * Get the last successfully extracted record's cursor from the staging table.
+   * Finds the maximum __sync_time and __sync_id of records already in staging.
+   */
+  async getLastSyncCursor(instanceId) {
+    const stagingTable = this.getStagingTableName(instanceId);
+    try {
+      const query = `
+        SELECT TOP 1 __sync_time, __sync_id
+        FROM ${stagingTable}
+        WHERE __sync_time IS NOT NULL AND __sync_id IS NOT NULL
+        ORDER BY __sync_time DESC, __sync_id DESC
+      `;
+      const result = await this.newPool.request().query(query);
+      if (result.recordset?.length > 0) {
+        const row = result.recordset[0];
+        return {
+          time: row.__sync_time ? new Date(row.__sync_time).toISOString() : null,
+          id: Number(row.__sync_id || 0)
+        };
+      }
+    } catch (error) {
+      logger.warn(`[${this.modelName}] getLastSyncCursor failed or staging table does not exist: ${error.message}`);
+    }
+    return { time: null, id: 0 };
+  }
+
+  /**
+   * Get initial sync time (earliest time) for ASC sync
+   * TEMPORARY: Set to 2026-05-18T00:00:00.000Z (yesterday) for testing
+   */
+  getInitialSyncTime() {
+    return '2026-01-10T00:00:00.000Z';
   }
 
   // ──────────────────────────────────────────────
@@ -99,6 +152,7 @@ class Extractor extends BaseExtractor {
     const syncMinDate = this._syncMinDate;
     const startDate = process.env.SYNC_START_DATE || null;
     const endDate = process.env.SYNC_END_DATE || '2100-01-01T00:00:00.000Z';
+    const partitionExpr = this.getPartitionColumnExpression();
 
     const query = `
       ;WITH source_rows AS (
@@ -112,8 +166,8 @@ class Extractor extends BaseExtractor {
           ) AS __sync_id_num
         FROM ${this.oldDbSchema}.${this.oldDbTable}
         WHERE 1=1
-          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
-          AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
+          AND (${partitionExpr} >= @startDate OR @startDate IS NULL)
+          AND (${partitionExpr} <= @endDate OR @endDate IS NULL)
       )
       SELECT * FROM (
         SELECT
@@ -194,6 +248,7 @@ class Extractor extends BaseExtractor {
     const syncMinDate = this._syncMinDate;
     const startDate = process.env.SYNC_START_DATE || null;
     const endDate = process.env.SYNC_END_DATE || '2100-01-01T00:00:00.000Z';
+    const partitionExpr = this.getPartitionColumnExpression();
 
     const query = `
       ;WITH source_rows AS (
@@ -205,8 +260,8 @@ class Extractor extends BaseExtractor {
           ) AS __sync_id_num
         FROM ${this.oldDbSchema}.${this.oldDbTable}
         WHERE 1=1
-          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
-          AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
+          AND (${partitionExpr} >= @startDate OR @startDate IS NULL)
+          AND (${partitionExpr} <= @endDate OR @endDate IS NULL)
       )
       SELECT COUNT(1) AS total
       FROM source_rows

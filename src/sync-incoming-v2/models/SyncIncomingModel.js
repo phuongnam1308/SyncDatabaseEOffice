@@ -161,10 +161,14 @@ class SyncIncomingModel extends BaseSyncModel {
     // Cleanup stale records before extracting
     await this._cleanupStaleRecords();
 
-    let lastSyncTime = this._normalizeSyncTime(null); // starts from 1753-01-01
-    let lastSyncId = 0;
+    // Get last sync cursor from staging table to support incremental resume (ASC)
+    const lastCursor = await this.extractor.getLastSyncCursor(this.instanceId);
+    let lastSyncTime = this._normalizeSyncTime(lastCursor.time || this.extractor.getInitialSyncTime());
+    let lastSyncId = lastCursor.id || 0;
     let totalExtracted = 0;
     let hasMore = true;
+
+    logger.info(`[${this.modelName}] Resuming extraction from cursor: time=${lastSyncTime}, id=${lastSyncId}`);
 
     while (hasMore && !this.shouldStop) {
       // Parallel batching

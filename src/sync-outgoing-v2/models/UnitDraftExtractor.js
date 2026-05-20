@@ -45,10 +45,44 @@ class UnitDraftExtractor extends BaseExtractor {
   }
 
   /**
-   * Get cursor direction - DESC (newer first)
+   * Get cursor direction - ASC (older first)
    */
   getCursorDirection() {
-    return 'DESC';
+    return 'ASC';
+  }
+
+  /**
+   * Get the last successfully extracted record's cursor from the staging table.
+   * Finds the maximum __sync_time and __sync_id of records already in staging.
+   */
+  async getLastSyncCursor(instanceId) {
+    const stagingTable = this.getStagingTableName(instanceId);
+    try {
+      const query = `
+        SELECT TOP 1 __sync_time, __sync_id
+        FROM ${stagingTable}
+        WHERE __sync_time IS NOT NULL AND __sync_id IS NOT NULL
+        ORDER BY __sync_time DESC, __sync_id DESC
+      `;
+      const result = await this.newPool.request().query(query);
+      if (result.recordset?.length > 0) {
+        const row = result.recordset[0];
+        return {
+          time: row.__sync_time ? new Date(row.__sync_time).toISOString() : null,
+          id: Number(row.__sync_id || 0)
+        };
+      }
+    } catch (error) {
+      logger.warn(`[${this.modelName}] getLastSyncCursor failed or staging table does not exist: ${error.message}`);
+    }
+    return { time: null, id: 0 };
+  }
+
+  /**
+   * Get initial sync time (earliest time) for ASC sync
+   */
+  getInitialSyncTime() {
+    return process.env.SYNC_MIN_DATE || '1753-01-01T00:00:00.000Z';
   }
 
   /**
@@ -93,7 +127,7 @@ class UnitDraftExtractor extends BaseExtractor {
    */
   async fetchBatchFromOldDb(lastSyncTime, lastSyncId = 0, batchSize = 1000, offset = 0) {
     const allItems = [];
-    const defaultSyncTime = '2999-12-31T23:59:59.999Z';
+    const defaultSyncTime = this.getInitialSyncTime();
 
     // Validate lastSyncTime
     const lastSyncDate = new Date(lastSyncTime);
@@ -101,7 +135,7 @@ class UnitDraftExtractor extends BaseExtractor {
     const isValidTime = lastSyncTime &&
                         lastSyncTime !== '1970-01-01T00:00:00.000Z' &&
                         isDateValid &&
-                        lastSyncDate.getFullYear() > 2000;
+                        lastSyncDate.getFullYear() > 1753;
 
     const effectiveSyncTime = isValidTime ? lastSyncTime : defaultSyncTime;
 
@@ -110,8 +144,8 @@ class UnitDraftExtractor extends BaseExtractor {
     // Iterate through all sites
     for (const site of this.sites) {
       try {
-        // Build OData filter
-        let filter = `Modified lt datetime'${effectiveSyncTime}'`;
+        // Build OData filter - greater than for ASC sync
+        let filter = `Modified gt datetime'${effectiveSyncTime}'`;
 
         // Add site-specific filter if lastSyncId is being used
         // Note: SharePoint doesn't have ID comparison with datetime in same filter cleanly
@@ -123,7 +157,7 @@ class UnitDraftExtractor extends BaseExtractor {
           $select: this.getSelectColumns().join(','),
           $expand: this.getExpandColumns().join(','),
           $filter: filter,
-          $orderby: 'Modified desc',
+          $orderby: 'Modified asc',
           $top: batchSize,
           $skip: offset
         });
@@ -165,12 +199,12 @@ class UnitDraftExtractor extends BaseExtractor {
       }
     }
 
-    // Sort by Modified desc to match cursor logic
+    // Sort by Modified asc to match cursor logic
     allItems.sort((a, b) => {
       const timeA = new Date(a.__sync_time || 0);
       const timeB = new Date(b.__sync_time || 0);
-      if (timeB - timeA !== 0) return timeB - timeA;
-      return (b.ID || 0) - (a.ID || 0);
+      if (timeA - timeB !== 0) return timeA - timeB;
+      return (a.ID || 0) - (b.ID || 0);
     });
 
     // Apply limit

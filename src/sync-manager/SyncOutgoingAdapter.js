@@ -91,21 +91,28 @@ class SyncOutgoingAdapter {
     const batchSize = Number(process.env.STAGING_FETCH_BATCH_SIZE || 2000);
     let extractedCount = 0;
     let hasMore = true;
-    // Default to max date (DESC ordering starts from newest)
-    const DEFAULT_SYNC_TIME = '2999-12-31T23:59:59.999Z';
 
-    // Handle epoch time (1970-01-01) or 1900-01-01 as "reset" - use default (2999) for DESC sync
-    const lastSyncDate = new Date(lastSyncTime);
-    const isDateValid = !isNaN(lastSyncDate.getTime());
-    const isValidTime = lastSyncTime && 
-                        lastSyncTime !== '1970-01-01T00:00:00.000Z' &&
-                        isDateValid &&
-                        lastSyncDate.getFullYear() > 2000; // Nếu nhỏ hơn năm 2000, coi như Reset
+    // Get last sync cursor from staging table to support incremental resume (ASC)
+    const lastCursor = await this._model.extractor.getLastSyncCursor(this._instanceId);
+    let cursorTime = lastCursor.time;
+    let cursorId = lastCursor.id || 0;
 
-    let cursorTime = isValidTime ? lastSyncTime : DEFAULT_SYNC_TIME;
-    let cursorId = Number(lastSyncId || 0);
+    // If staging has no cursor, fallback to lastSyncTime passed by manager, or getInitialSyncTime
+    if (!cursorTime) {
+      const lastSyncDate = new Date(lastSyncTime);
+      const isDateValid = !isNaN(lastSyncDate.getTime());
+      const isValidTime = lastSyncTime && 
+                          lastSyncTime !== '1970-01-01T00:00:00.000Z' &&
+                          lastSyncTime !== '2100-01-01T00:00:00.000Z' &&
+                          isDateValid &&
+                          lastSyncDate.getFullYear() > 1753 &&
+                          lastSyncDate.getFullYear() < 2100;
 
-    logger.info(`[SyncOutgoingAdapter] getList start: cursorTime=${cursorTime}, lastSyncId=${cursorId} (Raw lastSyncTime: ${lastSyncTime})`);
+      cursorTime = isValidTime ? lastSyncTime : this._model.extractor.getInitialSyncTime();
+      cursorId = isValidTime ? Number(lastSyncId || 0) : 0;
+    }
+
+    logger.info(`[SyncOutgoingAdapter] getList start: cursorTime=${cursorTime}, lastSyncId=${cursorId} (Raw lastSyncTime: ${lastSyncTime}) [ASC direction]`);
 
     while (hasMore) {
       const batch = await this._model.extractor.fetchBatchFromOldDb(
@@ -124,7 +131,7 @@ class SyncOutgoingAdapter {
 
       const lastRow = batch[batch.length - 1];
       cursorTime = lastRow.__sync_time;
-      cursorId = lastRow.__sync_id;
+      cursorId = lastRow.__sync_id || lastRow.ID;
 
       if (batch.length < batchSize) {
         hasMore = false;
@@ -150,10 +157,16 @@ class SyncOutgoingAdapter {
   async fetchListFromOldDb(lastSyncTime, lastSyncId = 0, limit = null, offset = 0) {
     const batchSize = Number(limit) || Number(process.env.STAGING_FETCH_BATCH_SIZE || 2000);
     const effectiveOffset = Number(offset) || 0;
-    // Handle epoch time as "not set"
-    const DEFAULT_SYNC_TIME = '2999-12-31T23:59:59.999Z';
-    const isValidTime = lastSyncTime && lastSyncTime !== '1970-01-01T00:00:00.000Z';
-    const effectiveSyncTime = isValidTime ? lastSyncTime : DEFAULT_SYNC_TIME;
+    
+    const lastSyncDate = new Date(lastSyncTime);
+    const isDateValid = !isNaN(lastSyncDate.getTime());
+    const isValidTime = lastSyncTime && 
+                        lastSyncTime !== '1970-01-01T00:00:00.000Z' &&
+                        lastSyncTime !== '2100-01-01T00:00:00.000Z' &&
+                        isDateValid &&
+                        lastSyncDate.getFullYear() > 1753;
+                        
+    const effectiveSyncTime = isValidTime ? lastSyncTime : this._model.extractor.getInitialSyncTime();
 
     const rows = await this._model.extractor.fetchBatchFromOldDb(
       effectiveSyncTime,

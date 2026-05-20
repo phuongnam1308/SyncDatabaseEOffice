@@ -1,4 +1,4 @@
-﻿/**
+/**
  * SyncUnitDraftAdapter - Wrapper để SyncUnitDraftModel hoạt động với SyncManagerService
  *
  * SyncUnitDraftModel lấy dữ liệu từ SharePoint List "Văn bản đi"
@@ -81,27 +81,32 @@ class SyncUnitDraftAdapter {
     }
   }
 
-  /**
-   * Implement interface - Fetch batch từ SharePoint List và push vào staging
-   */
   async getList(lastSyncTime, syncJobId, lastSyncId = 0) {
     const batchSize = 10; // HARDCODED for testing as requested
     let extractedCount = 0;
     let hasMore = true;
-    const DEFAULT_SYNC_TIME = '2999-12-31T23:59:59.999Z';
 
-    // Handle epoch time - use default for DESC ordering
-    const lastSyncDate = new Date(lastSyncTime);
-    const isDateValid = !isNaN(lastSyncDate.getTime());
-    const isValidTime = lastSyncTime &&
-                        lastSyncTime !== '1970-01-01T00:00:00.000Z' &&
-                        isDateValid &&
-                        lastSyncDate.getFullYear() > 2000;
+    // Get last sync cursor from staging table to support incremental resume (ASC)
+    const lastCursor = await this._model.extractor.getLastSyncCursor(this._instanceId);
+    let cursorTime = lastCursor.time;
+    let cursorId = lastCursor.id || 0;
 
-    let cursorTime = isValidTime ? lastSyncTime : DEFAULT_SYNC_TIME;
-    let cursorId = Number(lastSyncId || 0);
+    // If staging has no cursor, fallback to lastSyncTime passed by manager, or getInitialSyncTime
+    if (!cursorTime) {
+      const lastSyncDate = new Date(lastSyncTime);
+      const isDateValid = !isNaN(lastSyncDate.getTime());
+      const isValidTime = lastSyncTime &&
+                          lastSyncTime !== '1970-01-01T00:00:00.000Z' &&
+                          lastSyncTime !== '2100-01-01T00:00:00.000Z' &&
+                          isDateValid &&
+                          lastSyncDate.getFullYear() > 1753 &&
+                          lastSyncDate.getFullYear() < 2100;
 
-    logger.info(`[SyncUnitDraftAdapter] getList start: cursorTime=${cursorTime}, lastSyncId=${cursorId}`);
+      cursorTime = isValidTime ? lastSyncTime : this._model.extractor.getInitialSyncTime();
+      cursorId = isValidTime ? Number(lastSyncId || 0) : 0;
+    }
+
+    logger.info(`[SyncUnitDraftAdapter] getList start: cursorTime=${cursorTime}, lastSyncId=${cursorId} [ASC direction]`);
 
     try {
       // First check which sites have data
@@ -137,7 +142,7 @@ class SyncUnitDraftAdapter {
 
         const lastRow = batch[batch.length - 1];
         cursorTime = lastRow.__sync_time;
-        cursorId = lastRow.ID;
+        cursorId = lastRow.__sync_id || lastRow.ID;
 
         if (batch.length < batchSize) {
           hasMore = false;
@@ -167,16 +172,16 @@ class SyncUnitDraftAdapter {
   async fetchListFromOldDb(lastSyncTime, lastSyncId = 0, limit = null, offset = 0) {
     const batchSize = 10; // HARDCODED for testing as requested
     const effectiveOffset = Number(offset) || 0;
-    const DEFAULT_SYNC_TIME = '2999-12-31T23:59:59.999Z';
-
+    
     const lastSyncDate = new Date(lastSyncTime);
     const isDateValid = !isNaN(lastSyncDate.getTime());
     const isValidTime = lastSyncTime &&
                         lastSyncTime !== '1970-01-01T00:00:00.000Z' &&
+                        lastSyncTime !== '2100-01-01T00:00:00.000Z' &&
                         isDateValid &&
-                        lastSyncDate.getFullYear() > 2000;
+                        lastSyncDate.getFullYear() > 1753;
 
-    const effectiveSyncTime = isValidTime ? lastSyncTime : DEFAULT_SYNC_TIME;
+    const effectiveSyncTime = isValidTime ? lastSyncTime : this._model.extractor.getInitialSyncTime();
 
     const rows = await this._model.extractor.fetchBatchFromOldDb(
       effectiveSyncTime,
