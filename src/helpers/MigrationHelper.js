@@ -17,6 +17,7 @@ class MigrationHelper {
     this.queryOldDb = queryOldDbFn;
     this.mapStatus = this.mapStatusOutgoing.bind(this);
     this.deptCache = new Map(); // Local cache for department IDs
+    this.customSenderUnitCache = new Map(); // Local cache for custom sender unit IDs
   }
 
   async ensureUsersTbBakColumnExists(transaction = null) {
@@ -649,6 +650,131 @@ class MigrationHelper {
       }
     } catch (error) {
       logger.error(`[mapSenderUnitId] Error value="${value}": ${error.message}`);
+      return null;
+    }
+  }
+
+  async mapCustomSenderUnitId(value, transaction = null) {
+    try {
+      const originalName = this.processSenderUnit(value);
+      if (!originalName) return null;
+
+      const normalizedKey = this.normalizeUnitName(originalName);
+
+      // 1. Check local cache
+      if (!this.customSenderUnitCache) {
+        this.customSenderUnitCache = new Map();
+      }
+      if (this.customSenderUnitCache.has(normalizedKey)) {
+        return this.customSenderUnitCache.get(normalizedKey);
+      }
+
+      const dbName = process.env.NEW_DB_NAME || 'dbo';
+
+      // 2. Check in New DB (Search by code/normalizedKey or name/originalName in custom_sender_units)
+      const selectQuery = `
+        SELECT TOP 1 id, mpath FROM [${dbName}].[dbo].[custom_sender_units] 
+        WHERE code = @normalizedKey OR LTRIM(RTRIM(name)) = @originalName
+      `;
+      let existing = await this.queryNewDbTx(selectQuery, { normalizedKey, originalName }, transaction);
+      
+      if (existing?.length) {
+        const foundId = existing[0].id;
+        this.customSenderUnitCache.set(normalizedKey, foundId);
+        return foundId;
+      }
+
+      // Default values for custom_sender_units
+      const newId = uuidv4();
+      const creatorId = process.env.MIGRATION_CREATOR_ID || 'system_migration';
+      const creatorName = 'System Migration';
+
+      // 3. Try Old DB (to find Parent or other attributes from old Department)
+      let oldDeptParentId = null;
+      let oldDeptCode = null;
+      
+      if (this.queryOldDb) {
+        const oldDept = await this.queryOldDb(
+          `SELECT TOP 1 ID, ParentID, Title, Code FROM ${process.env.OLD_DB_NAME}.dbo.Department WHERE LTRIM(RTRIM(Title)) = @name`,
+          { name: originalName }
+        );
+        
+        if (oldDept?.length) {
+          const dept = oldDept[0];
+          oldDeptCode = dept.Code || null;
+
+          // Check if there's an existing parent in custom_sender_units
+          if (dept.ParentID) {
+            const parentDept = await this.queryOldDb(
+              `SELECT TOP 1 Title FROM ${process.env.OLD_DB_NAME}.dbo.Department WHERE ID = @parentId`,
+              { parentId: dept.ParentID }
+            );
+            if (parentDept?.length) {
+              const parentName = parentDept[0].Title;
+              const parentNormalizedKey = this.normalizeUnitName(parentName);
+              
+              // Find parent in new DB
+              const selectParentQuery = `
+                SELECT TOP 1 id, mpath FROM [${dbName}].[dbo].[custom_sender_units] 
+                WHERE code = @parentNormalizedKey OR LTRIM(RTRIM(name)) = @parentName
+              `;
+              const parentExisted = await this.queryNewDbTx(selectParentQuery, { parentNormalizedKey, parentName }, transaction);
+              if (parentExisted?.length) {
+                oldDeptParentId = parentExisted[0].id;
+                // Compute mpath: parent.mpath + '.' + newId
+                const parentMpath = parentExisted[0].mpath || parentExisted[0].id;
+                const mpath = `${parentMpath}.${newId}`;
+                
+                await this.queryNewDbTx(
+                  `INSERT INTO [${dbName}].[dbo].[custom_sender_units] 
+                    (id, name, code, parent_id, mpath, created_by, created_by_name, status, created_at, updated_at)
+                   VALUES 
+                    (@id, @name, @code, @parentId, @mpath, @createdBy, @createdByName, 1, GETDATE(), GETDATE())`,
+                  {
+                    id: newId,
+                    name: originalName,
+                    code: oldDeptCode || normalizedKey,
+                    parentId: oldDeptParentId,
+                    mpath: mpath,
+                    createdBy: creatorId,
+                    createdByName: creatorName
+                  },
+                  transaction
+                );
+                this.customSenderUnitCache.set(normalizedKey, newId);
+                return newId;
+              }
+            }
+          }
+        }
+      }
+
+      // 4. Insert Completely new or without Parent resolved yet
+      const defaultMpath = newId;
+      try {
+        await this.queryNewDbTx(
+          `INSERT INTO [${dbName}].[dbo].[custom_sender_units] 
+            (id, name, code, parent_id, mpath, created_by, created_by_name, status, created_at, updated_at)
+           VALUES 
+            (@id, @name, @code, NULL, @mpath, @createdBy, @createdByName, 1, GETDATE(), GETDATE())`,
+          {
+            id: newId,
+            name: originalName,
+            code: oldDeptCode || normalizedKey,
+            mpath: defaultMpath,
+            createdBy: creatorId,
+            createdByName: creatorName
+          },
+          transaction
+        );
+        this.customSenderUnitCache.set(normalizedKey, newId);
+        return newId;
+      } catch (err) {
+        const finalRetry = await this.queryNewDbTx(selectQuery, { normalizedKey, originalName }, transaction);
+        return finalRetry?.[0]?.id || null;
+      }
+    } catch (error) {
+      logger.error(`[mapCustomSenderUnitId] Error value="${value}": ${error.message}`);
       return null;
     }
   }

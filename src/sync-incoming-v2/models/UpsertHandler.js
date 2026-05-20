@@ -140,7 +140,7 @@ class UpsertHandler {
     }
 
     const id = String(oldRecord?.ID || '').trim();
-    logger.info(`[UpsertHandler:Incoming] Processing ID: ${id}`);
+    // logger.info(`[UpsertHandler:Incoming] Processing ID: ${id}`);
 
     try {
       // Download files BEFORE transaction (avoid long lock on network I/O)
@@ -175,7 +175,7 @@ class UpsertHandler {
         };
       }, { maxRetries: 5 });
 
-      logger.info(`[UpsertHandler:Incoming] Completed ID: ${id}, action: ${result.action}`);
+      // logger.info(`[UpsertHandler:Incoming] Completed ID: ${id}, action: ${result.action}`);
       return { success: true, documentId: result.documentId, error: null };
 
     } catch (error) {
@@ -205,7 +205,7 @@ class UpsertHandler {
 
     if (existing && existing.length > 0) {
       const dbDocId = existing[0].document_id;
-      logger.info(`[UpsertHandler:Incoming] Found existing document [${dbDocId}] for bak_id: [${mapped.id_incoming_bak}]`);
+      // logger.info(`[UpsertHandler:Incoming] Found existing document [${dbDocId}] for bak_id: [${mapped.id_incoming_bak}]`);
       await this._updateRecord(mapped, transaction);
       return {
         action: 'updated',
@@ -252,7 +252,7 @@ class UpsertHandler {
     `;
 
     await this.queryNewDbTx(query, this._buildParams(record), transaction);
-    logger.info(`[UpsertHandler:Incoming] ✅ Inserted document ${record.document_id}`);
+    // logger.info(`[UpsertHandler:Incoming] ✅ Inserted document ${record.document_id}`);
 
     // Safety check
     const check = await this.queryNewDbTx(
@@ -379,7 +379,7 @@ class UpsertHandler {
         const fullUrl = `${baseUrl}${relativePath}`;
         const fileName = relativePath.substring(relativePath.lastIndexOf('/') + 1);
 
-        logger.info(`[UpsertHandler:Incoming][prepareFiles] Downloading: ${fileName}`);
+        // logger.info(`[UpsertHandler:Incoming][prepareFiles] Downloading: ${fileName}`);
         const buffer = await spDownload(fullUrl, this.newPool);
 
         if (buffer && buffer.length > 0) {
