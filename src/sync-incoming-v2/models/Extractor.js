@@ -147,8 +147,12 @@ class Extractor extends BaseExtractor {
     const syncTimeExpr = this.getSyncTimeExpression();
 
     // Incoming: start từ DEFAULT nếu không có cursor hợp lệ
+    // Bỏ qua các ngày dummy của bản cũ (2100, 2999) hoặc epoch mặc định (1970, 1753)
     const isValidTime = lastSyncTime &&
+      lastSyncTime !== '1753-01-01T00:00:00.000Z' &&
+      lastSyncTime !== '1970-01-01T00:00:00.000Z' &&
       lastSyncTime !== '2100-01-01T00:00:00.000Z' &&
+      lastSyncTime !== '2999-12-31T23:59:59.999Z' &&
       !Number.isNaN(new Date(lastSyncTime).getTime()) &&
       new Date(lastSyncTime).getFullYear() > 1000;
 
@@ -251,8 +255,12 @@ class Extractor extends BaseExtractor {
    */
   async countListFromOldDb(lastSyncTime, lastSyncId = 0) {
     const syncTimeExpr = this.getSyncTimeExpression();
+    // Bỏ qua các ngày dummy của bản cũ (2100, 2999) hoặc epoch mặc định (1970, 1753)
     const isValidTime = lastSyncTime &&
+      lastSyncTime !== '1753-01-01T00:00:00.000Z' &&
+      lastSyncTime !== '1970-01-01T00:00:00.000Z' &&
       lastSyncTime !== '2100-01-01T00:00:00.000Z' &&
+      lastSyncTime !== '2999-12-31T23:59:59.999Z' &&
       !Number.isNaN(new Date(lastSyncTime).getTime()) &&
       new Date(lastSyncTime).getFullYear() > 1000;
 

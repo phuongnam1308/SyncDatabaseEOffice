@@ -78,12 +78,24 @@ class SyncManagerService {
     // SSE clients (Set của Express response objects)
     this._sseClients = new Set();
 
+    // Reference tới SyncModelRegistry instance (được inject từ Controller sau init)
+    this._modelRegistry = null;
+
     // Setup shutdown hooks
     this.setupShutdownHandlers();
 
     // Setup Memory Leak Protection (Auto-pause on high RAM)
     this.memoryThresholdMB = parseInt(process.env.SYNC_MAX_RAM_MB || '2048', 10);
     this._startMemoryMonitor();
+  }
+
+  /**
+   * Inject SyncModelRegistry instance từ Controller sau khi initializeAll() hoàn tất.
+   * Dùng để auto-reset errors khi Full Resync thay vì require() Class.
+   * @param {import('./SyncModelRegistry')} registryInstance
+   */
+  setModelRegistry(registryInstance) {
+    this._modelRegistry = registryInstance;
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -935,8 +947,8 @@ class SyncManagerService {
     // THÊM: Nếu là Full Resync VÀ không phải đang Resume → reset các bản ghi lỗi
     if (forceFullSync && !isResuming) {
       try {
-        const modelRegistry = require('./SyncModelRegistry');
-        const entry = modelRegistry.get(job.modelName);
+        // Dùng _modelRegistry (instance) thay vì require Class trực tiếp
+        const entry = this._modelRegistry ? this._modelRegistry.get(job.modelName) : null;
         if (entry && entry.instance && typeof entry.instance.resetErrors === 'function') {
           const resetCount = await entry.instance.resetErrors();
           if (resetCount > 0) {

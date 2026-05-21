@@ -221,6 +221,12 @@ class BaseExtractor {
       // 1. Get column types for OPENJSON WITH clause
       const typeMap = await this._getStagingColumnTypes(stagingTable);
 
+      // Datetime-family types that cause implicit conversion errors in OPENJSON.
+      // We declare them as NVARCHAR(MAX) in the WITH clause so SQL Server treats
+      // the value as a plain string — avoiding "Conversion failed when converting
+      // date and/or time from character string" on malformed / out-of-range values.
+      const DATETIME_TYPES = new Set(['DATETIME', 'DATETIME2', 'DATE', 'SMALLDATETIME', 'TIME', 'DATETIMEOFFSET']);
+
       const excludeColumnsLower = new Set(['migrateflg', 'migrateerrflg', 'migrateerrmess']);
       const columns = Object.keys(rows[0] || {}).filter(col => {
         const lower = String(col).toLowerCase();
@@ -232,16 +238,47 @@ class BaseExtractor {
       const safeNonIdColumns = nonIdColumns.map(col => this.sanitizeColumnName(col));
 
       // 3. Build OPENJSON WITH clause
-      const withDeclarations = safeColumns.map(col => {
-        const type = typeMap[col] || 'NVARCHAR(MAX)'; // fallback if not found in schema
-        return `[${col}] ${type} '$.${col}'`;
+      // ALWAYS use NVARCHAR(MAX) for OPENJSON to prevent parsing crashes.
+      // SQL Server's OPENJSON will keep the value as a string; the target staging
+      // column is typed correctly so the MERGE INSERT/UPDATE will do the
+      // conversion via TRY_CONVERT safely.
+      const withDeclarations = columns.map(origCol => {
+        const safeCol = this.sanitizeColumnName(origCol);
+        // Escape quotes in the original column name for the JSON path
+        const jsonPath = origCol.replace(/"/g, '\\"');
+        return `[${safeCol}] NVARCHAR(MAX) '$."${jsonPath}"'`;
       }).join(',\n        ');
+
+      // Helper: emit INSERT/UPDATE value expression with safe TRY_CONVERT
+      const srcExpr = (safeCol) => {
+        const targetType = typeMap[safeCol] || 'NVARCHAR(MAX)';
+        const baseType = targetType.split('(')[0].toUpperCase().trim();
+        
+        // If it's already a string type, no conversion needed, but we MUST truncate
+        // it to the column's max length to prevent "String or binary data would be truncated".
+        if (['NVARCHAR', 'VARCHAR', 'CHAR', 'NCHAR', 'TEXT', 'NTEXT'].includes(baseType)) {
+          const match = targetType.match(/\((\d+)\)/);
+          if (match && match[1]) {
+            return `LEFT(src.[${safeCol}], ${match[1]})`;
+          }
+          return `src.[${safeCol}]`;
+        }
+        
+        // For DATETIME-family, use style 127 for ISO 8601 parsing
+        if (DATETIME_TYPES.has(baseType)) {
+          return `TRY_CONVERT(${targetType}, src.[${safeCol}], 127)`;
+        }
+        
+        // For all other types (INT, UNIQUEIDENTIFIER, etc), use TRY_CONVERT 
+        // to return NULL instead of crashing the batch on dirty data.
+        return `TRY_CONVERT(${targetType}, src.[${safeCol}])`;
+      };
 
       // 4. Build MERGE clauses
       const insertColumns = safeColumns.map(c => `[${c}]`).join(', ');
-      const insertValues = safeColumns.map(c => `src.[${c}]`).join(', ');
-      let updateSetClause = safeNonIdColumns.map(c => `[${c}] = src.[${c}]`).join(', ');
-      
+      const insertValues = safeColumns.map(c => srcExpr(c)).join(', ');
+      let updateSetClause = safeNonIdColumns.map(c => `[${c}] = ${srcExpr(c)}`).join(', ');
+
       // Always reset staging flags on UPDATE so that modified records get re-processed
       if (updateSetClause) {
         updateSetClause += `, [MigrateFlg] = 0, [MigrateErrFlg] = 0, [MigrateErrMess] = NULL`;
@@ -250,10 +287,19 @@ class BaseExtractor {
       }
 
       // 5. Create JSON string from rows
+      // Sanitize values: convert JS Date objects to ISO strings; null-ify undefined.
       const cleanRows = rows.map(row => {
         const cleanRow = {};
         columns.forEach(col => {
-          cleanRow[col] = row[col];
+          const val = row[col];
+          if (val instanceof Date) {
+            // Convert Date objects to ISO 8601 string; null if invalid
+            cleanRow[col] = isNaN(val.getTime()) ? null : val.toISOString();
+          } else if (typeof val === 'string' && val.trim().toUpperCase() === 'NULL') {
+            cleanRow[col] = null;
+          } else {
+            cleanRow[col] = val === undefined ? null : val;
+          }
         });
         return cleanRow;
       });
