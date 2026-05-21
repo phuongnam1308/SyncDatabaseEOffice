@@ -490,7 +490,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     const compactParams = this._safeParamsForLog(params);
     logger.error(
       `[StreamTaskInIncrementalModel][${dbLabel}] Query failed at ${caller}. ` +
-        `Error=${error?.message || 'unknown error'}. Query=${compactQuery}. Params=${compactParams}`,
+      `Error=${error?.message || 'unknown error'}. Query=${compactQuery}. Params=${compactParams}`,
       extra,
     );
   }
@@ -635,6 +635,9 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
    * Náº¿u thiáº¿u cá»™t (vÃ­ dá»¥: ItemId má»›i bá»• sung), nÃ³ sáº½ tá»± Ä‘á»™ng ALTER TABLE ADD.
    */
   async ensureStagingTableColumns() {
+    if (process.env.DISABLE_ENSURE_SCHEMA === 'true') {
+      return;
+    }
     const table = this.getStagingTableRef();
     const tableName = this.newTableSync;
     const dbName = this.newDbName;
@@ -1033,13 +1036,12 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
         SET LOCK_TIMEOUT ${Number.isFinite(lockTimeoutMs) && lockTimeoutMs > 0 ? lockTimeoutMs : 8000};
         IF EXISTS (SELECT 1 FROM ${stagingTableRef} WHERE ${whereClause})
         BEGIN
-          ${
-            nonIdColumns.length > 0
-              ? `UPDATE ${stagingTableRef} WITH (ROWLOCK)
+          ${nonIdColumns.length > 0
+          ? `UPDATE ${stagingTableRef} WITH (ROWLOCK)
                SET ${updateClause}
                WHERE ${whereClause};`
-              : `SELECT 1 AS noop;`
-          }
+          : `SELECT 1 AS noop;`
+        }
         END
         ELSE
         BEGIN
@@ -1636,8 +1638,8 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       logger.error(`[StreamTaskIn] Batch transaction failed, falling back to sequential: ${batchError.message}`);
       if (transaction) {
         try {
-          await transaction.rollback().catch(() => {});
-        } catch (_) {}
+          await transaction.rollback().catch(() => { });
+        } catch (_) { }
       }
     }
 
