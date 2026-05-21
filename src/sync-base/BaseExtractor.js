@@ -79,6 +79,10 @@ class BaseExtractor {
    * @param {string} instanceId
    */
   async ensureStagingTableExists(instanceId) {
+    if (process.env.DISABLE_ENSURE_SCHEMA === 'true') {
+      logger.info(`[${this.modelName}] Skipping ensureStagingTableExists (disabled via environment variable)`);
+      return;
+    }
     const stagingTable = this.getStagingTableName(instanceId);
 
     await this.newPool.request().query(`

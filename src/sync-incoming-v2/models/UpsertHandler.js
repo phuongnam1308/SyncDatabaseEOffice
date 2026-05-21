@@ -372,10 +372,9 @@ class UpsertHandler {
       }
     }
 
-    const results = [];
-    for (const relativePath of filesToPath) {
+    const downloadPromises = filesToPath.map(async (relativePath) => {
       try {
-        if (!relativePath.includes('/')) continue;
+        if (!relativePath.includes('/')) return null;
         const fullUrl = `${baseUrl}${relativePath}`;
         const fileName = relativePath.substring(relativePath.lastIndexOf('/') + 1);
 
@@ -383,14 +382,16 @@ class UpsertHandler {
         const buffer = await spDownload(fullUrl, this.newPool);
 
         if (buffer && buffer.length > 0) {
-          results.push({ buffer, fileName, relativePath });
+          return { buffer, fileName, relativePath };
         }
       } catch (err) {
         logger.error(`[UpsertHandler:Incoming][prepareFiles] Error downloading ${relativePath}: ${err.message}`);
       }
-    }
+      return null;
+    });
 
-    return results;
+    const results = await Promise.all(downloadPromises);
+    return results.filter(Boolean);
   }
 
   async _applyPreparedFiles(preparedFiles, oldRecord, documentInfo, transaction) {

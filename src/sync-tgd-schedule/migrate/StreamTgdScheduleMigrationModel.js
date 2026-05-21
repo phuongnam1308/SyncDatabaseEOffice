@@ -189,6 +189,11 @@ class StreamTgdScheduleMigrationModel extends BaseIncrementalSyncInterface {
     // 🔥 Cache Source Schema to prevent "Invalid column name" errors
     await this.cacheSourceSchema();
 
+    if (process.env.DISABLE_ENSURE_SCHEMA === 'true') {
+      console.log(`[StreamTgdScheduleMigrationModel] Skipping staging table and column checks (disabled via environment variable)`);
+      return;
+    }
+
     await this.ensureStagingTableExists();
     await this.ensureTargetColumnsExist();
     console.log(`[StreamTgdScheduleMigrationModel] Initialization complete.`);

@@ -29,6 +29,10 @@ async function runNewDb(model, query, params = {}, transaction = null) {
 }
 
 async function ensureTrackingColumns(model, options = {}) {
+  if (process.env.DISABLE_ENSURE_SCHEMA === 'true') {
+    logger.info(`[${toLogLabel(model, options?.label)}] Skipping ensureTrackingColumns (disabled via environment variable)`);
+    return;
+  }
   const {
     tableRef,
     tableName,

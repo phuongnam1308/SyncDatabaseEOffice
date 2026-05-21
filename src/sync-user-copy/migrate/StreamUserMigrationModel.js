@@ -37,6 +37,10 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
    */
   async initialize() {
     await super.initialize();
+    if (process.env.DISABLE_ENSURE_SCHEMA === 'true') {
+      logger.info(`[${this.modelName}] Skipping staging table and schema initialization (disabled via environment variable)`);
+      return;
+    }
     await this.ensureStagingTableExists();
 
     // Tự động chuyển cột id sang NVARCHAR để chấp nhận ID dạng bình thường (Mã NV)

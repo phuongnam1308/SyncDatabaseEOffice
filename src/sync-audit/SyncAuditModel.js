@@ -81,6 +81,10 @@ class SyncAuditModel extends BaseModel {
 
     // Khởi tạo block check schema duy nhất
     SyncAuditModel._schemaInitPromise = (async () => {
+      if (process.env.DISABLE_ENSURE_SCHEMA === 'true') {
+        logger.info('[SyncAuditModel] Skipping global schema initialization (disabled via environment variable).');
+        return;
+      }
       try {
         const dbName = process.env.NEW_DB_NAME;
         const schema = this.newDbSchema;
@@ -165,6 +169,38 @@ class SyncAuditModel extends BaseModel {
         if (sqlScript) {
           await this.queryNewDb(sqlScript);
           // logger.info('[SyncAuditModel] Global audit schema check/migration completed once (optimized).');
+        }
+
+        // Bổ sung: Tự động tạo non-clustered index trên cột [document_id] nếu chưa có
+        // để loại bỏ table scans khi thực hiện DELETE/UPDATE theo document_id dưới tải cao (tránh deadlocks)
+        const indexTables = [
+          'audit',
+          'incomming_assignment',
+          'incomming_current_state',
+          'outgoing_assignment',
+          'outgoing_current_state'
+        ];
+        
+        let indexScript = '';
+        for (const tbl of indexTables) {
+          const idxName = `IX_${tbl}_document_id`;
+          indexScript += `
+            IF EXISTS (
+              SELECT 1 FROM sys.objects 
+              WHERE object_id = OBJECT_ID('${dbName}.${schema}.${tbl}') AND type = 'U'
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM sys.indexes 
+              WHERE name = '${idxName}' AND object_id = OBJECT_ID('${dbName}.${schema}.${tbl}')
+            )
+            BEGIN
+              CREATE NONCLUSTERED INDEX [${idxName}] ON ${dbName}.${schema}.${tbl} (document_id);
+            END
+          `;
+        }
+        
+        if (indexScript) {
+          await this.queryNewDb(indexScript);
         }
 
       } catch (err) {

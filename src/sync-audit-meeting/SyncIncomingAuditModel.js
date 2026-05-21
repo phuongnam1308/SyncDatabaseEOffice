@@ -23,6 +23,8 @@ const STAGE = {
 // action_code tương ứng với sự kiện "tạo văn bản" → is_creator = 1
 const CREATOR_ACTION_CODES = new Set(['CREATE', 'TONG_HOP', 'SOAN_THAO']);
 
+const { isRetryableSqlError } = require('../../utils/dbUtils');
+
 class SyncIncomingAuditModel extends SyncAuditModel {
   // ---------------------------------------------------------------------------
   // OVERRIDE: processSingleRecord
@@ -46,6 +48,9 @@ class SyncIncomingAuditModel extends SyncAuditModel {
         await this._syncToCurrentState(mapped, auditId, transaction);
       }
     } catch (err) {
+      if (isRetryableSqlError(err)) {
+        throw err;
+      }
       // Lỗi bảng phụ không được làm hỏng toàn bộ luồng
       logger.warn(
         `[SyncIncomingAuditModel] sync phụ thất bại doc=${documentId} originId=${rawRecord?.ID}: ${err.message}`

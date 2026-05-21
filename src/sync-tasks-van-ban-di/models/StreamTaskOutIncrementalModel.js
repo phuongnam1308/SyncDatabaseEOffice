@@ -222,6 +222,23 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
   async _doInitialize() {
     await super.initialize();
 
+    if (process.env.DISABLE_ENSURE_SCHEMA === 'true') {
+      logger.info('[StreamTaskOutIncrementalModel] Skipping staging table and column checks (disabled via environment variable)');
+      // Late require to break potential circular dependencies
+      const StreamTaskMigrationModel = require('./StreamTaskMigrationModel');
+      const StreamTaskUsersModel = require('./StreamTaskUsersModel');
+      const StreamSystemLogTasksModel = require('./StreamSystemLogTasksModel');
+      
+      this.taskMigrationModel = new StreamTaskMigrationModel();
+      this.taskUsersModel = new StreamTaskUsersModel();
+      this.sysLogTasksModel = new StreamSystemLogTasksModel();
+
+      await this.taskMigrationModel.initialize();
+      await this.taskUsersModel.initialize();
+      await this.sysLogTasksModel.initialize();
+      return;
+    }
+
     try {
       // FIX: Ensure staging table exists FIRST before any model inits
       await withDeadlockRetry(() => this.ensureStagingTableExists(), 'ensureStagingTableExists');

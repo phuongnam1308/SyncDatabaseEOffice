@@ -202,6 +202,10 @@ class Extractor extends BaseExtractor {
    * thay vì SELECT * INTO từ DB cũ (không hoạt động khi DB cũ ở server khác)
    */
   async ensureStagingTableExists(instanceId) {
+    if (process.env.DISABLE_ENSURE_SCHEMA === 'true') {
+      logger.info(`[${this.modelName}] Skipping ensureStagingTableExists (disabled via environment variable)`);
+      return;
+    }
     const stagingTable = this.getStagingTableName(instanceId);
 
     const query = `
