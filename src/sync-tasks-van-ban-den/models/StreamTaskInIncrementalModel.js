@@ -288,24 +288,6 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
   async _doInitialize() {
     await super.initialize();
 
-    if (process.env.DISABLE_ENSURE_SCHEMA === 'true') {
-      logger.info('[StreamTaskInIncrementalModel] Skipping staging table and column checks (disabled via environment variable)');
-      // Late require to break potential circular dependencies
-      const StreamTaskMigrationModel = require('./StreamTaskMigrationModel');
-      const StreamTaskUsersModel = require('./StreamTaskUsersModel');
-      const StreamSystemLogTasksModel = require('./StreamSystemLogTasksModel');
-
-      this.taskModel = new StreamTaskMigrationModel();
-      await this.taskModel.initialize();
-
-      this.taskUsersModel = new StreamTaskUsersModel();
-      await this.taskUsersModel.initialize();
-
-      this.sysLogModel = new StreamSystemLogTasksModel();
-      await this.sysLogModel.initialize();
-      return;
-    }
-
     try {
       // FIX: Ensure staging table exists FIRST before any column checks or model inits
       await withDeadlockRetry(() => this.ensureStagingTableExists(), 'ensureStagingTableExists');
@@ -508,7 +490,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     const compactParams = this._safeParamsForLog(params);
     logger.error(
       `[StreamTaskInIncrementalModel][${dbLabel}] Query failed at ${caller}. ` +
-      `Error=${error?.message || 'unknown error'}. Query=${compactQuery}. Params=${compactParams}`,
+        `Error=${error?.message || 'unknown error'}. Query=${compactQuery}. Params=${compactParams}`,
       extra,
     );
   }
@@ -1051,12 +1033,13 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
         SET LOCK_TIMEOUT ${Number.isFinite(lockTimeoutMs) && lockTimeoutMs > 0 ? lockTimeoutMs : 8000};
         IF EXISTS (SELECT 1 FROM ${stagingTableRef} WHERE ${whereClause})
         BEGIN
-          ${nonIdColumns.length > 0
-          ? `UPDATE ${stagingTableRef} WITH (ROWLOCK)
+          ${
+            nonIdColumns.length > 0
+              ? `UPDATE ${stagingTableRef} WITH (ROWLOCK)
                SET ${updateClause}
                WHERE ${whereClause};`
-          : `SELECT 1 AS noop;`
-        }
+              : `SELECT 1 AS noop;`
+          }
         END
         ELSE
         BEGIN
@@ -1592,81 +1575,6 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     const rows = await this.fetchBatchFromStaging(syncJobId, batchSize);
 
     if (!rows || rows.length === 0) {
-      if (!this._finishedLogged) {
-        try {
-          const stagingTableRef = this.getStagingTableRef();
-          const jobState = await this.getSyncJobState(syncJobId);
-          logger.info(`[StreamTaskIn] No more data in staging for job ${syncJobId}`);
-          const expected = Number(jobState?.total_to_sync || 0);
-          const processed = Number(jobState?.total_processed || 0);
-          if (expected > processed) {
-            logger.warn(
-              `[StreamTaskIn][gap] processed=${processed}/${expected}, missing=${expected - processed}`,
-            );
-          }
-          const diag = await this.queryNewDb(
-            `
-            SELECT
-              COUNT(1) AS pending_total,
-              SUM(CASE WHEN ISNULL(MigrateErrFlg, 0) = 1 THEN 1 ELSE 0 END) AS pending_err,
-              SUM(CASE WHEN ISNULL(MigrateErrFlg, 0) = 0 THEN 1 ELSE 0 END) AS pending_clean
-            FROM ${stagingTableRef}
-            WHERE ISNULL(MigrateFlg, 0) = 0
-              AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) >= @startDate OR @startDate IS NULL)
-              AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) <= @endDate OR @endDate IS NULL)
-          `,
-            {
-              startDate: process.env.SYNC_START_DATE || null,
-              endDate: process.env.SYNC_END_DATE || null,
-            },
-          );
-          const d = diag?.[0] || {};
-          logger.info(
-            `[StreamTaskIn][diag] pending_total=${Number(d.pending_total || 0)}, pending_clean=${Number(d.pending_clean || 0)}, pending_err=${Number(d.pending_err || 0)}`,
-          );
-
-          const samplePending = await this.queryNewDb(
-            `
-            SELECT TOP (20) ID, Created, Modified, MigrateFlg, MigrateErrFlg, MigrateErrMess
-            FROM ${stagingTableRef}
-            WHERE ISNULL(MigrateFlg, 0) = 0
-              AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) >= @startDate OR @startDate IS NULL)
-              AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) <= @endDate OR @endDate IS NULL)
-            ORDER BY TRY_CONVERT(datetime2, Modified) DESC,
-                     TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(ID)), '')) DESC
-          `,
-            {
-              startDate: process.env.SYNC_START_DATE || null,
-              endDate: process.env.SYNC_END_DATE || null,
-            },
-          );
-          if (Array.isArray(samplePending) && samplePending.length > 0) {
-            logger.warn(`[StreamTaskIn][pending-sample] ${JSON.stringify(samplePending)}`);
-          }
-
-          const sampleError = await this.queryNewDb(
-            `
-            SELECT TOP (20) ID, Created, Modified, MigrateFlg, MigrateErrFlg, MigrateErrMess
-            FROM ${stagingTableRef}
-            WHERE ISNULL(MigrateErrFlg, 0) = 1
-              AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) >= @startDate OR @startDate IS NULL)
-              AND (TRY_CONVERT(datetime2, ${this.partitionColumn}) <= @endDate OR @endDate IS NULL)
-            ORDER BY TRY_CONVERT(datetime2, Modified) DESC,
-                     TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(ID)), '')) DESC
-          `,
-            {
-              startDate: process.env.SYNC_START_DATE || null,
-              endDate: process.env.SYNC_END_DATE || null,
-            },
-          );
-          if (Array.isArray(sampleError) && sampleError.length > 0) {
-            logger.warn(`[StreamTaskIn][error-sample] ${JSON.stringify(sampleError)}`);
-          }
-        } catch (diagErr) {
-          logger.warn(`[StreamTaskIn][diag] failed: ${diagErr.message}`);
-        }
-        this._finishedLogged = true;
-      }
       await this.finalizeProcessingCursor(syncJobId);
       return {
         syncJobId,
@@ -1728,8 +1636,8 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
       logger.error(`[StreamTaskIn] Batch transaction failed, falling back to sequential: ${batchError.message}`);
       if (transaction) {
         try {
-          await transaction.rollback().catch(() => { });
-        } catch (_) { }
+          await transaction.rollback().catch(() => {});
+        } catch (_) {}
       }
     }
 

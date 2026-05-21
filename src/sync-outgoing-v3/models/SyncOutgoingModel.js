@@ -50,7 +50,7 @@ class SyncOutgoingModel extends BaseSyncModel {
     this.extractor.newPool = this.newPool;
 
     // Ensure staging table exists
-    await this.extractor.ensureStagingTableExists(instanceId);
+    // await this.extractor.ensureStagingTableExists(instanceId);
 
     // Initialize loader with pools
     this.loader = new Loader(this.newPool, this.oldPool);
