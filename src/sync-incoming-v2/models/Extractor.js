@@ -64,12 +64,24 @@ class Extractor extends BaseExtractor {
    */
   getSyncTimeExpression() {
     return `
-      ISNULL(
+      COALESCE(
         TRY_CONVERT(datetime2, Modified, 121),
-        ISNULL(
-          TRY_CONVERT(datetime2, Created, 121),
-          '1753-01-01'
-        )
+        TRY_CONVERT(datetime2, Created, 121),
+        TRY_CONVERT(datetime2, Modified, 120),
+        TRY_CONVERT(datetime2, Created, 120),
+        TRY_CONVERT(datetime2, Modified, 105),
+        TRY_CONVERT(datetime2, Created, 105),
+        TRY_CONVERT(datetime2, [NgayDen], 105),
+        TRY_CONVERT(datetime2, [NgayDen], 120),
+        TRY_CONVERT(datetime2, [NgayDen], 121),
+        TRY_CONVERT(datetime2, [NgayTrenVB], 105),
+        TRY_CONVERT(datetime2, [NgayTrenVB], 120),
+        TRY_CONVERT(datetime2, [NgayTrenVB], 121),
+        TRY_CONVERT(datetime2, Modified),
+        TRY_CONVERT(datetime2, Created),
+        TRY_CONVERT(datetime2, [NgayDen]),
+        TRY_CONVERT(datetime2, [NgayTrenVB]),
+        '2026-01-01T00:00:00.000Z'
       )
     `.trim();
   }
@@ -121,10 +133,10 @@ class Extractor extends BaseExtractor {
 
   /**
    * Get initial sync time (earliest time) for ASC sync
-   * TEMPORARY: Set to 2026-05-18T00:00:00.000Z (yesterday) for testing
+   * TEMPORARY: Set to 2025-12-31T00:00:00.000Z for testing fallback
    */
   getInitialSyncTime() {
-    return '2026-01-10T00:00:00.000Z';
+    return '2025-12-31T00:00:00.000Z';
   }
 
   // ──────────────────────────────────────────────
