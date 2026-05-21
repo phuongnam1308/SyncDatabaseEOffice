@@ -81,7 +81,7 @@ class Extractor extends BaseExtractor {
         TRY_CONVERT(datetime2, Created),
         TRY_CONVERT(datetime2, [NgayDen]),
         TRY_CONVERT(datetime2, [NgayTrenVB]),
-        '2026-01-01T00:00:00.000Z'
+        '1753-01-01T00:00:00.000Z'
       )
     `.trim();
   }
@@ -133,10 +133,10 @@ class Extractor extends BaseExtractor {
 
   /**
    * Get initial sync time (earliest time) for ASC sync
-   * TEMPORARY: Set to 2025-12-31T00:00:00.000Z for testing fallback
+   * Fetches all records from the past if no last sync time exists.
    */
   getInitialSyncTime() {
-    return '2025-12-31T00:00:00.000Z';
+    return '1753-01-01T00:00:00.000Z';
   }
 
   // ──────────────────────────────────────────────
