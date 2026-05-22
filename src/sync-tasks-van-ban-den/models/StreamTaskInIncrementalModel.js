@@ -713,7 +713,7 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
 
   /**
    * Force-rebuilds the staging table (DROP + CREATE).
-   * Call this ONLY during maintenance / schema migration â€” NOT on every startup.
+   * Call this ONLY during maintenance / schema migration — NOT on every startup.
    * Wrapped with deadlock retry automatically.
    */
   async rebuildStagingTable() {
@@ -747,34 +747,58 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     const preparedResults = [];
     for (const { field, objectType } of fileFields) {
       const rawUrl = stagingRow?.[field];
-      if (!rawUrl || String(rawUrl).trim() === '') continue;
-      if (String(rawUrl).toLowerCase().includes('.aspx')) {
-        logger.debug(`[StreamTaskIn][prepareFiles] Skipping ASPX page link (not a file): ${rawUrl}`);
+      if (!rawUrl) continue;
+
+      let urlStr = String(rawUrl).trim();
+      if (urlStr === '') continue;
+
+      // Handle JSON strings (e.g. {"Url": "..."} or [{"Url": "..."}])
+      if (urlStr.startsWith('{') || urlStr.startsWith('[')) {
+        try {
+          const parsed = JSON.parse(urlStr);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            urlStr = parsed[0].Url || parsed[0].url || urlStr;
+          } else if (parsed && typeof parsed === 'object') {
+            urlStr = parsed.Url || parsed.url || urlStr;
+          }
+        } catch (e) {
+          // Keep using urlStr
+        }
+      }
+
+      // Strip any wrapping quotes
+      urlStr = urlStr.replace(/^["']|["']$/g, '').trim();
+
+      if (urlStr.toLowerCase().includes('.aspx')) {
+        logger.debug(`[StreamTaskIn][prepareFiles] Skipping ASPX page link (not a file): ${urlStr}`);
         continue;
       }
 
-      const relativePath = String(rawUrl).trim();
+      // Tránh trùng lắp nếu metadata dùng chung link
+      if (preparedResults.some(p => p.relativePath === urlStr)) continue;
+
+      const relativePath = urlStr;
       const fullUrl = relativePath.startsWith('http') ? relativePath : `${baseUrl}${relativePath}`;
       const fileName = relativePath.substring(relativePath.lastIndexOf('/') + 1) || field;
 
       try {
         logger.info(
-          `[StreamTaskIn][prepareFiles] Äang táº£i file cho Task ${stagingRow.ID}: ${fileName}`,
+          `[StreamTaskIn][prepareFiles] Đang tải file cho Task ID ${stagingRow.ID}: ${fileName}`,
         );
-        const buffer = await spDownload(fullUrl, this.newPool); // Truyá»n Pool Ä‘á»ƒ lock Ä‘a tiáº¿n trÃ¬nh
+        const buffer = await spDownload(fullUrl, this.newPool); // Truyền Pool để lock đa tiến trình
 
         if (buffer && buffer.length > 0) {
           preparedResults.push({ buffer, fileName, relativePath, objectType });
         }
       } catch (err) {
-        logger.error(`[StreamTaskIn][prepareFiles] Lá»—i táº£i file ${fileName}: ${err.message}`);
+        logger.error(`[StreamTaskIn][prepareFiles] Lỗi tải file ${fileName}: ${err.message}`);
       }
     }
     return preparedResults;
   }
 
   /**
-   * Ghi dá»¯ liá»‡u file cá»§a Task vÃ o database (TRONG Transaction SQL).
+   * Ghi dữ liệu file của Task vào database (TRONG Transaction SQL).
    */
   async applyPreparedTaskFiles(preparedFiles, newTaskId, stagingRow, transaction) {
     if (!Array.isArray(preparedFiles) || preparedFiles.length === 0) return true;

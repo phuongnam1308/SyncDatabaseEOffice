@@ -228,14 +228,33 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
       const StreamTaskMigrationModel = require('./StreamTaskMigrationModel');
       const StreamTaskUsersModel = require('./StreamTaskUsersModel');
       const StreamSystemLogTasksModel = require('./StreamSystemLogTasksModel');
+      const SyncCommentModel = require('../../sync-document-comment/SyncCommentModel');
       
-      this.taskMigrationModel = new StreamTaskMigrationModel();
-      this.taskUsersModel = new StreamTaskUsersModel();
-      this.sysLogTasksModel = new StreamSystemLogTasksModel();
+      this.taskModel = new StreamTaskMigrationModel();
+      await this.taskModel.initialize();
 
-      await this.taskMigrationModel.initialize();
+      this.taskUsersModel = new StreamTaskUsersModel();
       await this.taskUsersModel.initialize();
-      await this.sysLogTasksModel.initialize();
+
+      this.systemLogsModel = new StreamSystemLogTasksModel();
+      await this.systemLogsModel.initialize();
+
+      this._fileService = new FileService(this.newPool);
+
+      this._syncCommentModel = [];
+      const baseCommentModel = new SyncCommentModel(COMMENT_TABLES[0]);
+      await baseCommentModel.initialize();
+
+      this._syncCommentModel = COMMENT_TABLES.map((table) => {
+        const model = new SyncCommentModel(table);
+        model.oldPool = baseCommentModel.oldPool;
+        model.newPool = baseCommentModel.newPool;
+        return model;
+      });
+
+      logger.info(
+        '[StreamTaskOutIncrementalModel] Initialized with transaction-based aggregate processing (DISABLE_ENSURE_SCHEMA=true)',
+      );
       return;
     }
 
@@ -625,15 +644,37 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
     const preparedResults = [];
     for (const { field, objectType } of fileFields) {
       const rawUrl = stagingRow?.[field];
-      if (!rawUrl || String(rawUrl).trim() === '') continue;
-      if (String(rawUrl).toLowerCase().includes('.aspx')) {
-        logger.debug(`[StreamTaskOut][prepareFiles] Skipping ASPX page link (not a file): ${rawUrl}`);
+      if (!rawUrl) continue;
+
+      let urlStr = String(rawUrl).trim();
+      if (urlStr === '') continue;
+
+      // Handle JSON strings (e.g. {"Url": "..."} or [{"Url": "..."}])
+      if (urlStr.startsWith('{') || urlStr.startsWith('[')) {
+        try {
+          const parsed = JSON.parse(urlStr);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            urlStr = parsed[0].Url || parsed[0].url || urlStr;
+          } else if (parsed && typeof parsed === 'object') {
+            urlStr = parsed.Url || parsed.url || urlStr;
+          }
+        } catch (e) {
+          // Keep using urlStr
+        }
+      }
+
+      // Strip any wrapping quotes
+      urlStr = urlStr.replace(/^["']|["']$/g, '').trim();
+
+      if (urlStr.toLowerCase().includes('.aspx')) {
+        logger.debug(`[StreamTaskOut][prepareFiles] Skipping ASPX page link (not a file): ${urlStr}`);
         continue;
       }
-      // Tránh trùng lắp nếu metadata dùng chung link
-      if (preparedResults.some(p => p.relativePath === String(rawUrl).trim())) continue;
 
-      const relativePath = String(rawUrl).trim();
+      // Tránh trùng lắp nếu metadata dùng chung link
+      if (preparedResults.some(p => p.relativePath === urlStr)) continue;
+
+      const relativePath = urlStr;
       const fullUrl = relativePath.startsWith('http') ? relativePath : `${baseUrl}${relativePath}`;
       const fileName = relativePath.substring(relativePath.lastIndexOf('/') + 1) || field;
 
