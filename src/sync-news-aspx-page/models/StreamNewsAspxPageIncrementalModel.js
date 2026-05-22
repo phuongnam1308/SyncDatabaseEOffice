@@ -120,7 +120,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
       } else {
         logger.warn('[StreamNewsAspxPageIncrementalModel] Table "topics" not found in target DB. Skipping column ensure.');
       }
-      
+
       logger.info(
         '[StreamNewsAspxPageIncrementalModel] Schema check/widening completed for dbo.news and dbo.topics.',
       );
@@ -346,6 +346,9 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
   }
 
   async ensureStagingTableExists() {
+    if (process.env.DISABLE_ENSURE_SCHEMA === 'true') {
+      return;
+    }
     const table = this.getStagingTableRef();
     const query = `
       IF OBJECT_ID('${table}', 'U') IS NULL
@@ -860,7 +863,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
               stageResult = await this.syncOldToStaging(rows, { transaction, dbName: db });
               await transaction.commit();
             } catch (err) {
-              if (transaction) await transaction.rollback().catch(() => {});
+              if (transaction) await transaction.rollback().catch(() => { });
               logger.error(
                 `[Phase 1] Lỗi đồng bộ staging DB ${db} tại offset ${offset}: ${err.message}`,
               );
@@ -935,7 +938,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
             stageResult = await this.syncOldToStaging(rows, { transaction, dbName: db });
             await transaction.commit();
           } catch (err) {
-            if (transaction) await transaction.rollback().catch(() => {});
+            if (transaction) await transaction.rollback().catch(() => { });
             logger.error(
               `[Phase 2] Lỗi đồng bộ staging DB ${db} tại offset ${offset}: ${err.message}`,
             );
@@ -968,7 +971,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
 
     logger.info(
       `[StreamNewsAspxPageIncrementalModel] Hoàn tất hút dữ liệu đợt này. ` +
-        `Tổng cộng kéo được: ${allRowsCount} bản ghi.`,
+      `Tổng cộng kéo được: ${allRowsCount} bản ghi.`,
     );
 
     // === Phase 3 count: đếm records PENDING trong staging để SyncManager biết gọi processOne() bao nhiêu lần ===
@@ -993,7 +996,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
 
     logger.info(
       `[StreamNewsAspxPageIncrementalModel] Phase 3: ${pendingCount} records pending trong staging ` +
-        `(offset=${beginLimit}, limit=${completedLimit}).`,
+      `(offset=${beginLimit}, limit=${completedLimit}).`,
     );
 
     // Cập nhật Dashboard lần cuối với tổng số thực tế (bao gồm cả các bản ghi tồn đọng cũ trong staging)
@@ -1081,9 +1084,9 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
 
     const sourceLastSyncTime = this.normalizeSyncTime(
       options.sourceLastSyncTime ||
-        options.lastSyncTime ||
-        jobState?.last_sync_time ||
-        DEFAULT_SYNC_TIME,
+      options.lastSyncTime ||
+      jobState?.last_sync_time ||
+      DEFAULT_SYNC_TIME,
     );
     const sourceLastSyncId = Number(
       options.sourceLastSyncId != null ? options.sourceLastSyncId : jobState?.last_sync_id || 0,
@@ -1152,42 +1155,42 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
       });
     } catch (error) {
       if (error.response && (error.response.status === 401 || error.response.status === 403)) {
-         logger.warn(`[API] Cookie hết hạn khi gọi API JSON. Đang làm mới Token...`);
-         await refreshAuth(this.pool);
-         cookie = fs.readFileSync(cookiePath, 'utf8').trim(); // Đọc lại cookie mới
-         response = await axios.get(apiUrl, { // Gọi lần 2
-            httpsAgent,
-            headers: { 'Accept': 'application/json;odata=verbose', 'Cookie': cookie }
-         });
+        logger.warn(`[API] Cookie hết hạn khi gọi API JSON. Đang làm mới Token...`);
+        await refreshAuth(this.pool);
+        cookie = fs.readFileSync(cookiePath, 'utf8').trim(); // Đọc lại cookie mới
+        response = await axios.get(apiUrl, { // Gọi lần 2
+          httpsAgent,
+          headers: { 'Accept': 'application/json;odata=verbose', 'Cookie': cookie }
+        });
       } else {
-         throw error;
+        throw error;
       }
     }
 
     const items = response.data?.d?.results;
     if (items && items.length > 0) {
-       const article = items[0];
-       
-       // Bước 2: Dịch Taxonomy ID (WssId) thành Tên thật (Plain Text) từ Root Site
-       const taxonomyId = article.Categories1 && article.Categories1.Label ? article.Categories1.Label : null;
-       if (taxonomyId && !isNaN(Number(taxonomyId))) {
-           try {
-               const rootUrl = `https://${domain}`;
-               const taxApiUrl = `${rootUrl}/_api/web/lists/getbytitle('TaxonomyHiddenList')/items(${taxonomyId})`;
-               const taxResponse = await axios.get(taxApiUrl, {
-                   httpsAgent,
-                   headers: { 'Accept': 'application/json;odata=verbose', 'Cookie': cookie }
-               });
-               const taxItem = taxResponse.data.d;
-               // Ghi đè số ID thành chữ
-               article.Categories1.Label = taxItem.Term || taxItem.Title || taxonomyId;
-               logger.info(`[API] Đã dịch chuyên mục ID ${taxonomyId} thành "${article.Categories1.Label}"`);
-           } catch (taxErr) {
-               logger.warn(`[API] Không thể dịch chuyên mục ID ${taxonomyId}. Lỗi: ${taxErr.message}`);
-           }
-       }
-       
-       return article;
+      const article = items[0];
+
+      // Bước 2: Dịch Taxonomy ID (WssId) thành Tên thật (Plain Text) từ Root Site
+      const taxonomyId = article.Categories1 && article.Categories1.Label ? article.Categories1.Label : null;
+      if (taxonomyId && !isNaN(Number(taxonomyId))) {
+        try {
+          const rootUrl = `https://${domain}`;
+          const taxApiUrl = `${rootUrl}/_api/web/lists/getbytitle('TaxonomyHiddenList')/items(${taxonomyId})`;
+          const taxResponse = await axios.get(taxApiUrl, {
+            httpsAgent,
+            headers: { 'Accept': 'application/json;odata=verbose', 'Cookie': cookie }
+          });
+          const taxItem = taxResponse.data.d;
+          // Ghi đè số ID thành chữ
+          article.Categories1.Label = taxItem.Term || taxItem.Title || taxonomyId;
+          logger.info(`[API] Đã dịch chuyên mục ID ${taxonomyId} thành "${article.Categories1.Label}"`);
+        } catch (taxErr) {
+          logger.warn(`[API] Không thể dịch chuyên mục ID ${taxonomyId}. Lỗi: ${taxErr.message}`);
+        }
+      }
+
+      return article;
     }
     return null;
   }
@@ -1276,7 +1279,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
           };
           try {
             require('../../sync-manager/SyncManagerService')._broadcastSSE();
-          } catch (e) {}
+          } catch (e) { }
           break;
         }
 
@@ -1327,7 +1330,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
               const syncManager = require('../../sync-manager/SyncManagerService');
               syncManager.pauseJob(syncJobId); // DỪNG JOB LẠI ĐỂ USER ĐĂNG NHẬP
               syncManager._broadcastSSE();
-            } catch (e) {}
+            } catch (e) { }
             break;
           }
         }
@@ -1502,7 +1505,7 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
                 try {
                   const rawBaseName = path.basename(img.fullUrl.split('?')[0]);
                   let imgFileName = rawBaseName;
-                  try { imgFileName = decodeURIComponent(rawBaseName); } catch (e) {}
+                  try { imgFileName = decodeURIComponent(rawBaseName); } catch (e) { }
                   const imgLocalPath = path.join(imgOutDir, imgFileName);
 
                   // === FIX IMAGE LOOP: Kiểm tra cache trước, tránh download trùng lặp ===
@@ -1658,14 +1661,14 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
 
             // === FIX LINKING FILE: Cập nhật object_id cho các file vừa upload từ DocId sang newsId mới sinh ===
             if (resultProd.newsId && parsedData.DocId) {
-                await this.queryNewDbTx(
-                    `UPDATE dbo.file_relations 
+              await this.queryNewDbTx(
+                `UPDATE dbo.file_relations 
                      SET object_id = CAST(@newsId AS NVARCHAR(50))
                      WHERE object_id = @docId AND object_type IN ('news', 'NEWS')`,
-                    { newsId: String(resultProd.newsId), docId: String(parsedData.DocId) },
-                    trans
-                );
-                logger.info(`[Production Sync] Đã liên kết lại file: DocId ${parsedData.DocId} ➔ news.id ${resultProd.newsId}`);
+                { newsId: String(resultProd.newsId), docId: String(parsedData.DocId) },
+                trans
+              );
+              logger.info(`[Production Sync] Đã liên kết lại file: DocId ${parsedData.DocId} ➔ news.id ${resultProd.newsId}`);
             }
           },
           { maxRetries: 5 },

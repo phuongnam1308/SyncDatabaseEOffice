@@ -23,6 +23,8 @@ const STAGE = {
 // action_code tương ứng với sự kiện "tạo văn bản" → is_creator = 1
 const CREATOR_ACTION_CODES = new Set(['CREATE', 'TONG_HOP', 'SOAN_THAO']);
 
+const { isRetryableSqlError } = require('../../utils/dbUtils');
+
 class SyncOutgoingAuditModel extends SyncAuditModel {
   // ---------------------------------------------------------------------------
   // OVERRIDE: processSingleRecord
@@ -57,6 +59,9 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
           await this._syncToCurrentState(audit, auditId, transaction);
         }
       } catch (err) {
+        if (isRetryableSqlError(err)) {
+          throw err;
+        }
         logger.warn(
           `[SyncOutgoingAuditModel] sync phụ thất bại doc=${newDocumentId} originId=${rawRecord?.ID}: ${err.message}`
         );

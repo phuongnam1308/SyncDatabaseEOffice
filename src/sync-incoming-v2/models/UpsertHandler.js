@@ -140,7 +140,7 @@ class UpsertHandler {
     }
 
     const id = String(oldRecord?.ID || '').trim();
-    logger.info(`[UpsertHandler:Incoming] Processing ID: ${id}`);
+    // logger.info(`[UpsertHandler:Incoming] Processing ID: ${id}`);
 
     try {
       // Download files BEFORE transaction (avoid long lock on network I/O)
@@ -175,7 +175,7 @@ class UpsertHandler {
         };
       }, { maxRetries: 5 });
 
-      logger.info(`[UpsertHandler:Incoming] Completed ID: ${id}, action: ${result.action}`);
+      // logger.info(`[UpsertHandler:Incoming] Completed ID: ${id}, action: ${result.action}`);
       return { success: true, documentId: result.documentId, error: null };
 
     } catch (error) {
@@ -205,7 +205,7 @@ class UpsertHandler {
 
     if (existing && existing.length > 0) {
       const dbDocId = existing[0].document_id;
-      logger.info(`[UpsertHandler:Incoming] Found existing document [${dbDocId}] for bak_id: [${mapped.id_incoming_bak}]`);
+      // logger.info(`[UpsertHandler:Incoming] Found existing document [${dbDocId}] for bak_id: [${mapped.id_incoming_bak}]`);
       await this._updateRecord(mapped, transaction);
       return {
         action: 'updated',
@@ -252,7 +252,7 @@ class UpsertHandler {
     `;
 
     await this.queryNewDbTx(query, this._buildParams(record), transaction);
-    logger.info(`[UpsertHandler:Incoming] ✅ Inserted document ${record.document_id}`);
+    // logger.info(`[UpsertHandler:Incoming] ✅ Inserted document ${record.document_id}`);
 
     // Safety check
     const check = await this.queryNewDbTx(
@@ -372,25 +372,26 @@ class UpsertHandler {
       }
     }
 
-    const results = [];
-    for (const relativePath of filesToPath) {
+    const downloadPromises = filesToPath.map(async (relativePath) => {
       try {
-        if (!relativePath.includes('/')) continue;
+        if (!relativePath.includes('/')) return null;
         const fullUrl = `${baseUrl}${relativePath}`;
         const fileName = relativePath.substring(relativePath.lastIndexOf('/') + 1);
 
-        logger.info(`[UpsertHandler:Incoming][prepareFiles] Downloading: ${fileName}`);
+        // logger.info(`[UpsertHandler:Incoming][prepareFiles] Downloading: ${fileName}`);
         const buffer = await spDownload(fullUrl, this.newPool);
 
         if (buffer && buffer.length > 0) {
-          results.push({ buffer, fileName, relativePath });
+          return { buffer, fileName, relativePath };
         }
       } catch (err) {
         logger.error(`[UpsertHandler:Incoming][prepareFiles] Error downloading ${relativePath}: ${err.message}`);
       }
-    }
+      return null;
+    });
 
-    return results;
+    const results = await Promise.all(downloadPromises);
+    return results.filter(Boolean);
   }
 
   async _applyPreparedFiles(preparedFiles, oldRecord, documentInfo, transaction) {
@@ -505,12 +506,12 @@ class UpsertHandler {
 
           try {
             const result = await model.processSingleRecord(rawAudit, documentId, transaction, drafter);
-            if (result) {
-              logger.info(
-                `[UpsertHandler:Incoming][Audit] table=${tableName} documentId=${documentId} ` +
-                `inserted=${result?.inserted || 0} updated=${result?.updated || 0}`
-              );
-            }
+            // if (result) {
+            //   logger.info(
+            //     `[UpsertHandler:Incoming][Audit] table=${tableName} documentId=${documentId} ` +
+            //     `inserted=${result?.inserted || 0} updated=${result?.updated || 0}`
+            //   );
+            // }
           } catch (auditErr) {
             if (dbUtils.isRetryableSqlError(auditErr)) throw auditErr;
             logger.warn(`[UpsertHandler:Incoming][Audit] Error table=${tableName}: ${auditErr.message}`);
@@ -585,7 +586,7 @@ class UpsertHandler {
         table_backups: 'auto_create'
       }, transaction);
 
-      logger.info(`[UpsertHandler:Incoming][AutoAudit] Created initial CREATE audit for documentId=${documentId}`);
+      // logger.info(`[UpsertHandler:Incoming][AutoAudit] Created initial CREATE audit for documentId=${documentId}`);
     } catch (autoAuditErr) {
       if (dbUtils.isRetryableSqlError(autoAuditErr)) throw autoAuditErr;
       logger.warn(`[UpsertHandler:Incoming][AutoAudit] Failed for documentId=${documentId}: ${autoAuditErr.message}`);

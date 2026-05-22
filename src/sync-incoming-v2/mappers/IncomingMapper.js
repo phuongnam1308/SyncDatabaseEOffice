@@ -106,9 +106,8 @@ class IncomingMapper {
       this.helper.safeString(oldRecord.LinhVuc)
     );
 
-    // ── Unit / user mapping ───────────────────────
     // Incoming: sender_unit = cơ quan gửi (CoQuanGui2/CoQuanGuiText)
-    const senderUnit = await this.helper.mapSenderUnitId(
+    const senderUnit = await this.helper.mapCustomSenderUnitId(
       this.helper.safeString(oldRecord.CoQuanGui2 || oldRecord.CoQuanGui || oldRecord.CoQuanGuiText),
       transaction
     );

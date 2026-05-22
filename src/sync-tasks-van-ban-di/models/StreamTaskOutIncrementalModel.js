@@ -222,6 +222,23 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
   async _doInitialize() {
     await super.initialize();
 
+    if (process.env.DISABLE_ENSURE_SCHEMA === 'true') {
+      logger.info('[StreamTaskOutIncrementalModel] Skipping staging table and column checks (disabled via environment variable)');
+      // Late require to break potential circular dependencies
+      const StreamTaskMigrationModel = require('./StreamTaskMigrationModel');
+      const StreamTaskUsersModel = require('./StreamTaskUsersModel');
+      const StreamSystemLogTasksModel = require('./StreamSystemLogTasksModel');
+      
+      this.taskMigrationModel = new StreamTaskMigrationModel();
+      this.taskUsersModel = new StreamTaskUsersModel();
+      this.sysLogTasksModel = new StreamSystemLogTasksModel();
+
+      await this.taskMigrationModel.initialize();
+      await this.taskUsersModel.initialize();
+      await this.sysLogTasksModel.initialize();
+      return;
+    }
+
     try {
       // FIX: Ensure staging table exists FIRST before any model inits
       // await withDeadlockRetry(() => this.ensureStagingTableExists(), 'ensureStagingTableExists');
@@ -609,6 +626,10 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
     for (const { field, objectType } of fileFields) {
       const rawUrl = stagingRow?.[field];
       if (!rawUrl || String(rawUrl).trim() === '') continue;
+      if (String(rawUrl).toLowerCase().includes('.aspx')) {
+        logger.debug(`[StreamTaskOut][prepareFiles] Skipping ASPX page link (not a file): ${rawUrl}`);
+        continue;
+      }
       // Tránh trùng lắp nếu metadata dùng chung link
       if (preparedResults.some(p => p.relativePath === String(rawUrl).trim())) continue;
 

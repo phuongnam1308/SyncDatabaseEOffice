@@ -22,7 +22,12 @@ class SyncHandlerModel {
     return async (lastTime, lastSyncId = 0, opts = {}) => {
       // Lấy singleton instance của SyncManagerService để kiểm tra settings
       const syncManager = require('./SyncManagerService');
-      const skipPull = syncManager.state && syncManager.state.settings && syncManager.state.settings.SKIP_PULL_FROM_OLD === true;
+      let skipPull = syncManager.state && syncManager.state.settings && syncManager.state.settings.SKIP_PULL_FROM_OLD === true;
+      if (this.syncModel.modelName === 'STREAM_TASK_SHAREPOINT' ||
+          this.syncModel.constructor.name === 'SyncTaskSharePointAdapter' ||
+          (this.syncModel.getName && this.syncModel.getName().includes('StreamTaskSharePoint'))) {
+        skipPull = false;
+      }
 
       // Xác định chế độ đếm:
       // - forceFullSync=true → dùng DEFAULT_SYNC_TIME để đếm tất cả bản ghi (past + future)
@@ -84,7 +89,12 @@ class SyncHandlerModel {
       if (!preparedJobs.has(jobId)) {
         // Lấy singleton instance của SyncManagerService để kiểm tra settings
         const syncManager = require('./SyncManagerService');
-        const skipPull = syncManager.state && syncManager.state.settings && syncManager.state.settings.SKIP_PULL_FROM_OLD === true;
+        let skipPull = syncManager.state && syncManager.state.settings && syncManager.state.settings.SKIP_PULL_FROM_OLD === true;
+        if (this.syncModel.modelName === 'STREAM_TASK_SHAREPOINT' ||
+            this.syncModel.constructor.name === 'SyncTaskSharePointAdapter' ||
+            (this.syncModel.getName && this.syncModel.getName().includes('StreamTaskSharePoint'))) {
+          skipPull = false;
+        }
         const logger = require('../../utils/logger');
 
         let listResult = null;
@@ -92,6 +102,7 @@ class SyncHandlerModel {
           const modelLabel = this.syncModel.getName ? this.syncModel.getName() : (this.syncModel.modelName || 'Unknown');
           logger.info(`[SyncHandlerModel][${modelLabel}] SKIP_PULL_FROM_OLD is ON. Skipping extraction, using existing staging data.`);
           const stagedCount = await this.syncModel.getCount(effectiveTime, effectiveSyncId);
+          
           listResult = {
             totalCount: stagedCount,
             lastSyncTime: effectiveTime,
@@ -121,6 +132,20 @@ class SyncHandlerModel {
         // Do đó tổng `totalCount` trong context của preparedJobs phải là (pendingCount + resumeIndex)
         // để đảm bảo `remaining = totalCount - processed = pendingCount`.
         const pendingCount = Number(listResult?.totalCount ?? listResult?.stagedCount ?? 0);
+
+        // Đảm bảo ghi nhận total_to_sync vào DB cho tất cả các model (kể cả khi skipPull hoặc adapter không tự ghi)
+        try {
+          const dbConnection = require('../../db/connection');
+          const pool = dbConnection.getNewPool();
+          if (pool) {
+            await pool.request()
+              .input('total', pendingCount)
+              .input('jobId', jobId)
+              .query('UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId');
+          }
+        } catch (dbErr) {
+          logger.warn(`[SyncHandlerModel] Failed to update total_to_sync in DB: ${dbErr.message}`);
+        }
 
         preparedJobs.set(jobId, {
           totalCount: pendingCount + resumeIndex,

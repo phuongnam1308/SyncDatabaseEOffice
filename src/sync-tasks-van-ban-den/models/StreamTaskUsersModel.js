@@ -38,6 +38,10 @@ class StreamTaskUsersModel extends BaseIncrementalSyncInterface {
   /** Initialize model */
   async initialize() {
     await super.initialize();
+    if (process.env.DISABLE_ENSURE_SCHEMA === 'true') {
+      logger.info('[StreamTaskUsersModel] Skipping target column checks (disabled via environment variable)');
+      return;
+    }
     await this.ensureTaskUsersTableColumns();
     logger.info('[StreamTaskUsersModel] Initialized - no staging table');
   }

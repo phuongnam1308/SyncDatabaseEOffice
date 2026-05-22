@@ -30,7 +30,11 @@ class StreamSystemLogTasksModel extends BaseIncrementalSyncInterface {
   /** Initialize model */
   async initialize() {
     await super.initialize();
-    await this.ensureSystemLogTasksTableExists();
+    if (process.env.DISABLE_ENSURE_SCHEMA === 'true') {
+      logger.info('[StreamSystemLogTasksModel] DISABLE_ENSURE_SCHEMA is true, skipping system_log_tasks DDL');
+    } else {
+      await this.ensureSystemLogTasksTableExists();
+    }
     logger.info('[StreamSystemLogTasksModel] Initialized');
   }
 
