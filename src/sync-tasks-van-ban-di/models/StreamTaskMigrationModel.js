@@ -429,16 +429,13 @@ class StreamTaskMigrationModel extends BaseModel {
       throw new Error('rawRecord is required');
     }
 
-    // TEMP: force creator/updater để đồng nhất với luồng CV đến.
-    // TODO (logic chuẩn): bật lại map user từ dữ liệu cũ:
-    // const createdBy = await this.helper.mapUserName(rawRecord.CreatedBy) || null;
-    // const modifiedBy = await this.helper.mapUserName(rawRecord.ModifiedBy) || null;
+    // Bật lại logic chuẩn: Tự động ánh xạ người tạo và người chỉnh sửa từ CSDL cũ
     const forcedActorId =
       process.env.TASK_TEMP_CREATED_BY_ID ||
       process.env.VANTHU_USER_ID ||
       'b23406e3-5c75-41d3-91e0-1654293ae6b2';
-    const createdBy = forcedActorId;
-    const modifiedBy = forcedActorId;
+    const createdBy = (await this.helper.mapUserName(this.helper.safeString(rawRecord.CreatedBy), transaction)) || forcedActorId;
+    const modifiedBy = (await this.helper.mapUserName(this.helper.safeString(rawRecord.ModifiedBy), transaction)) || forcedActorId;
 
     // CV đi: dùng raw staging values để giữ nguyên format legacy kiểu "Nov 28 2024  8:46AM".
     // Không dùng helper.parseDate ở đây vì có thể làm mất format trước khi safeDateParse xử lý.

@@ -423,16 +423,13 @@ class StreamTaskMigrationModel extends BaseModel {
       throw new Error('rawRecord.ID is required for id_task_bak');
     }
 
-    // TEMP: force creator/updater để nhìn thấy dữ liệu trước trên UI.
-    // TODO (logic chuẩn): bật lại map user từ dữ liệu cũ:
-    // const createdBy = (await this.helper.mapUserName(this.helper.safeString(rawRecord.CreatedBy))) || null;
-    // const modifiedBy = (await this.helper.mapUserName(this.helper.safeString(rawRecord.ModifiedBy))) || null;
+    // Bật lại logic chuẩn: Tự động ánh xạ người tạo và người chỉnh sửa từ CSDL cũ
     const forcedActorId =
       process.env.TASK_TEMP_CREATED_BY_ID ||
       process.env.VANTHU_USER_ID ||
       'b23406e3-5c75-41d3-91e0-1654293ae6b2';
-    const createdBy = forcedActorId;
-    const modifiedBy = forcedActorId;
+    const createdBy = (await this.helper.mapUserName(this.helper.safeString(rawRecord.CreatedBy), transaction)) || forcedActorId;
+    const modifiedBy = (await this.helper.mapUserName(this.helper.safeString(rawRecord.ModifiedBy), transaction)) || forcedActorId;
 
     // Read raw values directly from staging to preserve legacy formats.
     const startDateRaw = rawRecord.StartDate;
