@@ -16,7 +16,7 @@ class Loader extends BaseLoader {
   constructor(newPool, oldPool) {
     super({
       modelName: 'INCOMING_LOADER',
-      stagingTableBaseName: 'incomming_documents_sync',
+      stagingTableBaseName: 'incomming_document_sync',
       mainTableName: 'incomming_documents',
       partitionColumn: 'NgayDen'
     });
@@ -24,6 +24,10 @@ class Loader extends BaseLoader {
     this.newPool = newPool;
     this.oldPool = oldPool;
     this.upsertHandler = null;
+  }
+
+  getStagingTableName(instanceId) {
+    return 'incomming_document_sync';
   }
 
   async initialize() {

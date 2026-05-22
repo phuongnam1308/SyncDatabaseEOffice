@@ -57,6 +57,13 @@ class SyncIncomingModel extends BaseSyncModel {
     this.oldPool = dbConnection.getOldPool();
     this.newPool = dbConnection.getNewPool();
 
+    if (!this.newPool) {
+      throw new Error('Chưa kết nối được Database MỚI (Đích). Không thể ghi dữ liệu.');
+    }
+    if (!this.oldPool) {
+      logger.warn(`[${this.modelName}] Database CŨ (Nguồn) chưa được kết nối. Quá trình lấy dữ liệu mới sẽ gặp lỗi.`);
+    }
+
     this.extractor.oldPool = this.oldPool;
     this.extractor.newPool = this.newPool;
 

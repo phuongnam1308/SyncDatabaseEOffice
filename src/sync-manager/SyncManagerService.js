@@ -730,7 +730,16 @@ class SyncManagerService {
    * @returns {{jobId:string,modelName:string,status:string}}
    */
   startModel(modelName, options = {}) {
-    if (!this.registry.has(modelName)) throw new Error(`Model ${modelName} is not registered`);
+    if (!this.registry.has(modelName)) {
+      // Nếu có SyncModelRegistry, kiểm tra xem model có tồn tại nhưng bị lỗi init không
+      if (this._modelRegistry) {
+        const entry = this._modelRegistry.get(modelName);
+        if (entry && !entry.handler) {
+          throw new Error(`Module '${modelName}' đã cấu hình nhưng KHỞI TẠO THẤT BẠI lúc khởi động (thường do lỗi kết nối Database). Vui lòng kiểm tra file error.log.`);
+        }
+      }
+      throw new Error(`Model ${modelName} is not registered`);
+    }
 
     const modelState = this.getModelState(modelName);
     const isReset = Boolean(options.reset);

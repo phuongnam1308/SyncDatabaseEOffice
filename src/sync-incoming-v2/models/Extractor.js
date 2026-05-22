@@ -18,7 +18,7 @@ class Extractor extends BaseExtractor {
       modelName: 'INCOMING_EXTRACTOR',
       oldDbTable: 'VanBanDen',
       oldDbSchema: 'dbo',
-      stagingTableBaseName: 'incomming_documents_sync',
+      stagingTableBaseName: 'incomming_document_sync',
       partitionColumn: 'NgayDen'
     });
 
@@ -29,6 +29,10 @@ class Extractor extends BaseExtractor {
 
     // Effective SYNC_MIN_DATE: nếu SYNC_START_DATE sớm hơn thì dùng SYNC_START_DATE
     this._syncMinDate = this._resolveEffectiveSyncMinDate();
+  }
+
+  getStagingTableName(instanceId) {
+    return 'incomming_document_sync';
   }
 
   // ──────────────────────────────────────────────
@@ -382,7 +386,7 @@ class Extractor extends BaseExtractor {
           __sync_time                 DATETIME2        NULL,
           __sync_id                   BIGINT           NULL,
 
-          CONSTRAINT PK_incomming_documents_sync_${instanceId} PRIMARY KEY (ID)
+          CONSTRAINT PK_incomming_document_sync PRIMARY KEY (ID)
         );
       END
     `;

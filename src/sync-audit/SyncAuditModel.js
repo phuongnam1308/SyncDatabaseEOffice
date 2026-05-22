@@ -194,7 +194,7 @@ class SyncAuditModel extends BaseModel {
               WHERE name = '${idxName}' AND object_id = OBJECT_ID('${dbName}.${schema}.${tbl}')
             )
             BEGIN
-              CREATE NONCLUSTERED INDEX [${idxName}] ON ${dbName}.${schema}.${tbl} (document_id);
+              EXEC('CREATE NONCLUSTERED INDEX [${idxName}] ON ${dbName}.${schema}.${tbl} (document_id)');
             END
           `;
         }
