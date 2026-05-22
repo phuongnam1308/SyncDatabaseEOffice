@@ -836,7 +836,7 @@ class MigrationHelper {
       await this.queryNewDbTx(insertQuery, { id, name: normalizedName }, null); // Không dùng transaction chung
 
       if (topicMap) topicMap[lowerName] = id;
-      logger.info(`[getOrCreateTopic] Đã tự động tạo Danh mục mới: "${normalizedName}" (ID: ${id})`);
+      // logger.info(`[getOrCreateTopic] Đã tự động tạo Danh mục mới: "${normalizedName}" (ID: ${id})`);
       return id;
 
     } catch (error) {
@@ -902,7 +902,7 @@ class MigrationHelper {
       const trimmed = userIdOrName.trim();
       if (!trimmed) return userIdOrName;
 
-      logger.info(`[syncAndMapUser] Searching for: "${trimmed}"`);
+      // logger.info(`[syncAndMapUser] Searching for: "${trimmed}"`);
 
       // 1. Tìm trong DB mới (theo ID, Username, hoặc Name)
       const checkNewQuery = `
@@ -911,7 +911,7 @@ class MigrationHelper {
       `;
       const existedNew = await this.queryNewDbTx(checkNewQuery, { val: trimmed }, transaction);
       if (existedNew?.length) {
-        logger.info(`[syncAndMapUser] Found in New DB: ${trimmed} -> ${existedNew[0].id}`);
+        // logger.info(`[syncAndMapUser] Found in New DB: ${trimmed} -> ${existedNew[0].id}`);
         return existedNew[0].id;
       }
 
@@ -945,7 +945,7 @@ class MigrationHelper {
    */
   async strictUserResolver(rowData, transaction = null) {
     const recordId = rowData.ID || rowData.tp_ID || 'Unknown';
-    logger.info(`[strictUserResolver] --- START STRICT RESOLVING USER (Record ID: ${recordId}) ---`);
+    // logger.info(`[strictUserResolver] --- START STRICT RESOLVING USER (Record ID: ${recordId}) ---`);
 
     const selectQuery = `
       SELECT TOP 1 id, name, username, code_nd
@@ -956,10 +956,10 @@ class MigrationHelper {
     // --- STEP 1: AuthorAccount ---
     if (rowData.AuthorAccount) {
       const account = this.extractAccountOnly(rowData.AuthorAccount);
-      logger.info(`[strictUserResolver] STEP 1: Checking AuthorAccount "${rowData.AuthorAccount}" -> Extracted: "${account}"`);
+      // logger.info(`[strictUserResolver] STEP 1: Checking AuthorAccount "${rowData.AuthorAccount}" -> Extracted: "${account}"`);
       const res = await this.queryNewDbTx(selectQuery, { val: account }, transaction);
       if (res?.length) {
-        logger.info(`[strictUserResolver] >> SUCCESS: Found UID ${res[0].id} (${res[0].name})`);
+        // logger.info(`[strictUserResolver] >> SUCCESS: Found UID ${res[0].id} (${res[0].name})`);
         return res[0].id;
       }
     }
@@ -967,10 +967,10 @@ class MigrationHelper {
     // --- STEP 2: AuthorName ---
     if (rowData.AuthorName) {
       const cleanName = this.extractDisplayName(rowData.AuthorName);
-      logger.info(`[strictUserResolver] STEP 2: Checking AuthorName "${rowData.AuthorName}" -> Clean: "${cleanName}"`);
+      // logger.info(`[strictUserResolver] STEP 2: Checking AuthorName "${rowData.AuthorName}" -> Clean: "${cleanName}"`);
       const res = await this.queryNewDbTx(selectQuery, { val: cleanName }, transaction);
       if (res?.length) {
-        logger.info(`[strictUserResolver] >> SUCCESS: Found UID ${res[0].id} (${res[0].name})`);
+        // logger.info(`[strictUserResolver] >> SUCCESS: Found UID ${res[0].id} (${res[0].name})`);
         return res[0].id;
       }
     }
@@ -978,10 +978,10 @@ class MigrationHelper {
     // --- STEP 3: EditorAccount ---
     if (rowData.EditorAccount) {
       const account = this.extractAccountOnly(rowData.EditorAccount);
-      logger.info(`[strictUserResolver] STEP 3: Checking EditorAccount "${rowData.EditorAccount}" -> Extracted: "${account}"`);
+      // logger.info(`[strictUserResolver] STEP 3: Checking EditorAccount "${rowData.EditorAccount}" -> Extracted: "${account}"`);
       const res = await this.queryNewDbTx(selectQuery, { val: account }, transaction);
       if (res?.length) {
-        logger.info(`[strictUserResolver] >> SUCCESS: Found UID ${res[0].id} (${res[0].name})`);
+        // logger.info(`[strictUserResolver] >> SUCCESS: Found UID ${res[0].id} (${res[0].name})`);
         return res[0].id;
       }
     }
@@ -989,10 +989,10 @@ class MigrationHelper {
     // --- STEP 4: EditorName ---
     if (rowData.EditorName) {
       const cleanName = this.extractDisplayName(rowData.EditorName);
-      logger.info(`[strictUserResolver] STEP 4: Checking EditorName "${rowData.EditorName}" -> Clean: "${cleanName}"`);
+      // logger.info(`[strictUserResolver] STEP 4: Checking EditorName "${rowData.EditorName}" -> Clean: "${cleanName}"`);
       const res = await this.queryNewDbTx(selectQuery, { val: cleanName }, transaction);
       if (res?.length) {
-        logger.info(`[strictUserResolver] >> SUCCESS: Found UID ${res[0].id} (${res[0].name})`);
+        // logger.info(`[strictUserResolver] >> SUCCESS: Found UID ${res[0].id} (${res[0].name})`);
         return res[0].id;
       }
     }
@@ -1021,7 +1021,7 @@ class MigrationHelper {
           `;
           const existing = await this.queryNewDbTx(selectQuery, { name: coreName }, transaction);
           if (existing?.length) {
-              logger.info(`[mapUserWithLikeSearch] KHỚP CHÍNH XÁC: "${coreName}" -> User: ${existing[0].name} (ID: ${existing[0].id})`);
+            //   logger.info(`[mapUserWithLikeSearch] KHỚP CHÍNH XÁC: "${coreName}" -> User: ${existing[0].name} (ID: ${existing[0].id})`);
               return existing[0].id;
           }
 
@@ -1033,7 +1033,7 @@ class MigrationHelper {
           `;
           const likeResult = await this.queryNewDbTx(likeQuery, { name: coreName }, transaction);
           if (likeResult?.length) {
-              logger.info(`[mapUserWithLikeSearch] KHỚP LIKE: "${coreName}" -> User: ${likeResult[0].name} (ID: ${likeResult[0].id})`);
+            //   logger.info(`[mapUserWithLikeSearch] KHỚP LIKE: "${coreName}" -> User: ${likeResult[0].name} (ID: ${likeResult[0].id})`);
               return likeResult[0].id;
           }
 
@@ -2098,9 +2098,9 @@ class MigrationHelper {
         );
 
         if (matchedRoom?.id) {
-          logger.info(
-            `[mapMeetingRoom] Reusing room "${matchedRoom.name}" for "${room}" (score=${score}, reason=${matchedRoom._matchReason || 'unknown'})`
-          );
+        //   logger.info(
+        //     `[mapMeetingRoom] Reusing room "${matchedRoom.name}" for "${room}" (score=${score}, reason=${matchedRoom._matchReason || 'unknown'})`
+        //   );
           ids.push(matchedRoom.id);
           continue;
         }
@@ -3618,7 +3618,7 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
 
       if (result?.length) {
         const name = this.safeString(result[0].Name);
-        logger.info(`[getUserFieldName] Found: UserFieldId="${trimmed}" -> Name="${name}"`);
+        // logger.info(`[getUserFieldName] Found: UserFieldId="${trimmed}" -> Name="${name}"`);
         return name;
       }
 
@@ -3651,7 +3651,7 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
         const incomingResult = await this.queryNewDbTx(incomingQuery, { oldId: trimmed }, transaction);
         if (incomingResult?.length) {
           const document_id = incomingResult[0].document_id;
-          logger.info(`[findDocumentIdByOldId] Found in incoming_documents: oldId="${trimmed}" -> document_id="${document_id}"`);
+          // logger.info(`[findDocumentIdByOldId] Found in incoming_documents: oldId="${trimmed}" -> document_id="${document_id}"`);
           return { document_id, type: 'IncommingDocument' };
         }
       }
@@ -3667,7 +3667,7 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
         const outgoingResult = await this.queryNewDbTx(outgoingQuery, { oldId: trimmed }, transaction);
         if (outgoingResult?.length) {
           const document_id = outgoingResult[0].document_id;
-          logger.info(`[findDocumentIdByOldId] Found in outgoing_documents: oldId="${trimmed}" -> document_id="${document_id}"`);
+          // logger.info(`[findDocumentIdByOldId] Found in outgoing_documents: oldId="${trimmed}" -> document_id="${document_id}"`);
           return { document_id, type: 'OutgoingDocument' };
         }
       }
