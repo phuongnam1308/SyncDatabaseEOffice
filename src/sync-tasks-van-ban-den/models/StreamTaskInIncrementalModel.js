@@ -748,6 +748,10 @@ class StreamTaskInIncrementalModel extends BaseIncrementalSyncInterface {
     for (const { field, objectType } of fileFields) {
       const rawUrl = stagingRow?.[field];
       if (!rawUrl || String(rawUrl).trim() === '') continue;
+      if (String(rawUrl).toLowerCase().includes('.aspx')) {
+        logger.debug(`[StreamTaskIn][prepareFiles] Skipping ASPX page link (not a file): ${rawUrl}`);
+        continue;
+      }
 
       const relativePath = String(rawUrl).trim();
       const fullUrl = relativePath.startsWith('http') ? relativePath : `${baseUrl}${relativePath}`;

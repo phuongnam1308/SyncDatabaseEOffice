@@ -626,6 +626,10 @@ class StreamTaskOutIncrementalModel extends BaseIncrementalSyncInterface {
     for (const { field, objectType } of fileFields) {
       const rawUrl = stagingRow?.[field];
       if (!rawUrl || String(rawUrl).trim() === '') continue;
+      if (String(rawUrl).toLowerCase().includes('.aspx')) {
+        logger.debug(`[StreamTaskOut][prepareFiles] Skipping ASPX page link (not a file): ${rawUrl}`);
+        continue;
+      }
       // Tránh trùng lắp nếu metadata dùng chung link
       if (preparedResults.some(p => p.relativePath === String(rawUrl).trim())) continue;
 
