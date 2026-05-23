@@ -52,7 +52,7 @@ class SyncIncomingAdapter {
    * Đếm số bản ghi đang chờ xử lý trong staging (phục vụ Skip Pull)
    */
   async getCount(lastTime, lastSyncId = 0) {
-    const stagingTable = `incomming_document_sync`;
+    const stagingTable = `incomming_documents_sync`;
 
     const query = `
       SELECT COUNT(1) AS cnt

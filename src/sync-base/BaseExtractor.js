@@ -158,6 +158,11 @@ class BaseExtractor {
 
     logger.info(`[${this.modelName}] Fetching batch: lastSyncTime=${lastSyncTime}, lastSyncId=${lastSyncId}, limit=${batchSize}, offset=${offset}`);
 
+    if (!this.oldPool) {
+      logger.warn(`[${this.modelName}] fetchBatchFromOldDb: Database CŨ (Nguồn) chưa kết nối. Bỏ qua fetch.`);
+      return [];
+    }
+
     const results = await this.oldPool.request()
       .input('lastSyncTime', sql.DateTime2, lastSyncTime)
       .input('lastSyncId', sql.BigInt, lastSyncId)
@@ -350,6 +355,11 @@ class BaseExtractor {
       WHERE (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
         AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
     `;
+
+    if (!this.oldPool) {
+      logger.warn(`[${this.modelName}] countOldDbRecords: Database CŨ (Nguồn) chưa kết nối. Trả về 0.`);
+      return 0;
+    }
 
     const result = await this.oldPool.request()
       .input('startDate', sql.DateTime2, process.env.SYNC_START_DATE || null)

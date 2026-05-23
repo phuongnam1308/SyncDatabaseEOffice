@@ -68,10 +68,11 @@ class SyncIncomingModel extends BaseSyncModel {
     this.extractor.newPool = this.newPool;
 
     // Ensure staging table exists for this instance
-    await this.extractor.ensureStagingTableExists(instanceId);
+    // Yêu cầu của người dùng: "bỏ cái tự động khởi tạo" (để tránh lỗi CREATE TABLE)
+    // await this.extractor.ensureStagingTableExists(instanceId);
 
     // Ensure main table has required columns (self-healing)
-    await this._ensureMainTableSchema();
+    // await this._ensureMainTableSchema();
 
     // Initialize loader
     this.loader = new Loader(this.newPool, this.oldPool);

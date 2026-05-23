@@ -16,7 +16,7 @@ class Loader extends BaseLoader {
   constructor(newPool, oldPool) {
     super({
       modelName: 'INCOMING_LOADER',
-      stagingTableBaseName: 'incomming_document_sync',
+      stagingTableBaseName: 'incomming_documents_sync',
       mainTableName: 'incomming_documents',
       partitionColumn: 'NgayDen'
     });
@@ -27,7 +27,7 @@ class Loader extends BaseLoader {
   }
 
   getStagingTableName(instanceId) {
-    return 'incomming_document_sync';
+    return 'incomming_documents_sync';
   }
 
   async initialize() {
@@ -60,6 +60,9 @@ class Loader extends BaseLoader {
     const endDate   = process.env.SYNC_END_DATE   || null;
 
     try {
+      if (!this.newPool) {
+        throw new Error('Loader: newPool (Đích) chưa được kết nối.');
+      }
       let dateConditions = '';
       const reqCount = this.newPool.request();
       const reqClaim = this.newPool.request();

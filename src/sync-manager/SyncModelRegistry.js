@@ -350,8 +350,17 @@ class SyncModelRegistry {
         handler: null // Will be set if registration succeeds
       });
 
-      if (typeof instance.initialize === 'function') {
-        await instance.initialize();
+      try {
+        if (typeof instance.initialize === 'function') {
+          await instance.initialize();
+        }
+        instance._initSuccess = true;
+        logger.info(`[SyncModelRegistry] ✅ Khởi tạo thành công: ${key}`);
+      } catch (error) {
+        logger.error(`[SyncModelRegistry] ❌ Khởi tạo THẤT BẠI: ${key}. Lỗi: ${error.message}. (Sẽ thử lại khi chạy job)`);
+        instance._initSuccess = false;
+        // Don't re-throw, so other models can continue
+        // We STILL register the handler below so the module can be started later!
       }
 
       const handler = new SyncHandlerModel(instance);
@@ -360,7 +369,6 @@ class SyncModelRegistry {
       // Update registry with the successful handler
       this._registry.get(key).handler = handler;
 
-      logger.info(`[SyncModelRegistry] ✅ Khởi tạo thành công: ${key}`);
     } catch (error) {
       logger.error(`[SyncModelRegistry] ❌ Khởi tạo THẤT BẠI: ${key}. Lỗi: ${error.message}`);
       // Don't re-throw, so other models can continue

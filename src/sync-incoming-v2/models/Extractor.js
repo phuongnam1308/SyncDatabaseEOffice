@@ -18,7 +18,7 @@ class Extractor extends BaseExtractor {
       modelName: 'INCOMING_EXTRACTOR',
       oldDbTable: 'VanBanDen',
       oldDbSchema: 'dbo',
-      stagingTableBaseName: 'incomming_document_sync',
+      stagingTableBaseName: 'incomming_documents_sync',
       partitionColumn: 'NgayDen'
     });
 
@@ -32,7 +32,7 @@ class Extractor extends BaseExtractor {
   }
 
   getStagingTableName(instanceId) {
-    return 'incomming_document_sync';
+    return 'incomming_documents_sync';
   }
 
   // ──────────────────────────────────────────────
@@ -220,6 +220,11 @@ class Extractor extends BaseExtractor {
       `lastSyncId=${lastSyncId}, limit=${batchSize}, offset=${offset}`
     );
 
+    if (!this.oldPool) {
+      logger.warn(`[${this.modelName}] fetchBatchFromOldDb: Database CŨ (Nguồn) chưa kết nối. Bỏ qua fetch.`);
+      return [];
+    }
+
     try {
       const results = await this.oldPool.request()
         .input('lastSyncTime', sql.DateTime2, effectiveSyncTime)
@@ -299,6 +304,11 @@ class Extractor extends BaseExtractor {
       )
       AND __sync_time >= @syncMinDate
     `;
+
+    if (!this.oldPool) {
+      logger.warn(`[${this.modelName}] countListFromOldDb: Database CŨ (Nguồn) chưa kết nối. Trả về 0.`);
+      return 0;
+    }
 
     try {
       const results = await this.oldPool.request()
@@ -386,7 +396,7 @@ class Extractor extends BaseExtractor {
           __sync_time                 DATETIME2        NULL,
           __sync_id                   BIGINT           NULL,
 
-          CONSTRAINT PK_incomming_document_sync PRIMARY KEY (ID)
+          CONSTRAINT PK_incomming_documents_sync PRIMARY KEY (ID)
         );
       END
     `;

@@ -81,10 +81,9 @@ class SyncAuditModel extends BaseModel {
 
     // Khởi tạo block check schema duy nhất
     SyncAuditModel._schemaInitPromise = (async () => {
-      if (process.env.DISABLE_ENSURE_SCHEMA === 'true') {
-        logger.info('[SyncAuditModel] Skipping global schema initialization (disabled via environment variable).');
-        return;
-      }
+      // Yêu cầu của người dùng: tắt auto schema creation (tránh lỗi permission denied)
+      logger.info('[SyncAuditModel] Skipping global schema initialization (disabled as per user request).');
+      return;
       try {
         const dbName = process.env.NEW_DB_NAME;
         const schema = this.newDbSchema;
