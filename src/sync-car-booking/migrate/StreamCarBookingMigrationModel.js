@@ -1001,15 +1001,26 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         // 🔥 1. Resolve Thông tin Người dùng (Waterfall) - Đồng nhất ID cho Master & Audit
         let finalUserId = null;
 
-        // 1a. Tách tên thuần (Loại bỏ phòng ban phía sau dấu "-")
-        // Ví dụ: "Hoàng Thị Lan Phương - TB ATPC" -> "Hoàng Thị Lan Phương"
-        let pureName = null;
-        if (rowData.AuthorName) {
-            pureName = String(rowData.AuthorName).split('-')[0].trim();
-            console.log(`[StreamCarBookingMigrationModel] Extracted pure name: "${pureName}" from "${rowData.AuthorName}"`);
+        const createdByFallback = [rowData.AuthorName, rowData.AuthorAccount, rowData.EditorName, rowData.EditorAccount]
+            .map(v => (v || '').toString().trim())
+            .find(v => v !== '');
+
+        if (createdByFallback) {
+            rowData.created_by = createdByFallback;
+            if (!rowData.AuthorAccount) {
+                rowData.AuthorAccount = createdByFallback; // keep existing mapping logic for user lookup/contact_person flow
+            }
         }
 
-        // 1b. Dùng MigrationHelper để tự động dò tìm hoặc tạo User ID
+        // 1a. Tách tên thuần (Loại bỏ phòng ban phía sau dấu "-") từ nguồn ưu tiên
+        let pureName = null;
+        const nameSource = rowData.AuthorName || rowData.EditorName || rowData.AuthorAccount || rowData.EditorAccount;
+        if (nameSource) {
+            pureName = String(nameSource).split('-')[0].trim();
+            console.log(`[StreamCarBookingMigrationModel] Extracted pure name: "${pureName}" from "${nameSource}"`);
+        }
+
+        // 1b. Dùng MigrationHelper để tự động dò tìm hoặc tạo User ID khi có tên
         if (pureName) {
             try {
                 if (this.helper && typeof this.helper.syncAndMapUser === 'function') {
@@ -1026,14 +1037,15 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
             }
         }
 
-        // 1c. Thử tìm ID theo Account (username) nếu Tên thất bại hoặc Helper không tìm thấy
-        if (!finalUserId && rowData.AuthorAccount) {
+        // 1c. Thử tìm ID theo Account (username) nếu Tên thất bại hoặc nếu source là account
+        const accountSource = rowData.AuthorAccount || rowData.EditorAccount;
+        if (!finalUserId && accountSource) {
             try {
                 const qAccount = `SELECT TOP 1 id FROM [${this.newDbName}].[dbo].[users] WHERE username = @account OR email LIKE @account + '@%'`;
-                const accRows = await this.queryNewDbTx(qAccount, { account: String(rowData.AuthorAccount).trim() }, transaction);
+                const accRows = await this.queryNewDbTx(qAccount, { account: String(accountSource).trim() }, transaction);
                 if (accRows && accRows.length > 0) {
                     finalUserId = accRows[0].id;
-                    console.log(`[StreamCarBookingMigrationModel] Mapped User by Account (${rowData.AuthorAccount}) -> ${finalUserId}`);
+                    console.log(`[StreamCarBookingMigrationModel] Mapped User by Account (${accountSource}) -> ${finalUserId}`);
                 }
             } catch (e) {
                 console.warn(`[StreamCarBookingMigrationModel] Lỗi tìm user bằng Account: ${e.message}`);
@@ -1043,7 +1055,7 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         // 1d. Fallback an toàn nếu vẫn không tìm thấy
         if (!finalUserId) {
             finalUserId = 'b23406e3-5c75-41d3-91e0-1654293ae6b2';
-            console.log(`[StreamCarBookingMigrationModel] User not found for ${rowData.AuthorName || rowData.AuthorAccount}. Using fallback Admin ID: ${finalUserId}`);
+            console.log(`[StreamCarBookingMigrationModel] User not found for ${createdByFallback || 'unknown source'}. Using fallback Admin ID: ${finalUserId}`);
         }
 
         rowData.AuthorAccount = finalUserId;
@@ -1110,19 +1122,19 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         rowData.department = '68afbefecb36081f0bbbef2e';
 
         // Thời gian gốc từ SharePoint
-        rowData.request_submitted_at = rowData.tp_Created || now;
+        rowData.request_submitted_at = rowData.tp_Created || rowData.CreatedDate || now;
 
-        // 🔥 1.8. Tính toán các trường bổ trợ (Thời lượng & Chuẩn hóa thời gian)
-        // Lấy thời gian đi từ tp_Created và thời gian về từ tp_Modified theo yêu cầu USER
         const parseDateFallback = (str) => {
             if (!str) return null;
             if (str instanceof Date) return isNaN(str.getTime()) ? null : str;
-            // Làm sạch khoảng trắng và thêm dấu cách trước AM/PM nếu thiếu (ví dụ: "6:36AM" -> "6:36 AM")
             let cleanStr = String(str).replace(/\s+/g, ' ').trim();
             cleanStr = cleanStr.replace(/([aApP][mM])$/, ' $1');
             const d = new Date(cleanStr);
             return isNaN(d.getTime()) ? null : d;
         };
+
+        rowData.created_at = rowData.created_at || parseDateFallback(rowData.CreatedDate || rowData.Created || rowData.tp_Created) || now;
+        rowData.updated_at = rowData.updated_at || parseDateFallback(rowData.ModifiedDate || rowData.Modified || rowData.tp_Modified) || rowData.created_at || now;
 
         const start = parseDateFallback(rowData.tp_Created || rowData.CreatedDate);
         const end = parseDateFallback(rowData.tp_Modified || rowData.ModifiedDate);
@@ -1141,15 +1153,33 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         // Safeguard: Chuẩn hóa cột JSON array/số - chuỗi rỗng hoặc null → NULL (không ghi '[]' hay 0 giả)
         const normalizeNullable = (v) => {
             if (v === null || v === undefined) return null;
+            if (Array.isArray(v) || (typeof v === 'object' && v !== null)) {
+                return JSON.stringify(v);
+            }
             const s = String(v).trim();
             return s === '' || s === 'null' || s === 'undefined' ? null : s;
         };
+
+        rowData.notes = rowData.notes || rowData.DocumentTitle || rowData.DocumentSubject || null;
         rowData.driver_ids               = normalizeNullable(rowData.driver_ids);
         rowData.car_ids                  = normalizeNullable(rowData.car_ids);
         rowData.coordination_information = normalizeNullable(rowData.coordination_information);
         rowData.confirmed_driver_ids     = normalizeNullable(rowData.confirmed_driver_ids);
         rowData.driver_notice_count      = (rowData.driver_notice_count === null || rowData.driver_notice_count === undefined || String(rowData.driver_notice_count).trim() === '') ? null : Number(rowData.driver_notice_count);
         rowData.leader_notice_times      = normalizeNullable(rowData.leader_notice_times);
+
+        // Nếu không có dữ liệu car/driver/coordination thì thêm fake cụ thể theo yêu cầu
+        const fakeCarId = 'LC-20260520042132-Q7C0L3IS';
+        const fakeDriverId = '33084655-3a53-4dfd-b841-b8de26a3f8b7';
+        if (!rowData.car_ids) {
+            rowData.car_ids = JSON.stringify([fakeCarId]);
+        }
+        if (!rowData.driver_ids) {
+            rowData.driver_ids = JSON.stringify([fakeDriverId]);
+        }
+        if (!rowData.coordination_information) {
+            rowData.coordination_information = JSON.stringify([{ carId: fakeCarId, driverId: fakeDriverId }]);
+        }
 
         logger.info(`[StreamCarBookingMigrationModel] Executing Upsert for MASTER table...`);
         const masterResult = await this.upsertDataToNewDB(rowData, this.oldConfig, 'id_sp_bak', recordId, transaction);
@@ -1202,12 +1232,13 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
                     finalDriverId = driverList[Math.floor(Math.random() * driverList.length)];
                 }
 
+                const confirmedAt = item.confirmedAt ? new Date(item.confirmedAt) : new Date();
                 const detailData = {
                     registration_id: masterId,
                     car_id: finalCarId || 'UNKNOWN_CAR',
                     driver_id: finalDriverId || 'UNKNOWN_DRIVER',
-                    is_confirmed: item.isConfirmed ? 1 : 0,
-                    confirmed_at: item.confirmedAt ? new Date(item.confirmedAt) : null,
+                    is_confirmed: item.isConfirmed ? 0 : 1,
+                    confirmed_at: confirmedAt,
                     id_sp_bak: recordId,
                     table_bak: 1,
                     source_db: rowData.source_db
