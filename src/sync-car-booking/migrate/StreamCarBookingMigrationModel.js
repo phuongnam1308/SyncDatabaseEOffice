@@ -138,10 +138,33 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         { name: 'driver_notice_times', type: 'nvarchar(MAX)', nullable: 'NULL' },
         { name: 'leader_notice_times', type: 'nvarchar(MAX)', nullable: 'NULL' },
         { name: 'leader_escalated_at', type: 'datetime', nullable: 'NULL' },
-        { name: 'table_bak', type: 'int', nullable: 'NULL' },
-        { name: 'id_sp_bak', type: 'nvarchar(255)', nullable: 'NULL' },
-        { name: 'source_db', type: 'nvarchar(255)', nullable: 'NULL' }
+        { name: 'table_bak', type: 'int', nullable: 'NULL', optional: true },
+        { name: 'id_sp_bak', type: 'nvarchar(255)', nullable: 'NULL', optional: true },
+        { name: 'source_db', type: 'nvarchar(255)', nullable: 'NULL', optional: true }
       ];
+
+      const detailCols = [
+        { name: 'id', type: 'uniqueidentifier', nullable: 'DEFAULT newid() NOT NULL' },
+        { name: 'registration_id', type: 'uniqueidentifier', nullable: 'NOT NULL' },
+        { name: 'car_id', type: 'nvarchar(100)', nullable: 'NOT NULL' },
+        { name: 'driver_id', type: 'nvarchar(100)', nullable: 'NULL' },
+        { name: 'is_confirmed', type: 'bit', nullable: 'DEFAULT 0 NULL' },
+        { name: 'confirmed_at', type: 'datetime', nullable: 'NULL' },
+        { name: 'created_at', type: 'datetime', nullable: 'DEFAULT getdate() NULL' },
+        { name: 'table_bak', type: 'int', nullable: 'NULL', optional: true },
+        { name: 'id_sp_bak', type: 'nvarchar(255)', nullable: 'NULL', optional: true },
+        { name: 'source_db', type: 'nvarchar(255)', nullable: 'NULL', optional: true }
+      ];
+
+      const addMissingColumns = async (tableName, tableRef, expectedCols, existingCols) => {
+        const missingCols = expectedCols.filter(col => col.name !== 'id' && !existingCols.has(col.name.toLowerCase()));
+        for (const col of missingCols) {
+          const nullPart = col.nullable || 'NULL';
+          const addQuery = `ALTER TABLE ${tableRef} ADD [${col.name}] ${col.type} ${nullPart};`;
+          await this.queryNewDb(addQuery);
+          console.log(`[StreamCarBookingMigrationModel] [ensureTargetColumnsExist] Added missing column ${col.name} to ${tableName}.`);
+        }
+      };
 
       console.log(`[StreamCarBookingMigrationModel] Checking/Creating Master table: ${masterTable}`);
       const createMasterIfNotExists = `
@@ -151,14 +174,9 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
       END
       `;
       await this.queryNewDb(createMasterIfNotExists);
-      const existingMasterCols = await this.getExistingColumns(masterTable, schema);
-
-      for (const col of masterCols) {
-        if (col.name === 'id') continue;
-        if (!existingMasterCols.has(col.name.toLowerCase())) {
-          console.warn(`[StreamCarBookingMigrationModel] [ensureTargetColumnsExist] Column missing in ${masterTable}: ${col.name}. Not creating it automatically.`);
-        }
-      }
+      let existingMasterCols = await this.getExistingColumns(masterTable, schema);
+      await addMissingColumns(masterTable, masterRef, masterCols, existingMasterCols);
+      existingMasterCols = await this.getExistingColumns(masterTable, schema);
 
       if (existingMasterCols.has('id_sp_bak') && existingMasterCols.has('source_db')) {
         const dropMasterIdx = `IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${masterTable}_id_sp_bak' AND object_id = OBJECT_ID('${masterRef}')) DROP INDEX IX_${masterTable}_id_sp_bak ON ${masterRef};`;
@@ -172,19 +190,6 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
       const detailTable = 'vehicle_registration_assignments';
       const detailRef = `[${db}].[${schema}].[${detailTable}]`;
 
-      const detailCols = [
-        { name: 'id', type: 'uniqueidentifier', nullable: 'DEFAULT newid() NOT NULL' },
-        { name: 'registration_id', type: 'uniqueidentifier', nullable: 'NOT NULL' },
-        { name: 'car_id', type: 'nvarchar(100)', nullable: 'NOT NULL' },
-        { name: 'driver_id', type: 'nvarchar(100)', nullable: 'NULL' },
-        { name: 'is_confirmed', type: 'bit', nullable: 'DEFAULT 0 NULL' },
-        { name: 'confirmed_at', type: 'datetime', nullable: 'NULL' },
-        { name: 'created_at', type: 'datetime', nullable: 'DEFAULT getdate() NULL' },
-        { name: 'table_bak', type: 'int', nullable: 'NULL' },
-        { name: 'id_sp_bak', type: 'nvarchar(255)', nullable: 'NULL' },
-        { name: 'source_db', type: 'nvarchar(255)', nullable: 'NULL' }
-      ];
-
       console.log(`[StreamCarBookingMigrationModel] Checking/Creating Detail table: ${detailTable}`);
       const createDetailIfNotExists = `
       IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '${detailTable}' AND TABLE_SCHEMA = '${schema}')
@@ -194,16 +199,9 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
       `;
       await this.queryNewDb(createDetailIfNotExists);
 
-      const existingDetailCols = await this.getExistingColumns(detailTable, schema);
-      for (const col of detailCols) {
-        if (col.name === 'id') continue;
-        if (!existingDetailCols.has(col.name.toLowerCase())) {
-          console.warn(`[StreamCarBookingMigrationModel] [ensureTargetColumnsExist] Column missing in ${detailTable}: ${col.name}. Not creating it automatically.`);
-        }
-      }
-
-      const dropDetailIdx = `IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${detailTable}_id_sp_bak' AND object_id = OBJECT_ID('${detailRef}')) DROP INDEX IX_${detailTable}_id_sp_bak ON ${detailRef};`;
-      await this.queryNewDb(dropDetailIdx);
+      let existingDetailCols = await this.getExistingColumns(detailTable, schema);
+      await addMissingColumns(detailTable, detailRef, detailCols, existingDetailCols);
+      existingDetailCols = await this.getExistingColumns(detailTable, schema);
 
       if (existingDetailCols.has('id_sp_bak') && existingDetailCols.has('source_db')) {
         await this.queryNewDb(`IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${detailTable}_sp_source' AND object_id = OBJECT_ID('${detailRef}')) CREATE INDEX IX_${detailTable}_sp_source ON ${detailRef}(id_sp_bak, source_db);`);
@@ -1683,6 +1681,27 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
     const insertCols = [];
     const insertVals = [];
     const updateSet = [];
+    const insertColsSet = new Set();
+    const updateColsSet = new Set();
+    const seenNewFields = new Set();
+    const ignoredMappings = [];
+    const skippedDuplicates = [];
+
+    const addInsertColumn = (fieldName) => {
+      const lowerField = fieldName.toLowerCase();
+      if (!insertColsSet.has(lowerField)) {
+        insertCols.push(`[${fieldName}]`);
+        insertVals.push(`@${fieldName}`);
+        insertColsSet.add(lowerField);
+      }
+    };
+    const addUpdateColumn = (fieldName) => {
+      const lowerField = fieldName.toLowerCase();
+      if (!updateColsSet.has(lowerField)) {
+        updateSet.push(`[${fieldName}] = @${fieldName}`);
+        updateColsSet.add(lowerField);
+      }
+    };
 
     // Tự động sinh ID nếu bảng có cột 'id' (case-insensitive) nhưng mapping không có
     if (existingCols.has('id') && !params.hasOwnProperty('id')) {
@@ -1691,34 +1710,46 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         if (!hasIdInMapping) {
             const newId = uuidv4().toUpperCase();
             params['id'] = newId;
-            insertCols.push('[id]');
-            insertVals.push('@id');
+            addInsertColumn('id');
             // Thường không update ID
         }
     }
 
     for (const [oldField, newField] of Object.entries(fieldMapping)) {
-      if (!existingCols.has(newField.toLowerCase())) continue;
+      const lowerNewField = newField.toLowerCase();
+      if (!existingCols.has(lowerNewField)) {
+        ignoredMappings.push(`${oldField}->${newField}`);
+        continue;
+      }
+      if (seenNewFields.has(lowerNewField)) {
+        skippedDuplicates.push(`${oldField}->${newField}`);
+        continue;
+      }
+
       const value = rawData[oldField];
       if (value === undefined || value === null) continue;
+
+      seenNewFields.add(lowerNewField);
       params[newField] = value;
-      insertCols.push(`[${newField}]`);
-      insertVals.push(`@${newField}`);
+      addInsertColumn(newField);
 
       // 🔥 NEVER update ID or created_at
-      if (newField.toLowerCase() !== 'id' && newField.toLowerCase() !== 'created_at') {
-        updateSet.push(`[${newField}] = @${newField}`);
+      if (lowerNewField !== 'id' && lowerNewField !== 'created_at') {
+        addUpdateColumn(newField);
       }
     }
 
     // --- 2. Ánh xạ từ defaultValues (Ghi đè nếu vẫn chưa có trong params) ---
     for (const [newField, valueFn] of Object.entries(defaultValues || {})) {
       const lowerNewField = newField.toLowerCase();
-      if (!existingCols.has(lowerNewField)) continue;
+      if (!existingCols.has(lowerNewField)) {
+        ignoredMappings.push(`default:${newField}`);
+        continue;
+      }
 
-      // Kiểm tra sự tồn tại (không phân biệt hoa thường)
-      const exists = Object.keys(params).some(k => k.toLowerCase() === lowerNewField);
-      if (!exists || params[Object.keys(params).find(k => k.toLowerCase() === lowerNewField)] === null) {
+      const paramKey = Object.keys(params).find(k => k.toLowerCase() === lowerNewField);
+      const exists = paramKey !== undefined;
+      if (!exists || params[paramKey] === null) {
           const val = typeof valueFn === 'function' ? valueFn(rawData) : valueFn;
 
         // Fix: Never pass NULL or Invalid Date for created_at/updated_at to avoid "Invalid date" validation errors
@@ -1730,12 +1761,22 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         }
 
         if (params[lowerNewField] !== undefined && params[lowerNewField] !== null) {
-            if (!insertCols.includes(`[${lowerNewField}]`)) {
-                insertCols.push(`[${lowerNewField}]`); insertVals.push(`@${lowerNewField}`);
-                if (lowerNewField !== 'id' && lowerNewField !== 'created_at') updateSet.push(`[${lowerNewField}] = @${lowerNewField}`);
-            }
+            addInsertColumn(newField);
+            if (lowerNewField !== 'id' && lowerNewField !== 'created_at') addUpdateColumn(newField);
         }
       }
+    }
+
+    if (ignoredMappings.length) {
+      console.warn(`[StreamCarBookingMigrationModel] [upsertDataToNewDB] ignored mappings because target column missing: ${ignoredMappings.join(', ')}`);
+    }
+    if (skippedDuplicates.length) {
+      console.warn(`[StreamCarBookingMigrationModel] [upsertDataToNewDB] skipped duplicate target columns: ${skippedDuplicates.join(', ')}`);
+    }
+
+    if (!insertCols.length) {
+      console.warn(`[StreamCarBookingMigrationModel] [upsertDataToNewDB] No valid columns to insert for ${newTable}. Skipping row.`);
+      return { id: null, action: 'skipped', affected: 0 };
     }
 
     // --- 3. Tự động điền dữ liệu dựa trên kiểu dữ liệu của cột ---
@@ -1751,8 +1792,8 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
 
         if (fallback !== null) {
           params[lowerCol] = fallback;
-          insertCols.push(`[${col}]`); insertVals.push(`@${lowerCol}`);
-          if (lowerCol !== 'id' && lowerCol !== 'created_at') updateSet.push(`[${col}] = @${lowerCol}`);
+          addInsertColumn(col);
+          if (lowerCol !== 'id' && lowerCol !== 'created_at') addUpdateColumn(col);
         }
     }
 
