@@ -145,6 +145,11 @@ class SyncIncomingAuditModel extends SyncAuditModel {
         }
       }
 
+      // Sort stable order to reduce deadlock risk when multiple transactions touch the same document
+      const sortKey = (item) => `${item.receiver || ''}_${item.role_process || ''}`;
+      toInsert.sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
+      toUpdate.sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
+
       // 5. Thực thi insert 1 lần
       if (toInsert.length > 0) {
         let query = `INSERT INTO ${process.env.NEW_DB_NAME}.dbo.incomming_assignment WITH (ROWLOCK) 

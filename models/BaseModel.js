@@ -46,6 +46,10 @@ class BaseModel {
         throw new Error('Lỗi: Chưa kết nối được Database MỚI (Đích). Không thể ghi dữ liệu.');
       }
       const request = this.newPool.request();
+      const requestTimeout = parseInt(process.env.DB_REQUEST_TIMEOUT_MS || process.env.NEW_DB_REQUEST_TIMEOUT_MS || '120000', 10);
+      if (!Number.isNaN(requestTimeout)) {
+        request.timeout = requestTimeout;
+      }
 
       // Bind parameters
       this._bindParams(request, params);
@@ -75,6 +79,10 @@ class BaseModel {
       const request = canUseTransaction
         ? new sql.Request(transaction)
         : this.newPool.request();
+      const requestTimeout = parseInt(process.env.DB_REQUEST_TIMEOUT_MS || process.env.NEW_DB_REQUEST_TIMEOUT_MS || '120000', 10);
+      if (!Number.isNaN(requestTimeout)) {
+        request.timeout = requestTimeout;
+      }
 
       this._bindParams(request, params);
 
