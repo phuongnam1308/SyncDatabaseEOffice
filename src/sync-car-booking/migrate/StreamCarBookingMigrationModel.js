@@ -151,22 +151,22 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
       END
       `;
       await this.queryNewDb(createMasterIfNotExists);
+      const existingMasterCols = await this.getExistingColumns(masterTable, schema);
 
       for (const col of masterCols) {
         if (col.name === 'id') continue;
-        const alterQuery = `
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${masterTable}' AND COLUMN_NAME = '${col.name}')
-        BEGIN
-            ALTER TABLE ${masterRef} ADD [${col.name}] ${col.type} ${col.nullable};
-        END
-        `;
-        await this.queryNewDb(alterQuery);
+        if (!existingMasterCols.has(col.name.toLowerCase())) {
+          console.warn(`[StreamCarBookingMigrationModel] [ensureTargetColumnsExist] Column missing in ${masterTable}: ${col.name}. Not creating it automatically.`);
+        }
       }
 
-      // Index Master
-      const dropMasterIdx = `IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${masterTable}_id_sp_bak' AND object_id = OBJECT_ID('${masterRef}')) DROP INDEX IX_${masterTable}_id_sp_bak ON ${masterRef};`;
-      await this.queryNewDb(dropMasterIdx);
-      await this.queryNewDb(`IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${masterTable}_sp_source' AND object_id = OBJECT_ID('${masterRef}')) CREATE UNIQUE INDEX IX_${masterTable}_sp_source ON ${masterRef}(id_sp_bak, source_db) WHERE id_sp_bak IS NOT NULL AND source_db IS NOT NULL;`);
+      if (existingMasterCols.has('id_sp_bak') && existingMasterCols.has('source_db')) {
+        const dropMasterIdx = `IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${masterTable}_id_sp_bak' AND object_id = OBJECT_ID('${masterRef}')) DROP INDEX IX_${masterTable}_id_sp_bak ON ${masterRef};`;
+        await this.queryNewDb(dropMasterIdx);
+        await this.queryNewDb(`IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${masterTable}_sp_source' AND object_id = OBJECT_ID('${masterRef}')) CREATE UNIQUE INDEX IX_${masterTable}_sp_source ON ${masterRef}(id_sp_bak, source_db) WHERE id_sp_bak IS NOT NULL AND source_db IS NOT NULL;`);
+      } else {
+        console.warn(`[StreamCarBookingMigrationModel] [ensureTargetColumnsExist] Skipping index creation for ${masterTable} because id_sp_bak or source_db is missing.`);
+      }
 
       // 2. Phân tích & Khởi tạo Bảng VEHICLE_REGISTRATION_ASSIGNMENTS (Detail)
       const detailTable = 'vehicle_registration_assignments';
@@ -194,37 +194,45 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
       `;
       await this.queryNewDb(createDetailIfNotExists);
 
+      const existingDetailCols = await this.getExistingColumns(detailTable, schema);
       for (const col of detailCols) {
         if (col.name === 'id') continue;
-        const alterQuery = `
-        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${detailTable}' AND COLUMN_NAME = '${col.name}')
-        BEGIN
-            ALTER TABLE ${detailRef} ADD [${col.name}] ${col.type} ${col.nullable};
-        END
-        `;
-        await this.queryNewDb(alterQuery);
+        if (!existingDetailCols.has(col.name.toLowerCase())) {
+          console.warn(`[StreamCarBookingMigrationModel] [ensureTargetColumnsExist] Column missing in ${detailTable}: ${col.name}. Not creating it automatically.`);
+        }
       }
 
-      // Index Detail
       const dropDetailIdx = `IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${detailTable}_id_sp_bak' AND object_id = OBJECT_ID('${detailRef}')) DROP INDEX IX_${detailTable}_id_sp_bak ON ${detailRef};`;
       await this.queryNewDb(dropDetailIdx);
-      // Note: Detail doesn't necessarily need unique on (id_sp_bak, source_db) if it's 1-to-many,
-      // but if SharePoint has 1 row per assignment (which it doesn't seem to, it's parsed from JSON),
-      // we'll at least index it for performance.
-      await this.queryNewDb(`IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${detailTable}_sp_source' AND object_id = OBJECT_ID('${detailRef}')) CREATE INDEX IX_${detailTable}_sp_source ON ${detailRef}(id_sp_bak, source_db);`);
-      await this.queryNewDb(`IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_vra_car' AND object_id = OBJECT_ID('${detailRef}')) CREATE INDEX idx_vra_car ON ${detailRef}(car_id);`);
-      await this.queryNewDb(`IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_vra_driver' AND object_id = OBJECT_ID('${detailRef}')) CREATE INDEX idx_vra_driver ON ${detailRef}(driver_id);`);
-      await this.queryNewDb(`IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_vra_registration' AND object_id = OBJECT_ID('${detailRef}')) CREATE INDEX idx_vra_registration ON ${detailRef}(registration_id);`);
+
+      if (existingDetailCols.has('id_sp_bak') && existingDetailCols.has('source_db')) {
+        await this.queryNewDb(`IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${detailTable}_sp_source' AND object_id = OBJECT_ID('${detailRef}')) CREATE INDEX IX_${detailTable}_sp_source ON ${detailRef}(id_sp_bak, source_db);`);
+      } else {
+        console.warn(`[StreamCarBookingMigrationModel] [ensureTargetColumnsExist] Skipping index creation IX_${detailTable}_sp_source because id_sp_bak or source_db is missing.`);
+      }
+      if (existingDetailCols.has('car_id')) {
+        await this.queryNewDb(`IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_vra_car' AND object_id = OBJECT_ID('${detailRef}')) CREATE INDEX idx_vra_car ON ${detailRef}(car_id);`);
+      }
+      if (existingDetailCols.has('driver_id')) {
+        await this.queryNewDb(`IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_vra_driver' AND object_id = OBJECT_ID('${detailRef}')) CREATE INDEX idx_vra_driver ON ${detailRef}(driver_id);`);
+      }
+      if (existingDetailCols.has('registration_id')) {
+        await this.queryNewDb(`IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_vra_registration' AND object_id = OBJECT_ID('${detailRef}')) CREATE INDEX idx_vra_registration ON ${detailRef}(registration_id);`);
+      }
 
       // 3. Khóa ngoại
-      const fkQuery = `
-      IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = 'FK_vra_registration')
-      BEGIN
-          ALTER TABLE ${detailRef} ADD CONSTRAINT FK_vra_registration
-          FOREIGN KEY (registration_id) REFERENCES ${masterRef}(id);
-      END
-      `;
-      await this.queryNewDb(fkQuery);
+      if (existingDetailCols.has('registration_id') && existingMasterCols.has('id')) {
+        const fkQuery = `
+        IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = 'FK_vra_registration')
+        BEGIN
+            ALTER TABLE ${detailRef} ADD CONSTRAINT FK_vra_registration
+            FOREIGN KEY (registration_id) REFERENCES ${masterRef}(id);
+        END
+        `;
+        await this.queryNewDb(fkQuery);
+      } else {
+        console.warn(`[StreamCarBookingMigrationModel] [ensureTargetColumnsExist] Skipping FK_vra_registration because registration_id or master id column is missing.`);
+      }
 
       // 🔥 AUTO-INIT AUDIT TABLE
       await this.ensureAuditTableExists();
@@ -1506,14 +1514,11 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
       { name: 'table_bak', type: 'int' }
     ];
 
+    const existingAuditCols = await this.getExistingColumns(table, schema);
     for (const col of auditCols) {
-      const query = `
-      IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${table}' AND COLUMN_NAME = '${col.name}')
-      BEGIN
-          ALTER TABLE ${tableRef} ADD [${col.name}] ${col.type} ${col.nullable || 'NULL'};
-      END
-      `;
-      await this.queryNewDb(query);
+      if (!existingAuditCols.has(col.name.toLowerCase())) {
+        console.warn(`[StreamCarBookingMigrationModel] [ensureAuditTableExists] Column missing in audit: ${col.name}. Not creating it automatically.`);
+      }
     }
   }
 
@@ -1589,32 +1594,57 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
       const tableRef = `[${db}].[${schema}].[${table}]`;
       const { v4: uuidv4 } = require('uuid');
 
+      const existingCols = await this.getExistingColumns(table, schema);
+      const hasSourceDb = existingCols.has('source_db');
+      const hasIdSpBak = existingCols.has('id_sp_bak');
+      const hasTableBak = existingCols.has('table_bak');
+
       const params = {
           id: uuidv4().toUpperCase(),
           registration_id: data.registration_id,
           car_id: data.car_id,
           driver_id: data.driver_id,
           is_confirmed: data.is_confirmed || 0,
-          confirmed_at: data.confirmed_at || null,
-          table_bak: 1, // Fixed: Missing in params but used in query
-          id_sp_bak: data.id_sp_bak,
-          source_db: data.source_db || null
+          confirmed_at: data.confirmed_at || null
       };
 
+      const insertCols = ['id', 'registration_id', 'car_id', 'driver_id', 'is_confirmed', 'confirmed_at'];
+      const insertVals = ['@id', '@registration_id', '@car_id', '@driver_id', '@is_confirmed', '@confirmed_at'];
+      const updateSet = ['is_confirmed = @is_confirmed', 'confirmed_at = @confirmed_at'];
+
+      if (hasTableBak) {
+          params.table_bak = 1;
+          insertCols.push('table_bak');
+          insertVals.push('@table_bak');
+          updateSet.push('table_bak = @table_bak');
+      }
+      if (hasIdSpBak) {
+          params.id_sp_bak = data.id_sp_bak || null;
+          insertCols.push('id_sp_bak');
+          insertVals.push('@id_sp_bak');
+          updateSet.push('id_sp_bak = @id_sp_bak');
+      }
+      if (hasSourceDb) {
+          params.source_db = data.source_db || null;
+          insertCols.push('source_db');
+          insertVals.push('@source_db');
+      }
+
+      const whereClause = hasSourceDb
+        ? 'registration_id = @registration_id AND car_id = @car_id AND driver_id = @driver_id AND source_db = @source_db'
+        : 'registration_id = @registration_id AND car_id = @car_id AND driver_id = @driver_id';
+
       const query = `
-      IF NOT EXISTS (SELECT 1 FROM ${tableRef} WHERE registration_id = @registration_id AND car_id = @car_id AND driver_id = @driver_id AND source_db = @source_db)
+      IF NOT EXISTS (SELECT 1 FROM ${tableRef} WHERE ${whereClause})
       BEGIN
-          INSERT INTO ${tableRef} (id, registration_id, car_id, driver_id, is_confirmed, confirmed_at, table_bak, id_sp_bak, source_db)
-          VALUES (@id, @registration_id, @car_id, @driver_id, @is_confirmed, @confirmed_at, @table_bak, @id_sp_bak, @source_db)
+          INSERT INTO ${tableRef} (${insertCols.join(', ')})
+          VALUES (${insertVals.join(', ')})
       END
       ELSE
       BEGIN
           UPDATE ${tableRef} SET
-            is_confirmed = @is_confirmed,
-            confirmed_at = @confirmed_at,
-            table_bak = @table_bak,
-            id_sp_bak = @id_sp_bak
-          WHERE registration_id = @registration_id AND car_id = @car_id AND driver_id = @driver_id AND source_db = @source_db
+            ${updateSet.join(', ')}
+          WHERE ${whereClause}
       END
       `;
       try {
@@ -1755,17 +1785,30 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
     params._externalKeyValue = externalKeyValue;
     params._sourceDb = rawData.source_db || null;
 
+    const externalKeyExists = externalKeyField && existingCols.has(externalKeyField.toLowerCase());
+    const sourceDbExists = existingCols.has('source_db');
+    const whereClauses = [];
+    if (externalKeyExists) whereClauses.push(`[${externalKeyField}] = @_externalKeyValue`);
+    if (sourceDbExists) whereClauses.push(`source_db = @_sourceDb`);
+    const whereClause = whereClauses.length ? whereClauses.join(' AND ') : null;
+
+    if (!externalKeyExists) {
+      console.warn(`[StreamCarBookingMigrationModel] [upsertDataToNewDB] externalKeyField "${externalKeyField}" not found in ${newTable}. Falling back to INSERT only.`);
+    } else if (!sourceDbExists) {
+      console.warn(`[StreamCarBookingMigrationModel] [upsertDataToNewDB] source_db column missing in ${newTable}. Using only ${externalKeyField} for lookup.`);
+    }
+
     console.log(`[StreamCarBookingMigrationModel] upsertDataToNewDB params (Sanitized): ${JSON.stringify(params)}`);
     const tableRef = `[${this.newDbName}].[${newSchema}].[${newTable}]`;
-    const query = `
+    const query = whereClause ? `
       DECLARE @OutputTable TABLE (id NVARCHAR(255));
       DECLARE @affected INT;
 
-      IF EXISTS (SELECT 1 FROM ${tableRef} WHERE [${externalKeyField}] = @_externalKeyValue AND source_db = @_sourceDb)
+      IF EXISTS (SELECT 1 FROM ${tableRef} WHERE ${whereClause})
       BEGIN
           UPDATE ${tableRef} SET ${updateSet.length ? updateSet.join(', ') : `${externalKeyField} = ${externalKeyField}`}
           OUTPUT INSERTED.id INTO @OutputTable
-          WHERE [${externalKeyField}] = @_externalKeyValue AND source_db = @_sourceDb;
+          WHERE ${whereClause};
 
           SELECT @affected = @@ROWCOUNT;
           SELECT (SELECT TOP 1 id FROM @OutputTable) AS id, @affected AS affected, 'updated' AS action;
@@ -1779,6 +1822,16 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
           SELECT @affected = @@ROWCOUNT;
           SELECT (SELECT TOP 1 id FROM @OutputTable) AS id, @affected AS affected, 'inserted' AS action;
       END
+    ` : `
+      DECLARE @OutputTable TABLE (id NVARCHAR(255));
+      DECLARE @affected INT;
+
+      INSERT INTO ${tableRef} (${insertCols.join(', ')})
+      OUTPUT INSERTED.id INTO @OutputTable
+      VALUES (${insertVals.join(', ')});
+
+      SELECT @affected = @@ROWCOUNT;
+      SELECT (SELECT TOP 1 id FROM @OutputTable) AS id, @affected AS affected, 'inserted' AS action;
     `;
     try {
         console.log(`[StreamCarBookingMigrationModel] Executing SQL Query...`);
