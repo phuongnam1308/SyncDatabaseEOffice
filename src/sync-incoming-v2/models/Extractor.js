@@ -31,6 +31,10 @@ class Extractor extends BaseExtractor {
     this._syncMinDate = this._resolveEffectiveSyncMinDate();
   }
 
+  getStagingTableName(instanceId) {
+    return 'incomming_documents_sync';
+  }
+
   // ──────────────────────────────────────────────
   // Cursor direction: ASC (incoming goes forward in time)
   // ──────────────────────────────────────────────
@@ -58,20 +62,85 @@ class Extractor extends BaseExtractor {
   }
 
   /**
-   * getSyncTimeExpression - incoming dùng COALESCE với nhiều format hơn
-   * vì VanBanDen có thể lưu date dạng DD/MM/YYYY (style 105) hoặc ISO.
+   * Get SQL expression that normalizes source sync time.
+   * Since the old DB format is strictly 'yyyy-MM-dd HH:mm:ss.fff', we use style 121
+   * for the fastest and most optimal conversion.
    */
   getSyncTimeExpression() {
     return `
       COALESCE(
-        TRY_CONVERT(datetime2, Modified, 105),
-        TRY_CONVERT(datetime2, Created, 105),
+        TRY_CONVERT(datetime2, Modified, 121),
+        TRY_CONVERT(datetime2, Created, 121),
         TRY_CONVERT(datetime2, Modified, 120),
         TRY_CONVERT(datetime2, Created, 120),
+        TRY_CONVERT(datetime2, Modified, 105),
+        TRY_CONVERT(datetime2, Created, 105),
+        TRY_CONVERT(datetime2, [NgayDen], 105),
+        TRY_CONVERT(datetime2, [NgayDen], 120),
+        TRY_CONVERT(datetime2, [NgayDen], 121),
+        TRY_CONVERT(datetime2, [NgayTrenVB], 105),
+        TRY_CONVERT(datetime2, [NgayTrenVB], 120),
+        TRY_CONVERT(datetime2, [NgayTrenVB], 121),
         TRY_CONVERT(datetime2, Modified),
-        TRY_CONVERT(datetime2, Created)
+        TRY_CONVERT(datetime2, Created),
+        TRY_CONVERT(datetime2, [NgayDen]),
+        TRY_CONVERT(datetime2, [NgayTrenVB]),
+        '1753-01-01T00:00:00.000Z'
       )
     `.trim();
+  }
+
+  /**
+   * Get SQL expression that safely normalizes and converts the partition column (NgayDen) to datetime2.
+   * Prioritizes Created and Modified first (using style 121), and falls back to NgayDen with style checks.
+   * Prevents crash if the legacy columns contain malformed or empty strings.
+   */
+  getPartitionColumnExpression() {
+    return `
+      COALESCE(
+        TRY_CONVERT(datetime2, [Created], 121),
+        TRY_CONVERT(datetime2, [Modified], 121),
+        TRY_CONVERT(datetime2, [${this.partitionColumn}], 105),
+        TRY_CONVERT(datetime2, [${this.partitionColumn}], 120),
+        TRY_CONVERT(datetime2, [${this.partitionColumn}], 121),
+        TRY_CONVERT(datetime2, [${this.partitionColumn}])
+      )
+    `.trim();
+  }
+
+  /**
+   * Get the last successfully extracted record's cursor from the staging table.
+   * Finds the maximum __sync_time and __sync_id of records already in staging.
+   */
+  async getLastSyncCursor(instanceId) {
+    const stagingTable = this.getStagingTableName(instanceId);
+    try {
+      const query = `
+        SELECT TOP 1 __sync_time, __sync_id
+        FROM ${stagingTable}
+        WHERE __sync_time IS NOT NULL AND __sync_id IS NOT NULL
+        ORDER BY __sync_time DESC, __sync_id DESC
+      `;
+      const result = await this.newPool.request().query(query);
+      if (result.recordset?.length > 0) {
+        const row = result.recordset[0];
+        return {
+          time: row.__sync_time ? new Date(row.__sync_time).toISOString() : null,
+          id: Number(row.__sync_id || 0)
+        };
+      }
+    } catch (error) {
+      logger.warn(`[${this.modelName}] getLastSyncCursor failed or staging table does not exist: ${error.message}`);
+    }
+    return { time: null, id: 0 };
+  }
+
+  /**
+   * Get initial sync time (earliest time) for ASC sync
+   * Fetches all records from the past if no last sync time exists.
+   */
+  getInitialSyncTime() {
+    return '1753-01-01T00:00:00.000Z';
   }
 
   // ──────────────────────────────────────────────
@@ -82,8 +151,12 @@ class Extractor extends BaseExtractor {
     const syncTimeExpr = this.getSyncTimeExpression();
 
     // Incoming: start từ DEFAULT nếu không có cursor hợp lệ
+    // Bỏ qua các ngày dummy của bản cũ (2100, 2999) hoặc epoch mặc định (1970, 1753)
     const isValidTime = lastSyncTime &&
+      lastSyncTime !== '1753-01-01T00:00:00.000Z' &&
+      lastSyncTime !== '1970-01-01T00:00:00.000Z' &&
       lastSyncTime !== '2100-01-01T00:00:00.000Z' &&
+      lastSyncTime !== '2999-12-31T23:59:59.999Z' &&
       !Number.isNaN(new Date(lastSyncTime).getTime()) &&
       new Date(lastSyncTime).getFullYear() > 1000;
 
@@ -99,6 +172,7 @@ class Extractor extends BaseExtractor {
     const syncMinDate = this._syncMinDate;
     const startDate = process.env.SYNC_START_DATE || null;
     const endDate = process.env.SYNC_END_DATE || '2100-01-01T00:00:00.000Z';
+    const partitionExpr = this.getPartitionColumnExpression();
 
     const query = `
       ;WITH source_rows AS (
@@ -112,8 +186,8 @@ class Extractor extends BaseExtractor {
           ) AS __sync_id_num
         FROM ${this.oldDbSchema}.${this.oldDbTable}
         WHERE 1=1
-          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
-          AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
+          AND (${partitionExpr} >= @startDate OR @startDate IS NULL)
+          AND (${partitionExpr} <= @endDate OR @endDate IS NULL)
       )
       SELECT * FROM (
         SELECT
@@ -145,6 +219,11 @@ class Extractor extends BaseExtractor {
       `[${this.modelName}] Fetching batch: lastSyncTime=${effectiveSyncTime}, ` +
       `lastSyncId=${lastSyncId}, limit=${batchSize}, offset=${offset}`
     );
+
+    if (!this.oldPool) {
+      logger.warn(`[${this.modelName}] fetchBatchFromOldDb: Database CŨ (Nguồn) chưa kết nối. Bỏ qua fetch.`);
+      return [];
+    }
 
     try {
       const results = await this.oldPool.request()
@@ -185,8 +264,12 @@ class Extractor extends BaseExtractor {
    */
   async countListFromOldDb(lastSyncTime, lastSyncId = 0) {
     const syncTimeExpr = this.getSyncTimeExpression();
+    // Bỏ qua các ngày dummy của bản cũ (2100, 2999) hoặc epoch mặc định (1970, 1753)
     const isValidTime = lastSyncTime &&
+      lastSyncTime !== '1753-01-01T00:00:00.000Z' &&
+      lastSyncTime !== '1970-01-01T00:00:00.000Z' &&
       lastSyncTime !== '2100-01-01T00:00:00.000Z' &&
+      lastSyncTime !== '2999-12-31T23:59:59.999Z' &&
       !Number.isNaN(new Date(lastSyncTime).getTime()) &&
       new Date(lastSyncTime).getFullYear() > 1000;
 
@@ -194,6 +277,7 @@ class Extractor extends BaseExtractor {
     const syncMinDate = this._syncMinDate;
     const startDate = process.env.SYNC_START_DATE || null;
     const endDate = process.env.SYNC_END_DATE || '2100-01-01T00:00:00.000Z';
+    const partitionExpr = this.getPartitionColumnExpression();
 
     const query = `
       ;WITH source_rows AS (
@@ -205,8 +289,8 @@ class Extractor extends BaseExtractor {
           ) AS __sync_id_num
         FROM ${this.oldDbSchema}.${this.oldDbTable}
         WHERE 1=1
-          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
-          AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
+          AND (${partitionExpr} >= @startDate OR @startDate IS NULL)
+          AND (${partitionExpr} <= @endDate OR @endDate IS NULL)
       )
       SELECT COUNT(1) AS total
       FROM source_rows
@@ -220,6 +304,11 @@ class Extractor extends BaseExtractor {
       )
       AND __sync_time >= @syncMinDate
     `;
+
+    if (!this.oldPool) {
+      logger.warn(`[${this.modelName}] countListFromOldDb: Database CŨ (Nguồn) chưa kết nối. Trả về 0.`);
+      return 0;
+    }
 
     try {
       const results = await this.oldPool.request()
@@ -307,7 +396,7 @@ class Extractor extends BaseExtractor {
           __sync_time                 DATETIME2        NULL,
           __sync_id                   BIGINT           NULL,
 
-          CONSTRAINT PK_incomming_documents_sync_${instanceId} PRIMARY KEY (ID)
+          CONSTRAINT PK_incomming_documents_sync PRIMARY KEY (ID)
         );
       END
     `;

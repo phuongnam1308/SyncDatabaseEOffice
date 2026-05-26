@@ -11,6 +11,18 @@ class SyncHandlerModel {
   }
 
   /**
+   * Lazily initializes the underlying model if it failed during startup.
+   */
+  async _ensureInitialized() {
+    if (this.syncModel && this.syncModel._initSuccess === false && typeof this.syncModel.initialize === 'function') {
+      const logger = require('../../utils/logger');
+      logger.info(`[SyncHandlerModel] Lỗi khởi tạo trước đó, đang thử khởi tạo lại (lazy init)...`);
+      await this.syncModel.initialize(this.syncModel.instanceId || '1');
+      this.syncModel._initSuccess = true;
+    }
+  }
+
+  /**
    * Builds a count function based on incremental source query.
    * @returns {(lastTime: string, lastSyncId?: number) => Promise<number>}
    */
@@ -20,6 +32,8 @@ class SyncHandlerModel {
 
     // opts: { forceFullSync, syncMode } — được truyền từ SyncManagerService.runJob()
     return async (lastTime, lastSyncId = 0, opts = {}) => {
+      await this._ensureInitialized();
+
       // Lấy singleton instance của SyncManagerService để kiểm tra settings
       const syncManager = require('./SyncManagerService');
       let skipPull = syncManager.state && syncManager.state.settings && syncManager.state.settings.SKIP_PULL_FROM_OLD === true;
@@ -73,6 +87,8 @@ class SyncHandlerModel {
     const DEFAULT_SYNC_TIME = '1970-01-01T00:00:00.000Z';
 
     return async (lastTime, limit, _offset, cursor = {}) => {
+      await this._ensureInitialized();
+
       const jobId = cursor.jobId;
       const lastSyncId = Number(cursor.lastSyncId || 0);
       if (!jobId) {
@@ -246,6 +262,8 @@ class SyncHandlerModel {
    */
   createProcessFnIncremental() {
     return async (record, context = {}) => {
+      await this._ensureInitialized();
+
       const jobId = context.jobId;
       if (!jobId) {
         throw new Error('[SyncHandlerModel] jobId is required for incremental process');

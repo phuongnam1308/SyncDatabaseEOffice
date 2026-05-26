@@ -78,12 +78,24 @@ class SyncManagerService {
     // SSE clients (Set của Express response objects)
     this._sseClients = new Set();
 
+    // Reference tới SyncModelRegistry instance (được inject từ Controller sau init)
+    this._modelRegistry = null;
+
     // Setup shutdown hooks
     this.setupShutdownHandlers();
 
     // Setup Memory Leak Protection (Auto-pause on high RAM)
     this.memoryThresholdMB = parseInt(process.env.SYNC_MAX_RAM_MB || '2048', 10);
     this._startMemoryMonitor();
+  }
+
+  /**
+   * Inject SyncModelRegistry instance từ Controller sau khi initializeAll() hoàn tất.
+   * Dùng để auto-reset errors khi Full Resync thay vì require() Class.
+   * @param {import('./SyncModelRegistry')} registryInstance
+   */
+  setModelRegistry(registryInstance) {
+    this._modelRegistry = registryInstance;
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -718,7 +730,16 @@ class SyncManagerService {
    * @returns {{jobId:string,modelName:string,status:string}}
    */
   startModel(modelName, options = {}) {
-    if (!this.registry.has(modelName)) throw new Error(`Model ${modelName} is not registered`);
+    if (!this.registry.has(modelName)) {
+      // Nếu có SyncModelRegistry, kiểm tra xem model có tồn tại nhưng bị lỗi init không
+      if (this._modelRegistry) {
+        const entry = this._modelRegistry.get(modelName);
+        if (entry && !entry.handler) {
+          throw new Error(`Module '${modelName}' đã cấu hình nhưng KHỞI TẠO THẤT BẠI lúc khởi động (thường do lỗi kết nối Database). Vui lòng kiểm tra file error.log.`);
+        }
+      }
+      throw new Error(`Model ${modelName} is not registered`);
+    }
 
     const modelState = this.getModelState(modelName);
     const isReset = Boolean(options.reset);
@@ -935,8 +956,8 @@ class SyncManagerService {
     // THÊM: Nếu là Full Resync VÀ không phải đang Resume → reset các bản ghi lỗi
     if (forceFullSync && !isResuming) {
       try {
-        const modelRegistry = require('./SyncModelRegistry');
-        const entry = modelRegistry.get(job.modelName);
+        // Dùng _modelRegistry (instance) thay vì require Class trực tiếp
+        const entry = this._modelRegistry ? this._modelRegistry.get(job.modelName) : null;
         if (entry && entry.instance && typeof entry.instance.resetErrors === 'function') {
           const resetCount = await entry.instance.resetErrors();
           if (resetCount > 0) {

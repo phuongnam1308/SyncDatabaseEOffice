@@ -26,6 +26,10 @@ class Loader extends BaseLoader {
     this.upsertHandler = null;
   }
 
+  getStagingTableName(instanceId) {
+    return 'incomming_documents_sync';
+  }
+
   async initialize() {
     this.upsertHandler = new UpsertHandler(this.newPool, this.oldPool);
     await this.upsertHandler.initialize();
@@ -56,19 +60,42 @@ class Loader extends BaseLoader {
     const endDate   = process.env.SYNC_END_DATE   || null;
 
     try {
+      if (!this.newPool) {
+        throw new Error('Loader: newPool (Đích) chưa được kết nối.');
+      }
+      let dateConditions = '';
+      const reqCount = this.newPool.request();
+      const reqClaim = this.newPool.request();
+
+      const dateExpr = `COALESCE(
+        TRY_CONVERT(datetime2, [Created], 121),
+        TRY_CONVERT(datetime2, [Modified], 121),
+        TRY_CONVERT(datetime2, [NgayDen], 105),
+        TRY_CONVERT(datetime2, [NgayDen], 120),
+        TRY_CONVERT(datetime2, [NgayDen], 121),
+        TRY_CONVERT(datetime2, [NgayDen])
+      )`;
+
+      if (startDate) {
+        dateConditions += ` AND ${dateExpr} >= @startDate`;
+        reqCount.input('startDate', startDate);
+        reqClaim.input('startDate', startDate);
+      }
+      if (endDate) {
+        dateConditions += ` AND ${dateExpr} <= @endDate`;
+        reqCount.input('endDate', endDate);
+        reqClaim.input('endDate', endDate);
+      }
+
       // Debug count trước khi fetch
-      const countResult = await this.newPool.request()
-        .input('startDate', startDate)
-        .input('endDate', endDate)
-        .query(`
+      const countResult = await reqCount.query(`
           SELECT COUNT(1) AS cnt,
-                 MIN(NgayDen) AS minDate,
-                 MAX(NgayDen) AS maxDate
+                 MIN(${dateExpr}) AS minDate,
+                 MAX(${dateExpr}) AS maxDate
           FROM ${stagingTable}
           WHERE ISNULL(MigrateFlg, 0) = 0
             AND ISNULL(MigrateErrFlg, 0) = 0
-            AND (NgayDen >= @startDate OR @startDate IS NULL)
-            AND (NgayDen <= @endDate   OR @endDate IS NULL)
+            ${dateConditions}
         `);
 
       const available = Number(countResult?.recordset?.[0]?.cnt || 0);
@@ -87,8 +114,7 @@ class Loader extends BaseLoader {
           FROM ${stagingTable} WITH (UPDLOCK, ROWLOCK, READPAST)
           WHERE ISNULL(MigrateFlg, 0) = 0
             AND ISNULL(MigrateErrFlg, 0) = 0
-            AND (NgayDen >= @startDate OR @startDate IS NULL)
-            AND (NgayDen <= @endDate   OR @endDate IS NULL)
+            ${dateConditions}
           ORDER BY TRY_CONVERT(datetime2, Modified) DESC,
                    TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(ID)), '')) DESC
         )
@@ -101,11 +127,8 @@ class Loader extends BaseLoader {
         OUTPUT inserted.*
       `;
 
-      const claimResult = await this.newPool.request()
-        .input('startDate', startDate)
-        .input('endDate', endDate)
-        .input('owner', `pid_${process.pid}_${instanceId}`)
-        .query(claimQuery);
+      reqClaim.input('owner', `pid_${process.pid}_${instanceId}`);
+      const claimResult = await reqClaim.query(claimQuery);
 
       const rows = claimResult?.recordset;
       if (!rows?.length) return null;

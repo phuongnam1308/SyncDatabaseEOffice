@@ -49,6 +49,9 @@ class BaseLoader {
     const endDate = process.env.SYNC_END_DATE || null;
 
     try {
+      if (!this.newPool) {
+        throw new Error('BaseLoader: newPool (Đích) chưa được kết nối.');
+      }
       // Count available records first
       const countQuery = `
         SELECT COUNT(1) AS cnt

@@ -787,19 +787,17 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
     // Số giờ quét lùi đọc từ biến môi trường (mặc định 24 giờ)
     const lookbackHours = Number(process.env.TINTUC_LOOKBACK_HOURS || 24);
 
-    // 0. CẬP NHẬT TỔNG SỐ BẢN GHI ĐỂ DASHBOARD HIỂN THỊ NGAY
-    // QUAN TRỌNG: Khi gọi getCount để lấy total_to_sync, ta áp dụng lookback (nếu không phải chạy lại từ đầu)
+    // 0. ĐẾM SỐ BẢN GHI TỪ DB CŨ (CHỈ ĐỂ LOG, KHÔNG ghi lên dashboard)
+    // Dashboard sẽ chỉ hiển thị tổng CHÍNH XÁC sau khi đổ dữ liệu về staging xong (Phase 3)
     const totalToSync = await this.getCount(lastSyncTime, lastSyncId, {
       useLimit: true,
       lookbackHours,
     });
     logger.info(
-      `[StreamNewsAspxPageIncrementalModel] Tổng số bản ghi (News) cần đồng bộ (áp dụng lookback ${lookbackHours}h): ${totalToSync}`,
+      `[StreamNewsAspxPageIncrementalModel] Ước tính từ DB cũ (News, lookback ${lookbackHours}h): ${totalToSync} — Dashboard sẽ cập nhật sau khi đổ về xong.`,
     );
-    await this.queryNewDb(`UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`, {
-      total: totalToSync,
-      jobId: syncJobId,
-    });
+    // GHI CHÚ: Không ghi total_to_sync lúc này vì con số từ DB cũ chưa chính xác.
+    // total_to_sync sẽ được ghi lại ở cuối getList() bằng pendingCount từ staging.
 
     // =========================================================================
     // BUOC 0.5: THU LAI CAC BAI BI LOI TIMEOUT (RETRY_WAITING) - CHAY SONG SONG
@@ -974,19 +972,27 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
       `Tổng cộng kéo được: ${allRowsCount} bản ghi.`,
     );
 
-    // === Phase 3 count: đếm records PENDING trong staging để SyncManager biết gọi processOne() bao nhiêu lần ===
-    const beginLimit = Number(process.env.BEGIN_LIMIT || 0);
-    const completedLimit = Number(process.env.COMPLETED_LIMIT || 1000);
+    // === Phase 3: Đếm CHÍNH XÁC số item mà processOne() sẽ thực sự xử lý ===
+    // WHERE khớp hoàn toàn với fetchOneFromStaging() để dashboard không sai lệch.
+    // - RETRY_WAITING: worker riêng (retryFailedParallel) xử lý, processOne() BỎ QUA
+    // - MigrateErrFlg=1: đã đánh dấu lỗi, không xử lý thêm
     const table = this.getStagingTableRef();
     let pendingCount = 0;
+    let retryWaitingCount = 0;
     try {
-      const fetchNextClause = completedLimit > 0 ? `FETCH NEXT ${completedLimit} ROWS ONLY` : '';
       const countRows = await this.queryNewDb(`
-        SELECT COUNT(1) AS cnt
+        SELECT
+          SUM(CASE
+            WHEN ISNULL(DownloadStatus, '') NOT IN ('OK', 'ERROR', 'RETRY_WAITING', 'PROCESSING')
+              AND ISNULL(MigrateErrFlg, 0) = 0
+            THEN 1 ELSE 0
+          END) AS actionable_cnt,
+          SUM(CASE WHEN DownloadStatus = 'RETRY_WAITING' THEN 1 ELSE 0 END) AS retry_cnt
         FROM ${table}
         WHERE ISNULL(DownloadStatus, '') NOT IN ('OK', 'ERROR')
       `);
-      pendingCount = Number(countRows?.[0]?.cnt || 0);
+      pendingCount = Number(countRows?.[0]?.actionable_cnt || 0);
+      retryWaitingCount = Number(countRows?.[0]?.retry_cnt || 0);
     } catch (e) {
       logger.warn(
         `[StreamNewsAspxPageIncrementalModel] Không đếm được pending staging: ${e.message}`,
@@ -995,11 +1001,11 @@ class StreamNewsAspxPageIncrementalModel extends BaseIncrementalSyncInterface {
     }
 
     logger.info(
-      `[StreamNewsAspxPageIncrementalModel] Phase 3: ${pendingCount} records pending trong staging ` +
-      `(offset=${beginLimit}, limit=${completedLimit}).`,
+      `[StreamNewsAspxPageIncrementalModel] Phase 3: ${pendingCount} item sẽ được processOne() xử lý ` +
+      `| ${retryWaitingCount} item đang RETRY_WAITING (worker riêng xử lý).`,
     );
 
-    // Cập nhật Dashboard lần cuối với tổng số thực tế (bao gồm cả các bản ghi tồn đọng cũ trong staging)
+    // Ghi total_to_sync = số item processOne() SẼ XỬ LÝ → dashboard hiện đúng %
     await this.queryNewDb(`UPDATE sync_jobs SET total_to_sync = @total WHERE job_id = @jobId`, {
       total: pendingCount,
       jobId: syncJobId,

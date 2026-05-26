@@ -17,18 +17,69 @@ class Extractor extends BaseExtractor {
   }
 
   /**
+   * getSyncTimeExpression - Fallback nhiều kiểu dữ liệu, ưu tiên Modified, Created, NgayBanHanh
+   */
+  getSyncTimeExpression() {
+    return `
+      COALESCE(
+        TRY_CONVERT(datetime2, Modified, 121),
+        TRY_CONVERT(datetime2, Created, 121),
+        TRY_CONVERT(datetime2, Modified, 120),
+        TRY_CONVERT(datetime2, Created, 120),
+        TRY_CONVERT(datetime2, Modified, 105),
+        TRY_CONVERT(datetime2, Created, 105),
+        TRY_CONVERT(datetime2, [NgayBanHanh], 105),
+        TRY_CONVERT(datetime2, [NgayBanHanh], 120),
+        TRY_CONVERT(datetime2, [NgayBanHanh], 121),
+        TRY_CONVERT(datetime2, Modified),
+        TRY_CONVERT(datetime2, Created),
+        TRY_CONVERT(datetime2, [NgayBanHanh]),
+        '2026-01-01T00:00:00.000Z'
+      )
+    `.trim();
+  }
+
+  /**
+   * getPartitionColumnExpression - Ưu tiên Created, Modified cho partition column an toàn
+   */
+  getPartitionColumnExpression() {
+    return `
+      COALESCE(
+        TRY_CONVERT(datetime2, [Created], 121),
+        TRY_CONVERT(datetime2, [Modified], 121),
+        TRY_CONVERT(datetime2, [NgayBanHanh], 121),
+        TRY_CONVERT(datetime2, [Created]),
+        TRY_CONVERT(datetime2, [Modified]),
+        TRY_CONVERT(datetime2, [NgayBanHanh]),
+        '2026-01-01T00:00:00.000Z'
+      )
+    `.trim();
+  }
+
+  /**
    * Helper to get effective sync time handling epoch reset
    */
   _getEffectiveSyncTime(lastSyncTime) {
-    const defaultSyncTime = '2999-12-31T23:59:59.999Z';
+    const defaultSyncTime = '1753-01-01T00:00:00.000Z';
     const lastSyncDate = new Date(lastSyncTime);
     const isDateValid = !isNaN(lastSyncDate.getTime());
     const isValidTime = lastSyncTime && 
                         lastSyncTime !== '1970-01-01T00:00:00.000Z' &&
                         isDateValid &&
-                        lastSyncDate.getFullYear() > 2000;
+                        lastSyncDate.getFullYear() > 1000 &&
+                        lastSyncTime !== '2999-12-31T23:59:59.999Z' &&
+                        lastSyncTime !== '2100-01-01T00:00:00.000Z';
     
-    return isValidTime ? lastSyncTime : defaultSyncTime;
+    let effectiveSyncTime = isValidTime ? lastSyncTime : defaultSyncTime;
+
+    // Guard: chặn cursor tương lai để tránh skip toàn bộ data
+    const maxAllowed = new Date(Date.now() + 8 * 60 * 60 * 1000);
+    if (new Date(effectiveSyncTime) > maxAllowed) {
+      logger.warn(`[${this.modelName}] Cursor tương lai bị reset về DEFAULT: ${effectiveSyncTime}`);
+      effectiveSyncTime = defaultSyncTime;
+    }
+
+    return effectiveSyncTime;
   }
 
   /**
@@ -36,18 +87,20 @@ class Extractor extends BaseExtractor {
    */
   async getTotalCount(lastSyncTime, lastSyncId = 0) {
     const syncTimeExpr = this.getSyncTimeExpression();
+    const partitionExpr = this.getPartitionColumnExpression();
 
     const query = `
       SELECT COUNT(1) AS cnt
       FROM ${this.oldDbSchema}.${this.oldDbTable}
       WHERE 1=1
-        AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
-        AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
+        AND (${partitionExpr} >= @startDate OR @startDate IS NULL)
+        AND (${partitionExpr} <= @endDate OR @endDate IS NULL)
         AND (
-          ${syncTimeExpr} < @lastSyncTime
+          @lastSyncTime = '1753-01-01T00:00:00.000Z'
+          OR ${syncTimeExpr} > @lastSyncTime
           OR (
             ${syncTimeExpr} = @lastSyncTime
-            AND TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')) < @lastSyncId
+            AND TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')) > @lastSyncId
           )
         )
         AND ${syncTimeExpr} >= @syncMinDate
@@ -76,6 +129,7 @@ class Extractor extends BaseExtractor {
    */
   async fetchBatchFromOldDb(lastSyncTime, lastSyncId = 0, batchSize = 1000, offset = 0) {
     const syncTimeExpr = this.getSyncTimeExpression();
+    const partitionExpr = this.getPartitionColumnExpression();
 
     const query = `
       ;WITH source_rows AS (
@@ -89,8 +143,8 @@ class Extractor extends BaseExtractor {
           ) AS __sync_id_num
         FROM ${this.oldDbSchema}.${this.oldDbTable}
         WHERE 1=1
-          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
-          AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
+          AND (${partitionExpr} >= @startDate OR @startDate IS NULL)
+          AND (${partitionExpr} <= @endDate OR @endDate IS NULL)
       )
       SELECT * FROM (
         SELECT
@@ -98,16 +152,17 @@ class Extractor extends BaseExtractor {
           ISNULL(__sync_id_num, 0) AS __sync_id,
           ROW_NUMBER() OVER (
             ORDER BY
-              __sync_time DESC,
-              ISNULL(__sync_id_num, 9223372036854775807) DESC,
-              ID DESC
+              __sync_time ASC,
+              ISNULL(__sync_id_num, 0) ASC,
+              ID ASC
           ) AS __page_rn
         FROM source_rows
         WHERE (
-          __sync_time < @lastSyncTime
+          @lastSyncTime = '1753-01-01T00:00:00.000Z'
+          OR __sync_time > @lastSyncTime
           OR (
             __sync_time = @lastSyncTime
-            AND ISNULL(__sync_id_num, 9223372036854775807) < @lastSyncId
+            AND ISNULL(__sync_id_num, 0) > @lastSyncId
           )
         )
         AND __sync_time >= @syncMinDate
@@ -154,6 +209,7 @@ class Extractor extends BaseExtractor {
    */
   async countListFromOldDb(lastSyncTime, lastSyncId = 0) {
     const syncTimeExpr = this.getSyncTimeExpression();
+    const partitionExpr = this.getPartitionColumnExpression();
     const effectiveSyncTime = this._getEffectiveSyncTime(lastSyncTime);
 
     const query = `
@@ -166,16 +222,17 @@ class Extractor extends BaseExtractor {
           ) AS __sync_id_num
         FROM ${this.oldDbSchema}.${this.oldDbTable}
         WHERE 1=1
-          AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
-          AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
+          AND (${partitionExpr} >= @startDate OR @startDate IS NULL)
+          AND (${partitionExpr} <= @endDate OR @endDate IS NULL)
       )
       SELECT COUNT(1) AS total
       FROM source_rows
       WHERE (
-        __sync_time < @lastSyncTime
+        @lastSyncTime = '1753-01-01T00:00:00.000Z'
+        OR __sync_time > @lastSyncTime
         OR (
           __sync_time = @lastSyncTime
-          AND ISNULL(__sync_id_num, 9223372036854775807) < @lastSyncId
+          AND ISNULL(__sync_id_num, 0) > @lastSyncId
         )
       )
       AND __sync_time >= @syncMinDate

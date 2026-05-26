@@ -57,14 +57,22 @@ class SyncIncomingModel extends BaseSyncModel {
     this.oldPool = dbConnection.getOldPool();
     this.newPool = dbConnection.getNewPool();
 
+    if (!this.newPool) {
+      throw new Error('Chưa kết nối được Database MỚI (Đích). Không thể ghi dữ liệu.');
+    }
+    if (!this.oldPool) {
+      logger.warn(`[${this.modelName}] Database CŨ (Nguồn) chưa được kết nối. Quá trình lấy dữ liệu mới sẽ gặp lỗi.`);
+    }
+
     this.extractor.oldPool = this.oldPool;
     this.extractor.newPool = this.newPool;
 
     // Ensure staging table exists for this instance
-    await this.extractor.ensureStagingTableExists(instanceId);
+    // Yêu cầu của người dùng: "bỏ cái tự động khởi tạo" (để tránh lỗi CREATE TABLE)
+    // await this.extractor.ensureStagingTableExists(instanceId);
 
     // Ensure main table has required columns (self-healing)
-    await this._ensureMainTableSchema();
+    // await this._ensureMainTableSchema();
 
     // Initialize loader
     this.loader = new Loader(this.newPool, this.oldPool);
@@ -161,10 +169,14 @@ class SyncIncomingModel extends BaseSyncModel {
     // Cleanup stale records before extracting
     await this._cleanupStaleRecords();
 
-    let lastSyncTime = this._normalizeSyncTime(null); // starts from 1753-01-01
-    let lastSyncId = 0;
+    // Get last sync cursor from staging table to support incremental resume (ASC)
+    const lastCursor = await this.extractor.getLastSyncCursor(this.instanceId);
+    let lastSyncTime = this._normalizeSyncTime(lastCursor.time || this.extractor.getInitialSyncTime());
+    let lastSyncId = lastCursor.id || 0;
     let totalExtracted = 0;
     let hasMore = true;
+
+    logger.info(`[${this.modelName}] Resuming extraction from cursor: time=${lastSyncTime}, id=${lastSyncId}`);
 
     while (hasMore && !this.shouldStop) {
       // Parallel batching

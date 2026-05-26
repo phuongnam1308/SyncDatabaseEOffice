@@ -45,6 +45,8 @@ class SyncManagerController extends BaseController {
           SyncManagerService,
           SyncStateRepository
         );
+        // Inject registry instance vào Service để runJob có thể gọi .get() đúng cách
+        SyncManagerService.setModelRegistry(this.modelRegistry);
         this.initialized = true;
       } catch (error) {
         logger.error('[SyncManagerController] Failed to initialize models:', error);

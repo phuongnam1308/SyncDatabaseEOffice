@@ -66,8 +66,10 @@ class BaseModel {
         !transaction._aborted
       );
 
-      if (!canUseTransaction && !this.newPool) {
-        throw new Error('Lỗi: Chưa kết nối được Database MỚI (Đích). Không thể ghi dữ liệu.');
+      if (!canUseTransaction) {
+        if (!this.newPool) {
+          throw new Error('Lỗi: Chưa kết nối được Database MỚI (Đích). Không thể ghi dữ liệu.');
+        }
       }
 
       const request = canUseTransaction
@@ -84,9 +86,11 @@ class BaseModel {
     }
   }
 
-  // Execute query trên database mới
   async executeNewDb(query, params = {}) {
     try {
+      if (!this.newPool) {
+        throw new Error('Lỗi: Chưa kết nối được Database MỚI (Đích). Không thể ghi dữ liệu.');
+      }
       const request = this.newPool.request();
 
       // Bind parameters
@@ -105,6 +109,10 @@ class BaseModel {
     try {
       const query = `SELECT COUNT(*) as total FROM ${schema}.${tableName}`;
       const pool = isOldDb ? this.oldPool : this.newPool;
+      if (!pool) {
+        logger.warn(`[BaseModel.count] Không có kết nối tới Database ${isOldDb ? 'CŨ' : 'MỚI'}. Bỏ qua query: ${query}`);
+        return 0;
+      }
       const result = await pool.request().query(query);
       return result.recordset[0].total;
     } catch (error) {

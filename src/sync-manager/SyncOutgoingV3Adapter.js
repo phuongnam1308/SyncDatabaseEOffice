@@ -106,19 +106,43 @@ class SyncOutgoingV3Adapter {
     logger.info(`[SyncOutgoingV3Adapter] getList start: cursorTime=${cursorTime}, lastSyncId=${cursorId}`);
 
     while (hasMore) {
-      const batch = await this._model.extractor.fetchBatchFromOldDb(
-        cursorTime,
-        cursorId,
-        batchSize
-      );
+      let batch;
+      try {
+        batch = await this._model.extractor.fetchBatchFromOldDb(
+          cursorTime,
+          cursorId,
+          batchSize
+        );
+      } catch (fetchErr) {
+        logger.error(`[SyncOutgoingV3Adapter] fetchBatchFromOldDb failed, stopping extraction: ${fetchErr.message}`);
+        hasMore = false;
+        break;
+      }
 
       if (!batch || batch.length === 0) {
         hasMore = false;
         break;
       }
 
-      await this._model.extractor.syncBatchToStaging(batch, this._instanceId);
-      extractedCount += batch.length;
+      try {
+        await this._model.extractor.syncBatchToStaging(batch, this._instanceId);
+        extractedCount += batch.length;
+      } catch (stagingErr) {
+        // Log lỗi nhưng KHÔNG throw ra ngoài — skip batch này, tiến cursor
+        // để tránh vòng lặp vô hạn trên cùng một batch lỗi.
+        logger.warn(
+          `[SyncOutgoingV3Adapter] syncBatchToStaging failed for batch of ${batch.length} rows ` +
+          `(cursorTime=${cursorTime}, cursorId=${cursorId}): ${stagingErr.message}. Skipping batch.`
+        );
+        // Vẫn tiến cursor theo last row của batch để không bị mắc kẹt
+        const lastRow = batch[batch.length - 1];
+        cursorTime = lastRow.__sync_time || cursorTime;
+        cursorId = lastRow.__sync_id || cursorId;
+        if (batch.length < batchSize) {
+          hasMore = false;
+        }
+        continue;
+      }
 
       const lastRow = batch[batch.length - 1];
       cursorTime = lastRow.__sync_time;

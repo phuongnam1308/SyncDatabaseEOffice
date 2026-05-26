@@ -159,16 +159,36 @@ async function loginKeycloak(options = {}) {
     }
 
     // 3. Tm trong LocalStorage / SessionStorage
+    let lsKeys = [];
+    let ssKeys = [];
     if (!token) {
-      token = await page.evaluate(() => {
-        return localStorage.getItem('token') || localStorage.getItem('access_token') || localStorage.getItem('jwt') ||
-               sessionStorage.getItem('token') || sessionStorage.getItem('access_token') || sessionStorage.getItem('jwt');
+      const storageDump = await page.evaluate(() => {
+        return {
+          token: localStorage.getItem('token') || localStorage.getItem('access_token') || localStorage.getItem('jwt') ||
+                 sessionStorage.getItem('token') || sessionStorage.getItem('access_token') || sessionStorage.getItem('jwt'),
+          lsKeys: Object.keys(localStorage),
+          ssKeys: Object.keys(sessionStorage),
+          allLS: JSON.stringify(localStorage),
+          allSS: JSON.stringify(sessionStorage)
+        };
       });
+      token = storageDump.token;
+      lsKeys = storageDump.lsKeys;
+      ssKeys = storageDump.ssKeys;
+      
       if (token) console.log('Token found in Web Storage.');
+      else {
+        // Thu debug xem co key nao lien quan toi token khong
+        console.log('--- STORAGE DUMP ---');
+        console.log('LocalStorage keys:', lsKeys.join(', '));
+        console.log('SessionStorage keys:', ssKeys.join(', '));
+      }
     }
 
     if (!token) {
-      throw new Error(`Khong tim thay token trong URL tra ve hoac Cookies: ${tokenUrl}`);
+      const cookies = await context.cookies();
+      const cookieNames = cookies.map(c => c.name).join(', ');
+      throw new Error(`Khong tim thay token. \nURL: ${tokenUrl} \nCookies co san: ${cookieNames} \nLocalStorage: ${lsKeys.join(', ')} \nSessionStorage: ${ssKeys.join(', ')}`);
     }
 
     // Luu cache token

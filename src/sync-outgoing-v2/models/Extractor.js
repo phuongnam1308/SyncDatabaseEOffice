@@ -17,16 +17,75 @@ class Extractor extends BaseExtractor {
   }
 
   /**
+   * Get cursor comparison direction
+   * Outgoing uses ASC (incremental sync, older to newer)
+   */
+  getCursorDirection() {
+    return 'ASC';
+  }
+
+  /**
+   * Get SQL expression that normalizes source sync time.
+   * Since the old DB format is strictly 'yyyy-MM-dd HH:mm:ss.fff', we use style 121
+   * for the fastest and most optimal conversion.
+   */
+  getSyncTimeExpression() {
+    return `
+      ISNULL(
+        TRY_CONVERT(datetime2, Modified, 121),
+        ISNULL(
+          TRY_CONVERT(datetime2, Created, 121),
+          '1753-01-01'
+        )
+      )
+    `;
+  }
+
+  /**
+   * Get the last successfully extracted record's cursor from the staging table.
+   * Finds the maximum __sync_time and __sync_id of records already in staging.
+   */
+  async getLastSyncCursor(instanceId) {
+    const stagingTable = this.getStagingTableName(instanceId);
+    try {
+      const query = `
+        SELECT TOP 1 __sync_time, __sync_id
+        FROM ${stagingTable}
+        WHERE __sync_time IS NOT NULL AND __sync_id IS NOT NULL
+        ORDER BY __sync_time DESC, __sync_id DESC
+      `;
+      const result = await this.newPool.request().query(query);
+      if (result.recordset?.length > 0) {
+        const row = result.recordset[0];
+        return {
+          time: row.__sync_time ? new Date(row.__sync_time).toISOString() : null,
+          id: Number(row.__sync_id || 0)
+        };
+      }
+    } catch (error) {
+      logger.warn(`[${this.modelName}] getLastSyncCursor failed or staging table does not exist: ${error.message}`);
+    }
+    return { time: null, id: 0 };
+  }
+
+  /**
+   * Get initial sync time (earliest time) for ASC sync
+   */
+  getInitialSyncTime() {
+    return process.env.SYNC_MIN_DATE || '1753-01-01T00:00:00.000Z';
+  }
+
+  /**
    * Helper to get effective sync time handling epoch reset
    */
   _getEffectiveSyncTime(lastSyncTime) {
-    const defaultSyncTime = '2999-12-31T23:59:59.999Z';
+    const defaultSyncTime = this.getInitialSyncTime();
     const lastSyncDate = new Date(lastSyncTime);
     const isDateValid = !isNaN(lastSyncDate.getTime());
     const isValidTime = lastSyncTime && 
                         lastSyncTime !== '1970-01-01T00:00:00.000Z' &&
                         isDateValid &&
-                        lastSyncDate.getFullYear() > 2000;
+                        lastSyncDate.getFullYear() > 1753;
     
     return isValidTime ? lastSyncTime : defaultSyncTime;
   }
@@ -44,10 +103,10 @@ class Extractor extends BaseExtractor {
         AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
         AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
         AND (
-          ${syncTimeExpr} < @lastSyncTime
+          ${syncTimeExpr} > @lastSyncTime
           OR (
             ${syncTimeExpr} = @lastSyncTime
-            AND TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')) < @lastSyncId
+            AND TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')) > @lastSyncId
           )
         )
         AND ${syncTimeExpr} >= @syncMinDate
@@ -98,16 +157,16 @@ class Extractor extends BaseExtractor {
           ISNULL(__sync_id_num, 0) AS __sync_id,
           ROW_NUMBER() OVER (
             ORDER BY
-              __sync_time DESC,
-              ISNULL(__sync_id_num, 9223372036854775807) DESC,
-              ID DESC
+              __sync_time ASC,
+              ISNULL(__sync_id_num, 0) ASC,
+              ID ASC
           ) AS __page_rn
         FROM source_rows
         WHERE (
-          __sync_time < @lastSyncTime
+          __sync_time > @lastSyncTime
           OR (
             __sync_time = @lastSyncTime
-            AND ISNULL(__sync_id_num, 9223372036854775807) < @lastSyncId
+            AND ISNULL(__sync_id_num, 0) > @lastSyncId
           )
         )
         AND __sync_time >= @syncMinDate
@@ -172,10 +231,10 @@ class Extractor extends BaseExtractor {
       SELECT COUNT(1) AS total
       FROM source_rows
       WHERE (
-        __sync_time < @lastSyncTime
+        __sync_time > @lastSyncTime
         OR (
           __sync_time = @lastSyncTime
-          AND ISNULL(__sync_id_num, 9223372036854775807) < @lastSyncId
+          AND ISNULL(__sync_id_num, 0) > @lastSyncId
         )
       )
       AND __sync_time >= @syncMinDate

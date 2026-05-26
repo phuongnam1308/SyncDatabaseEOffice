@@ -109,6 +109,9 @@ class UpsertHandler {
   // ──────────────────────────────────────────────
 
   async queryNewDbTx(query, params, transaction) {
+    if (!transaction && !this.newPool) {
+      throw new Error('Lỗi: Chưa kết nối được Database MỚI (Đích). Không thể ghi dữ liệu.');
+    }
     const request = transaction ? transaction.request() : this.newPool.request();
     for (const [key, value] of Object.entries(params || {})) {
       request.input(key, value);
@@ -118,6 +121,9 @@ class UpsertHandler {
   }
 
   async queryOldDb(query, params) {
+    if (!this.oldPool) {
+      throw new Error('Chưa kết nối được Database CŨ (Nguồn). Vui lòng kiểm tra lại cấu hình OLD_DB_* trong file .env.');
+    }
     const request = this.oldPool.request();
     for (const [key, value] of Object.entries(params || {})) {
       request.input(key, value);
