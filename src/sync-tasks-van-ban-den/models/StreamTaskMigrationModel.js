@@ -568,8 +568,9 @@ class StreamTaskMigrationModel extends BaseModel {
       SET parent = parent.id
       FROM ${targetTable} child
       INNER JOIN ${targetTable} parent
-        ON child.parent = parent.id_task_bak
-      WHERE child.parent IS NOT NULL AND child.id_task_bak <> child.parent
+        ON CAST(child.parent AS NVARCHAR(255)) = parent.id_task_bak
+      WHERE child.parent IS NOT NULL 
+        AND child.id_task_bak <> CAST(child.parent AS NVARCHAR(255))
     `;
 
     await this.queryNewDbTx(query, {}, transaction);
