@@ -16,13 +16,20 @@ const StreamDepartmentMigrationModel = require('../sync-department/migrate/Strea
 const StreamNewsAspxPageIncrementalModel = require('../sync-news-aspx-page/models/StreamNewsAspxPageIncrementalModel');
 const SyncTaskSharePointAdapter = require('./SyncTaskSharePointAdapter');
 
-// 5 Specialized Sync Modules
-const StreamMeetingCopyMigrationModel = require('../sync-meeting copy/migrate/StreamMeetingMigrationModel');
+// Bỏ require trực tiếp ở đây để tránh circular dependency
+// Sẽ require trực tiếp trong MODEL_DEFINITIONS bằng getter
 const StreamEventMigrationModel = require('../sync-event/migrate/StreamEventMigrationModel');
 const StreamTgdScheduleMigrationModel = require('../sync-tgd-schedule/migrate/StreamTgdScheduleMigrationModel');
 const StreamMissionMigrationModel = require('../sync-mission-schedule/migrate/StreamMissionMigrationModel');
 const StreamCarBookingMigrationModel = require('../sync-car-booking/migrate/StreamCarBookingMigrationModel');
 const StreamPassportMigrationModel = require('../sync-passport/migrate/StreamPassportMigrationModel');
+
+let StreamMeetingCopyMigrationModel = null;
+try {
+  StreamMeetingCopyMigrationModel = require('../sync-meeting copy/migrate/StreamMeetingMigrationModel');
+} catch (e) {
+  logger.error(`[SyncModelRegistry] ⚠️ Không thể load StreamMeetingCopyMigrationModel: ${e.stack}`);
+}
 
 const MODEL_DEFINITIONS = [
   // {
@@ -95,7 +102,7 @@ const MODEL_DEFINITIONS = [
     key: 'STREAM_MEETING_COPY_MIGRATION',
     label: 'Đồng bộ lịch họp',
     section: 'realtime',
-    ModelClass: StreamMeetingCopyMigrationModel,
+    ModelClass: null // Sẽ require trực tiếp trong _initializeSingle
   },
   {
     key: 'STREAM_EVENT_MIGRATION',
@@ -340,8 +347,14 @@ class SyncModelRegistry {
     try {
       logger.info(`[SyncModelRegistry] 🔄 Đang khởi tạo module: ${key} (${label})`);
 
+      if (!ModelClass || typeof ModelClass !== 'function') {
+        const typeOfModel = typeof ModelClass;
+        logger.error(`[SyncModelRegistry] ⚠️ DEBUG ${key}: typeof=${typeOfModel}, isArray=${Array.isArray(ModelClass)}`);
+        throw new Error(`ModelClass cho ${key} không hợp lệ hoặc chưa được load (kiểm tra thư mục/file nguồn)`);
+      }
+
       const instance = new ModelClass();
-      
+
       // Store in registry early (even if initialize fails later)
       // This ensures it shows up on the dashboard.
       this._registry.set(key, {

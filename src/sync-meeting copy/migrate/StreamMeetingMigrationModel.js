@@ -712,49 +712,103 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
       } catch (e) {}
     }
 
+    if (dbName === this.oldDbName && referenceIds.length > 0) {
+      discoveredIds = [...discoveredIds, ...referenceIds];
+    }
+
+    // ĐẢM BẢO BAO GỒM CÁC DANH SÁCH BỊ LỌT DO KHÔNG KHỚP TÊN (VD: Lịch đặc thù)
+    if (dbName === 'WSS_Content_eoffice_khkd' || dbName === this.oldDbName) {
+      discoveredIds.push('B0F4D2C4-D65B-42AB-A37A-9D45118A2A2C');
+      discoveredIds.push('360585BB-EDDA-4990-B293-AA097594B073');
+    }
+
     if (discoveredIds.length > 0) {
+      discoveredIds = [...new Set(discoveredIds.map(id => String(id).toUpperCase()))];
       this.listIdCache[dbName] = discoveredIds;
       return discoveredIds;
     }
 
-    if (dbName === this.oldDbName) return referenceIds;
     console.error(`[StreamMeetingMigrationModel] !!! KHÔNG TÌM THẤY DANH SÁCH HỌP TẠI DB: ${dbName} !!!`);
     return [];
   }
 
   async getCount(lastSyncTime, lastSyncId = 0) {
+    // Dùng 2 list ID hardcode (giống SQL query chuẩn) cho tất cả sites
+    // Build 1 query UNION ALL động để đếm tổng tất cả DB chỉ trong 1 lần gọi
+    const HARDCODED_LIST_IDS = [
+      'B0F4D2C4-D65B-42AB-A37A-9D45118A2A2C',
+      '360585BB-EDDA-4990-B293-AA097594B073'
+    ];
+    const listIdsStr = HARDCODED_LIST_IDS.map(id => `'${id}'`).join(',');
     const dbs = this.databases || [this.oldDbName];
+
+    // Build UNION ALL query đếm từng DB
+    const unionParts = dbs.map(db =>
+      `SELECT N'${db}' AS DatabaseName, COUNT(*) AS cnt
+       FROM [${db}].[dbo].[AllUserData]
+       WHERE [tp_ListId] IN (${listIdsStr})
+       AND tp_RowOrdinal = 0`
+    );
+    const countSql = `
+      SELECT DatabaseName, cnt FROM (
+        ${unionParts.join('\n      UNION ALL\n      ')}
+      ) AS _all
+      ORDER BY DatabaseName
+    `;
+
     let total = 0;
-    for (const db of dbs) {
-      const listIds = await this.resolveListIdsForDb(db);
-      if (!listIds?.length) continue;
-      const listIdsStr = listIds.map(id => `'${id}'`).join(',');
-      const query = `
-          SELECT COUNT(*) AS total
-          FROM [${db}].[dbo].[AllUserData] ud
-          WHERE ud.[tp_ListId] IN (${listIdsStr})
-          AND ud.tp_RowOrdinal = 0
-          AND (CAST(@lastSyncTime AS DATETIME2) <= '1970-01-01' 
-               OR ud.tp_Modified > @lastSyncTime 
-               OR (ud.tp_Modified = @lastSyncTime AND ud.tp_ID > @lastSyncId))
-      `;
-      try {
-          const rows = await this.queryOldDb(query, { lastSyncTime, lastSyncId: Number(lastSyncId || 0) });
-          total += Number(rows?.[0]?.total || 0);
-      } catch (e) {
-          console.error(`[StreamMeetingMigrationModel] getCount failed for DB ${db}: ${e.message}`);
+    try {
+      console.log(`[StreamMeetingMigrationModel] [getCount] Đếm tổng bản ghi trên ${dbs.length} databases...`);
+      const rows = await this.queryOldDb(countSql);
+      for (const row of rows || []) {
+        const cnt = Number(row.cnt || 0);
+        total += cnt;
+        if (cnt > 0) {
+          console.log(`[StreamMeetingMigrationModel] [getCount]   ${row.DatabaseName}: ${cnt} bản ghi`);
+        }
       }
+      console.log(`[StreamMeetingMigrationModel] [getCount] ✅ Tổng cộng: ${total} bản ghi trên ${dbs.length} DB`);
+    } catch (e) {
+      console.error(`[StreamMeetingMigrationModel] [getCount] ❌ Lỗi query tổng hợp: ${e.message}`);
+      console.warn(`[StreamMeetingMigrationModel] [getCount] Fallback: đếm từng DB riêng lẻ...`);
+      // Fallback: đếm từng DB riêng lẻ nếu UNION ALL thất bại (VD: 1 DB offline)
+      for (const db of dbs) {
+        try {
+          const rows = await this.queryOldDb(`
+            SELECT COUNT(*) AS total
+            FROM [${db}].[dbo].[AllUserData]
+            WHERE [tp_ListId] IN (${listIdsStr})
+            AND tp_RowOrdinal = 0
+          `);
+          const cnt = Number(rows?.[0]?.total || 0);
+          total += cnt;
+          if (cnt > 0) {
+            console.log(`[StreamMeetingMigrationModel] [getCount]   ${db}: ${cnt} bản ghi`);
+          }
+        } catch (err) {
+          console.warn(`[StreamMeetingMigrationModel] [getCount]   ${db}: BỎ QUA (${err.message})`);
+        }
+      }
+      console.log(`[StreamMeetingMigrationModel] [getCount] ✅ Tổng cộng (fallback): ${total} bản ghi`);
     }
     return total;
   }
 
   async fetchListFromOldDb(lastSyncTime, lastSyncId = 0, offset = 0, limit = 2000, dbName = null) {
-    const targetDb = dbName || this.oldDbName;
-    const listIds = await this.resolveListIdsForDb(targetDb);
+    const db = dbName || this.oldDbName;
+
+    // Lấy listIds cho DB này
+    const listIds = await this.resolveListIdsForDb(db);
+    if (!listIds?.length) return [];
     const listIdsStr = listIds.map(id => `'${id}'`).join(',');
+
+    // JOIN UserInfo từ WSS_Content_eoffice (DB gốc trung tâm) cho tất cả sites
+    // để đảm bảo thông tin author/editor nhất quán dù dữ liệu từ DB nào
+    const userDb = this.oldUserDb || 'WSS_Content_eoffice';
 
     const query = `
         SELECT
+            N'${db}' AS DatabaseName,
             l.[tp_Title] AS ListName,
             ud.[tp_ID] AS ID,
             ud.[tp_Created] AS tp_Created,
@@ -810,37 +864,29 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
             ud.[tp_ListId] AS tp_ListId,
             ud.[float1] AS float1,
             ud.[float2] AS float2,
-            ci.[Title] AS DocumentTitle,
 
             -- Sync Tracking
             ud.[tp_Modified] AS __sync_time,
             ud.[tp_ID] AS __sync_id_num
 
-        FROM [${targetDb}].[dbo].[AllUserData] ud
-        INNER JOIN [${targetDb}].[dbo].[AllLists] l
+        FROM [${db}].[dbo].[AllUserData] ud
+        INNER JOIN [${db}].[dbo].[AllLists] l
             ON ud.[tp_ListId] = l.[tp_ID]
-        LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_author
+        LEFT JOIN [${userDb}].[dbo].[UserInfo] ui_author
             ON ud.[tp_Author] = ui_author.[tp_ID]
-        LEFT JOIN [${this.oldUserDb}].[dbo].[UserInfo] ui_editor
+        LEFT JOIN [${userDb}].[dbo].[UserInfo] ui_editor
             ON ud.[tp_Editor] = ui_editor.[tp_ID]
-        LEFT JOIN [DataEOfficeSNP].[SNP].[CodeItem] ci
-            ON ud.[tp_ID] = ci.[SPItemId]
         WHERE ud.[tp_ListId] IN (${listIdsStr})
         AND ud.tp_RowOrdinal = 0
-        AND (CAST(@lastSyncTime AS DATETIME2) <= '1970-01-01' 
-             OR ud.tp_Modified > @lastSyncTime 
-             OR (ud.tp_Modified = @lastSyncTime AND ud.tp_ID > @lastSyncId))
         ORDER BY ud.[tp_Modified] ASC, ud.[tp_ID] ASC, ud.[tp_ListId] ASC
         OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
     `;
 
     const rows = await this.queryOldDb(query, {
-      lastSyncTime,
-      lastSyncId: Number(lastSyncId || 0),
       offset: Number(offset || 0),
       limit: Number(limit || 2000)
     });
-    console.log(`[StreamMeetingMigrationModel] Fetched ${rows.length} rows from old DB`);
+    console.log(`[StreamMeetingMigrationModel] Fetched ${rows.length} rows from old DB (db=${db}, userDb=${userDb}, listIds=${listIds.join(',')})`);
     return rows;
   }
 
@@ -940,10 +986,9 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
       }
     );
 
-    await this.queryNewDb(
-      `DELETE FROM ${stagingTableRef} WHERE stg_job_id = @syncJobId`,
-      { syncJobId }
-    );
+    // KHÔNG XÓA STAGING NỮA ĐỂ HÚT TIẾP (SKIP CÁI ĐÃ CÓ)
+    // await this.queryNewDb(`DELETE FROM ${stagingTableRef}`, {});
+    console.log(`[StreamMeetingMigrationModel] 🔄 HÚT TIẾP: Giữ nguyên staging table, cái nào có rồi thì skip/update.`);
 
     const dbs = this.databases || [this.oldDbName];
     const fetchBatchSize = Number(process.env.STAGING_FETCH_BATCH_SIZE || 2000);
@@ -951,40 +996,69 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     let nextSyncTime = normalizedLastSyncTime;
     let nextSyncId = normalizedLastSyncId;
 
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`[StreamMeetingMigrationModel] 🚀 BẮT ĐẦU HÚT DỮ LIỆU OLD → STAGING`);
+    console.log(`[StreamMeetingMigrationModel]    Job: ${syncJobId}`);
+    console.log(`[StreamMeetingMigrationModel]    Tổng DB: ${dbs.length} | Tổng bản ghi ước tính: ${totalCount}`);
+    console.log(`[StreamMeetingMigrationModel]    Batch size: ${fetchBatchSize}`);
+    console.log(`${'='.repeat(60)}\n`);
+
     let dbCounted = 0;
+    const jobStartTime = Date.now();
+
     for (const db of dbs) {
       dbCounted++;
+      const dbStartTime = Date.now();
       try {
-        console.log(`[StreamMeetingMigrationModel] [SITE ${dbCounted}/${dbs.length}] Processing database: ${db}`);
+        console.log(`\n[StreamMeetingMigrationModel] ┌─ [SITE ${dbCounted}/${dbs.length}] ${db}`);
 
         const listIds = await this.resolveListIdsForDb(db);
-        if (!listIds?.length) continue;
-        const listIdsStr = listIds.map(id => `'${id}'`).join(',');
+        if (!listIds?.length) {
+          console.log(`[StreamMeetingMigrationModel] │   ⚠ Không tìm thấy list ID → BỎ QUA`);
+          console.log(`[StreamMeetingMigrationModel] └─ [${db}] SKIPPED`);
+          continue;
+        }
+        console.log(`[StreamMeetingMigrationModel] │   List IDs: ${listIds.join(', ')}`);
 
-        const dbCountQuery = `
+        const listIdsStr = listIds.map(id => `'${id}'`).join(',');
+        const dbCountRes = await this.queryOldDb(`
             SELECT COUNT(*) AS total
             FROM [${db}].[dbo].[AllUserData]
             WHERE [tp_ListId] IN (${listIdsStr})
             AND tp_RowOrdinal = 0
-        `;
-        const dbCountRes = await this.queryOldDb(dbCountQuery, { lastSyncTime: normalizedLastSyncTime, lastSyncId: normalizedLastSyncId });
+        `);
         const dbCount = Number(dbCountRes?.[0]?.total || 0);
+        console.log(`[StreamMeetingMigrationModel] │   Số bản ghi trong DB: ${dbCount}`);
 
         if (dbCount === 0) {
-          console.log(`[StreamMeetingMigrationModel] [${db}] No new records.`);
+          console.log(`[StreamMeetingMigrationModel] │   ✓ Không có bản ghi cần đồng bộ`);
+          console.log(`[StreamMeetingMigrationModel] └─ [${db}] DONE (0 bản ghi)`);
           continue;
         }
 
         const numIterations = Math.ceil(dbCount / fetchBatchSize);
+        let dbStagedCount = 0;
+
         for (let i = 0; i < numIterations; i++) {
           const offset = i * fetchBatchSize;
-          console.log(`[StreamMeetingMigrationModel] [${db}] Fetching batch ${i + 1}/${numIterations} (Offset: ${offset})`);
+          const batchStart = Date.now();
+          console.log(`[StreamMeetingMigrationModel] │   📦 Batch ${i + 1}/${numIterations} - Offset: ${offset}, Limit: ${fetchBatchSize}`);
 
           const rows = await this.fetchListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId, offset, fetchBatchSize, db);
-          if (!rows || rows.length === 0) break;
+          if (!rows || rows.length === 0) {
+            console.log(`[StreamMeetingMigrationModel] │   ⚠ Batch ${i + 1}: Không có dữ liệu → Dừng vòng lặp`);
+            break;
+          }
+          console.log(`[StreamMeetingMigrationModel] │   ✅ Fetch OK: ${rows.length} rows (${Date.now() - batchStart}ms)`);
 
           const stageResult = await this.syncOldToStaging(rows, { syncJobId, dbName: db });
-          totalStagedCount += Number(stageResult?.stagedCount || rows.length || 0);
+          const batchStaged = Number(stageResult?.stagedCount || rows.length || 0);
+          dbStagedCount += batchStaged;
+          totalStagedCount += batchStaged;
+
+          const batchDuration = Date.now() - batchStart;
+          const progressPct = totalCount > 0 ? ((totalStagedCount / totalCount) * 100).toFixed(1) : '?';
+          console.log(`[StreamMeetingMigrationModel] │   💾 Staged batch: ${batchStaged}/${rows.length} | DB tổng: ${dbStagedCount} | Tổng: ${totalStagedCount}/${totalCount} (${progressPct}%) | Thời gian batch: ${batchDuration}ms`);
 
           for (const row of rows) {
               const rowTime = this.extractRowSyncTime(row);
@@ -994,12 +1068,23 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
                   nextSyncId = rowId;
               }
           }
-          console.log(`[StreamMeetingMigrationModel] [${db}] Staged progressive: ${totalStagedCount}/${totalCount}`);
         }
+
+        const dbDuration = ((Date.now() - dbStartTime) / 1000).toFixed(1);
+        console.log(`[StreamMeetingMigrationModel] └─ [${db}] ✅ HOÀN THÀNH: ${dbStagedCount} bản ghi staged (${dbDuration}s)`);
+
       } catch (err) {
-        console.error(`[StreamMeetingMigrationModel] [SKIPPED SITE] Error processing DB ${db}: ${err.message}`);
+        const dbDuration = ((Date.now() - dbStartTime) / 1000).toFixed(1);
+        console.error(`[StreamMeetingMigrationModel] └─ [${db}] ❌ LỖI sau ${dbDuration}s: ${err.message}`);
       }
     }
+
+    const totalDuration = ((Date.now() - jobStartTime) / 1000).toFixed(1);
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`[StreamMeetingMigrationModel] 🏁 KẾT THÚC HÚT DỮ LIỆU OLD → STAGING`);
+    console.log(`[StreamMeetingMigrationModel]    Tổng thời gian: ${totalDuration}s`);
+    console.log(`[StreamMeetingMigrationModel]    Đã xử lý: ${dbCounted}/${dbs.length} DB`);
+    console.log(`[StreamMeetingMigrationModel]    Tổng staged (tạm tính): ${totalStagedCount}`);
 
     const countQuery = `
       SELECT COUNT(*) AS total 
@@ -1176,12 +1261,13 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
                 const targetTime = new Date(targetUpdated).getTime();
                 const sourceTime = new Date(sourceUpdated).getTime();
                 if (targetTime >= sourceTime) {
-                    console.log(`[StreamMeetingMigrationModel] SKIP NHANH: recordId=${recordId} đã đồng bộ (Target: ${new Date(targetUpdated).toISOString()} >= Source: ${new Date(sourceUpdated).toISOString()}).`);
-                    return {
-                        backupId: recordId,
-                        affected: 0,
-                        logs: [{ table: this.oldConfig?.newTable || 'meetings', action: 'SKIPPED_UP_TO_DATE' }]
-                    };
+                    console.log(`[StreamMeetingMigrationModel] SKIP NHANH: recordId=${recordId} đã đồng bộ (Target: ${new Date(targetUpdated).toISOString()} >= Source: ${new Date(sourceUpdated).toISOString()}). Nhưng vẫn cho phép update để fix meeting_time.`);
+                    // TẠM THỜI COMMENT ĐỂ FORCE UPDATE meeting_time
+                    // return {
+                    //     backupId: recordId,
+                    //     affected: 0,
+                    //     logs: [{ table: this.oldConfig?.newTable || 'meetings', action: 'SKIPPED_UP_TO_DATE' }]
+                    // };
                 }
             }
         }
@@ -1197,12 +1283,21 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     let creatorId = await this.helper.robustUserResolver(rowData, transaction);
 
     // 2. Resolve Chairman (Chủ trì) - Theo trường nvarchar10 (ChuTri từ db cũ) hoặc nvarchar4 (Organizer)
+    // Fallback cố định khi không tìm thấy chủ trì theo tên
+    const CHAIRMAN_FALLBACK_ID = 'b23406e3-5c75-41d3-91e0-1654293ae6b2';
     const chairmanSrc = rowData.nvarchar10 || rowData.ChuTri || rowData.nvarchar4 || rowData.Organizer;
-    let chairmanId = creatorId; // Fallback
+    let chairmanId = CHAIRMAN_FALLBACK_ID; // Mặc định: UUID fix cứng khi không resolve được
     if (chairmanSrc) {
-        // Chủ trì thường nhập tiếng Việt, dùng LikeSearch để dò ra ID chuẩn nhất
+        // Chủ trì thường nhập tiếng Việt, dùng LikeSearch để dò ra ID chuẩn nhất theo họ tên
         const mapped = await this.helper.mapUserWithLikeSearch(chairmanSrc, transaction);
-        if (mapped) chairmanId = mapped;
+        if (mapped) {
+            chairmanId = mapped;
+            console.log(`[StreamMeetingMigrationModel] Chairman RESOLVED: "${chairmanSrc}" -> ${mapped}`);
+        } else {
+            console.warn(`[StreamMeetingMigrationModel] Chairman NOT FOUND: "${chairmanSrc}" -> Dùng fallback UUID ${CHAIRMAN_FALLBACK_ID}`);
+        }
+    } else {
+        console.warn(`[StreamMeetingMigrationModel] Chairman SRC EMPTY (nvarchar10/ChuTri/nvarchar4 null) -> Dùng fallback UUID ${CHAIRMAN_FALLBACK_ID}`);
     }
 
     console.log(`[StreamMeetingMigrationModel] FINAL DECISION: Creator=${creatorId}, Chairman=${chairmanId}`);
@@ -1223,17 +1318,26 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     rowData.direct_command = rowData.DocumentTitle || null;
     rowData.conclusion = rowData.nvarchar7 || null;
 
-    // Xử lý tách Ngày và Giờ từ StartDate
-    if (rowData.StartDate) {
-        const d = new Date(rowData.StartDate);
+    // Xử lý tách Ngày và Giờ từ BatDau và KetThuc
+    if (rowData.BatDau || rowData.StartDate) {
+        const sourceStart = rowData.BatDau || rowData.StartDate;
+        const sourceEnd = rowData.KetThuc || rowData.EndDate;
+        const d = new Date(sourceStart);
         if (!isNaN(d.getTime())) {
             // Định dạng: yyyy-MM-dd
             rowData.meeting_date = d.toISOString().split('T')[0];
-            // Định dạng: HH:mm
-            rowData.meeting_time = d.toTimeString().split(' ')[0].substring(0, 5);
+            
+            // Định dạng: HH:mm-HH:mm (cộng thêm 7 tiếng)
+            const timeFormat = this.helper.formatMeetingTimeWithOffset(sourceStart, sourceEnd, 7);
+            if (timeFormat) {
+                rowData.meeting_time = timeFormat;
+            } else {
+                rowData.meeting_time = d.toTimeString().split(' ')[0].substring(0, 5);
+            }
+            
             // Gán các trường started_at/ended_at nếu cần cho app
-            rowData.started_at = rowData.StartDate;
-            if (rowData.EndDate) rowData.ended_at = rowData.EndDate;
+            rowData.started_at = sourceStart;
+            if (sourceEnd) rowData.ended_at = sourceEnd;
 
             // Map priority (Col 4 of sample) if possible
             // In SharePoint, priority is usually stored in nvarchar or specialized field
@@ -1291,6 +1395,55 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
 
     const result = await this.upsertDataToNewDB(rowData, this.oldConfig, externalKey, recordId, transaction);
     console.log(`[StreamMeetingMigrationModel] Upsert result for recordId=${recordId}: ${result.action}, ID=${result.id}`);
+
+    // FIX CỨNG: Cộng +7 giờ từ BatDau/KetThuc → meeting_time dạng "HH:mm-HH:mm"
+    try {
+        const db = this.newDbName || 'app_tancang';
+        const schema = this.newDbSchema || 'dbo';
+        const meetingTable = `[${db}].[${schema}].[meetings]`;
+
+        const sourceStart = rowData.BatDau || rowData.StartDate;
+        const sourceEnd = rowData.KetThuc || rowData.EndDate;
+
+        // LOG CHI TIẾT để debug
+        console.log(`[StreamMeetingMigrationModel] FIX meeting_time DEBUG:`);
+        console.log(`  rowData.BatDau   = ${rowData.BatDau} (type=${typeof rowData.BatDau})`);
+        console.log(`  rowData.StartDate= ${rowData.StartDate} (type=${typeof rowData.StartDate})`);
+        console.log(`  rowData.KetThuc  = ${rowData.KetThuc} (type=${typeof rowData.KetThuc})`);
+        console.log(`  rowData.EndDate  = ${rowData.EndDate} (type=${typeof rowData.EndDate})`);
+        console.log(`  rowData.datetime1= ${rowData.datetime1} (type=${typeof rowData.datetime1})`);
+        console.log(`  rowData.datetime2= ${rowData.datetime2} (type=${typeof rowData.datetime2})`);
+        console.log(`  sourceStart=${sourceStart}, sourceEnd=${sourceEnd}`);
+
+        const meetingTimeVal = this.helper.formatMeetingTimeWithOffset(sourceStart, sourceEnd, 7);
+
+        console.log(`[StreamMeetingMigrationModel] FIX meeting_time → "${meetingTimeVal}"`);
+
+        if (meetingTimeVal) {
+            await this.queryNewDbTx(
+                `UPDATE ${meetingTable} SET [meeting_time] = @meetingTime WHERE [id_sp_bak] = @recordId`,
+                { meetingTime: meetingTimeVal, recordId },
+                transaction
+            );
+            console.log(`[StreamMeetingMigrationModel] ✅ Updated meeting_time="${meetingTimeVal}" for recordId=${recordId}`);
+        } else {
+            // FALLBACK: thử dùng datetime1/datetime2 trực tiếp từ staging
+            const fallbackStart = rowData.datetime1;
+            const fallbackEnd = rowData.datetime2;
+            const fallbackTime = this.helper.formatMeetingTimeWithOffset(fallbackStart, fallbackEnd, 7);
+            console.log(`[StreamMeetingMigrationModel] FALLBACK datetime1=${fallbackStart} datetime2=${fallbackEnd} → "${fallbackTime}"`);
+            if (fallbackTime) {
+                await this.queryNewDbTx(
+                    `UPDATE ${meetingTable} SET [meeting_time] = @meetingTime WHERE [id_sp_bak] = @recordId`,
+                    { meetingTime: fallbackTime, recordId },
+                    transaction
+                );
+                console.log(`[StreamMeetingMigrationModel] ✅ FALLBACK Updated meeting_time="${fallbackTime}" for recordId=${recordId}`);
+            }
+        }
+    } catch (e) {
+        console.warn(`[StreamMeetingMigrationModel] Lỗi force update meeting_time: ${e.message}`);
+    }
 
     // Bổ sung: Cập nhật quyền "cứng" cho các user liên quan (chỉ chạy trong module này)
     if (creatorId) await this.forceUpdateUserRoles(creatorId, transaction);
@@ -1721,11 +1874,16 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
       if (!params.hasOwnProperty(newField)) {
         const rawVal = typeof valueFn === 'function' ? valueFn(rawData) : valueFn;
         const safeValue = applySafeCast(newField, rawVal);
+        if (newField === 'meeting_time') {
+          console.log(`[upsertDataToNewDB] meeting_time từ defaultValues: rawData.BatDau=${rawData?.BatDau}, rawData.StartDate=${rawData?.StartDate}, rawData.KetThuc=${rawData?.KetThuc}, rawData.EndDate=${rawData?.EndDate} → VALUE="${rawVal}"`);
+        }
         params[newField] = safeValue;
         addInsertColumn(newField);
 
         // 🔥 NEVER update ID or created_at
         addUpdateColumn(newField);
+      } else if (newField === 'meeting_time') {
+        console.log(`[upsertDataToNewDB] meeting_time đã có sẵn trong params (từ fieldMapping): "${params[newField]}", KHÔNG gọi defaultValues`);
       }
     }
 

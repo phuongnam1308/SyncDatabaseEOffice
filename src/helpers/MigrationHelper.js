@@ -225,6 +225,39 @@ class MigrationHelper {
     }
   }
 
+  formatMeetingTimeWithOffset(batDau, ketThuc, offsetHours = 7) {
+    if (!batDau) {
+      console.log(`[formatMeetingTimeWithOffset] batDau is null/undefined → return null`);
+      return null;
+    }
+    try {
+      const d1 = new Date(batDau);
+      if (isNaN(d1.getTime())) {
+        console.log(`[formatMeetingTimeWithOffset] batDau="${batDau}" không parse được → return null`);
+        return null;
+      }
+      
+      // Dùng UTC getTime() + offset để tránh lỗi timezone máy chủ
+      const s1 = new Date(d1.getTime() + offsetHours * 60 * 60 * 1000);
+      const startTime = s1.toISOString().substring(11, 16); // HH:mm chuẩn
+      console.log(`[formatMeetingTimeWithOffset] batDau=${d1.toISOString()} +${offsetHours}h → startTime=${startTime}`);
+
+      if (ketThuc) {
+        const d2 = new Date(ketThuc);
+        if (!isNaN(d2.getTime())) {
+          const s2 = new Date(d2.getTime() + offsetHours * 60 * 60 * 1000);
+          const endTime = s2.toISOString().substring(11, 16);
+          console.log(`[formatMeetingTimeWithOffset] ketThuc=${d2.toISOString()} +${offsetHours}h → endTime=${endTime}`);
+          return `${startTime}-${endTime}`;
+        }
+      }
+      return startTime;
+    } catch (e) {
+      console.log(`[formatMeetingTimeWithOffset] lỗi: ${e.message}`);
+      return null;
+    }
+  }
+
   mapStatusOutgoing(trangThai) {
     const safeTrangThai = this.safeString(trangThai);
     const defaultResult = {
