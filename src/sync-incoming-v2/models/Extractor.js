@@ -113,25 +113,28 @@ class Extractor extends BaseExtractor {
    * Finds the maximum __sync_time and __sync_id of records already in staging.
    */
   async getLastSyncCursor(instanceId) {
-    const stagingTable = this.getStagingTableName(instanceId);
-    try {
-      const query = `
-        SELECT TOP 1 __sync_time, __sync_id
-        FROM ${stagingTable}
-        WHERE __sync_time IS NOT NULL AND __sync_id IS NOT NULL
-        ORDER BY __sync_time DESC, __sync_id DESC
-      `;
-      const result = await this.newPool.request().query(query);
-      if (result.recordset?.length > 0) {
-        const row = result.recordset[0];
-        return {
-          time: row.__sync_time ? new Date(row.__sync_time).toISOString() : null,
-          id: Number(row.__sync_id || 0)
-        };
-      }
-    } catch (error) {
-      logger.warn(`[${this.modelName}] getLastSyncCursor failed or staging table does not exist: ${error.message}`);
-    }
+    // const stagingTable = this.getStagingTableName(instanceId);
+    // try {
+    //   const query = `
+    //     SELECT TOP 1 __sync_time
+    //     -- , __sync_id
+    //     FROM ${stagingTable}
+    //     WHERE __sync_time IS NOT NULL 
+    //     --AND __sync_id IS NOT NULL
+    //     ORDER BY __sync_time DESC,
+    //     -- __sync_id DESC
+    //   `;
+    //   const result = await this.newPool.request().query(query);
+    //   if (result.recordset?.length > 0) {
+    //     const row = result.recordset[0];
+    //     return {
+    //       time: row.__sync_time ? new Date(row.__sync_time).toISOString() : null,
+    //       id: Number(row.__sync_id || 0)
+    //     };
+    //   }
+    // } catch (error) {
+    //   logger.warn(`[${this.modelName}] getLastSyncCursor failed or staging table does not exist: ${error.message}`);
+    // }
     return { time: null, id: 0 };
   }
 
@@ -149,75 +152,34 @@ class Extractor extends BaseExtractor {
 
   async fetchBatchFromOldDb(lastSyncTime, lastSyncId = 0, batchSize = 1000, offset = 0) {
     const syncTimeExpr = this.getSyncTimeExpression();
-
-    // Incoming: start từ DEFAULT nếu không có cursor hợp lệ
-    // Bỏ qua các ngày dummy của bản cũ (2100, 2999) hoặc epoch mặc định (1970, 1753)
-    const isValidTime = lastSyncTime &&
-      lastSyncTime !== '1753-01-01T00:00:00.000Z' &&
-      lastSyncTime !== '1970-01-01T00:00:00.000Z' &&
-      lastSyncTime !== '2100-01-01T00:00:00.000Z' &&
-      lastSyncTime !== '2999-12-31T23:59:59.999Z' &&
-      !Number.isNaN(new Date(lastSyncTime).getTime()) &&
-      new Date(lastSyncTime).getFullYear() > 1000;
-
-    const effectiveSyncTime = isValidTime ? lastSyncTime : this._defaultSyncTime;
-
-    // Guard: chặn cursor tương lai để tránh skip toàn bộ data
-    const maxAllowed = new Date(Date.now() + 8 * 60 * 60 * 1000);
-    if (new Date(effectiveSyncTime) > maxAllowed) {
-      logger.warn(`[${this.modelName}] Cursor tương lai bị reset về DEFAULT: ${effectiveSyncTime}`);
-      lastSyncTime = this._defaultSyncTime;
-    }
-
-    const syncMinDate = this._syncMinDate;
-    const startDate = process.env.SYNC_START_DATE || null;
-    const endDate = process.env.SYNC_END_DATE || '2100-01-01T00:00:00.000Z';
-    const partitionExpr = this.getPartitionColumnExpression();
+    const hardCodedOldId = '480927';
 
     const query = `
-      ;WITH source_rows AS (
-        SELECT
-          *,
-          N'${this.oldDbTable}' AS __source_table,
-          ${syncTimeExpr} AS __sync_time,
+      SELECT
+        *,
+        N'${this.oldDbTable}' AS __source_table,
+        ${syncTimeExpr} AS __sync_time,
+        TRY_CONVERT(
+          BIGINT,
+          NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
+        ) AS __sync_id_num
+      FROM ${this.oldDbSchema}.${this.oldDbTable}
+      WHERE ID = @hardCodedOldId
+      ORDER BY
+        __sync_time ASC,
+        ISNULL(
           TRY_CONVERT(
             BIGINT,
             NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
-          ) AS __sync_id_num
-        FROM ${this.oldDbSchema}.${this.oldDbTable}
-        WHERE 1=1
-          AND (${partitionExpr} >= @startDate OR @startDate IS NULL)
-          AND (${partitionExpr} <= @endDate OR @endDate IS NULL)
-      )
-      SELECT * FROM (
-        SELECT
-          *,
-          ISNULL(__sync_id_num, 0) AS __sync_id,
-          ROW_NUMBER() OVER (
-            ORDER BY
-              __sync_time ASC,
-              ISNULL(__sync_id_num, 0) ASC,
-              ID ASC
-          ) AS __page_rn
-        FROM source_rows
-        WHERE (
-          @lastSyncTime = '1753-01-01T00:00:00.000Z'
-          OR __sync_time > @lastSyncTime
-          OR (
-            __sync_time = @lastSyncTime
-            AND ISNULL(__sync_id_num, 0) > @lastSyncId
-          )
-        )
-        AND __sync_time >= @syncMinDate
-      ) AS t
-      WHERE __page_rn > @offset
-        AND __page_rn <= (@offset + @limit)
-      ORDER BY __page_rn
+          ),
+          0
+        ) ASC,
+        ID ASC
+      OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY
     `;
 
     logger.info(
-      `[${this.modelName}] Fetching batch: lastSyncTime=${effectiveSyncTime}, ` +
-      `lastSyncId=${lastSyncId}, limit=${batchSize}, offset=${offset}`
+      `[${this.modelName}] Fetching batch for old ID ${hardCodedOldId}: limit=${batchSize}, offset=${offset}`
     );
 
     if (!this.oldPool) {
@@ -227,13 +189,9 @@ class Extractor extends BaseExtractor {
 
     try {
       const results = await this.oldPool.request()
-        .input('lastSyncTime', sql.DateTime2, effectiveSyncTime)
-        .input('lastSyncId', sql.BigInt, Number(lastSyncId || 0))
         .input('limit', sql.Int, batchSize)
         .input('offset', sql.Int, offset)
-        .input('startDate', sql.DateTime2, startDate)
-        .input('endDate', sql.DateTime2, endDate)
-        .input('syncMinDate', sql.DateTime2, syncMinDate)
+        .input('hardCodedOldId', sql.NVarChar, hardCodedOldId)
         .query(query);
 
       const count = results.recordset?.length || 0;
@@ -251,10 +209,6 @@ class Extractor extends BaseExtractor {
       return results.recordset || [];
     } catch (error) {
       logger.error(`[${this.modelName}] fetchBatchFromOldDb failed! Error: ${error.message}`);
-      logger.error(
-        `[${this.modelName}] Query Params: lastSyncTime=${effectiveSyncTime}, ` +
-        `lastSyncId=${lastSyncId}, startDate=${startDate}, endDate=${endDate}`
-      );
       throw error;
     }
   }
@@ -263,46 +217,11 @@ class Extractor extends BaseExtractor {
    * countListFromOldDb - Đếm tổng số bản ghi từ CSDL cũ (VanBanDen)
    */
   async countListFromOldDb(lastSyncTime, lastSyncId = 0) {
-    const syncTimeExpr = this.getSyncTimeExpression();
-    // Bỏ qua các ngày dummy của bản cũ (2100, 2999) hoặc epoch mặc định (1970, 1753)
-    const isValidTime = lastSyncTime &&
-      lastSyncTime !== '1753-01-01T00:00:00.000Z' &&
-      lastSyncTime !== '1970-01-01T00:00:00.000Z' &&
-      lastSyncTime !== '2100-01-01T00:00:00.000Z' &&
-      lastSyncTime !== '2999-12-31T23:59:59.999Z' &&
-      !Number.isNaN(new Date(lastSyncTime).getTime()) &&
-      new Date(lastSyncTime).getFullYear() > 1000;
-
-    const effectiveSyncTime = isValidTime ? lastSyncTime : this._defaultSyncTime;
-    const syncMinDate = this._syncMinDate;
-    const startDate = process.env.SYNC_START_DATE || null;
-    const endDate = process.env.SYNC_END_DATE || '2100-01-01T00:00:00.000Z';
-    const partitionExpr = this.getPartitionColumnExpression();
-
+    const hardCodedOldId = '480927';
     const query = `
-      ;WITH source_rows AS (
-        SELECT
-          ${syncTimeExpr} AS __sync_time,
-          TRY_CONVERT(
-            BIGINT,
-            NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')
-          ) AS __sync_id_num
-        FROM ${this.oldDbSchema}.${this.oldDbTable}
-        WHERE 1=1
-          AND (${partitionExpr} >= @startDate OR @startDate IS NULL)
-          AND (${partitionExpr} <= @endDate OR @endDate IS NULL)
-      )
       SELECT COUNT(1) AS total
-      FROM source_rows
-      WHERE (
-        @lastSyncTime = '1753-01-01T00:00:00.000Z'
-        OR __sync_time > @lastSyncTime
-        OR (
-          __sync_time = @lastSyncTime
-          AND ISNULL(__sync_id_num, 0) > @lastSyncId
-        )
-      )
-      AND __sync_time >= @syncMinDate
+      FROM ${this.oldDbSchema}.${this.oldDbTable}
+      WHERE ID = @hardCodedOldId
     `;
 
     if (!this.oldPool) {
@@ -312,11 +231,7 @@ class Extractor extends BaseExtractor {
 
     try {
       const results = await this.oldPool.request()
-        .input('lastSyncTime', sql.DateTime2, effectiveSyncTime)
-        .input('lastSyncId', sql.BigInt, Number(lastSyncId || 0))
-        .input('startDate', sql.DateTime2, startDate)
-        .input('endDate', sql.DateTime2, endDate)
-        .input('syncMinDate', sql.DateTime2, syncMinDate)
+        .input('hardCodedOldId', sql.NVarChar, hardCodedOldId)
         .query(query);
 
       return Number(results.recordset?.[0]?.total || 0);

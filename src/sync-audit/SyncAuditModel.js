@@ -1189,11 +1189,13 @@ class SyncAuditModel extends BaseModel {
     const categoryRaw = record?.Category ?? null;
     const category = this._normalizeTextField(categoryRaw);
 
-    // chỉ assign nếu thực sự chưa có (null hoặc undefined, KHÔNG override '')
-    if (type_document === null || type_document === undefined) {
-      if (category && INCOMING_CATEGORIES.has(category)) {
-        type_document = 'IncomingDocument';
-      } else if (category && OUTGOING_CATEGORIES.has(category)) {
+    // Nếu category thuộc nhóm incoming thì ưu tiên gán IncomingDocument.
+    // Điều này tránh trường hợp text hành động như "trình" bị parse thành OutgoingDocument
+    // trong khi bản ghi thực chất là văn bản đến.
+    if (category && INCOMING_CATEGORIES.has(category)) {
+      type_document = 'IncomingDocument';
+    } else if (type_document === null || type_document === undefined) {
+      if (category && OUTGOING_CATEGORIES.has(category)) {
         type_document = 'OutgoingDocument';
       }
     }

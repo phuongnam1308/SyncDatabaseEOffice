@@ -866,7 +866,7 @@ class MigrationHelper {
       const displayName = this.extractDisplayName(trimmed);
       if (!displayName) return userIdOrName;
 
-      const selectQuery = `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users WHERE name = @name OR id = @name`;
+      const selectQuery = `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users WHERE name = @name OR id = @name OR username = @name OR code_nd = @name OR id_user_bak = @name`;
       const existing = await this.queryNewDbTx(selectQuery, { name: displayName }, transaction);
       if (existing?.length) return existing[0].id;
 

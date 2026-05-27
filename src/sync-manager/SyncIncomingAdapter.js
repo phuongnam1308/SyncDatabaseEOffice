@@ -197,6 +197,7 @@ class SyncIncomingAdapter {
       batchSize,
       effectiveOffset
     );
+    console.log('BEGIN == ', rows);
 
     return rows || [];
   }

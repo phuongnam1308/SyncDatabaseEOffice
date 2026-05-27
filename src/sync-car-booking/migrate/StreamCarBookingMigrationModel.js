@@ -514,7 +514,6 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
           SELECT COUNT(*) AS total
           FROM [${db}].[dbo].[AllUserData] ud
           WHERE ud.[tp_ListId] IN (${listIdsStr})
-          AND ud.tp_RowOrdinal = 0
       `;
       try {
         const rows = await this.queryOldDb(query, { lastSyncTime, lastSyncId: Number(lastSyncId || 0) });
@@ -608,7 +607,6 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
             ${cols.hasDepartment ? `LEFT JOIN [${this.oldUserDb}].[dbo].[Department] dept ON ci.[DepartmentId] = dept.[ID]` : ''}
 
             WHERE ud.[tp_ListId] IN (${listIdsStr})
-            AND ud.tp_RowOrdinal = 0
         ) AS t
         WHERE __page_rn > @offset AND __page_rn <= (@offset + @limit)
         ORDER BY __page_rn;
@@ -746,7 +744,6 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
             SELECT COUNT(*) AS total
             FROM [${db}].[dbo].[AllUserData]
             WHERE [tp_ListId] IN (${listIdsStr})
-            AND tp_RowOrdinal = 0
         `;
         const dbCountRes = await this.queryOldDb(dbCountQuery, { lastSyncTime: normalizedLastSyncTime, lastSyncId: normalizedLastSyncId });
         const dbCount = Number(dbCountRes?.[0]?.total || 0);

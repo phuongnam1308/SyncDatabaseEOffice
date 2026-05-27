@@ -87,6 +87,9 @@ class Loader extends BaseLoader {
         reqClaim.input('endDate', endDate);
       }
 
+      reqCount.input('hardCodedOldId', '480927');
+      reqClaim.input('hardCodedOldId', '480927');
+
       // Debug count trước khi fetch
       const countResult = await reqCount.query(`
           SELECT COUNT(1) AS cnt,
@@ -95,6 +98,7 @@ class Loader extends BaseLoader {
           FROM ${stagingTable}
           WHERE ISNULL(MigrateFlg, 0) = 0
             AND ISNULL(MigrateErrFlg, 0) = 0
+            AND ID = @hardCodedOldId
             ${dateConditions}
         `);
 
@@ -114,6 +118,7 @@ class Loader extends BaseLoader {
           FROM ${stagingTable} WITH (UPDLOCK, ROWLOCK, READPAST)
           WHERE ISNULL(MigrateFlg, 0) = 0
             AND ISNULL(MigrateErrFlg, 0) = 0
+            AND ID = @hardCodedOldId
             ${dateConditions}
           ORDER BY TRY_CONVERT(datetime2, Modified) DESC,
                    TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(ID)), '')) DESC
