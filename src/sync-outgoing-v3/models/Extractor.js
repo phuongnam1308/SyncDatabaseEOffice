@@ -89,7 +89,16 @@ class Extractor extends BaseExtractor {
     const syncTimeExpr = this.getSyncTimeExpression();
     const partitionExpr = this.getPartitionColumnExpression();
 
-    const query = `
+    // =========================================================================
+    // KHỐI GHI ĐÈ ĐỂ TEST SYNC 1 VĂN BẢN DUY NHẤT
+    // =========================================================================
+    // Hướng dẫn: Gán ID văn bản cũ (ví dụ: '123') cho testDocId để chỉ sync đúng 1 bản ghi này.
+    // Hoặc cấu hình qua biến môi trường TEST_SINGLE_DOC_ID ở file .env
+    // =========================================================================
+    const testDocId = process.env.TEST_SINGLE_DOC_ID || null; // ví dụ: '123'
+    // =========================================================================
+
+    let query = `
       SELECT COUNT(1) AS cnt
       FROM ${this.oldDbSchema}.${this.oldDbTable}
       WHERE 1=1
@@ -106,10 +115,18 @@ class Extractor extends BaseExtractor {
         AND ${syncTimeExpr} >= @syncMinDate
     `;
 
+    if (testDocId) {
+      query = query.replace('WHERE 1=1', `WHERE 1=1 AND ID = @testDocId`);
+    }
+
     const effectiveSyncTime = this._getEffectiveSyncTime(lastSyncTime);
 
     try {
-      const results = await this.oldPool.request()
+      const request = this.oldPool.request();
+      if (testDocId) {
+        request.input('testDocId', sql.NVarChar, testDocId);
+      }
+      const results = await request
         .input('lastSyncTime', sql.DateTime2, effectiveSyncTime)
         .input('lastSyncId', sql.BigInt, lastSyncId)
         .input('startDate', sql.DateTime2, process.env.SYNC_START_DATE || null)
@@ -131,7 +148,16 @@ class Extractor extends BaseExtractor {
     const syncTimeExpr = this.getSyncTimeExpression();
     const partitionExpr = this.getPartitionColumnExpression();
 
-    const query = `
+    // =========================================================================
+    // KHỐI GHI ĐÈ ĐỂ TEST SYNC 1 VĂN BẢN DUY NHẤT
+    // =========================================================================
+    // Hướng dẫn: Gán ID văn bản cũ (ví dụ: '123') cho testDocId để chỉ sync đúng 1 bản ghi này.
+    // Hoặc cấu hình qua biến môi trường TEST_SINGLE_DOC_ID ở file .env
+    // =========================================================================
+    const testDocId = process.env.TEST_SINGLE_DOC_ID || null; // ví dụ: '123'
+    // =========================================================================
+
+    let query = `
       ;WITH source_rows AS (
         SELECT
           *,
@@ -172,12 +198,20 @@ class Extractor extends BaseExtractor {
       ORDER BY __page_rn
     `;
 
+    if (testDocId) {
+      query = query.replace('WHERE 1=1', `WHERE 1=1 AND ID = @testDocId`);
+    }
+
     const effectiveSyncTime = this._getEffectiveSyncTime(lastSyncTime);
 
     logger.info(`[${this.modelName}] Fetching batch: lastSyncTime=${effectiveSyncTime}, lastSyncId=${lastSyncId}, limit=${batchSize}, offset=${offset}`);
 
     try {
-      const results = await this.oldPool.request()
+      const request = this.oldPool.request();
+      if (testDocId) {
+        request.input('testDocId', sql.NVarChar, testDocId);
+      }
+      const results = await request
         .input('lastSyncTime', sql.DateTime2, effectiveSyncTime)
         .input('lastSyncId', sql.BigInt, lastSyncId)
         .input('limit', sql.Int, batchSize)
@@ -212,7 +246,16 @@ class Extractor extends BaseExtractor {
     const partitionExpr = this.getPartitionColumnExpression();
     const effectiveSyncTime = this._getEffectiveSyncTime(lastSyncTime);
 
-    const query = `
+    // =========================================================================
+    // KHỐI GHI ĐÈ ĐỂ TEST SYNC 1 VĂN BẢN DUY NHẤT
+    // =========================================================================
+    // Hướng dẫn: Gán ID văn bản cũ (ví dụ: '123') cho testDocId để chỉ sync đúng 1 bản ghi này.
+    // Hoặc cấu hình qua biến môi trường TEST_SINGLE_DOC_ID ở file .env
+    // =========================================================================
+    const testDocId = process.env.TEST_SINGLE_DOC_ID || null; // ví dụ: '123'
+    // =========================================================================
+
+    let query = `
       ;WITH source_rows AS (
         SELECT
           ${syncTimeExpr} AS __sync_time,
@@ -238,8 +281,16 @@ class Extractor extends BaseExtractor {
       AND __sync_time >= @syncMinDate
     `;
 
+    if (testDocId) {
+      query = query.replace('WHERE 1=1', `WHERE 1=1 AND ID = @testDocId`);
+    }
+
     try {
-      const results = await this.oldPool.request()
+      const request = this.oldPool.request();
+      if (testDocId) {
+        request.input('testDocId', sql.NVarChar, testDocId);
+      }
+      const results = await request
         .input('lastSyncTime', sql.DateTime2, effectiveSyncTime)
         .input('lastSyncId', sql.BigInt, Number(lastSyncId || 0))
         .input('startDate', sql.DateTime2, process.env.SYNC_START_DATE || null)

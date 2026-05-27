@@ -590,6 +590,83 @@ class UpsertHandler {
    * Step 4: Process audits
    */
   async _processAudits(oldRecord, documentId, recordId, drafter, transaction, isNew = false) {
+    // 1. Luôn luôn kiểm tra và tạo bản ghi audit khởi tạo 'CREATE'
+    try {
+      const existingAudit = await this.queryNewDbTx(
+        `SELECT TOP 1 id FROM ${this.newDbName}.dbo.audit WHERE document_id = @docId AND action_code = 'CREATE'`,
+        { docId: documentId },
+        transaction
+      );
+
+      if (!existingAudit || existingAudit.length === 0) {
+        // Lấy thông tin người tạo từ bản ghi cũ
+        const creatorName = oldRecord.CreatedBy || oldRecord.NguoiSoanThaoText || oldRecord.NguoiSoanThao || oldRecord.CBNV || '';
+        const parsedDate = this.mapper && this.mapper.helper
+          ? this.mapper.helper.parseDate(oldRecord.Created || oldRecord.NgayTao)
+          : null;
+        const createdDate = parsedDate || new Date();
+
+        let creatorId = drafter || process.env.VANTHU_USER_ID;
+        let displayName = creatorName;
+
+        if (this.mapper && this.mapper.helper && creatorName && !creatorId) {
+          try {
+            const cleanName = this.mapper.helper.extractDisplayName
+              ? this.mapper.helper.extractDisplayName(creatorName)
+              : creatorName;
+            displayName = cleanName || creatorName;
+            const resolvedId = await this.mapper.helper.mapUserName(cleanName, transaction);
+            if (resolvedId) creatorId = resolvedId;
+          } catch (mapErr) {
+            logger.warn(`[AutoCreateAudit] mapUserName failed for "${creatorName}": ${mapErr.message}`);
+          }
+        }
+
+        const typeDoc = 'OutgoingDocument';
+
+        const insertQuery = `
+          INSERT INTO ${this.newDbName}.dbo.audit (
+            document_id, [time], user_id, display_name,
+            action_code, details, origin_id, created_by,
+            receiver, receiver_unit, group_, roleProcess,
+            [action], stage_status, created_at, updated_at,
+            type_document, table_backups
+          ) VALUES (
+            @document_id, @time, @user_id, @display_name,
+            @action_code, @details, @origin_id, @created_by,
+            @receiver, @receiver_unit, @group_, @roleProcess,
+            @action, @stage_status, @created_at, @updated_at,
+            @type_document, @table_backups
+          )
+        `;
+
+        await this.queryNewDbTx(insertQuery, {
+          document_id: documentId,
+          time: createdDate,
+          user_id: creatorId,
+          display_name: displayName || null,
+          action_code: 'CREATE',
+          details: JSON.stringify({ note: 'Tạo văn bản (tự động tạo từ migration)', isTransferOption: false }),
+          origin_id: `auto_create_${String(oldRecord.ID || '').substring(0, 80)}`,
+          created_by: creatorId,
+          receiver: creatorId,
+          receiver_unit: null,
+          group_: null,
+          roleProcess: 'VANTHU',
+          action: 'Tạo văn bản',
+          stage_status: 'DA_XU_LY',
+          created_at: createdDate,
+          updated_at: createdDate,
+          type_document: typeDoc,
+          table_backups: 'auto_create'
+        }, transaction);
+
+        logger.info(`[UpsertHandler][AutoCreateAudit] Created initial CREATE audit for documentId=${documentId} creator=${displayName}`);
+      }
+    } catch (autoAuditErr) {
+      logger.warn(`[UpsertHandler][AutoCreateAudit] Failed for documentId=${documentId}: ${autoAuditErr.message}`);
+    }
+
     if (this._syncAuditModel.length === 0) return;
 
     try {

@@ -1,4 +1,4 @@
-﻿const { Client: MinioClient } = require('minio');
+const { Client: MinioClient } = require('minio');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const logger = require('../../utils/logger');
@@ -463,35 +463,54 @@ class FileUploadService {
       throw new Error('[FileUploadService] NEW_SYSTEM_UPLOAD_URL chưa được cấu hình hoặc thiếu thông tin relationRecord.objectId. (Cơ chế MinIO cũ đã bị tắt)');
     }
 
-    // ── BƯỚC 2 & 3: Insert files + file_relations ──
+    // ── BƯỚC 2 & 3: Cập nhật files tự sinh + Insert file_relations ──
     let fileId = null;
     let relationId = null;
 
     try {
-      // BƯỚC 2: Insert vào bảng files
-      const enrichedFileRecord = {
-        ...fileRecord,
-        // Ưu tiên: tên file gốc (fileRecord.file_name) → originalName → cuối cùng mới dùng apiResponse.file_name
-        // Lý do: apiResponse.file_name thường trả về UUID/ID thay vì tên file thật
-        file_name: fileRecord.file_name || originalName || apiResponse?.file_name,
-        mime_type: fileRecord.mime_type || mime || null,
-        file_size: fileRecord.file_size ?? fileSize,
-        storage_path: storagePath,
-        storage_type: apiResponse?.storage_type || 'minio',
-        id_bak: apiResponse?.id ? String(apiResponse.id) : (fileRecord.id_bak || null), // Lưu ID từ hệ thống mới
-      };
+      if (apiResponse && (apiResponse.id || apiResponse.public_id)) {
+        // Lấy ID của bản ghi file do API của hệ thống mới đã tự động chèn khi upload tệp
+        fileId = Number(apiResponse.id || apiResponse.public_id);
+        
+        logger.info(
+          `[FileUploadService][DB] API hệ thống mới đã tự sinh file record ID=${fileId}. ` +
+          `Bắt đầu UPDATE cột created_by thành drafter="${fileRecord.created_by || 'NULL'}" và cập nhật table_bak...`
+        );
 
-      logger.info(
-        `[FileUploadService][DB] Bắt đầu ghi bảng files` +
-        ` | storagePath=${storagePath}` +
-        ` | storageType=${enrichedFileRecord.storage_type}` +
-        ` | id_bak=${enrichedFileRecord.id_bak}`
-      );
+        // BƯỚC 2: Update thông tin người soạn thảo (created_by) và các trường kỹ thuật vào bản ghi có sẵn đó
+        const updateQuery = `
+          UPDATE ${this.fileModel.getTableRef()}
+          SET created_by = @created_by,
+              table_bak = @table_bak,
+              type_doc = @type_doc,
+              isBak = @isBak
+          WHERE id = @fileId
+        `;
+        
+        await this.fileModel.queryDb(updateQuery, {
+          created_by: fileRecord.created_by || null,
+          table_bak: fileRecord.table_bak || 'VanBanBanHanh',
+          type_doc: fileRecord.type_doc || null,
+          isBak: fileRecord.isBak ?? 1,
+          fileId: fileId
+        }, transaction);
 
-      const fileResult = await this.fileModel.insert(enrichedFileRecord, transaction);
-      fileId = fileResult.newId;
+        logger.info(`[FileUploadService][DB] Đã UPDATE thành công bản ghi file ID=${fileId} với created_by=${fileRecord.created_by}`);
+      } else {
+        // Fallback: Nếu không chạy qua API hệ thống mới, chèn thủ công như cũ (thực tế cấu hình NEW_SYSTEM_UPLOAD_URL bắt buộc ở trên)
+        const enrichedFileRecord = {
+          ...fileRecord,
+          file_name: fileRecord.file_name || originalName,
+          mime_type: fileRecord.mime_type || mime || null,
+          file_size: fileRecord.file_size ?? fileSize,
+          storage_path: storagePath,
+          storage_type: 'minio'
+        };
+        const fileResult = await this.fileModel.insert(enrichedFileRecord, transaction);
+        fileId = fileResult.newId;
+      }
 
-      // BƯỚC 3: Insert vào bảng file_relations
+      // BƯỚC 3: Insert vào bảng file_relations để tạo mối liên kết với văn bản đi
       if (relationRecord && typeof relationRecord === 'object') {
         const enrichedRelationRecord = {
           ...relationRecord,

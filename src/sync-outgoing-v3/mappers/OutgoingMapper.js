@@ -43,10 +43,25 @@ class OutgoingMapper {
     )) || process.env.DEFAULT_RECEIVER_UNIT_ID;
 
     let drafterRaw = this.helper.safeString(oldRecord.NguoiSoanThaoText || oldRecord.CreatedBy);
-    const drafter = (await this.helper.mapUserDrafter(
+    let drafter = (await this.helper.mapUserDrafter(
       drafterRaw,
       transaction
     )) || process.env.VANTHU_USER_ID || null;
+
+    // =========================================================================
+    // KHỐI HARDCODE ĐỂ TEST (BẬT LÊN KHI CẦN TEST MAPPING VĂN BẢN VÀO USER CỐ ĐỊNH)
+    // =========================================================================
+    // Hướng dẫn: 
+    // 1. Thay 'ID_USER_NEW_CẦN_TEST' bằng ID (GUID) của tài khoản mới bạn muốn gán.
+    // 2. Nếu muốn áp dụng cho TẤT CẢ các văn bản đồng bộ:
+    //    drafter = 'ID_USER_NEW_CẦN_TEST';
+    // 3. Nếu chỉ muốn áp dụng cho duy nhất 1 văn bản cụ thể (ví dụ ID cũ = 9999):
+    //    if (String(oldRecord.ID) === '9999') {
+    //        drafter = 'ID_USER_NEW_CẦN_TEST';
+    //    }
+    // =========================================================================
+     drafter = 'b23406e3-5c75-41d3-91e0-1654293ae6b2'; // Mẫu: ID tài khoản Văn Thư
+    // =========================================================================
 
     const reportSigner = await this.helper.mapUserDrafter(
       this.helper.safeString(oldRecord.NguoiKyVanBanText),
