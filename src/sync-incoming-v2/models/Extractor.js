@@ -13,7 +13,7 @@ const sql = require('mssql');
  * - SYNC_MIN_DATE: resolves from SYNC_START_DATE if earlier (incoming goes further back)
  */
 class Extractor extends BaseExtractor {
-  constructor() {
+  constructor(newPool, oldPool) {
     super({
       modelName: 'INCOMING_EXTRACTOR',
       oldDbTable: 'VanBanDen',
@@ -21,6 +21,9 @@ class Extractor extends BaseExtractor {
       stagingTableBaseName: 'incomming_documents_sync',
       partitionColumn: 'NgayDen'
     });
+
+    this.newPool = newPool;
+    this.oldPool = oldPool;
 
     this.newDbName = process.env.NEW_DB_NAME;
 

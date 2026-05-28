@@ -163,10 +163,14 @@ class UpsertHandler {
         const drafter = docResult.drafter;
 
         // Step 2: Apply files (inside transaction)
-        await this._applyPreparedFiles(preparedFiles, oldRecord, {
-          documentId,
-          drafter
-        }, transaction);
+        try {
+          await this._applyPreparedFiles(preparedFiles, oldRecord, {
+            documentId,
+            drafter 
+          }, transaction);
+        } catch (error) {
+          logger.error(`[UpsertHandler:Incoming] Failed to apply files for ID=${id}: ${error.message}`);
+        }
 
         // Step 3: Parse HTML comments (Incoming fields only)
         await this._processHtmlComments(oldRecord, documentId, id, transaction);

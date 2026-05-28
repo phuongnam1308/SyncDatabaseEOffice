@@ -119,7 +119,7 @@ class IncomingMapper {
     );
 
     // Incoming: receiver_unit = đơn vị nhận nội bộ (DonVi)
-    const receiverUnit = await this._resolveReceiverUnit(oldRecord.DonVi, transaction);
+    const receiverUnit = await this._resolveReceiverUnit(oldRecord.DonVi, transaction, drafter);
 
     // ── Book document ─────────────────────────────
     const bookDocumentObj = await this.helper.mapBookDocument(
@@ -225,7 +225,7 @@ class IncomingMapper {
    * Resolve receiver unit từ DonVi field (semicolon-separated).
    * Lấy unit đầu tiên map được.
    */
-  async _resolveReceiverUnit(donViRaw, transaction) {
+  async _resolveReceiverUnit(donViRaw, transaction, drafter) {
     const units = this.helper.splitStringSplitBySemicolon(
       this.helper.safeString(donViRaw)
     );
@@ -234,6 +234,11 @@ class IncomingMapper {
       if (!unit) continue;
       const unitId = await this.helper.mapSenderUnitId(unit, transaction);
       if (unitId) return unitId;
+    }
+
+    if (drafter) {
+      const parentUnit = await this.helper.getUserParentUnit(drafter, transaction);
+      if (parentUnit) return parentUnit;
     }
 
     return null;
