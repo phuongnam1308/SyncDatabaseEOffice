@@ -850,6 +850,9 @@ class MigrationHelper {
       if (!userIdOrName || typeof userIdOrName !== 'string') {
         return userIdOrName;
       }
+      if (userIdOrName === 'migservice')
+        return 'b23406e3-5c75-41d3-91e0-1654293ae6b2';
+      
       const trimmed = userIdOrName.trim();
       if (!trimmed) return userIdOrName;
 
@@ -3685,6 +3688,32 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
         type: scope
       };
     }
+  }
+
+  /**
+   * Lấy ID đơn vị (parent) của người dùng từ bảng users
+   * @param {string} userId - ID người dùng
+   * @param {object} transaction
+   * @returns {Promise<string|null>} - ID đơn vị hoặc null
+   */
+  async getUserParentUnit(userId, transaction = null) {
+    if (!userId) return null;
+    try {
+      const db = process.env.NEW_DB_NAME || 'app_tancang';
+      const query = `
+        SELECT TOP 1 parent 
+        FROM [${db}].[dbo].[users] 
+        WHERE id = @userId
+      `
+      const result = await this.queryNewDbTx(query, { userId }, transaction);
+      if (result && result.length > 0) {
+        const user = result[0];
+        if (user.parent) return user.parent;
+      }
+    } catch (e) {
+      logger.warn(`[MigrationHelper] Lỗi khi lấy parent của user ${userId}: ${e.message}`);
+    }
+    return null;
   }
 }
 
