@@ -29,11 +29,21 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     // Multi-site support
     this.listIdCache = {};
     this.canonicalListTitle = null;
-    try {
-      this.databases = require('./databases.json');
-    } catch (e) {
-      this.databases = [this.oldDbName];
-    }
+    this.databases = [
+      'WSS_Content_eoffice', 'WSS_Content_eoffice_atpc', 'WSS_Content_eoffice_cll', 'WSS_Content_eoffice_cntt',
+      'WSS_Content_eoffice_ct', 'WSS_Content_eoffice_cvtc', 'WSS_Content_eoffice_donvi', 'WSS_Content_eoffice_dvhh',
+      'WSS_Content_eoffice_dvkt', 'WSS_Content_eoffice_gnvt', 'WSS_Content_eoffice_hc', 'WSS_Content_eoffice_hdsd',
+      'WSS_Content_eoffice_ht', 'WSS_Content_eoffice_icdlb', 'WSS_Content_eoffice_icdst', 'WSS_Content_eoffice_ios',
+      'WSS_Content_eoffice_khdt', 'WSS_Content_eoffice_khkd', 'WSS_Content_eoffice_ktvt', 'WSS_Content_eoffice_kvtc',
+      'WSS_Content_eoffice_mkt', 'WSS_Content_eoffice_npl', 'WSS_Content_eoffice_qlct', 'WSS_Content_eoffice_qsbv',
+      'WSS_Content_eoffice_record', 'WSS_Content_eoffice_record2018', 'WSS_Content_eoffice_snpl', 'WSS_Content_eoffice_tc',
+      'WSS_Content_eoffice_tc189', 'WSS_Content_eoffice_tcct', 'WSS_Content_eoffice_tchp', 'WSS_Content_eoffice_tcidi',
+      'WSS_Content_eoffice_tcld', 'WSS_Content_eoffice_tcmt', 'WSS_Content_eoffice_tco', 'WSS_Content_eoffice_tcot',
+      'WSS_Content_eoffice_tcpc', 'WSS_Content_eoffice_tcph', 'WSS_Content_eoffice_tctt', 'WSS_Content_eoffice_testuser2',
+      'WSS_Content_eoffice_thuvientct', 'WSS_Content_eoffice_ttddc', 'WSS_Content_eoffice_vp', 'WSS_Content_eoffice_vpmb',
+      'WSS_Content_eoffice_vptnb', 'WSS_Content_eoffice_vtb', 'WSS_Content_eoffice_vtt', 'WSS_Content_eoffice_xdct',
+      'WSS_Content_eoffice_xncg', 'WSS_Content_eoffice_yte'
+    ];
   }
 
   /**
@@ -733,174 +743,86 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
   }
 
   async getCount(lastSyncTime, lastSyncId = 0) {
-    // Dùng 2 list ID hardcode (giống SQL query chuẩn) cho tất cả sites
-    // Build 1 query UNION ALL động để đếm tổng tất cả DB chỉ trong 1 lần gọi
-    const HARDCODED_LIST_IDS = [
-      'B0F4D2C4-D65B-42AB-A37A-9D45118A2A2C',
-      '360585BB-EDDA-4990-B293-AA097594B073'
-    ];
-    const listIdsStr = HARDCODED_LIST_IDS.map(id => `'${id}'`).join(',');
-    const dbs = this.databases || [this.oldDbName];
+    console.log(`[StreamMeetingMigrationModel] [getCount] Đếm tổng bản ghi trên 51 databases bằng UNION ALL...`);
+    const sql = `
+      DECLARE @dbs TABLE (DbName NVARCHAR(128));
+      INSERT INTO @dbs (DbName) VALUES
+      ('WSS_Content_eoffice'),('WSS_Content_eoffice_atpc'),('WSS_Content_eoffice_cll'),
+      ('WSS_Content_eoffice_cntt'),('WSS_Content_eoffice_ct'),('WSS_Content_eoffice_cvtc'),
+      ('WSS_Content_eoffice_donvi'),('WSS_Content_eoffice_dvhh'),('WSS_Content_eoffice_dvkt'),
+      ('WSS_Content_eoffice_gnvt'),('WSS_Content_eoffice_hc'),('WSS_Content_eoffice_hdsd'),
+      ('WSS_Content_eoffice_ht'),('WSS_Content_eoffice_icdlb'),('WSS_Content_eoffice_icdst'),
+      ('WSS_Content_eoffice_ios'),('WSS_Content_eoffice_khdt'),('WSS_Content_eoffice_khkd'),
+      ('WSS_Content_eoffice_ktvt'),('WSS_Content_eoffice_kvtc'),('WSS_Content_eoffice_mkt'),
+      ('WSS_Content_eoffice_npl'),('WSS_Content_eoffice_qlct'),('WSS_Content_eoffice_qsbv'),
+      ('WSS_Content_eoffice_record'),('WSS_Content_eoffice_record2018'),('WSS_Content_eoffice_snpl'),
+      ('WSS_Content_eoffice_tc'),('WSS_Content_eoffice_tc189'),('WSS_Content_eoffice_tcct'),
+      ('WSS_Content_eoffice_tchp'),('WSS_Content_eoffice_tcidi'),('WSS_Content_eoffice_tcld'),
+      ('WSS_Content_eoffice_tcmt'),('WSS_Content_eoffice_tco'),('WSS_Content_eoffice_tcot'),
+      ('WSS_Content_eoffice_tcpc'),('WSS_Content_eoffice_tcph'),('WSS_Content_eoffice_tctt'),
+      ('WSS_Content_eoffice_testuser2'),('WSS_Content_eoffice_thuvientct'),
+      ('WSS_Content_eoffice_ttddc'),('WSS_Content_eoffice_vp'),('WSS_Content_eoffice_vpmb'),
+      ('WSS_Content_eoffice_vptnb'),('WSS_Content_eoffice_vtb'),('WSS_Content_eoffice_vtt'),
+      ('WSS_Content_eoffice_xdct'),('WSS_Content_eoffice_xncg'),('WSS_Content_eoffice_yte');
 
-    // Build UNION ALL query đếm từng DB
-    const unionParts = dbs.map(db =>
-      `SELECT N'${db}' AS DatabaseName, COUNT(*) AS cnt
-       FROM [${db}].[dbo].[AllUserData]
-       WHERE [tp_ListId] IN (${listIdsStr})
-       AND tp_RowOrdinal = 0`
-    );
-    const countSql = `
-      SELECT DatabaseName, cnt FROM (
-        ${unionParts.join('\n      UNION ALL\n      ')}
-      ) AS _all
-      ORDER BY DatabaseName
+      DECLARE @sql NVARCHAR(MAX) = N'';
+
+      SELECT @sql = @sql + N'
+      SELECT
+         ud.[tp_ID] AS __sync_id_num
+      FROM [' + DbName + N'].[dbo].[AllUserData] ud
+      INNER JOIN [' + DbName + N'].[dbo].[AllLists] l
+         ON ud.[tp_ListId] = l.[tp_ID]
+      LEFT JOIN [WSS_Content_eoffice].[dbo].[UserInfo] ui_author
+         ON ud.[tp_Author] = ui_author.[tp_ID]
+      LEFT JOIN [WSS_Content_eoffice].[dbo].[UserInfo] ui_editor
+         ON ud.[tp_Editor] = ui_editor.[tp_ID]
+      WHERE ud.[tp_ListId] IN (
+         ''B0F4D2C4-D65B-42AB-A37A-9D45118A2A2C'',
+         ''360585BB-EDDA-4990-B293-AA097594B073''
+      )
+      AND ud.tp_RowOrdinal = 0
+      UNION ALL
+      '
+      FROM @dbs;
+
+      -- Cắt bỏ UNION ALL cuối cùng
+      IF LEN(@sql) > 0
+         SET @sql = LEFT(@sql, LEN(@sql) - LEN('UNION ALL' + CHAR(13) + CHAR(10)));
+
+      -- Chỉ lấy tổng cộng
+      SET @sql = N'
+      SELECT COUNT(*) AS TongSoBanGhi
+      FROM (
+      ' + @sql + N'
+      ) AS T;
+      ';
+
+      EXEC sp_executesql @sql;
     `;
 
-    let total = 0;
     try {
-      console.log(`[StreamMeetingMigrationModel] [getCount] Đếm tổng bản ghi trên ${dbs.length} databases...`);
-      const rows = await this.queryOldDb(countSql);
-      for (const row of rows || []) {
-        const cnt = Number(row.cnt || 0);
-        total += cnt;
-        if (cnt > 0) {
-          console.log(`[StreamMeetingMigrationModel] [getCount]   ${row.DatabaseName}: ${cnt} bản ghi`);
-        }
-      }
-      console.log(`[StreamMeetingMigrationModel] [getCount] ✅ Tổng cộng: ${total} bản ghi trên ${dbs.length} DB`);
-    } catch (e) {
-      console.error(`[StreamMeetingMigrationModel] [getCount] ❌ Lỗi query tổng hợp: ${e.message}`);
-      console.warn(`[StreamMeetingMigrationModel] [getCount] Fallback: đếm từng DB riêng lẻ...`);
-      // Fallback: đếm từng DB riêng lẻ nếu UNION ALL thất bại (VD: 1 DB offline)
-      for (const db of dbs) {
-        try {
-          const rows = await this.queryOldDb(`
-            SELECT COUNT(*) AS total
-            FROM [${db}].[dbo].[AllUserData]
-            WHERE [tp_ListId] IN (${listIdsStr})
-            AND tp_RowOrdinal = 0
-          `);
-          const cnt = Number(rows?.[0]?.total || 0);
-          total += cnt;
-          if (cnt > 0) {
-            console.log(`[StreamMeetingMigrationModel] [getCount]   ${db}: ${cnt} bản ghi`);
-          }
-        } catch (err) {
-          console.warn(`[StreamMeetingMigrationModel] [getCount]   ${db}: BỎ QUA (${err.message})`);
-        }
-      }
-      console.log(`[StreamMeetingMigrationModel] [getCount] ✅ Tổng cộng (fallback): ${total} bản ghi`);
+      const rows = await this.queryOldDb(sql);
+      const total = Number(rows?.[0]?.TongSoBanGhi || 0);
+      console.log(`[StreamMeetingMigrationModel] [getCount] ✅ Tổng cộng: ${total} bản ghi trên 51 DB`);
+      return total;
+    } catch (err) {
+      console.error(`[StreamMeetingMigrationModel] [getCount] ❌ LỖI: ${err.message}`);
+      return 0;
     }
-    return total;
-  }
-
-  async fetchListFromOldDb(lastSyncTime, lastSyncId = 0, offset = 0, limit = 2000, dbName = null) {
-    const db = dbName || this.oldDbName;
-
-    // Lấy listIds cho DB này
-    const listIds = await this.resolveListIdsForDb(db);
-    if (!listIds?.length) return [];
-    const listIdsStr = listIds.map(id => `'${id}'`).join(',');
-
-    // JOIN UserInfo từ WSS_Content_eoffice (DB gốc trung tâm) cho tất cả sites
-    // để đảm bảo thông tin author/editor nhất quán dù dữ liệu từ DB nào
-    const userDb = this.oldUserDb || 'WSS_Content_eoffice';
-
-    const query = `
-        SELECT
-            N'${db}' AS DatabaseName,
-            l.[tp_Title] AS ListName,
-            ud.[tp_ID] AS ID,
-            ud.[tp_Created] AS tp_Created,
-            ud.[tp_Modified] AS tp_Modified,
-            ui_author.[tp_Title] AS AuthorName,
-            ui_author.[tp_Title] AS AuthorFullName,
-            ui_author.[tp_Login] AS AuthorAccount,
-            ui_author.[tp_Email] AS AuthorEmail,
-            ui_editor.[tp_Title] AS EditorName,
-            ui_editor.[tp_Login] AS EditorAccount,
-            ud.[nvarchar1] AS Title,
-            ud.[nvarchar1] AS TieuDe,
-            ud.[datetime1] AS StartDate,
-            ud.[datetime1] AS BatDau,
-            ud.[datetime2] AS EndDate,
-            ud.[datetime2] AS KetThuc,
-            ud.[nvarchar2] AS Location,
-            ud.[nvarchar2] AS DiaDiem,
-            ud.[nvarchar3] AS Description,
-            ud.[nvarchar3] AS NoiDung,
-            ud.[nvarchar6] AS LoaiHop,
-            ud.[nvarchar10] AS ChuTri,
-            ud.[nvarchar14] AS ThuKy,
-            ud.[tp_Created] AS CreatedDate,
-            ud.[tp_Modified] AS ModifiedDate,
-            ud.[nvarchar4] AS nvarchar4,
-            ud.[nvarchar5] AS priority,
-            ud.[nvarchar6] AS nvarchar6,
-            ud.[nvarchar7] AS nvarchar7,
-            ud.[nvarchar8] AS nvarchar8,
-            ud.[nvarchar9] AS nvarchar9,
-            ud.[nvarchar10] AS nvarchar10,
-            ud.[nvarchar11] AS nvarchar11,
-            ud.[nvarchar12] AS nvarchar12,
-            ud.[nvarchar13] AS nvarchar13,
-            ud.[nvarchar14] AS nvarchar14,
-            ud.[nvarchar15] AS nvarchar15,
-            ud.[datetime1] AS datetime1,
-            ud.[datetime2] AS datetime2,
-            ud.[datetime3] AS datetime3,
-            ud.[datetime4] AS datetime4,
-            ud.[datetime5] AS datetime5,
-            ud.[int1] AS int1,
-            ud.[int2] AS int2,
-            ud.[int3] AS int3,
-            ud.[int4] AS int4,
-            ud.[bit1] AS bit1,
-            ud.[bit2] AS bit2,
-            ud.[tp_Author] AS tp_Author,
-            ud.[tp_Editor] AS tp_Editor,
-            ud.[tp_Version] AS tp_Version,
-            ud.[tp_IsCurrent] AS tp_IsCurrent,
-            ud.[tp_ListId] AS tp_ListId,
-            ud.[float1] AS float1,
-            ud.[float2] AS float2,
-
-            -- Sync Tracking
-            ud.[tp_Modified] AS __sync_time,
-            ud.[tp_ID] AS __sync_id_num
-
-        FROM [${db}].[dbo].[AllUserData] ud
-        INNER JOIN [${db}].[dbo].[AllLists] l
-            ON ud.[tp_ListId] = l.[tp_ID]
-        LEFT JOIN [${userDb}].[dbo].[UserInfo] ui_author
-            ON ud.[tp_Author] = ui_author.[tp_ID]
-        LEFT JOIN [${userDb}].[dbo].[UserInfo] ui_editor
-            ON ud.[tp_Editor] = ui_editor.[tp_ID]
-        WHERE ud.[tp_ListId] IN (${listIdsStr})
-        AND ud.tp_RowOrdinal = 0
-        ORDER BY ud.[tp_Modified] ASC, ud.[tp_ID] ASC, ud.[tp_ListId] ASC
-        OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
-    `;
-
-    const rows = await this.queryOldDb(query, {
-      offset: Number(offset || 0),
-      limit: Number(limit || 2000)
-    });
-    console.log(`[StreamMeetingMigrationModel] Fetched ${rows.length} rows from old DB (db=${db}, userDb=${userDb}, listIds=${listIds.join(',')})`);
-    return rows;
   }
 
   async syncOldToStaging(rows, { transaction, syncJobId, dbName } = {}) {
     if (!Array.isArray(rows) || rows.length === 0) return { stagedCount: 0 };
     if (!syncJobId) throw new Error('syncJobId is required for staging');
-    const targetDb = dbName || this.oldDbName;
-    console.log(`[StreamMeetingMigrationModel] Staging ${rows.length} rows from ${targetDb} to ${this.newTableSync}...`);
+    console.log(`[StreamMeetingMigrationModel] Staging ${rows.length} rows to ${this.newTableSync}...`);
     const columns = this.getStagingDataColumns();
     const stagingTableRef = this.getStagingTableRef();
 
     let actualStagedCount = 0;
 
     for (const row of rows) {
+      const targetDb = row.DatabaseName || dbName || this.oldDbName;
       const params = {};
       for (const column of columns) {
         params[column] = row[column] !== undefined ? row[column] : null;
@@ -958,11 +880,17 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     return { stagedCount: actualStagedCount };
   }
 
+  async fetchListFromOldDb(lastSyncTime, lastSyncId = 0, offset = 0, limit = 2000) {
+    // Required by SyncHandlerModel to satisfy interface check (BaseIncrementalSyncInterface).
+    // Actual data extraction logic is fully handled inside getList() and getCount() 
+    // for this specialized cross-database model.
+    return [];
+  }
+
   async getList(lastSyncTime, syncJobId, lastSyncId = 0) {
     if (!syncJobId) throw new Error('syncJobId is required');
     const normalizedLastSyncTime = this.normalizeSyncTime(lastSyncTime);
     const normalizedLastSyncId = Number(lastSyncId || 0);
-    const stagingTableRef = this.getStagingTableRef();
 
     const totalCount = await this.getCount(normalizedLastSyncTime, normalizedLastSyncId);
     console.log(`[StreamMeetingMigrationModel] Total records to sync: ${totalCount}`);
@@ -986,104 +914,111 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
       }
     );
 
-    // KHÔNG XÓA STAGING NỮA ĐỂ HÚT TIẾP (SKIP CÁI ĐÃ CÓ)
-    // await this.queryNewDb(`DELETE FROM ${stagingTableRef}`, {});
-    console.log(`[StreamMeetingMigrationModel] 🔄 HÚT TIẾP: Giữ nguyên staging table, cái nào có rồi thì skip/update.`);
-
-    const dbs = this.databases || [this.oldDbName];
-    const fetchBatchSize = Number(process.env.STAGING_FETCH_BATCH_SIZE || 2000);
-    let totalStagedCount = 0;
-    let nextSyncTime = normalizedLastSyncTime;
-    let nextSyncId = normalizedLastSyncId;
-
     console.log(`\n${'='.repeat(60)}`);
     console.log(`[StreamMeetingMigrationModel] 🚀 BẮT ĐẦU HÚT DỮ LIỆU OLD → STAGING`);
     console.log(`[StreamMeetingMigrationModel]    Job: ${syncJobId}`);
-    console.log(`[StreamMeetingMigrationModel]    Tổng DB: ${dbs.length} | Tổng bản ghi ước tính: ${totalCount}`);
-    console.log(`[StreamMeetingMigrationModel]    Batch size: ${fetchBatchSize}`);
+    console.log(`[StreamMeetingMigrationModel]    Đang thực thi truy vấn UNION ALL trên 51 DB...`);
     console.log(`${'='.repeat(60)}\n`);
 
-    let dbCounted = 0;
     const jobStartTime = Date.now();
+    let nextSyncTime = normalizedLastSyncTime;
+    let nextSyncId = normalizedLastSyncId;
+    let totalStagedCount = 0;
 
-    for (const db of dbs) {
-      dbCounted++;
-      const dbStartTime = Date.now();
-      try {
-        console.log(`\n[StreamMeetingMigrationModel] ┌─ [SITE ${dbCounted}/${dbs.length}] ${db}`);
+    const sql = `
+      DECLARE @dbs TABLE (DbName NVARCHAR(128));
+      INSERT INTO @dbs (DbName) VALUES
+      ('WSS_Content_eoffice'),('WSS_Content_eoffice_atpc'),('WSS_Content_eoffice_cll'),('WSS_Content_eoffice_cntt'),('WSS_Content_eoffice_ct'),('WSS_Content_eoffice_cvtc'),('WSS_Content_eoffice_donvi'),('WSS_Content_eoffice_dvhh'),('WSS_Content_eoffice_dvkt'),('WSS_Content_eoffice_gnvt'),('WSS_Content_eoffice_hc'),('WSS_Content_eoffice_hdsd'),('WSS_Content_eoffice_ht'),('WSS_Content_eoffice_icdlb'),('WSS_Content_eoffice_icdst'),('WSS_Content_eoffice_ios'),('WSS_Content_eoffice_khdt'),('WSS_Content_eoffice_khkd'),('WSS_Content_eoffice_ktvt'),('WSS_Content_eoffice_kvtc'),('WSS_Content_eoffice_mkt'),('WSS_Content_eoffice_npl'),('WSS_Content_eoffice_qlct'),('WSS_Content_eoffice_qsbv'),('WSS_Content_eoffice_record'),('WSS_Content_eoffice_record2018'),('WSS_Content_eoffice_snpl'),('WSS_Content_eoffice_tc'),('WSS_Content_eoffice_tc189'),('WSS_Content_eoffice_tcct'),('WSS_Content_eoffice_tchp'),('WSS_Content_eoffice_tcidi'),('WSS_Content_eoffice_tcld'),('WSS_Content_eoffice_tcmt'),('WSS_Content_eoffice_tco'),('WSS_Content_eoffice_tcot'),('WSS_Content_eoffice_tcpc'),('WSS_Content_eoffice_tcph'),('WSS_Content_eoffice_tctt'),('WSS_Content_eoffice_testuser2'),('WSS_Content_eoffice_thuvientct'),('WSS_Content_eoffice_ttddc'),('WSS_Content_eoffice_vp'),('WSS_Content_eoffice_vpmb'),('WSS_Content_eoffice_vptnb'),('WSS_Content_eoffice_vtb'),('WSS_Content_eoffice_vtt'),('WSS_Content_eoffice_xdct'),('WSS_Content_eoffice_xncg'),('WSS_Content_eoffice_yte');
 
-        const listIds = await this.resolveListIdsForDb(db);
-        if (!listIds?.length) {
-          console.log(`[StreamMeetingMigrationModel] │   ⚠ Không tìm thấy list ID → BỎ QUA`);
-          console.log(`[StreamMeetingMigrationModel] └─ [${db}] SKIPPED`);
-          continue;
-        }
-        console.log(`[StreamMeetingMigrationModel] │   List IDs: ${listIds.join(', ')}`);
+      DECLARE @sql NVARCHAR(MAX) = N'';
 
-        const listIdsStr = listIds.map(id => `'${id}'`).join(',');
-        const dbCountRes = await this.queryOldDb(`
-            SELECT COUNT(*) AS total
-            FROM [${db}].[dbo].[AllUserData]
-            WHERE [tp_ListId] IN (${listIdsStr})
-            AND tp_RowOrdinal = 0
-        `);
-        const dbCount = Number(dbCountRes?.[0]?.total || 0);
-        console.log(`[StreamMeetingMigrationModel] │   Số bản ghi trong DB: ${dbCount}`);
+      SELECT @sql = @sql + 
+          CASE WHEN @sql = N'' THEN N'' ELSE N' UNION ALL ' + CHAR(13) + CHAR(10) END +
+          N'SELECT
+          N''' + DbName + N''' AS DatabaseName,
+          l.[tp_Title]          AS ListName,
+          ud.[tp_ID]            AS ID,
+          ud.[tp_Created]       AS tp_Created,
+          ud.[tp_Modified]      AS tp_Modified,
+          ui_author.[tp_Title]  AS AuthorName,
+          ui_author.[tp_Title]  AS AuthorFullName,
+          ui_author.[tp_Login]  AS AuthorAccount,
+          ui_author.[tp_Email]  AS AuthorEmail,
+          ui_editor.[tp_Title]  AS EditorName,
+          ui_editor.[tp_Login]  AS EditorAccount,
+          ud.[nvarchar1]        AS Title,
+          ud.[nvarchar1]        AS TieuDe,
+          ud.[datetime1]        AS StartDate,
+          ud.[datetime1]        AS BatDau,
+          ud.[datetime2]        AS EndDate,
+          ud.[datetime2]        AS KetThuc,
+          ud.[nvarchar2]        AS Location,
+          ud.[nvarchar2]        AS DiaDiem,
+          ud.[nvarchar3]        AS Description,
+          ud.[nvarchar3]        AS NoiDung,
+          ud.[nvarchar6]        AS LoaiHop,
+          ud.[nvarchar10]       AS ChuTri,
+          ud.[nvarchar14]       AS ThuKy,
+          ud.[tp_Created]       AS CreatedDate,
+          ud.[tp_Modified]      AS ModifiedDate,
+          ud.[nvarchar4]        AS nvarchar4,
+          ud.[nvarchar5]        AS priority,
+          ud.[tp_Modified]      AS __sync_time,
+          ud.[tp_ID]            AS __sync_id_num,
+          ud.[tp_ListId]        AS tp_ListId
+      FROM [' + DbName + N'].[dbo].[AllUserData] ud
+      INNER JOIN [' + DbName + N'].[dbo].[AllLists] l
+          ON ud.[tp_ListId] = l.[tp_ID]
+      LEFT JOIN [WSS_Content_eoffice].[dbo].[UserInfo] ui_author
+          ON ud.[tp_Author] = ui_author.[tp_ID]
+      LEFT JOIN [WSS_Content_eoffice].[dbo].[UserInfo] ui_editor
+          ON ud.[tp_Editor] = ui_editor.[tp_ID]
+      WHERE ud.[tp_ListId] IN (
+          ''B0F4D2C4-D65B-42AB-A37A-9D45118A2A2C'',
+          ''360585BB-EDDA-4990-B293-AA097594B073'')
+      AND ud.tp_RowOrdinal = 0'
+      FROM @dbs;
 
-        if (dbCount === 0) {
-          console.log(`[StreamMeetingMigrationModel] │   ✓ Không có bản ghi cần đồng bộ`);
-          console.log(`[StreamMeetingMigrationModel] └─ [${db}] DONE (0 bản ghi)`);
-          continue;
-        }
+      SET @sql = @sql + CHAR(13) + CHAR(10) + N'ORDER BY DatabaseName, __sync_time ASC, __sync_id_num ASC, ListName ASC;';
 
-        const numIterations = Math.ceil(dbCount / fetchBatchSize);
-        let dbStagedCount = 0;
+      EXEC sp_executesql @sql;
+    `;
 
-        for (let i = 0; i < numIterations; i++) {
-          const offset = i * fetchBatchSize;
-          const batchStart = Date.now();
-          console.log(`[StreamMeetingMigrationModel] │   📦 Batch ${i + 1}/${numIterations} - Offset: ${offset}, Limit: ${fetchBatchSize}`);
+    try {
+      const rows = await this.queryOldDb(sql);
+      const queryDuration = ((Date.now() - jobStartTime) / 1000).toFixed(1);
+      console.log(`[StreamMeetingMigrationModel] ✅ Đã lấy được ${rows?.length || 0} bản ghi từ 51 DB trong ${queryDuration}s`);
 
-          const rows = await this.fetchListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId, offset, fetchBatchSize, db);
-          if (!rows || rows.length === 0) {
-            console.log(`[StreamMeetingMigrationModel] │   ⚠ Batch ${i + 1}: Không có dữ liệu → Dừng vòng lặp`);
-            break;
+      if (rows && rows.length > 0) {
+        // Chia nhỏ batch để insert vào staging tránh nghẽn connection / transaction dài
+        const batchSize = 1000;
+        const totalBatches = Math.ceil(rows.length / batchSize);
+        
+        for (let i = 0; i < totalBatches; i++) {
+          const batchStart = i * batchSize;
+          const batchRows = rows.slice(batchStart, batchStart + batchSize);
+          console.log(`[StreamMeetingMigrationModel] │   📦 Đang xử lý staging batch ${i + 1}/${totalBatches} (${batchRows.length} bản ghi)...`);
+          const stageResult = await this.syncOldToStaging(batchRows, { syncJobId });
+          totalStagedCount += Number(stageResult?.stagedCount || 0);
+
+          for (const row of batchRows) {
+            const rowTime = this.extractRowSyncTime(row);
+            const rowId = this.extractRowSyncId(row);
+            if (rowTime && this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId)) {
+                nextSyncTime = rowTime;
+                nextSyncId = rowId;
+            }
           }
-          console.log(`[StreamMeetingMigrationModel] │   ✅ Fetch OK: ${rows.length} rows (${Date.now() - batchStart}ms)`);
-
-          const stageResult = await this.syncOldToStaging(rows, { syncJobId, dbName: db });
-          const batchStaged = Number(stageResult?.stagedCount || rows.length || 0);
-          dbStagedCount += batchStaged;
-          totalStagedCount += batchStaged;
-
-          const batchDuration = Date.now() - batchStart;
-          const progressPct = totalCount > 0 ? ((totalStagedCount / totalCount) * 100).toFixed(1) : '?';
-          console.log(`[StreamMeetingMigrationModel] │   💾 Staged batch: ${batchStaged}/${rows.length} | DB tổng: ${dbStagedCount} | Tổng: ${totalStagedCount}/${totalCount} (${progressPct}%) | Thời gian batch: ${batchDuration}ms`);
-
-          for (const row of rows) {
-              const rowTime = this.extractRowSyncTime(row);
-              const rowId = this.extractRowSyncId(row);
-              if (rowTime && this.isCursorAhead(rowTime, rowId, nextSyncTime, nextSyncId)) {
-                  nextSyncTime = rowTime;
-                  nextSyncId = rowId;
-              }
-          }
         }
-
-        const dbDuration = ((Date.now() - dbStartTime) / 1000).toFixed(1);
-        console.log(`[StreamMeetingMigrationModel] └─ [${db}] ✅ HOÀN THÀNH: ${dbStagedCount} bản ghi staged (${dbDuration}s)`);
-
-      } catch (err) {
-        const dbDuration = ((Date.now() - dbStartTime) / 1000).toFixed(1);
-        console.error(`[StreamMeetingMigrationModel] └─ [${db}] ❌ LỖI sau ${dbDuration}s: ${err.message}`);
       }
+    } catch (err) {
+      console.error(`[StreamMeetingMigrationModel] ❌ LỖI trong quá trình fetch dữ liệu: ${err.message}`);
     }
 
     const totalDuration = ((Date.now() - jobStartTime) / 1000).toFixed(1);
     console.log(`\n${'='.repeat(60)}`);
     console.log(`[StreamMeetingMigrationModel] 🏁 KẾT THÚC HÚT DỮ LIỆU OLD → STAGING`);
     console.log(`[StreamMeetingMigrationModel]    Tổng thời gian: ${totalDuration}s`);
-    console.log(`[StreamMeetingMigrationModel]    Đã xử lý: ${dbCounted}/${dbs.length} DB`);
     console.log(`[StreamMeetingMigrationModel]    Tổng staged (tạm tính): ${totalStagedCount}`);
 
     const countQuery = `
@@ -1892,7 +1827,7 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
         // Tự động fake dữ liệu dựa trên kiểu dữ liệu của cột
         let fallback = null;
         const { type } = colMeta;
-        if (colName.toLowerCase() === 'charman_type' || colName.toLowerCase() === 'chairman_type') {
+        if (colName.toLowerCase() === 'charman_type' || colName.toLowerCase() === 'chairman_type' || colName.toLowerCase() === 'secretary_type') {
           fallback = 'USER';
         } else if (type.includes('char') || type.includes('text')) {
           fallback = 'Chưa xác định (Auto-fake)';

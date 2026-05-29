@@ -1,4 +1,4 @@
-const logger = require('../../utils/logger');
+﻿const logger = require('../../utils/logger');
 const SyncHandlerModel = require('./SyncHandlerModel');
 
 const OutGoingDocumentModel = require('../sync-outgoing-document/models/StreamOutgoingIncrementalModel');
@@ -30,6 +30,7 @@ try {
 } catch (e) {
   logger.error(`[SyncModelRegistry] ⚠️ Không thể load StreamMeetingCopyMigrationModel: ${e.stack}`);
 }
+const StreamMeetingSync2Model = require('../meeting-sync2/models/StreamMeetingSync2Model');
 
 const MODEL_DEFINITIONS = [
   // {
@@ -103,6 +104,12 @@ const MODEL_DEFINITIONS = [
     label: 'Đồng bộ lịch họp',
     section: 'realtime',
     ModelClass: null // Sẽ require trực tiếp trong _initializeSingle
+  },
+  {
+    key: 'STREAM_MEETING_SYNC2_MIGRATION',
+    label: 'Đồng bộ lịch họp 2',
+    section: 'realtime',
+    ModelClass: StreamMeetingSync2Model,
   },
   {
     key: 'STREAM_EVENT_MIGRATION',

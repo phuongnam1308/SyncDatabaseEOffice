@@ -350,11 +350,11 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     });
   }
 
-  async syncOldToStaging(rows, { transaction, dbName } = {}) {
+  async syncOldToStaging(rows, { transaction, dbName, syncJobId } = {}) {
     if (!Array.isArray(rows) || rows.length === 0) return { stagedCount: 0 };
 
     const targetDb = dbName || this.oldDbName;
-    const internalColumns = new Set(['__sync_time', '__sync_id_num', '__page_rn', 'source_db']);
+    const internalColumns = new Set(['__sync_time', '__sync_id_num', '__page_rn', 'source_db', 'stg_job_id']);
     const columns = Object.keys(rows[0] || {}).filter(
       (c) => !String(c).startsWith('__') && !internalColumns.has(c)
     );
@@ -366,7 +366,7 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
     let processedCount = 0;
     for (const row of rows) {
       try {
-        const params = { source_db: targetDb };
+        const params = { source_db: targetDb, stg_job_id: syncJobId || null };
         for (const col of columns) {
            params[col] = row[col];
         }
@@ -374,14 +374,16 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
         params.__sync_id_num = row.__sync_id_num;
 
         const updateSet = columns.filter(c => c !== keyColumn).map(c => `[${c}] = @${c}`).join(', ');
-        const insertCols = [...columns, '__sync_time', '__sync_id_num', 'source_db'].join(', ');
-        const insertVals = [...columns, '__sync_time', '__sync_id_num', 'source_db'].map(c => `@${c}`).join(', ');
+        // Include stg_job_id in INSERT so it satisfies the unique index (stg_job_id, source_db, tp_ListId, ID)
+        const insertCols = ['stg_job_id', ...columns, '__sync_time', '__sync_id_num', 'source_db'].join(', ');
+        const insertVals = ['stg_job_id', ...columns, '__sync_time', '__sync_id_num', 'source_db'].map(c => `@${c}`).join(', ');
 
         const query = `
           IF EXISTS (SELECT 1 FROM ${stagingTableRef} WHERE [${keyColumn}] = @${keyColumn} AND [source_db] = @source_db)
           BEGIN
               UPDATE ${stagingTableRef}
-              SET ${updateSet}, __sync_time = @__sync_time, __sync_id_num = @__sync_id_num, MigrateFlg = 0
+              SET ${updateSet}, __sync_time = @__sync_time, __sync_id_num = @__sync_id_num, MigrateFlg = 0,
+                  [stg_job_id] = @stg_job_id
               WHERE [${keyColumn}] = @${keyColumn} AND [source_db] = @source_db
           END
           ELSE
@@ -445,7 +447,7 @@ class StreamMeetingMigrationModel extends BaseIncrementalSyncInterface {
           const rows = await this.fetchListFromOldDb(normalizedLastSyncTime, normalizedLastSyncId, offset, fetchBatchSize, db, listIds);
           if (!rows?.length) break;
 
-          const stageResult = await this.syncOldToStaging(rows, { dbName: db });
+          const stageResult = await this.syncOldToStaging(rows, { dbName: db, syncJobId });
           totalStagedCount += Number(stageResult?.stagedCount || 0);
 
           for (const row of rows) {

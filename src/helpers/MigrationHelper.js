@@ -231,7 +231,8 @@ class MigrationHelper {
       return null;
     }
     try {
-      const d1 = new Date(batDau);
+      let batDauStr = String(batDau).replace(/(\d)(AM|PM)/i, '$1 $2');
+      const d1 = new Date(batDauStr);
       if (isNaN(d1.getTime())) {
         console.log(`[formatMeetingTimeWithOffset] batDau="${batDau}" không parse được → return null`);
         return null;
@@ -243,7 +244,8 @@ class MigrationHelper {
       console.log(`[formatMeetingTimeWithOffset] batDau=${d1.toISOString()} +${offsetHours}h → startTime=${startTime}`);
 
       if (ketThuc) {
-        const d2 = new Date(ketThuc);
+        let ketThucStr = String(ketThuc).replace(/(\d)(AM|PM)/i, '$1 $2');
+        const d2 = new Date(ketThucStr);
         if (!isNaN(d2.getTime())) {
           const s2 = new Date(d2.getTime() + offsetHours * 60 * 60 * 1000);
           const endTime = s2.toISOString().substring(11, 16);
