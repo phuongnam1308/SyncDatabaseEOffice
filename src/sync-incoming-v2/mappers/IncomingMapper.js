@@ -144,7 +144,7 @@ class IncomingMapper {
       status_code: statusInfo.statusCode,
       stage_status: statusInfo.stageStatus,
       bpmn_version: statusInfo.bpmnVersion,
-      status: Number(statusInfo.statusCode) || 1,
+      status: 1,
 
       // Dates
       created_at: createdAt,
