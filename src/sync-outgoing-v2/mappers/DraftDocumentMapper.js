@@ -62,7 +62,7 @@ class DraftDocumentMapper {
     const documentIdRef = oldRecord.DocumentId ? `VBD_${oldRecord.DocumentId}_DI` : null;
 
     // Parent/Child document references
-    const replaced = oldRecord.ParentId ? `VBD_${oldRecord.ParentId}_DRAFT` : null;
+    const replacedRef = oldRecord.ParentId ? `VBD_${oldRecord.ParentId}_DRAFT` : null;
 
     const oldId = String(oldRecord.ID);
     const suffix = 'DRAFT';
@@ -101,7 +101,7 @@ class DraftDocumentMapper {
 
       // Document references
       reply_incoming_doc: null,
-      replaced: replaced,
+      replaced: this.helper.mapBit(oldRecord.ParentId ? 1 : 0),
       replaced_documents: oldRecord.VBBiThayThe,
 
       // Book document
@@ -166,7 +166,7 @@ class DraftDocumentMapper {
       doc_proposal: null,
       doc_draft: null,
       doc_attachments: null,
-      doc_replacement: null,
+      doc_replacement: replacedRef,
       doc_answer: null,
 
       // Processor

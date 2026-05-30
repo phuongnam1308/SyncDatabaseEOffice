@@ -68,9 +68,12 @@ class SyncDraftDocumentModel extends BaseSyncModel {
   async runExtract() {
     logger.info(`[${this.modelName}] Starting extract phase...`);
     let totalExtracted = 0;
-    let lastSyncTime = '2999-12-31T23:59:59.999Z';
-    let lastSyncId = 0;
+    const lastCursor = await this.extractor.getLastSyncCursor(this.instanceId);
+    let lastSyncTime = lastCursor.time || this.extractor.getInitialSyncTime();
+    let lastSyncId = lastCursor.id || 0;
     let hasMore = true;
+
+    logger.info(`[${this.modelName}] Resuming extraction from cursor: time=${lastSyncTime}, id=${lastSyncId}`);
 
     while (hasMore && !this.shouldStop) {
       const batch = await this.extractor.fetchBatchFromOldDb(
@@ -114,32 +117,37 @@ class SyncDraftDocumentModel extends BaseSyncModel {
     let totalFailed = 0;
 
     const stagingTable = this.extractor.getStagingTableName(this.instanceId);
+    const batchSize = Number(process.env.DRAFT_LOAD_BATCH_SIZE || 20);
 
     try {
       while (!this.shouldStop) {
-        // Fetch one pending record from staging
-        const row = await this.fetchOneFromStaging(stagingTable);
+        const rows = await this.fetchBatchFromStaging(stagingTable, batchSize);
 
-        if (!row) {
+        if (!rows || rows.length === 0) {
           break;
         }
 
-        totalProcessed++;
+        totalProcessed += rows.length;
 
         try {
-          const result = await this.upsertHandler.processRecord(row);
+          const batchResult = await this.upsertHandler.processBatch(rows);
+          totalSuccess += batchResult.successCount || 0;
+          totalFailed += batchResult.failedCount || 0;
 
-          if (result.success) {
-            await this.markSuccess(stagingTable, row.ID);
-            totalSuccess++;
-          } else {
-            await this.markFailed(stagingTable, row.ID, result.error);
-            totalFailed++;
+          for (const item of batchResult.results || []) {
+            if (item.success) {
+              await this.markSuccess(stagingTable, item.ID);
+            } else {
+              await this.markFailed(stagingTable, item.ID, item.error);
+              logger.error(`[${this.modelName}] Failed to process row ID=${item.ID}: ${item.error}`);
+            }
           }
         } catch (error) {
-          await this.markFailed(stagingTable, row.ID, error.message);
-          totalFailed++;
-          logger.error(`[${this.modelName}] Failed to process row ID=${row.ID}: ${error.message}`);
+          logger.error(`[${this.modelName}] Failed to process batch: ${error.message}`);
+          for (const row of rows) {
+            await this.markFailed(stagingTable, row.ID, error.message);
+          }
+          totalFailed += rows.length;
         }
 
         if (totalProcessed % 100 === 0) {
@@ -198,6 +206,55 @@ class SyncDraftDocumentModel extends BaseSyncModel {
       return row;
     } catch (error) {
       logger.error(`[${this.modelName}] Failed to fetch from staging: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Fetch a batch of pending records from staging table
+   */
+  async fetchBatchFromStaging(stagingTable, batchSize = 20) {
+    try {
+      const selectQuery = `
+        SELECT TOP (@batchSize) *
+        FROM ${stagingTable} WITH (READPAST, ROWLOCK)
+        WHERE ISNULL(MigrateFlg, 0) = 0
+          AND ISNULL(MigrateErrFlg, 0) = 0
+        ORDER BY __sync_time ASC, __sync_id ASC, ID ASC;
+      `;
+
+      const rows = await this.newPool.request()
+        .input('batchSize', batchSize)
+        .query(selectQuery);
+
+      const batchRows = rows.recordset || [];
+      if (batchRows.length === 0) {
+        return [];
+      }
+
+      const ids = batchRows.map((row) => row.ID);
+      const placeholders = ids.map((_, index) => `@id${index}`);
+      const markQuery = `
+        UPDATE ${stagingTable} WITH (ROWLOCK)
+        SET MigrateFlg = 2,
+            MigrateErrMess = 'Processing Batch...',
+            processing_owner = @owner,
+            processing_started_at = SYSUTCDATETIME(),
+            processing_heartbeat_at = SYSUTCDATETIME()
+        WHERE ID IN (${placeholders.join(', ')})
+          AND ISNULL(MigrateFlg, 0) = 0
+          AND ISNULL(MigrateErrFlg, 0) = 0;
+      `;
+
+      const markRequest = this.newPool.request().input('owner', `pid_${process.pid}_${this.instanceId}`);
+      ids.forEach((id, index) => {
+        markRequest.input(`id${index}`, id);
+      });
+      await markRequest.query(markQuery);
+
+      return batchRows;
+    } catch (error) {
+      logger.error(`[${this.modelName}] Failed to fetch batch from staging: ${error.message}`);
       throw error;
     }
   }

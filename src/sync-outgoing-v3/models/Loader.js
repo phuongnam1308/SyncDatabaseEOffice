@@ -40,7 +40,6 @@ class Loader extends BaseLoader {
     if (!this.upsertHandler) {
       throw new Error('UpsertHandler not initialized');
     }
-
     return this.upsertHandler.processBatch(rows);
   }
 
@@ -73,13 +72,15 @@ class Loader extends BaseLoader {
             processing_heartbeat_at = SYSUTCDATETIME()
         OUTPUT inserted.*
         WHERE ISNULL(MigrateFlg, 0) = 0
-          AND ISNULL(MigrateErrFlg, 0) = 0;
+          AND ISNULL(MigrateErrFlg, 0) = 0
+          ;
       `;
 
-      const updateResult = await this.newPool.request()
+      const request = this.newPool.request()
         .input('batchSize', batchSize)
-        .input('owner', `pid_${process.pid}_${instanceId}`)
-        .query(query);
+        .input('owner', `pid_${process.pid}_${instanceId}`);
+
+      const updateResult = await request.query(query);
 
       const rows = updateResult.recordset || [];
       if (rows.length > 0) {

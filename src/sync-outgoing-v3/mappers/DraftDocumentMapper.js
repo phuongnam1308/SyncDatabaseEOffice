@@ -10,6 +10,19 @@ class DraftDocumentMapper {
     this.helper = new MigrationHelper(queryNewDbTx, queryOldDb);
   }
 
+  _toJsonArrayString(value) {
+    if (value === null || value === undefined) {
+      return null;
+    }
+
+    const rawValue = String(value).trim();
+    if (!rawValue) {
+      return null;
+    }
+
+    return JSON.stringify([rawValue]);
+  }
+
   /**
    * Map a raw draft document record to the outgoing_documents structure
    * @param {object} oldRecord - Raw record from SNP.CodeItem
@@ -35,9 +48,12 @@ class DraftDocumentMapper {
     const stageStatus = statusResult.stageStatus || 'DRAFT';
     const bpmnVersion = statusResult.bpmnVersion || 'SOANTHAO_PHATHANH_VBD';
 
-    // Sender unit from DepartmentId
+    // Sender unit from DepartmentId, fallback to parent of CreatedBy in new users table
     const senderUnit = await this.helper.mapSenderUnitId(
       String(oldRecord.DepartmentId || ''),
+      transaction
+    ) || await this.helper.mapSenderUnitFromCreatedByParent(
+      oldRecord.CreatedBy || oldRecord.CBNV,
       transaction
     ) || process.env.DEFAULT_RECEIVER_UNIT_ID;
 
@@ -59,10 +75,12 @@ class DraftDocumentMapper {
     const releaseNo = this.helper.cleanText(oldRecord.Title);
 
     // Get document_id for reference
-    const documentIdRef = oldRecord.DocumentId ? `VBD_${oldRecord.DocumentId}_DI` : null;
+    const documentIdValue = Number(oldRecord.DocumentId || 0);
+    const documentIdRef = documentIdValue > 0 ? `VBD_${documentIdValue}_DI` : null;
 
     // Parent/Child document references
-    const replaced = oldRecord.ParentId ? `VBD_${oldRecord.ParentId}_DRAFT` : null;
+    const parentIdValue = Number(oldRecord.ParentId || 0);
+    const replacedRef = parentIdValue > 0 ? `VBD_${parentIdValue}_DRAFT` : null;
 
     const oldId = String(oldRecord.ID);
     const suffix = 'DRAFT';
@@ -94,14 +112,14 @@ class DraftDocumentMapper {
       release_date: issuedDate,
 
       // Signer info
-      report_signer: reportSigner,
+      report_signer: this._toJsonArrayString(reportSigner),
 
       // Type doc = 1 for outgoing
       type_doc: 1,
 
       // Document references
       reply_incoming_doc: null,
-      replaced: replaced,
+      replaced: oldRecord.VBBiThayThe ? 1 : 0,
       replaced_documents: oldRecord.VBBiThayThe,
 
       // Book document
@@ -166,11 +184,11 @@ class DraftDocumentMapper {
       doc_proposal: null,
       doc_draft: null,
       doc_attachments: null,
-      doc_replacement: null,
+      doc_replacement: replacedRef,
       doc_answer: null,
 
       // Processor
-      processor: drafter,
+      processor: this._toJsonArrayString(drafter),
 
       // Files
       files: null,

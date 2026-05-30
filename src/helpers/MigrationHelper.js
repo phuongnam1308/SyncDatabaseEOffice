@@ -654,6 +654,29 @@ class MigrationHelper {
     }
   }
 
+  async mapSenderUnitFromCreatedByParent(createdByValue, transaction = null) {
+    try {
+      if (!createdByValue) return null;
+
+      const createdById = await this.mapUserDrafter(createdByValue, transaction);
+      if (!createdById) return null;
+
+      const query = `
+        SELECT TOP 1 parent
+        FROM ${process.env.NEW_DB_NAME}.dbo.users
+        WHERE id = @userId
+      `;
+      const rows = await this.queryNewDbTx(query, { userId: createdById }, transaction);
+      const parentValue = rows?.[0]?.parent ?? null;
+      if (!parentValue) return null;
+
+      return String(parentValue).trim() || null;
+    } catch (error) {
+      logger.warn(`[mapSenderUnitFromCreatedByParent] Error value="${createdByValue}": ${error.message}`);
+      return null;
+    }
+  }
+
   async mapCustomSenderUnitId(value, transaction = null) {
     try {
       const originalName = this.processSenderUnit(value);

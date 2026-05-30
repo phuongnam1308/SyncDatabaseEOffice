@@ -23,10 +23,47 @@ class DraftDocumentExtractor extends BaseExtractor {
 
   /**
    * Get cursor comparison direction
-   * Draft documents use DESC (newer records first)
+   * Draft documents use ASC (older records first)
    */
   getCursorDirection() {
-    return 'DESC';
+    return 'ASC';
+  }
+
+  /**
+   * Get the last successfully extracted record's cursor from the staging table.
+   * Mirrors the v2 extractor contract so sync-manager can resume incremental jobs.
+   */
+  async getLastSyncCursor(instanceId) {
+    const stagingTable = this.getStagingTableName(instanceId);
+
+    try {
+      const query = `
+        SELECT TOP 1 __sync_time, __sync_id
+        FROM ${stagingTable}
+        WHERE __sync_time IS NOT NULL AND __sync_id IS NOT NULL
+        ORDER BY __sync_time DESC, __sync_id DESC
+      `;
+
+      const result = await this.newPool.request().query(query);
+      if (result.recordset?.length > 0) {
+        const row = result.recordset[0];
+        return {
+          time: row.__sync_time ? new Date(row.__sync_time).toISOString() : null,
+          id: Number(row.__sync_id || 0)
+        };
+      }
+    } catch (error) {
+      logger.warn(`[${this.modelName}] getLastSyncCursor failed or staging table does not exist: ${error.message}`);
+    }
+
+    return { time: null, id: 0 };
+  }
+
+  /**
+   * Get initial sync time for incremental resume fallback.
+   */
+  getInitialSyncTime() {
+    return process.env.SYNC_MIN_DATE || '1753-01-01T00:00:00.000Z';
   }
 
   /**
@@ -34,7 +71,7 @@ class DraftDocumentExtractor extends BaseExtractor {
    */
   async getTotalCount(lastSyncTime, lastSyncId = 0) {
     const syncTimeExpr = this.getSyncTimeExpression();
-    const defaultSyncTime = '2999-12-31T23:59:59.999Z';
+    const defaultSyncTime = '1753-01-01T00:00:00.000Z';
 
     const query = `
       SELECT COUNT(1) AS cnt
@@ -43,10 +80,10 @@ class DraftDocumentExtractor extends BaseExtractor {
         AND (${this.partitionColumn} >= @startDate OR @startDate IS NULL)
         AND (${this.partitionColumn} <= @endDate OR @endDate IS NULL)
         AND (
-          ${syncTimeExpr} < @lastSyncTime
+          ${syncTimeExpr} > @lastSyncTime
           OR (
             ${syncTimeExpr} = @lastSyncTime
-            AND TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')) < @lastSyncId
+            AND TRY_CONVERT(BIGINT, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), ID))), '')) > @lastSyncId
           )
         )
         AND ${syncTimeExpr} >= @syncMinDate
@@ -82,7 +119,7 @@ class DraftDocumentExtractor extends BaseExtractor {
    */
   async fetchBatchFromOldDb(lastSyncTime, lastSyncId = 0, batchSize = 1000, offset = 0) {
     const syncTimeExpr = this.getSyncTimeExpression();
-    const defaultSyncTime = '2999-12-31T23:59:59.999Z';
+    const defaultSyncTime = '1753-01-01T00:00:00.000Z';
 
     const query = `
       ;WITH source_rows AS (
@@ -105,16 +142,16 @@ class DraftDocumentExtractor extends BaseExtractor {
           ISNULL(__sync_id_num, 0) AS __sync_id,
           ROW_NUMBER() OVER (
             ORDER BY
-              __sync_time DESC,
-              ISNULL(__sync_id_num, 9223372036854775807) DESC,
-              ID DESC
+              __sync_time ASC,
+              ISNULL(__sync_id_num, 0) ASC,
+              ID ASC
           ) AS __page_rn
         FROM source_rows
         WHERE (
-          __sync_time < @lastSyncTime
+          __sync_time > @lastSyncTime
           OR (
             __sync_time = @lastSyncTime
-            AND ISNULL(__sync_id_num, 9223372036854775807) < @lastSyncId
+            AND ISNULL(__sync_id_num, 0) > @lastSyncId
           )
         )
         AND __sync_time >= @syncMinDate
@@ -298,6 +335,8 @@ class DraftDocumentExtractor extends BaseExtractor {
         throw new Error('Row ID is required for staging');
       }
 
+      const sourceModified = row.Modified ?? row.modified ?? null;
+
       const updateClause = safeNonIdColumns
         .map((columnName, idx) => `${columnName} = @${nonIdColumns[idx]}`)
         .join(', ');
@@ -305,18 +344,29 @@ class DraftDocumentExtractor extends BaseExtractor {
       const query = `
         IF EXISTS (SELECT 1 FROM ${stagingTable} WHERE ID = @ID)
         BEGIN
-          ${nonIdColumns.length > 0 ? `
-          UPDATE ${stagingTable}
-          SET ${updateClause},
-              MigrateFlg = 0,
-              MigrateErrFlg = 0,
-              MigrateErrMess = NULL
-          WHERE ID = @ID;` : `
-          UPDATE ${stagingTable}
-          SET MigrateFlg = 0,
-              MigrateErrFlg = 0,
-              MigrateErrMess = NULL
-          WHERE ID = @ID;`}
+          IF EXISTS (
+            SELECT 1
+            FROM ${stagingTable}
+            WHERE ID = @ID
+              AND (
+                (@sourceModified IS NOT NULL AND (Modified IS NULL OR @sourceModified > Modified))
+                OR (@sourceModified IS NULL AND Modified IS NOT NULL)
+              )
+          )
+          BEGIN
+            ${nonIdColumns.length > 0 ? `
+            UPDATE ${stagingTable}
+            SET ${updateClause},
+                MigrateFlg = 0,
+                MigrateErrFlg = 0,
+                MigrateErrMess = NULL
+            WHERE ID = @ID;` : `
+            UPDATE ${stagingTable}
+            SET MigrateFlg = 0,
+                MigrateErrFlg = 0,
+                MigrateErrMess = NULL
+            WHERE ID = @ID;`}
+          END
         END
         ELSE
         BEGIN
@@ -329,6 +379,7 @@ class DraftDocumentExtractor extends BaseExtractor {
       for (const column of columns) {
         subRequest.input(column, row[column]);
       }
+      subRequest.input('sourceModified', sourceModified);
 
       await subRequest.query(query);
       logger.info(`  └─ [Staging] ID: ${rawId} | Action: ${safeNonIdColumns.length > 0 ? 'UPSERT' : 'INSERT'}`);

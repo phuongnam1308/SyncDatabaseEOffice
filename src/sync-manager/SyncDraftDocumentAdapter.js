@@ -1,13 +1,13 @@
 /**
  * SyncDraftDocumentAdapter - Wrapper để SyncDraftDocumentModel hoạt động với SyncManagerService
  *
- * SyncDraftDocumentModel cần được adapter để implement interface tương tự SyncOutgoingAdapter
+ * SyncDraftDocumentModel v3 cần được adapter để implement interface tương tự SyncOutgoingAdapter
  * để có thể đăng ký với SyncManagerService
  */
 
 const logger = require('../../utils/logger');
 const dbConnection = require('../../db/connection');
-const SyncDraftDocumentModel = require('../sync-outgoing-v2/models/SyncDraftDocumentModel');
+const SyncDraftDocumentModel = require('../sync-outgoing-v3/models/SyncDraftDocumentModel');
 
 class SyncDraftDocumentAdapter {
   constructor() {
@@ -23,7 +23,7 @@ class SyncDraftDocumentAdapter {
   async initialize() {
     if (this._initialized) return;
 
-    // Tạo instance của SyncDraftDocumentModel
+    // Tạo instance của SyncDraftDocumentModel v3
     this._model = new SyncDraftDocumentModel();
 
     // Gọi initialize của model để khởi tạo đầy đủ (pools, upsert handler, staging table)
@@ -57,12 +57,17 @@ class SyncDraftDocumentAdapter {
     try {
       const pool = dbConnection.getNewPool();
       if (!pool) return 0;
-      
+
       const stagingRes = await pool.request().query(stagingQuery);
       const inStaging = Number(stagingRes.recordset?.[0]?.cnt || 0);
 
-      // 2. Đếm số bản ghi trong OLD DB chưa được fetch (theo cursor)
-      const inSource = await this._model.extractor.getTotalCount(lastTime, lastSyncId);
+      let inSource = 0;
+      try {
+        // 2. Đếm số bản ghi trong OLD DB chưa được fetch (theo cursor)
+        inSource = await this._model.extractor.getTotalCount(lastTime, lastSyncId);
+      } catch (sourceError) {
+        logger.warn(`[SyncDraftDocumentAdapter] source count failed, fallback to staging only: ${sourceError.message}`);
+      }
 
       const total = inStaging + inSource;
       logger.info(`[SyncDraftDocumentAdapter] getCount: ${total} (Staging: ${inStaging}, Source: ${inSource})`);
@@ -71,6 +76,14 @@ class SyncDraftDocumentAdapter {
       logger.error(`[SyncDraftDocumentAdapter] getCount error: ${error.message}`);
       return 0;
     }
+  }
+
+  /**
+   * Implement countListFromOldDb - used by SyncHandlerModel in full sync mode.
+   */
+  async countListFromOldDb(lastSyncTime, lastSyncId = 0) {
+    if (!this._model || !this._model.extractor) return 0;
+    return this._model.extractor.getTotalCount(lastSyncTime, lastSyncId);
   }
 
   async getList(lastSyncTime, syncJobId, lastSyncId = 0) {
@@ -99,6 +112,28 @@ class SyncDraftDocumentAdapter {
     }
 
     logger.info(`[SyncDraftDocumentAdapter] getList start: cursorTime=${cursorTime}, lastSyncId=${cursorId} [ASC direction]`);
+
+    const stagingTable = `draft_documents_sync_${this._instanceId}`;
+    const pendingQuery = `
+      SELECT COUNT(1) AS cnt
+      FROM ${stagingTable}
+      WHERE ISNULL(MigrateFlg, 0) = 0
+        AND ISNULL(MigrateErrFlg, 0) = 0
+    `;
+    const pendingRes = await dbConnection.getNewPool().request().query(pendingQuery);
+    const pendingCount = Number(pendingRes.recordset?.[0]?.cnt || 0);
+
+    if (pendingCount > 0) {
+      const stagedCount = await this.getCount(cursorTime, cursorId);
+      logger.info(`[SyncDraftDocumentAdapter] getList skipped extract because staging has pending rows: ${pendingCount}`);
+      logger.info(`[SyncDraftDocumentAdapter] getList done: extracted=0, staged=${stagedCount}`);
+      return {
+        lastSyncTime: cursorTime,
+        lastSyncId: cursorId,
+        stagedCount,
+        totalCount: stagedCount
+      };
+    }
 
     while (hasMore) {
       const batch = await this._model.extractor.fetchBatchFromOldDb(
@@ -168,52 +203,62 @@ class SyncDraftDocumentAdapter {
    */
   async processOne(syncJobId, options = {}) {
     try {
-      // Fetch one pending record from staging
       const stagingTable = `draft_documents_sync_${this._instanceId}`;
-
-      const selectQuery = `
-        SELECT TOP (1) *
-        FROM ${stagingTable}
-        WHERE ISNULL(MigrateFlg, 0) = 0
-          AND ISNULL(MigrateErrFlg, 0) = 0
-        ORDER BY Modified DESC, ID DESC
-      `;
+      const batchSize = Number(options.batchSize || process.env.DRAFT_LOAD_BATCH_SIZE || 20);
 
       const pool = dbConnection.getNewPool();
-      const rows = await pool.request().query(selectQuery);
+      const selectQuery = `
+        SELECT TOP (@batchSize) *
+        FROM ${stagingTable} WITH (READPAST, ROWLOCK)
+        WHERE ISNULL(MigrateFlg, 0) = 0
+          AND ISNULL(MigrateErrFlg, 0) = 0
+        ORDER BY __sync_time ASC, __sync_id ASC, ID ASC;
+      `;
+
+      const rows = await pool.request()
+        .input('batchSize', batchSize)
+        .query(selectQuery);
 
       if (!rows.recordset?.length) {
         return { done: true, affected: 0 };
       }
 
-      const row = rows.recordset[0];
-
-      // Mark as processing
-      const updateQuery = `
+      const batchRows = rows.recordset || [];
+      const ids = batchRows.map((row) => row.ID);
+      const placeholders = ids.map((_, index) => `@id${index}`);
+      const markQuery = `
         UPDATE ${stagingTable} WITH (ROWLOCK)
         SET MigrateFlg = 2,
-            MigrateErrMess = 'Processing...',
+            MigrateErrMess = 'Processing Batch...',
             processing_owner = @owner,
             processing_started_at = SYSUTCDATETIME(),
             processing_heartbeat_at = SYSUTCDATETIME()
-        WHERE ID = @ID AND ISNULL(MigrateFlg, 0) = 0
+        WHERE ID IN (${placeholders.join(', ')})
+          AND ISNULL(MigrateFlg, 0) = 0
+          AND ISNULL(MigrateErrFlg, 0) = 0;
       `;
+      const markRequest = pool.request().input('owner', `pid_${process.pid}_${syncJobId}`);
+      ids.forEach((id, index) => {
+        markRequest.input(`id${index}`, id);
+      });
+      await markRequest.query(markQuery);
 
-      await pool.request()
-        .input('ID', row.ID)
-        .input('owner', `pid_${process.pid}_${syncJobId}`)
-        .query(updateQuery);
+      const batchResult = await this._model.upsertHandler.processBatch(batchRows);
 
-      // Process the record using upsert handler
-      const result = await this._model.upsertHandler.processRecord(row);
-
-      if (result.success) {
-        await this._markSuccess(stagingTable, row.ID);
-        return { done: false, affected: 1, documentId: result.documentId };
-      } else {
-        await this._markFailed(stagingTable, row.ID, result.error);
-        return { done: false, affected: 0, error: result.error };
+      for (const item of batchResult.results || []) {
+        if (item.success) {
+          await this._markSuccess(stagingTable, item.ID);
+        } else {
+          await this._markFailed(stagingTable, item.ID, item.error);
+        }
       }
+
+      return {
+        done: false,
+        affected: batchRows.length,
+        successCount: batchResult.successCount || 0,
+        failedCount: batchResult.failedCount || 0
+      };
     } catch (error) {
       logger.error(`[SyncDraftDocumentAdapter] processOne error: ${error.message}`);
       return { done: false, affected: 0, error: error.message };

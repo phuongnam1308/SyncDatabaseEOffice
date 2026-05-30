@@ -426,6 +426,7 @@ class FileUploadService {
     const objectName = this._buildObjectName(originalName, folder);
     const fileSize = fileBuffer.length;
     const mime = mimeType || fileRecord?.mime_type || null;
+    localFolder = null;
 
     // ── (Optional) save local copy before DB insert ──
     let localFullPath = null;

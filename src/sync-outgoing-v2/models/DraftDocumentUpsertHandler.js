@@ -212,8 +212,7 @@ class DraftDocumentUpsertHandler {
         external_receiving_unit, internal_receiving_dept, id_outgoing_bak,
         bpmn_version, type_of_process, type_doc, know_receivers, vieweds,
         sign_type, from_create_draf, replaced, tb_bak, table_backups,
-        internal_receiving_dept_old, processor, files, stage_status,
-        doc_draft
+        internal_receiving_dept_old, processor, files, stage_status
       ) VALUES (
         @document_id, @status_code, @sender_unit, @drafter, @document_type,
         @urgency_level, @private_level, @document_field, @report_signer,
@@ -226,8 +225,7 @@ class DraftDocumentUpsertHandler {
         @external_receiving_unit, @internal_receiving_dept, @id_outgoing_bak,
         @bpmn_version, @type_of_process, @type_doc, @know_receivers, @vieweds,
         @sign_type, @from_create_draf, @replaced, @tb_bak, @table_backups,
-        @internal_receiving_dept_old, @processor, @files, @stage_status,
-        @doc_draft
+        @internal_receiving_dept_old, @processor, @files, @stage_status
       )
     `;
 
@@ -285,8 +283,7 @@ class DraftDocumentUpsertHandler {
       internal_receiving_dept_old: record.internal_receiving_dept_old,
       processor: record.processor,
       files: record.files,
-      stage_status: record.stage_status,
-      doc_draft: record.doc_draft
+      stage_status: record.stage_status
     };
 
     for (const [key, value] of Object.entries(params)) {
