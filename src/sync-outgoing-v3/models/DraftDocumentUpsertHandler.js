@@ -385,7 +385,6 @@ class DraftDocumentUpsertHandler {
     }
 
     const id = String(oldRecord?.ID || '').trim();
-    logger.info(`[DraftDocumentUpsertHandler] Processing draft ID: ${id}`);
 
     const mapped = await this.mapper.mapRecord(oldRecord, transaction);
     if (!mapped?.document_id) {
@@ -409,7 +408,6 @@ class DraftDocumentUpsertHandler {
 
     if (existing && existing.length > 0) {
       const dbDocId = existing[0].document_id;
-      logger.info(`[DraftDocumentUpsertHandler] Found existing document: [${dbDocId}]`);
       await this._updateRecord(mapped, transaction, dbDocId);
       documentId = dbDocId;
     } else {
@@ -681,7 +679,6 @@ class DraftDocumentUpsertHandler {
       const { buffer, fileName, relativePath } = fileItem;
       const fileIdBak = String(fileItem?.fileIdBak || this._buildDeterministicFileIdBak(objectIdBak, relativePath || fileName || ''));
       if (existingRelationKeys.has(fileIdBak) || existingFileIds.has(fileIdBak)) {
-        logger.info(`[DraftDocumentUpsertHandler][Files] Skip duplicate SharePoint file ID=${objectIdBak}, fileIdBak=${fileIdBak}`);
         continue;
       }
 
@@ -1047,7 +1044,6 @@ class DraftDocumentUpsertHandler {
             mappedReceiverCache.set(receiverKey, mappedReceiver);
 
             if (pendingOriginIds.has(stepOriginId)) {
-              logger.info(`[DraftDocumentUpsertHandler][Audit] Duplicate SLA step origin_id=${stepOriginId} detected for document ${documentId}, skipping local duplicate.`);
               continue;
             }
 
@@ -1107,14 +1103,6 @@ class DraftDocumentUpsertHandler {
 
           if (rowsToInsert.length > 0) {
             await this._insertAuditRowsBatch(rowsToInsert, transaction);
-            for (const row of rowsToInsert) {
-              logger.info(`[DraftDocumentUpsertHandler][Audit] Synced SLA step ${row.step} (origin_id=${row.origin_id_raw}) for document ${documentId}`);
-            }
-          }
-          for (const row of pendingAuditRows) {
-            if (existingOriginIds.has(String(row.origin_id).trim())) {
-              logger.info(`[DraftDocumentUpsertHandler][Audit] SLA step ${row.step} already exists for document ${documentId}, skipping.`);
-            }
           }
         }
 
@@ -1130,7 +1118,6 @@ class DraftDocumentUpsertHandler {
             statusCode: String(maxStatusCode),
             documentId: documentId
           }, transaction);
-          logger.info(`[DraftDocumentUpsertHandler][Audit] Final status updated to ${maxStatusCode} for document ${documentId}`);
         }
       }
     } catch (error) {
@@ -1172,7 +1159,7 @@ class DraftDocumentUpsertHandler {
         .input('codeItemId', codeItemId)
         .query(query);
 
-      logger.info(`[DraftDocumentUpsertHandler][CodeAttach] Found ${rows.recordset?.length || 0} attachments for CodeItemId=${codeItemId}`);
+      // logger.info(`[DraftDocumentUpsertHandler][CodeAttach] Found ${rows.recordset?.length || 0} attachments for CodeItemId=${codeItemId}`);
       return rows.recordset || [];
     } catch (error) {
       logger.warn(`[DraftDocumentUpsertHandler][CodeAttach] Error fetching attachments: ${error.message}`);
@@ -1200,11 +1187,11 @@ class DraftDocumentUpsertHandler {
         const fileIdBak = String(attach.fileIdBak || attach.ID || uuidv4());
 
         if (existingRelationKeys.has(fileIdBak) || existingFileIds.has(fileIdBak)) {
-          logger.info(`[DraftDocumentUpsertHandler][CodeAttach] Skip duplicate attachment ID=${attach.ID}, fileIdBak=${fileIdBak}`);
+          // logger.info(`[DraftDocumentUpsertHandler][CodeAttach] Skip duplicate attachment ID=${attach.ID}, fileIdBak=${fileIdBak}`);
           continue;
         }
 
-        logger.info(`[DraftDocumentUpsertHandler][CodeAttach] Processing: ${fileName} | Path: ${filePath}`);
+        // logger.info(`[DraftDocumentUpsertHandler][CodeAttach] Processing: ${fileName} | Path: ${filePath}`);
         const buffer = attach.buffer || await spDownload(fullUrl, this.newPool);
 
         if (!buffer || buffer.length === 0) {

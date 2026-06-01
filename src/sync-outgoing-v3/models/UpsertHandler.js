@@ -1,5 +1,6 @@
 const logger = require('../../../utils/logger');
 const dbUtils = require('../../../utils/dbUtils');
+const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const OutgoingMapper = require('../mappers/OutgoingMapper');
 const FileService = require('../../sync-file-copy/Fileuploadservice');
@@ -31,6 +32,37 @@ function detectFileType(buffer) {
   if (b[0] === 0xD0 && b[1] === 0xCF && b[2] === 0x11 && b[3] === 0xE0) return { mime: 'application/msword', ext: 'doc' };
   if (b[0] === 0x52 && b[1] === 0x61 && b[2] === 0x72 && b[3] === 0x21) return { mime: 'application/x-rar-compressed', ext: 'rar' };
   return { mime: 'application/octet-stream', ext: 'bin' };
+}
+
+function ensureFileExtension(fileName, preferredExt = null, fallbackPath = '') {
+  const rawName = String(fileName || '').trim();
+  const safeName = rawName || 'file';
+  const currentExt = (safeName.includes('.') ? safeName.split('.').pop() : '').toLowerCase();
+
+  if (currentExt) {
+    return safeName;
+  }
+
+  const pathExt = String(fallbackPath || '').trim().split('.').pop().toLowerCase();
+  const ext = (preferredExt || pathExt || 'bin').replace(/^\.+/, '');
+
+  return `${safeName}.${ext}`;
+}
+
+function normalizeAttachFileName(attach) {
+  const rawType = attach?.Type;
+  const typeExt = rawType ? (rawType.startsWith('.') ? rawType : `.${rawType.replace(/^\.+/, '')}`) : '';
+  const pathExt = String(attach?.Path || '').trim().split('.').pop().toLowerCase();
+  const preferredExt = (typeExt || (pathExt ? `.${pathExt}` : '') || '.bin');
+
+  let candidateName;
+  let title = attach?.Title;
+  if (!title) {
+    candidateName = attach?.Name || preferredExt;
+  } else {
+    candidateName = `${title}${typeExt || preferredExt}`.trim();
+  }
+  return ensureFileExtension(candidateName, preferredExt.replace(/^\./, ''), attach?.Path || '');
 }
 
 const AUDIT_TABLES = [
@@ -68,6 +100,95 @@ class UpsertHandler {
     this._syncAuditModel = [];
     this.newDbName = process.env.NEW_DB_NAME;
   }
+
+  _buildDeterministicFileIdBak(ownerId, seed) {
+    const rawValue = `${String(ownerId || '').trim()}|${String(seed || '').trim()}`;
+    return crypto.createHash('sha1').update(rawValue).digest('hex');
+  }
+
+  async _getExistingFileRelationKeys(objectIdBak, tableBak, fileIdBaks, transaction) {
+    if (!objectIdBak || !tableBak || !Array.isArray(fileIdBaks) || fileIdBaks.length === 0) {
+      return new Set();
+    }
+
+    const params = {
+      objectIdBak: String(objectIdBak),
+      tableBak: String(tableBak)
+    };
+    const placeholders = [];
+
+    fileIdBaks.forEach((fileIdBak, index) => {
+      const paramName = `fileIdBak${index}`;
+      placeholders.push(`@${paramName}`);
+      params[paramName] = String(fileIdBak);
+    });
+
+    const query = `
+      SELECT DISTINCT file_id_bak
+      FROM ${this.newDbName}.dbo.file_relations
+      WHERE object_id_bak = @objectIdBak
+        AND table_bak = @tableBak
+        AND file_id_bak IN (${placeholders.join(', ')})
+    `;
+
+    const rows = await this.queryNewDbTx(query, params, transaction);
+    return new Set((rows || []).map((row) => String(row.file_id_bak).trim()));
+  }
+
+  async _getExistingFileIds(fileIdBaks, transaction) {
+    if (!Array.isArray(fileIdBaks) || fileIdBaks.length === 0) {
+      return new Set();
+    }
+
+    const params = {};
+    const placeholders = [];
+
+    fileIdBaks.forEach((fileIdBak, index) => {
+      const paramName = `fileIdBak${index}`;
+      placeholders.push(`@${paramName}`);
+      params[paramName] = String(fileIdBak);
+    });
+
+    const query = `
+      SELECT DISTINCT id_bak
+      FROM ${this.newDbName}.dbo.files
+      WHERE id_bak IN (${placeholders.join(', ')})
+    `;
+
+    const rows = await this.queryNewDbTx(query, params, transaction);
+    return new Set((rows || []).map((row) => String(row.id_bak).trim()));
+  }
+
+  _parseFilesField(fieldValue) {
+    if (!fieldValue) return [];
+
+    // Split entries by ;#
+    const blocks = String(fieldValue).split(';#').filter(Boolean);
+    const filesToPath = [];
+
+    for (const block of blocks) {
+      const trimmedBlock = block.trim();
+      if (!trimmedBlock) continue;
+
+      // Split parts inside each block by |
+      const parts = trimmedBlock.split('|');
+      const urlFile = String(parts[0] || '').trim();
+      if (!urlFile) continue;
+
+      const nameFile = String(parts[1] || '').trim();
+      const typeFile = String(parts[2] || '').trim();
+
+      filesToPath.push({
+        urlFile,
+        nameFile: nameFile || null,
+        typeFile: typeFile || null
+      });
+    }
+
+    return filesToPath;
+  }
+
+
 
   /**
    * Initialize dependencies
@@ -135,12 +256,13 @@ class UpsertHandler {
     for (let i = 0; i < records.length; i += concurrency) {
       const chunk = records.slice(i, i + concurrency);
       await Promise.all(chunk.map(async (record) => {
+        const recordId = record.ID;
         try {
           const files = await this._prepareFilesFromSharePoint(record);
-          preparedFilesMap.set(record.ID, files);
+          preparedFilesMap.set(recordId, files);
         } catch (err) {
-          logger.warn(`[UpsertHandler] Failed to prepare files for ID=${record.ID}: ${err.message}`);
-          preparedFilesMap.set(record.ID, []);
+          logger.warn(`[UpsertHandler] Failed to prepare files for ID=${recordId}: ${err.message}`);
+          preparedFilesMap.set(recordId, []);
         }
       }));
     }
@@ -402,9 +524,6 @@ class UpsertHandler {
     return record.document_id;
   }
 
-  /**
-   * Update existing document record
-   */
   async _updateRecord(record, transaction) {
     const query = `
       UPDATE ${this.newDbName}.dbo.outgoing_documents WITH (ROWLOCK, UPDLOCK) SET
@@ -469,64 +588,92 @@ class UpsertHandler {
   }
 
   /**
-   * Prepare files from SharePoint
+   * Prepare files from SharePoint (Files column)
+   * Handles the structured format: urlFile|nameFile|typeFile blocks separated by ;#
    */
   async _prepareFilesFromSharePoint(oldRecord) {
-    const files = oldRecord?.Files || '';
-    if (!files) return [];
-
     const baseUrl = (process.env.BASE_URL || '').replace(/\/$/, '');
     if (!baseUrl) return [];
 
-    const parts = files.split('|').filter(Boolean);
-    if (parts.length === 0) return [];
-
-    let filesToPath = [];
-    const firstPartIsLikelyFile = /\.(pdf|docx?|xlsx?|pptx?|jpe?g|png|gif|bmp|txt|zip|rar)$/i.test(parts[0]);
-
-    if (firstPartIsLikelyFile) {
-      filesToPath.push(parts[0]);
-    } else {
-      const directory = parts[0];
-      const names = parts.slice(1);
-      for (const name of names) {
-        if (!name) continue;
-        filesToPath.push(directory.endsWith('/') ? `${directory}${name}` : `${directory}/${name}`);
-      }
-    }
+    const filesItems = this._parseFilesField(oldRecord?.Files);
+    if (filesItems.length === 0) return [];
 
     const preparedResults = [];
-    for (const relativePath of filesToPath) {
+    for (const item of filesItems) {
+      const { urlFile, nameFile, typeFile } = item;
       try {
-        if (!relativePath.includes('/')) continue;
-        const fullUrl = `${baseUrl}${relativePath}`;
-        const fileName = relativePath.substring(relativePath.lastIndexOf('/') + 1);
+        if (!urlFile.includes('/')) continue;
+        const fullUrl = urlFile.startsWith('http') ? urlFile : `${baseUrl}${urlFile}`;
+        
+        // Extract display name
+        const urlFileName = urlFile.substring(urlFile.lastIndexOf('/') + 1);
+        let finalFileName = nameFile ? nameFile : urlFileName;
 
-        logger.info(`[UpsertHandler][prepareFiles] Downloading: ${fileName}`);
+        // Apply ensureFileExtension to guarantee filename has correct extension
+        const pathExt = urlFileName.split('.').pop();
+        finalFileName = ensureFileExtension(finalFileName, pathExt, urlFileName);
+
+        const fileIdBak = this._buildDeterministicFileIdBak(oldRecord?.ID, urlFile);
+
+        logger.info(`[UpsertHandler][prepareFiles] Downloading: ${finalFileName} | Path: ${urlFile}`);
         const buffer = await spDownload(fullUrl, this.newPool);
 
         if (buffer && buffer.length > 0) {
-          preparedResults.push({ buffer, fileName, relativePath });
+          preparedResults.push({
+            buffer,
+            fileName: finalFileName,
+            relativePath: urlFile,
+            fileIdBak,
+            typeFile
+          });
         }
       } catch (err) {
-        logger.error(`[UpsertHandler][prepareFiles] Error downloading file ${relativePath}: ${err.message}`);
+        logger.error(`[UpsertHandler][prepareFiles] Error downloading file ${urlFile}: ${err.message}`);
       }
     }
     return preparedResults;
   }
 
   /**
-   * Apply prepared files to database
+   * Apply prepared files to database with duplicate checking
    */
   async _applyPreparedFiles(preparedFiles, oldRecord, newDocumentRecord, transaction) {
     if (!Array.isArray(preparedFiles) || preparedFiles.length === 0) return true;
 
+    const objectIdBak = String(oldRecord?.ID || '').trim();
+    const fileIdBaks = preparedFiles.map((fileItem) => String(fileItem?.fileIdBak || this._buildDeterministicFileIdBak(objectIdBak, fileItem?.relativePath || fileItem?.fileName || '')));
+    const existingRelationKeys = await this._getExistingFileRelationKeys(objectIdBak, 'VanBanBanHanh', fileIdBaks, transaction);
+    const existingFileIds = await this._getExistingFileIds(fileIdBaks, transaction);
+
     for (const fileItem of preparedFiles) {
-      const { buffer, fileName, relativePath } = fileItem;
+      const { buffer, fileName, relativePath, typeFile } = fileItem;
+      const fileIdBak = String(fileItem?.fileIdBak || this._buildDeterministicFileIdBak(objectIdBak, relativePath || fileName || ''));
+      if (existingRelationKeys.has(fileIdBak) || existingFileIds.has(fileIdBak)) {
+        logger.info(`[UpsertHandler] Skip duplicate file attachment fileName=${fileName}, fileIdBak=${fileIdBak}`);
+        continue;
+      }
+
       const fileType = detectFileType(buffer);
       const mimeType = fileType.mime;
 
-      const fileIdBak = uuidv4();
+      // Determine type_doc and object_type based on typeFile category
+      let typeDocVal = 'docAttachments';
+      let objectTypeVal = 'docAttachments';
+
+      if (typeFile) {
+        const typeLower = String(typeFile).toLowerCase();
+        if (typeLower.includes('dự thảo') || typeLower.includes('phê duyệt') || typeLower.includes('draft')) {
+          typeDocVal = 'docDraft';
+          objectTypeVal = 'docDraft';
+        } else if (typeLower.includes('trình') || typeLower.includes('proposal')) {
+          typeDocVal = 'docProposal';
+          objectTypeVal = 'docProposal';
+        } else if (typeLower.includes('ban hành') || typeLower.includes('final')) {
+          typeDocVal = 'finaldocuments';
+          objectTypeVal = 'finaldocuments';
+        }
+      }
+
       const fileRecord = {
         file_name: fileName,
         file_path: relativePath,

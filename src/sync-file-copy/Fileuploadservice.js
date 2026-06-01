@@ -473,10 +473,10 @@ class FileUploadService {
         // Lấy ID của bản ghi file do API của hệ thống mới đã tự động chèn khi upload tệp
         fileId = Number(apiResponse.id || apiResponse.public_id);
         
-        logger.info(
-          `[FileUploadService][DB] API hệ thống mới đã tự sinh file record ID=${fileId}. ` +
-          `Bắt đầu UPDATE cột created_by thành drafter="${fileRecord.created_by || 'NULL'}" và cập nhật table_bak...`
-        );
+        // logger.info(
+        //   `[FileUploadService][DB] API hệ thống mới đã tự sinh file record ID=${fileId}. ` +
+        //   `Bắt đầu UPDATE cột created_by thành drafter="${fileRecord.created_by || 'NULL'}" và cập nhật table_bak...`
+        // );
 
         // BƯỚC 2: Update thông tin người soạn thảo (created_by) và các trường kỹ thuật vào bản ghi có sẵn đó
         const updateQuery = `
@@ -496,7 +496,7 @@ class FileUploadService {
           fileId: fileId
         }, transaction);
 
-        logger.info(`[FileUploadService][DB] Đã UPDATE thành công bản ghi file ID=${fileId} với created_by=${fileRecord.created_by}`);
+        // logger.info(`[FileUploadService][DB] Đã UPDATE thành công bản ghi file ID=${fileId} với created_by=${fileRecord.created_by}`);
       } else {
         // Fallback: Nếu không chạy qua API hệ thống mới, chèn thủ công như cũ (thực tế cấu hình NEW_SYSTEM_UPLOAD_URL bắt buộc ở trên)
         const enrichedFileRecord = {
@@ -542,9 +542,9 @@ class FileUploadService {
       // rollback local copy too (if written)
       if (localFullPath) {
         try {
-          logger.info(`[FileUploadService][Local] Đang rollback: xóa file cục bộ ${localFullPath}`);
+          // logger.info(`[FileUploadService][Local] Đang rollback: xóa file cục bộ ${localFullPath}`);
           await fs.unlink(localFullPath);
-          logger.info(`[FileUploadService][Local] Rollback OK: đã xóa file cục bộ ${localFullPath}`);
+          // logger.info(`[FileUploadService][Local] Rollback OK: đã xóa file cục bộ ${localFullPath}`);
         } catch (rollbackErr) {
           logger.error(
             `[FileUploadService] ⚠ ROLLBACK FILE CỤC BỘ THẤT BẠI — file rác tồn tại! Path: ${localFullPath}. Lỗi rollback: ${rollbackErr.message}`
@@ -556,13 +556,13 @@ class FileUploadService {
       throw dbError;
     }
 
-    logger.info(
-      `[FileUploadService] Hoàn tất đồng bộ file` +
-      ` | fileId=${fileId}` +
-      (relationId ? ` | relationId=${relationId}` : '') +
-      ` | storagePath=${storagePath}` +
-      (localFullPath ? ` | localPath=${localFullPath}` : '')
-    );
+    // logger.info(
+    //   `[FileUploadService] Hoàn tất đồng bộ file` +
+    //   ` | fileId=${fileId}` +
+    //   (relationId ? ` | relationId=${relationId}` : '') +
+    //   ` | storagePath=${storagePath}` +
+    //   (localFullPath ? ` | localPath=${localFullPath}` : '')
+    // );
 
     return {
       fileId,
