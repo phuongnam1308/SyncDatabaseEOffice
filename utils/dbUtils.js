@@ -19,6 +19,8 @@ function isRetryableSqlError(err) {
     num === 3930 ||
     code === 'EREQUEST' && num === 1205 ||
     code === 'EREQUEST' && num === 3930 ||
+    code === 'ETIMEOUT' ||
+    msg.includes('Timeout: Request failed to complete') ||
     msg.includes('Transaction has been aborted') ||
     msg.includes('Transaction context in use by other sessions') ||
     msg.includes('Could not continue processing')

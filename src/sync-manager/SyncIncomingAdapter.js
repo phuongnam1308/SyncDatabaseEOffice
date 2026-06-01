@@ -117,14 +117,6 @@ class SyncIncomingAdapter {
       cursorId = isValidTime ? Number(lastSyncId || 0) : 0;
     }
 
-    // TEMPORARY FOR TEST: Force cursorTime to be at least May 18, 2026
-    const minTestTime = '2026-01-10T00:00:00.000Z';
-    if (!cursorTime || new Date(cursorTime) < new Date(minTestTime)) {
-      logger.info(`[SyncIncomingAdapter] TEMPORARY: forcing cursorTime to ${minTestTime} for test`);
-      cursorTime = minTestTime;
-      cursorId = 0;
-    }
-
     logger.info(
       `[SyncIncomingAdapter] getList start: cursorTime=${cursorTime}, lastSyncId=${cursorId} ` +
       `(Raw lastSyncTime: ${lastSyncTime}) [ASC direction]`

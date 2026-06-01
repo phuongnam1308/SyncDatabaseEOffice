@@ -4,12 +4,29 @@ const mapping = require('./mapping.json');
 
 /* ===================== UTIL ===================== */
 
+/**
+ * Hàm phân tích chuỗi ngày tháng hoặc object Date thành đối tượng Date hợp lệ.
+ * Nếu giá trị truyền vào không hợp lệ, hàm sẽ trả về null để tránh lỗi.
+ * 
+ * @param {any} v - Giá trị ngày tháng cần phân tích (String, Number, Date object)
+ * @returns {Date|null} Trả về đối tượng Date nếu hợp lệ, ngược lại trả về null
+ */
 const parseDate = (v) => {
   if (!v) return null;
   const d = new Date(v);
   return isNaN(d.getTime()) ? null : d;
 };
 
+/**
+ * Hàm định dạng khoảng thời gian diễn ra cuộc họp (Ví dụ: "08:00-11:00").
+ * Hàm này sẽ tự động parse ngày bắt đầu và kết thúc, sau đó cộng thêm
+ * độ lệch múi giờ (mặc định là +7 cho giờ Việt Nam).
+ * 
+ * @param {string|Date} start - Thời gian bắt đầu
+ * @param {string|Date} end - Thời gian kết thúc
+ * @param {number} offsetHours - Độ lệch múi giờ (Mặc định: 7)
+ * @returns {string} Trả về chuỗi định dạng "HH:mm-HH:mm" (ví dụ: "14:00-16:00")
+ */
 const formatTimeRange = (start, end, offsetHours = 7) => {
   const s = parseDate(start);
   console.log(`[config.js][formatTimeRange] INPUT: start=${start} (type=${typeof start}), end=${end} (type=${typeof end}), offsetHours=${offsetHours}`);
@@ -33,6 +50,15 @@ const formatTimeRange = (start, end, offsetHours = 7) => {
   return `${startStr}-${endStr}`;
 };
 
+/**
+ * Hàm tính toán và xác định thời gian kết thúc của cuộc họp.
+ * Ưu tiên sử dụng trường EndDate. Nếu không có EndDate nhưng có
+ * thời lượng (ThoiLuongGiay), sẽ cộng thời lượng vào StartDate để ra kết quả.
+ * Nếu cả hai không có, trả về thời gian bắt đầu hoặc thời điểm hiện tại.
+ * 
+ * @param {Object} r - Dòng dữ liệu lịch họp gốc từ DB cũ
+ * @returns {Date} Đối tượng Date thể hiện thời gian kết thúc
+ */
 const buildEndedAt = (r) => {
   const ended = parseDate(r?.EndDate);
   if (ended) return ended;
@@ -47,6 +73,14 @@ const buildEndedAt = (r) => {
   return started || new Date();
 };
 
+/**
+ * Xác định trạng thái của lịch họp dựa trên thời gian thực tế.
+ * Nếu thời gian kết thúc đã trôi qua so với hiện tại, đánh dấu là 'KET_THUC'.
+ * Ngược lại, gán trạng thái là 'DU_KIEN'.
+ * 
+ * @param {Object} r - Dòng dữ liệu lịch họp gốc từ DB cũ
+ * @returns {string} Trạng thái tiến độ cuộc họp (DU_KIEN | KET_THUC)
+ */
 const buildMeetingState = (r) => {
   const now = new Date();
   const started = parseDate(r?.StartDate);
@@ -56,6 +90,14 @@ const buildMeetingState = (r) => {
   return 'DU_KIEN';
 };
 
+/**
+ * Ánh xạ trạng thái (status string) từ hệ thống cũ sang mã trạng thái mới
+ * dựa trên cấu hình khai báo trong file status_mapping.json.
+ * Các nhóm trạng thái sẽ được quy đổi thành mã số tương ứng (0: Đã hủy, 2: Đang xử lý, 3: Phê duyệt).
+ * 
+ * @param {string} statusStr - Chuỗi trạng thái từ hệ thống cũ (Ví dụ: "Đã phê duyệt")
+ * @returns {number} Mã trạng thái số nguyên tương ứng trên DB mới
+ */
 const mapStatusToStatusCode = (statusStr) => {
   const defaultCode = statusMapping.DEFAULT_STATUS_CODE || 2;
   if (!statusStr) return defaultCode;
@@ -210,4 +252,3 @@ const tableMappings = {
 };
 
 module.exports = { tableMappings };
-

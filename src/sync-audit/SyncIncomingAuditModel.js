@@ -96,113 +96,72 @@ class SyncIncomingAuditModel extends SyncAuditModel {
       const allReceivers = [receiver || created_by, receiver_unit].filter(Boolean);
       if (allReceivers.length === 0) return;
 
-      // 3. Tìm các record incomming_assignment đã tồn tại trong DB theo (document_id, receiver, role_process)
-      const existing = await this.queryNewDbTx(
-        `SELECT receiver, role_process, stage_status 
-         FROM ${process.env.NEW_DB_NAME}.dbo.incomming_assignment WITH (NOLOCK)
-         WHERE document_id = @document_id`,
-        { document_id },
-        transaction
-      );
-
-      const existingMap = new Map(
-        (existing || []).map(row => [
-          `${String(row.receiver).trim()}_${String(row.role_process).trim()}`,
-          String(row.stage_status).trim()
-        ])
-      );
-
-      // 4. Phân loại các record cần insert thêm hoặc update
-      const toInsert = [];
-      const toUpdate = [];
       const uniqueKeys = new Set();
+      const rows = [];
+      const createdAtValue = created_at || new Date();
+      const cleanRole = String(roleProcess).substring(0, 50);
+      const cleanStage = String(stage_status).substring(0, 50);
 
       for (const rec of allReceivers) {
         const cleanRec = String(rec).substring(0, 100);
-        const cleanRole = String(roleProcess).substring(0, 50);
-        const cleanStage = String(stage_status).substring(0, 50);
-
-        // Tránh trùng lặp trong cùng 1 đợt xử lý
         const key = `${cleanRec}_${cleanRole}`;
         if (uniqueKeys.has(key)) continue;
         uniqueKeys.add(key);
 
-        if (existingMap.has(key)) {
-          const currentStage = existingMap.get(key);
-          if (currentStage !== cleanStage) {
-            toUpdate.push({
-              receiver: cleanRec,
-              role_process: cleanRole,
-              stage_status: cleanStage,
-            });
-          }
-        } else {
-          toInsert.push({
-            receiver: cleanRec,
-            role_process: cleanRole,
-            stage_status: cleanStage,
-          });
-        }
-      }
-
-      // 5. Thực thi insert 1 lần
-      if (toInsert.length > 0) {
-        let query = `INSERT INTO ${process.env.NEW_DB_NAME}.dbo.incomming_assignment WITH (ROWLOCK) 
-          (document_id, receiver, role_process, stage_status, created_at, last_audit_id, table_backups)
-          VALUES `;
-        
-        const params = { document_id };
-        const valuesClauses = [];
-
-        toInsert.forEach((item, index) => {
-          valuesClauses.push(`(
-            @document_id,
-            @receiver_${index},
-            @role_process_${index},
-            @stage_status_${index},
-            @created_at_${index},
-            @last_audit_id_${index},
-            @table_backups_${index}
-          )`);
-
-          params[`receiver_${index}`] = item.receiver;
-          params[`role_process_${index}`] = item.role_process;
-          params[`stage_status_${index}`] = item.stage_status;
-          params[`created_at_${index}`] = created_at || new Date();
-          params[`last_audit_id_${index}`] = auditId || null;
-          params[`table_backups_${index}`] = 'incomming_assignment';
+        rows.push({
+          receiver: cleanRec,
+          role_process: cleanRole,
+          stage_status: cleanStage,
+          created_at: createdAtValue,
+          last_audit_id: auditId || null,
+          table_backups: 'incomming_assignment'
         });
-
-        query += valuesClauses.join(', ');
-
-        await this.queryNewDbTx(query, params, transaction);
       }
 
-      // 6. Thực thi update các record có sự thay đổi về stage_status
-      if (toUpdate.length > 0) {
-        for (const item of toUpdate) {
-          await this.queryNewDbTx(
-            `UPDATE ${process.env.NEW_DB_NAME}.dbo.incomming_assignment WITH (ROWLOCK)
-             SET stage_status = @stage_status,
-                 last_audit_id = @last_audit_id,
-                 created_at = @created_at,
-                 updated_at = SYSDATETIME()
-             WHERE document_id = @document_id 
-               AND receiver = @receiver 
-               AND role_process = @role_process`,
-            {
-              document_id,
-              receiver: item.receiver,
-              role_process: item.role_process,
-              stage_status: item.stage_status,
-              created_at: created_at || new Date(),
-              last_audit_id: auditId || null
-            },
-            transaction
-          );
-        }
-      }
+      if (rows.length === 0) return;
 
+      // Merge trong 1 câu SQL duy nhất để tránh select/update/insert riêng lẻ gây lock contention.
+      rows.sort((a, b) => `${a.receiver}_${a.role_process}`.localeCompare(`${b.receiver}_${b.role_process}`));
+
+      const params = { document_id };
+      const valuesClauses = rows.map((item, index) => {
+        params[`receiver_${index}`] = item.receiver;
+        params[`role_process_${index}`] = item.role_process;
+        params[`stage_status_${index}`] = item.stage_status;
+        params[`created_at_${index}`] = item.created_at;
+        params[`last_audit_id_${index}`] = item.last_audit_id;
+        params[`table_backups_${index}`] = item.table_backups;
+
+        return `(
+          @receiver_${index},
+          @role_process_${index},
+          @stage_status_${index},
+          @created_at_${index},
+          @last_audit_id_${index},
+          @table_backups_${index}
+        )`;
+      });
+
+      const mergeQuery = `
+        MERGE ${process.env.NEW_DB_NAME}.dbo.incomming_assignment WITH (HOLDLOCK, ROWLOCK) AS target
+        USING (
+          VALUES ${valuesClauses.join(', ')}
+        ) AS source(receiver, role_process, stage_status, created_at, last_audit_id, table_backups)
+        ON target.document_id = @document_id
+          AND target.receiver = source.receiver
+          AND target.role_process = source.role_process
+        WHEN MATCHED AND target.stage_status <> source.stage_status THEN
+          UPDATE SET
+            stage_status = source.stage_status,
+            last_audit_id = source.last_audit_id,
+            created_at = source.created_at,
+            updated_at = SYSDATETIME()
+        WHEN NOT MATCHED BY TARGET THEN
+          INSERT (document_id, receiver, role_process, stage_status, created_at, last_audit_id, table_backups)
+          VALUES (@document_id, source.receiver, source.role_process, source.stage_status, source.created_at, source.last_audit_id, source.table_backups);
+      `;
+
+      await this.queryNewDbTx(mergeQuery, params, transaction);
     } catch (err) {
       logger.error(`[SyncIncomingAuditModel] Sync assignment failed: doc=${document_id}`, err);
       throw err;
