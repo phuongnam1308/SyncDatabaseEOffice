@@ -215,6 +215,27 @@ class DraftDocumentMapper {
       })
     };
   }
+
+  /**
+   * Parse HTML comments and insert into database
+   * @param {string} htmlContent - HTML content containing comments
+   * @param {string} documentId - Target document ID
+   * @param {string} recordId - Source record ID
+   * @param {string} tableName - Source table name
+   * @param {string} fieldName - Field name containing comments
+   * @param {object} transaction - Database transaction
+   * @returns {Promise<number>} Number of comments inserted
+   */
+  async parseAndInsertHtmlComments(htmlContent, documentId, recordId, tableName, fieldName, transaction) {
+    return this.helper.parseAndInsertHtmlComments(
+      htmlContent,
+      documentId,
+      recordId,
+      tableName,
+      fieldName,
+      transaction
+    );
+  }
 }
 
 module.exports = DraftDocumentMapper;
