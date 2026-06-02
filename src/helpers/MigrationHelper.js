@@ -225,6 +225,94 @@ class MigrationHelper {
     }
   }
 
+  parseDateNonSubSeven(date) {
+    if (!date) return null;
+
+    try {
+      if (date instanceof Date) {
+        return isNaN(date.getTime()) ? null : date;
+      }
+
+      if (typeof date === "number") {
+        const parsed = new Date(
+          date > 1e12 ? date : date * 1000
+        );
+        return isNaN(parsed.getTime()) ? null : parsed;
+      }
+
+      if (typeof date !== "string") return null;
+
+      const trimmed = date.trim();
+      if (!trimmed) return null;
+
+      const dotNetMatch =
+        trimmed.match(/^\/Date\((\d+)\)\/$/i);
+      if (dotNetMatch?.[1]) {
+        const parsed = new Date(
+          Number(dotNetMatch[1])
+        );
+        return isNaN(parsed.getTime()) ? null : parsed;
+      }
+
+      if (/^\d{10,13}$/.test(trimmed)) {
+        const numeric = Number(trimmed);
+        const parsed = new Date(
+          trimmed.length === 13
+            ? numeric
+            : numeric * 1000
+        );
+        return isNaN(parsed.getTime()) ? null : parsed;
+      }
+
+      if (
+        /^\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?$/.test(
+          trimmed
+        )
+      ) {
+        const [datePart, timePart] = trimmed.split(/[ T]/);
+        const [year, month, day] = datePart.split("-").map(Number);
+        const [hour = 0, minute = 0, second = 0] = (timePart || "")
+          .split(":")
+          .map((part) => Number(part || 0));
+
+        const parsed = new Date(
+          Date.UTC(year, month - 1, day, hour, minute, second) * 60 * 60 * 1000
+        );
+        return isNaN(parsed.getTime()) ? null : parsed;
+      }
+
+      const vnDatePattern =
+        /^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/;
+      const vnMatch = trimmed.match(vnDatePattern);
+      if (vnMatch) {
+        const day = Number(vnMatch[1]);
+        const month = Number(vnMatch[2]);
+        const year = Number(vnMatch[3]);
+        const hour = Number(vnMatch[4] || 0);
+        const minute = Number(vnMatch[5] || 0);
+        const second = Number(vnMatch[6] || 0);
+
+        const parsed = new Date(
+          Date.UTC(year, month - 1, day, hour, minute, second) - 7 * 60 * 60 * 1000
+        );
+
+        if (
+          parsed.getUTCFullYear() === year &&
+          parsed.getUTCMonth() === month - 1 &&
+          parsed.getUTCDate() === day
+        ) {
+          return parsed;
+        }
+      }
+
+      const parsed = new Date(trimmed);
+      return isNaN(parsed.getTime()) ? null : parsed;
+
+    } catch {
+      return null;
+    }
+  }
+
   mapStatusOutgoing(trangThai) {
     const safeTrangThai = this.safeString(trangThai);
     const defaultResult = {
@@ -3245,7 +3333,7 @@ async uploadFromUrlToMinio({ url, filename, username, password, targetFolder = '
       if (dateMatch) {
          dateExtracted = dateMatch[1];
          userNameExtracted = headerRaw.replace(/\([^)]+\)$/, '').trim();
-         const parsedDt = this.parseDate(dateExtracted);
+         const parsedDt = this.parseDateNonSubSeven(dateExtracted);
          if (parsedDt) createdAt = parsedDt;
       }
 
