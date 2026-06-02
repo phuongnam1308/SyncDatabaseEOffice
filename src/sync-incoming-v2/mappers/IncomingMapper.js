@@ -88,9 +88,9 @@ class IncomingMapper {
     // ── Date fields ───────────────────────────────
     const createdAt = this.helper.parseDate(oldRecord.Created) || new Date();
     const updatedAt = this.helper.parseDate(oldRecord.Modified) || createdAt;
-    const receiveDate = this.helper.parseDate(oldRecord.NgayDen);
-    const documentDate = this.helper.parseDate(oldRecord.NgayTrenVB);
-    const deadline = this.helper.parseDate(oldRecord.ThoiHanGQ);
+    const receiveDate = this.helper.parseDateNonSubSeven(oldRecord.NgayDen);
+    const documentDate = this.helper.parseDateNonSubSeven(oldRecord.NgayTrenVB);
+    const deadline = this.helper.parseDateNonSubSeven(oldRecord.ThoiHanGQ);
 
     // ── Classification fields ─────────────────────
     const documentType = await this.helper.processDocumentType(

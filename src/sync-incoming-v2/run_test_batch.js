@@ -3,62 +3,62 @@ const Extractor = require('./models/Extractor');
 const Loader = require('./models/Loader');
 
 async function main() {
-  console.log(`Đang kết nối database...`);
+  console.log(`Dang ket noi database...`);
   await dbConnection.connectAll();
   const newPool = dbConnection.getNewPool();
   const oldPool = dbConnection.getOldPool();
 
   if (!newPool || !oldPool) {
-    console.error('Lỗi kết nối DB. Vui lòng kiểm tra lại cấu hình.');
+    console.error('Loi ket noi DB. Vui long kiem tra lai cau hinh.');
     process.exit(1);
   }
 
   const extractor = new Extractor(newPool, oldPool);
   const loader = new Loader(newPool, oldPool);
   
-  // Khởi tạo loader (UpsertHandler)
+  // Khoi tao loader (UpsertHandler)
   await loader.initialize();
 
   const instanceId = 'test_batch_1000';
   
-  // Đảm bảo bảng staging tồn tại
+  // Dam bao bang staging ton tai
   await extractor.ensureStagingTableExists(instanceId);
 
-  // Lấy cursor cuối cùng từ staging để tiếp tục lấy dữ liệu
+  // Lay cursor cuoi cung tu staging de tiep tuc lay du lieu
   let cursor = await extractor.getLastSyncCursor(instanceId);
   let lastSyncTime = cursor.time || extractor.getInitialSyncTime();
   let lastSyncId = cursor.id || 0;
 
-  console.log(`Bắt đầu chạy 1000 bản ghi tuần tự. Cursor ban đầu: Time=${lastSyncTime}, ID=${lastSyncId}`);
+  console.log(`Bat dau chay 1000 ban ghi tuan tu. Cursor ban dau: Time=${lastSyncTime}, ID=${lastSyncId}`);
 
   const maxRecords = 1000;
   let successCount = 0;
   let failCount = 0;
 
   for (let i = 1; i <= maxRecords; i++) {
-    console.log(`\n--- [Bản ghi ${i}/${maxRecords}] ---`);
+    console.log(`\n--- [Ban ghi ${i}/${maxRecords}] ---`);
     
-    // 1. Get tuần tự từng bản ghi một từ OLDB (VanBanDen)
+    // 1. Get tuan tu tung ban ghi mot tu OLDB (VanBanDen)
     const rows = await extractor.fetchBatchFromOldDb(lastSyncTime, lastSyncId, 1, 0);
     
     if (!rows || rows.length === 0) {
-      console.log(`Không còn bản ghi nào trong OLDB để đồng bộ. Kết thúc sớm ở vòng lặp ${i}.`);
+      console.log(`Khong con ban ghi nao trong OLDB de dong bo. Ket thuc som o vong lap ${i}.`);
       break;
     }
 
     const oldRow = rows[0];
     
-    // Cập nhật cursor cho vòng lặp tiếp theo
+    // Cap nhat cursor cho vong lap tiep theo
     lastSyncTime = oldRow.__sync_time ? new Date(oldRow.__sync_time).toISOString() : lastSyncTime;
     lastSyncId = oldRow.__sync_id || 0;
 
-    console.log(`> Lấy thành công ID = ${oldRow.ID} từ OLDB (Title: ${oldRow.Title || oldRow.TrichYeu || 'Không có tiêu đề'})`);
+    console.log(`> Lay thanh cong ID = ${oldRow.ID} tu OLDB (Title: ${oldRow.Title || oldRow.TrichYeu || 'Khong co tieu de'})`);
 
-    // 2. Đưa qua incomming_documents_sync (Staging)
+    // 2. Dua qua incomming_documents_sync (Staging)
     await extractor.syncBatchToStaging([oldRow], instanceId);
-    console.log(`> Đã chèn/cập nhật bản ghi vào staging.`);
+    console.log(`> Da chen/cap nhat ban ghi vao staging.`);
 
-    // 3. Claim bản ghi trong staging để xử lý
+    // 3. Claim ban ghi trong staging de xu ly
     const stagingTable = loader.getStagingTableName(instanceId);
     const claimQuery = `
       WITH CTE AS (
@@ -86,7 +86,7 @@ async function main() {
     }
 
     if (!stagingRow) {
-      console.log(`> [LỖI] Không claim được ID=${oldRow.ID} trong staging, bỏ qua bản ghi này...`);
+      console.log(`> [LOI] Khong claim duoc ID=${oldRow.ID} trong staging, bo qua ban ghi nay...`);
       failCount++;
       continue;
     }
@@ -99,28 +99,28 @@ async function main() {
 
       if (result.success) {
         await loader.markSuccess(instanceId, stagingRow.ID);
-        console.log(`> [THÀNH CÔNG] Đã đồng bộ vào incomming_documents.`);
-        console.log(`  - Document ID (Mới): ${result.documentId}`);
+        console.log(`> [THANH CONG] Da dong bo vao incomming_documents.`);
+        console.log(`  - Document ID (Moi): ${result.documentId}`);
         console.log(`  - Action: ${result.action}`);
-        console.log(`  - Thời gian xử lý: ${duration}ms`);
+        console.log(`  - Thoi gian xu ly: ${duration}ms`);
         successCount++;
       } else {
         await loader.markFailed(instanceId, stagingRow.ID, result.error);
-        console.log(`> [THẤT BẠI] Lỗi: ${result.error}`);
-        console.log(`  - Thời gian xử lý: ${duration}ms`);
+        console.log(`> [THAT BAI] Loi: ${result.error}`);
+        console.log(`  - Thoi gian xu ly: ${duration}ms`);
         failCount++;
       }
     } catch (err) {
       await loader.markFailed(instanceId, stagingRow.ID, err.message);
-      console.error(`> [LỖI NGHIÊM TRỌNG] ${err.message}`);
+      console.error(`> [LOI NGHIEM TRONG] ${err.message}`);
       failCount++;
     }
   }
 
-  console.log(`\n=== TỔNG KẾT ===`);
-  console.log(`- Số lượng yêu cầu: ${maxRecords}`);
-  console.log(`- Thành công: ${successCount}`);
-  console.log(`- Thất bại: ${failCount}`);
+  console.log(`\n=== TONG KET ===`);
+  console.log(`- So luong yeu cau: ${maxRecords}`);
+  console.log(`- Thanh cong: ${successCount}`);
+  console.log(`- That bai: ${failCount}`);
   
   process.exit(0);
 }
