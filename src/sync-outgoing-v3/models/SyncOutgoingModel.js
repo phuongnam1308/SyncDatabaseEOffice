@@ -147,14 +147,24 @@ class SyncOutgoingModel extends BaseSyncModel {
 
         try {
           const result = await this.loader.processBatch(batch);
+          const recordStates = Array.isArray(result.recordStates) ? result.recordStates : [];
+
+          if (recordStates.length > 0) {
+            await this.loader.markBatchStates(this.instanceId, recordStates);
+          } else {
+            if (result.successIds && result.successIds.length > 0) {
+              await this.loader.markBatchSuccess(this.instanceId, result.successIds);
+            }
+            if (result.failedRecords && result.failedRecords.length > 0) {
+              await this.loader.markBatchFailed(this.instanceId, result.failedRecords);
+            }
+          }
 
           if (result.successIds && result.successIds.length > 0) {
-            await this.loader.markBatchSuccess(this.instanceId, result.successIds);
             totalSuccess += result.successIds.length;
           }
           
           if (result.failedRecords && result.failedRecords.length > 0) {
-            await this.loader.markBatchFailed(this.instanceId, result.failedRecords);
             totalFailed += result.failedRecords.length;
           }
         } catch (error) {

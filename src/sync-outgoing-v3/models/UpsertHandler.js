@@ -242,11 +242,14 @@ class UpsertHandler {
    */
   async processBatch(records) {
     if (!records || records.length === 0) {
-      return { successIds: [], failedRecords: [] };
+      return { successIds: [], failedRecords: [], recordStates: [] };
     }
 
     const successIds = [];
     const failedRecords = [];
+    const recordStates = [];
+    const currentStateDocIds = new Set();
+    const recordIdByDocumentId = new Map();
     logger.info(`[UpsertHandler] Processing batch of ${records.length} records`);
 
     // Step 1: Pre-download files with concurrency limit
@@ -278,97 +281,86 @@ class UpsertHandler {
       }
     }
 
-    // Step 2: Try processing entire batch in a single transaction
-    let batchSuccess = true;
-    const successfulDocs = [];
-    try {
-      await dbUtils.withTransactionRetry(this.newPool, async (transaction) => {
-        for (const oldRecord of records) {
-          const id = String(oldRecord?.ID || '').trim();
-          
-          const docResult = await this._processDocument(oldRecord, transaction);
-          if (!docResult || docResult.affected === 0) continue;
+    // Step 2: Process each record with its own transaction
+    for (const oldRecord of records) {
+      let currentDocResult = null;
 
+      try {
+        await dbUtils.withTransactionRetry(this.newPool, async (transaction) => {
+          const id = String(oldRecord?.ID || '').trim();
+
+          const docResult = await this._processDocument(oldRecord, transaction);
+          if (!docResult || docResult.affected === 0) return;
+
+          currentDocResult = docResult;
           const documentId = docResult.documentId;
           const drafter = docResult.drafter;
 
           const isNew = docResult.action === 'INSERT' || docResult.action === 'inserted';
           await this._processAudits(oldRecord, documentId, id, drafter, transaction, isNew);
           await this._processHtmlComments(oldRecord, documentId, id, transaction);
-          
-          successfulDocs.push({ oldRecord, docResult });
-        }
-      });
-      // If success, process files outside transaction and mark as succeeded
-      for (const { oldRecord, docResult } of successfulDocs) {
-        successIds.push(oldRecord.ID);
-        const preparedFiles = preparedFilesMap.get(oldRecord.ID) || [];
-        
-        // Memory optimization: Clear from map immediately so GC can reclaim buffers
-        preparedFilesMap.delete(oldRecord.ID);
+        });
 
-        try {
-          await this._applyPreparedFiles(preparedFiles, oldRecord, {
-            id: docResult.documentId,
-            type_doc: 1,
-            drafter: docResult.drafter
+        if (currentDocResult && currentDocResult.affected > 0) {
+          successIds.push(oldRecord.ID);
+          recordIdByDocumentId.set(String(currentDocResult.documentId), String(oldRecord.ID));
+          currentStateDocIds.add(String(currentDocResult.documentId));
+
+          const preparedFiles = preparedFilesMap.get(oldRecord.ID) || [];
+          preparedFilesMap.delete(oldRecord.ID);
+
+          let syncStatus = 'SUCCESS';
+          let syncReason = null;
+
+          try {
+            await this._applyPreparedFiles(preparedFiles, oldRecord, {
+              id: currentDocResult.documentId,
+              type_doc: 1,
+              drafter: currentDocResult.drafter
+            });
+          } catch (fileErr) {
+            syncStatus = 'PARTIAL_SUCCESS';
+            syncReason = `FILE_UPLOAD_FAILED: ${fileErr.message}`;
+            logger.warn(`[UpsertHandler] File upload failed for ${currentDocResult.documentId}: ${fileErr.message}`);
+          }
+
+          recordStates.push({
+            id: oldRecord.ID,
+            documentId: currentDocResult.documentId,
+            syncStatus,
+            syncReason
           });
-        } catch (fileErr) {
-          logger.warn(`[UpsertHandler] File upload failed for ${docResult.documentId}: ${fileErr.message}`);
         }
+      } catch (singleError) {
+        logger.error(`[UpsertHandler] Failed for ID=${oldRecord.ID}: ${singleError.message}`);
+        failedRecords.push({ id: oldRecord.ID, error: singleError.message });
+        recordStates.push({
+          id: oldRecord.ID,
+          syncStatus: 'FAILED',
+          syncReason: singleError.message
+        });
       }
-    } catch (batchError) {
-      logger.error(`[UpsertHandler] Batch transaction failed, falling back to sequential processing: ${batchError.message}`);
-      batchSuccess = false;
     }
 
-    // Step 3: Fallback to sequential processing if batch transaction failed
-    if (!batchSuccess) {
-      for (const oldRecord of records) {
-        try {
-          let currentDocResult = null;
-          await dbUtils.withTransactionRetry(this.newPool, async (transaction) => {
-            const id = String(oldRecord?.ID || '').trim();
-            const docResult = await this._processDocument(oldRecord, transaction);
-            if (!docResult || docResult.affected === 0) return;
+    // Step 3: Refresh current state after all audits/comments/files are committed
+    const currentStateFailures = await this._refreshCurrentStates(Array.from(currentStateDocIds));
+    if (currentStateFailures.length > 0) {
+      for (const failure of currentStateFailures) {
+        const recordId = recordIdByDocumentId.get(String(failure.documentId));
+        if (!recordId) continue;
 
-            currentDocResult = docResult;
-            const documentId = docResult.documentId;
-            const drafter = docResult.drafter;
-
-            const isNew = docResult.action === 'INSERT' || docResult.action === 'inserted';
-            await this._processAudits(oldRecord, documentId, id, drafter, transaction, isNew);
-            await this._processHtmlComments(oldRecord, documentId, id, transaction);
-          });
-          
-          // Files outside transaction
-          if (currentDocResult && currentDocResult.affected > 0) {
-            const preparedFiles = preparedFilesMap.get(oldRecord.ID) || [];
-            
-            // Memory optimization: Clear from map immediately
-            preparedFilesMap.delete(oldRecord.ID);
-
-            try {
-              await this._applyPreparedFiles(preparedFiles, oldRecord, {
-                id: currentDocResult.documentId,
-                type_doc: 1,
-                drafter: currentDocResult.drafter
-              });
-            } catch (fileErr) {
-              logger.warn(`[UpsertHandler] File upload failed for ${currentDocResult.documentId}: ${fileErr.message}`);
-            }
-          }
-          
-          successIds.push(oldRecord.ID);
-        } catch (singleError) {
-          logger.error(`[UpsertHandler] Fallback failed for ID=${oldRecord.ID}: ${singleError.message}`);
-          failedRecords.push({ id: oldRecord.ID, error: singleError.message });
+        const existingState = recordStates.find((item) => String(item.id) === String(recordId));
+        if (existingState && existingState.syncStatus !== 'FAILED') {
+          existingState.syncStatus = existingState.syncStatus === 'SUCCESS' ? 'PARTIAL_SUCCESS' : existingState.syncStatus;
+          existingState.syncReason = existingState.syncReason
+            ? `${existingState.syncReason}; CURRENT_STATE_FAILED: ${failure.error}`
+            : `CURRENT_STATE_FAILED: ${failure.error}`;
         }
       }
     }
 
     logger.info(`[UpsertHandler] Completed batch. Success: ${successIds.length}, Failed: ${failedRecords.length}`);
-    return { successIds, failedRecords };
+    return { successIds, failedRecords, recordStates };
   }
 
   /**
@@ -734,7 +726,8 @@ class UpsertHandler {
   }
 
   /**
-   * Step 4: Process audits
+   * Step 4: Process audits + outgoing_assignment in the same transaction.
+   * current_state is intentionally deferred to a separate post-batch phase.
    */
   async _processAudits(oldRecord, documentId, recordId, drafter, transaction, isNew = false) {
     // 1. Luôn luôn kiểm tra và tạo bản ghi audit khởi tạo 'CREATE'
@@ -812,6 +805,9 @@ class UpsertHandler {
       }
     } catch (autoAuditErr) {
       logger.warn(`[UpsertHandler][AutoCreateAudit] Failed for documentId=${documentId}: ${autoAuditErr.message}`);
+      if (transaction) {
+        throw autoAuditErr;
+      }
     }
 
     if (this._syncAuditModel.length === 0) return;
@@ -849,7 +845,10 @@ class UpsertHandler {
               logger.info(`[UpsertHandler][Audit] table=${tableName} documentId=${documentId} inserted=${result?.inserted || 0}`);
             }
           } catch (auditErr) {
-            logger.warn(`[UpsertHandler][Audit] Error table=${tableName}: ${auditErr.message}`);
+            logger.error(`[UpsertHandler][Audit] Error table=${tableName}: ${auditErr.message}`);
+            if (transaction) {
+              throw auditErr;
+            }
           }
         }
 
@@ -859,9 +858,152 @@ class UpsertHandler {
           logger.info(`[UpsertHandler][Audit] ✅ Final status updated to ${maxStatusCode} for document ${documentId}`);
         }
       }
+
     } catch (error) {
       logger.warn(`[UpsertHandler][Audit] Aggregate fetch failed: ${error.message}`);
+      if (transaction) {
+        throw error;
+      }
     }
+  }
+
+  /**
+   * Refresh outgoing_current_state after all audit/comment/file work is committed.
+   */
+  async _refreshCurrentStates(documentIds) {
+    if (!Array.isArray(documentIds) || documentIds.length === 0) return [];
+    if (this._syncAuditModel.length === 0) return [];
+
+    const failures = [];
+    const auditModel = this._syncAuditModel.find((model) => typeof model?.updateCurrentState === 'function') || null;
+
+    for (const documentId of documentIds) {
+      try {
+        if (auditModel) {
+          await dbUtils.withTransactionRetry(this.newPool, async (transaction) => {
+            await auditModel.updateCurrentState(documentId, transaction);
+          });
+        } else {
+          await dbUtils.withTransactionRetry(this.newPool, async (transaction) => {
+            await this._refreshCurrentStateDirect(documentId, transaction);
+          });
+        }
+      } catch (err) {
+        logger.warn(`[UpsertHandler][Audit] updateCurrentState failed for documentId=${documentId}: ${err.message}`);
+        failures.push({ documentId, error: err.message });
+      }
+    }
+
+    return failures;
+  }
+
+  /**
+   * Fallback updater for outgoing_current_state when the audit model instance
+   * is unavailable or does not expose updateCurrentState().
+   */
+  async _refreshCurrentStateDirect(documentId, transaction = null) {
+    if (!documentId) return;
+
+    const query = `
+      SELECT id, [time], receiver, receiver_unit, created_by, roleProcess, stage_status, action_code
+      FROM ${this.newDbName}.dbo.audit
+      WHERE document_id = @documentId
+      ORDER BY [time] ASC, id ASC
+    `;
+
+    const audits = await this.queryNewDbTx(query, { documentId }, transaction);
+    if (!audits || audits.length === 0) return;
+
+    let hasBanHanh = 0;
+    let hasDaXuLy = 0;
+    let hasHtVbtt = 0;
+    let isCompleted = 0;
+    let lastDaXuLyAuditId = null;
+    let hasTraLaiAfterDaXuLy = 0;
+
+    const latestAudit = audits[audits.length - 1];
+    for (const audit of audits) {
+      const stageUp = String(audit.stage_status || '').toUpperCase();
+      if (stageUp === 'BAN_HANH' || stageUp === 'DA_BAN_HANH') {
+        hasBanHanh = 1;
+        isCompleted = 1;
+      }
+      if (stageUp === 'DA_XU_LY') {
+        hasDaXuLy = 1;
+        lastDaXuLyAuditId = audit.id;
+      }
+      if (stageUp === 'HT_VBTT' || stageUp === 'BAN_HANH_DU_THAO') {
+        hasHtVbtt = 1;
+      }
+      if (audit.action_code === 'TRA_LAI' && hasDaXuLy === 1) {
+        hasTraLaiAfterDaXuLy = 1;
+      }
+    }
+
+    const upsertQuery = `
+      IF EXISTS (
+        SELECT 1 FROM ${this.newDbName}.dbo.outgoing_current_state WITH (UPDLOCK, HOLDLOCK)
+        WHERE document_id = @document_id
+      )
+      BEGIN
+        UPDATE ${this.newDbName}.dbo.outgoing_current_state
+        SET
+          current_stage_status   = @stage_status,
+          current_action_code    = @action_code,
+          current_receiver       = @receiver,
+          current_role_process   = @role_process,
+          last_audit_id          = @last_audit_id,
+          last_audit_time        = @audit_time,
+          has_ban_hanh           = @has_ban_hanh,
+          has_da_xu_ly           = @has_da_xu_ly,
+          has_ht_vbtt            = @has_ht_vbtt,
+          is_completed_doc       = @is_completed,
+          last_da_xu_ly_audit_id = @last_da_xu_ly_audit_id,
+          has_tra_lai_after_da_xu_ly = @has_tra_lai_after_da_xu_ly,
+          updated_at             = @audit_time
+        WHERE document_id = @document_id;
+      END
+      ELSE
+      BEGIN
+        INSERT INTO ${this.newDbName}.dbo.outgoing_current_state (
+          document_id, current_stage_status, current_action_code,
+          current_receiver, current_role_process,
+          last_audit_id, last_audit_time,
+          has_ban_hanh, has_da_xu_ly, has_ht_vbtt,
+          is_completed_doc, last_da_xu_ly_audit_id, has_tra_lai_after_da_xu_ly,
+          has_open_workitem, is_transfer_to_room, updated_at, table_backups
+        )
+        VALUES (
+          @document_id, @stage_status, @action_code,
+          @receiver, @role_process,
+          @last_audit_id, @audit_time,
+          @has_ban_hanh, @has_da_xu_ly, @has_ht_vbtt,
+          @is_completed, @last_da_xu_ly_audit_id, @has_tra_lai_after_da_xu_ly,
+          0, 0, @audit_time, 'outgoing_current_state'
+        );
+      END
+    `;
+
+    const currentReceiver = latestAudit.receiver || latestAudit.receiver_unit || latestAudit.created_by;
+    await this.queryNewDbTx(
+      upsertQuery,
+      {
+        document_id: documentId,
+        stage_status: latestAudit.stage_status ? String(latestAudit.stage_status).substring(0, 100) : null,
+        action_code: latestAudit.action_code ? String(latestAudit.action_code).substring(0, 100) : null,
+        receiver: currentReceiver ? String(currentReceiver).substring(0, 100) : null,
+        role_process: latestAudit.roleProcess ? String(latestAudit.roleProcess).substring(0, 100) : null,
+        last_audit_id: latestAudit.id || null,
+        audit_time: latestAudit.time,
+        has_ban_hanh: hasBanHanh,
+        has_da_xu_ly: hasDaXuLy,
+        has_ht_vbtt: hasHtVbtt,
+        is_completed: isCompleted,
+        last_da_xu_ly_audit_id: lastDaXuLyAuditId,
+        has_tra_lai_after_da_xu_ly: hasTraLaiAfterDaXuLy
+      },
+      transaction
+    );
   }
 }
 

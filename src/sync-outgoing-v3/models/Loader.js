@@ -94,6 +94,58 @@ class Loader extends BaseLoader {
   }
 
   /**
+   * Mark staging rows with detailed sync status and reason.
+   */
+  async markBatchStates(instanceId, recordStates) {
+    if (!Array.isArray(recordStates) || recordStates.length === 0) return;
+
+    const stagingTable = this.getStagingTableName(instanceId);
+    const request = this.newPool.request();
+    const queryParts = [];
+
+    recordStates.forEach((item, index) => {
+      const syncStatus = String(item?.syncStatus || 'SUCCESS').toUpperCase();
+      const syncReason = item?.syncReason ? String(item.syncReason).substring(0, 4000) : null;
+      let migrateFlg = 1;
+      let migrateErrFlg = 0;
+      let migrateErrMess = null;
+
+      if (syncStatus === 'FAILED') {
+        migrateFlg = 3;
+        migrateErrFlg = 1;
+        migrateErrMess = syncReason;
+      } else if (syncStatus === 'PARTIAL_SUCCESS') {
+        migrateFlg = 4;
+        migrateErrFlg = 0;
+        migrateErrMess = syncReason;
+      } else {
+        migrateFlg = 1;
+        migrateErrFlg = 0;
+        migrateErrMess = null;
+      }
+
+      queryParts.push(`
+        UPDATE ${stagingTable} WITH (ROWLOCK)
+        SET MigrateFlg = @migrateFlg${index},
+            MigrateErrFlg = @migrateErrFlg${index},
+            MigrateErrMess = @migrateErrMess${index},
+            processing_owner = NULL,
+            processing_started_at = NULL,
+            processing_heartbeat_at = NULL
+        WHERE ID = @id${index};
+      `);
+
+      request.input(`id${index}`, item.id);
+      request.input(`migrateFlg${index}`, migrateFlg);
+      request.input(`migrateErrFlg${index}`, migrateErrFlg);
+      request.input(`migrateErrMess${index}`, migrateErrMess);
+    });
+
+    await request.query(queryParts.join('\n'));
+    logger.info(`[${this.modelName}] Marked ${recordStates.length} staging rows with detailed sync state`);
+  }
+
+  /**
    * Mark a batch of staging records as successfully processed
    */
   async markBatchSuccess(instanceId, rowIds) {
@@ -129,7 +181,7 @@ class Loader extends BaseLoader {
     failedRecords.forEach((item, index) => {
       queryParts.push(`
         UPDATE ${stagingTable} WITH (ROWLOCK)
-        SET MigrateFlg = 0,
+        SET MigrateFlg = 3,
             MigrateErrFlg = 1,
             MigrateErrMess = @err${index},
             processing_owner = NULL,
@@ -142,6 +194,32 @@ class Loader extends BaseLoader {
 
     await request.query(queryParts.join('\n'));
     logger.info(`[${this.modelName}] Marked failed for ${failedRecords.length} staging rows`);
+  }
+
+  /**
+   * Get detailed processing statistics for outgoing staging rows.
+   */
+  async getStats(instanceId) {
+    const stagingTable = this.getStagingTableName(instanceId);
+    const query = `
+      SELECT
+        SUM(CASE WHEN ISNULL(MigrateFlg, 0) = 0 THEN 1 ELSE 0 END) AS pending,
+        SUM(CASE WHEN ISNULL(MigrateFlg, 0) = 2 THEN 1 ELSE 0 END) AS processing,
+        SUM(CASE WHEN ISNULL(MigrateFlg, 0) = 1 THEN 1 ELSE 0 END) AS success,
+        SUM(CASE WHEN ISNULL(MigrateFlg, 0) = 4 THEN 1 ELSE 0 END) AS partial,
+        SUM(CASE WHEN ISNULL(MigrateFlg, 0) = 3 OR ISNULL(MigrateErrFlg, 0) = 1 THEN 1 ELSE 0 END) AS failed
+      FROM ${stagingTable}
+    `;
+
+    const result = await this.newPool.request().query(query);
+    const row = result.recordset?.[0] || {};
+    return {
+      pending: Number(row.pending || 0),
+      processing: Number(row.processing || 0),
+      success: Number(row.success || 0),
+      partial: Number(row.partial || 0),
+      failed: Number(row.failed || 0)
+    };
   }
 }
 

@@ -55,8 +55,8 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
             processedReceivers.add(recKey);
           }
 
-          // 3b. Sync vào current_state
-          await this._syncToCurrentState(audit, auditId, transaction);
+          // 3b. Trì hoãn sync current_state để xử lý gom nhóm ở cuối quy trình
+          // (Không gọi trong vòng lặp của từng audit lẻ)
         }
       } catch (err) {
         if (isRetryableSqlError(err)) {
@@ -238,6 +238,134 @@ class SyncOutgoingAuditModel extends SyncAuditModel {
   // ---------------------------------------------------------------------------
   async fetchByDocumentId(oldDocumentId) {
     return this.fetchByOutgoingDocumentId(oldDocumentId);
+  }
+
+  // ---------------------------------------------------------------------------
+  // updateCurrentState
+  // Gom nhóm cập nhật trạng thái cuối cho văn bản sau khi đồng bộ toàn bộ audit.
+  // ---------------------------------------------------------------------------
+  async updateCurrentState(documentId, transaction = null) {
+    if (!documentId) return;
+
+    try {
+      // 1. Lấy toàn bộ danh sách audit của văn bản này, sắp xếp theo thời gian tăng dần
+      const query = `
+        SELECT id, time, receiver, receiver_unit, created_by, roleProcess, stage_status, action_code
+        FROM ${process.env.NEW_DB_NAME || 'app_tancang'}.dbo.audit
+        WHERE document_id = @documentId
+        ORDER BY time ASC, id ASC
+      `;
+      const audits = await this.queryNewDbTx(query, { documentId }, transaction);
+      if (!audits || audits.length === 0) return;
+
+      // 2. Tính toán các cờ tích luỹ và trạng thái hiện tại
+      let hasBanHanh = 0;
+      let hasDaXuLy = 0;
+      let hasHtVbtt = 0;
+      let isCompleted = 0;
+      let lastDaXuLyAuditId = null;
+      let hasTraLaiAfterDaXuLy = 0;
+
+      // Bản ghi audit cuối cùng (mới nhất)
+      const latestAudit = audits[audits.length - 1];
+
+      for (const audit of audits) {
+        const stageUp = (audit.stage_status || '').toUpperCase();
+        
+        if (stageUp === STAGE.BAN_HANH || stageUp === STAGE.DA_BAN_HANH) {
+          hasBanHanh = 1;
+          isCompleted = 1;
+        }
+        if (stageUp === STAGE.DA_XU_LY) {
+          hasDaXuLy = 1;
+          lastDaXuLyAuditId = audit.id;
+        }
+        if (stageUp === STAGE.HT_VBTT || stageUp === STAGE.BAN_HANH_DU_THAO) {
+          hasHtVbtt = 1;
+        }
+
+        // Kiểm tra xem có hành động trả lại sau khi đã xử lý hay không
+        if (audit.action_code === 'TRA_LAI' && hasDaXuLy === 1) {
+          hasTraLaiAfterDaXuLy = 1;
+        }
+      }
+
+      const stageStatus = latestAudit.stage_status;
+      const actionCode = latestAudit.action_code;
+      const roleProcess = latestAudit.roleProcess;
+      const currentReceiver = latestAudit.receiver || latestAudit.receiver_unit || latestAudit.created_by;
+      const lastAuditId = latestAudit.id;
+      const auditTime = latestAudit.time;
+
+      // 3. Thực hiện Upsert (IF EXISTS UPDATE ELSE INSERT) vào outgoing_current_state
+      const upsertQuery = `
+        IF EXISTS (
+          SELECT 1 FROM ${process.env.NEW_DB_NAME || 'app_tancang'}.dbo.outgoing_current_state WITH (UPDLOCK, HOLDLOCK)
+          WHERE document_id = @document_id
+        )
+        BEGIN
+          UPDATE ${process.env.NEW_DB_NAME || 'app_tancang'}.dbo.outgoing_current_state
+          SET
+            current_stage_status   = @stage_status,
+            current_action_code    = @action_code,
+            current_receiver       = @receiver,
+            current_role_process   = @role_process,
+            last_audit_id          = @last_audit_id,
+            last_audit_time        = @audit_time,
+            has_ban_hanh           = @has_ban_hanh,
+            has_da_xu_ly           = @has_da_xu_ly,
+            has_ht_vbtt            = @has_ht_vbtt,
+            is_completed_doc       = @is_completed,
+            last_da_xu_ly_audit_id = @last_da_xu_ly_audit_id,
+            has_tra_lai_after_da_xu_ly = @has_tra_lai_after_da_xu_ly,
+            updated_at             = @audit_time
+          WHERE document_id = @document_id;
+        END
+        ELSE
+        BEGIN
+          INSERT INTO ${process.env.NEW_DB_NAME || 'app_tancang'}.dbo.outgoing_current_state (
+            document_id, current_stage_status, current_action_code,
+            current_receiver, current_role_process,
+            last_audit_id, last_audit_time,
+            has_ban_hanh, has_da_xu_ly, has_ht_vbtt,
+            is_completed_doc, last_da_xu_ly_audit_id, has_tra_lai_after_da_xu_ly,
+            has_open_workitem, is_transfer_to_room, updated_at, table_backups
+          )
+          VALUES (
+            @document_id, @stage_status, @action_code,
+            @receiver, @role_process,
+            @last_audit_id, @audit_time,
+            @has_ban_hanh, @has_da_xu_ly, @has_ht_vbtt,
+            @is_completed, @last_da_xu_ly_audit_id, @has_tra_lai_after_da_xu_ly,
+            0, 0, @audit_time, 'outgoing_current_state'
+          );
+        END
+      `;
+
+      await this.queryNewDbTx(
+        upsertQuery,
+        {
+          document_id: documentId,
+          stage_status: stageStatus ? String(stageStatus).substring(0, 100) : null,
+          action_code: actionCode ? String(actionCode).substring(0, 100) : null,
+          receiver: currentReceiver ? String(currentReceiver).substring(0, 100) : null,
+          role_process: roleProcess ? String(roleProcess).substring(0, 100) : null,
+          last_audit_id: lastAuditId || null,
+          audit_time: auditTime,
+          has_ban_hanh: hasBanHanh,
+          has_da_xu_ly: hasDaXuLy,
+          has_ht_vbtt: hasHtVbtt,
+          is_completed: isCompleted,
+          last_da_xu_ly_audit_id: lastDaXuLyAuditId,
+          has_tra_lai_after_da_xu_ly: hasTraLaiAfterDaXuLy
+        },
+        transaction
+      );
+      logger.info(`[SyncOutgoingAuditModel] ✅ Final sync current_state success for doc=${documentId} status=${stageStatus}`);
+    } catch (err) {
+      logger.error(`[SyncOutgoingAuditModel] updateCurrentState failed for doc=${documentId}: ${err.message}`);
+      throw err;
+    }
   }
 }
 

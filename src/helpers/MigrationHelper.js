@@ -643,7 +643,7 @@ class MigrationHelper {
           try {
             await this.queryNewDbTx(
               `INSERT INTO ${process.env.NEW_DB_NAME}.dbo.organization_units (id, name, normalized_name, code, status, created_at, updated_at, Id_backups, table_backups, tb_bak)
-               VALUES (@id, @name, @normalizedKey, @code, 1, GETDATE(), GETDATE(), @oldId, 'stream_migration', 1)`,
+               VALUES (@id, @name, @normalizedKey, @code, 10, GETDATE(), GETDATE(), @oldId, 'stream_migration', 1)`,
               {
                 id: newId,
                 name: dept.Title.trim(),

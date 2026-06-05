@@ -37,31 +37,17 @@ class OutgoingMapper {
     const urgencyLevel = await this.helper.processUrgencyLevel(this.helper.safeString(oldRecord.DoKhan));
     const privateLevel = await this.helper.processPrivateLevel(this.helper.safeString(oldRecord.DoMat));
 
-    const senderUnit = (await this.helper.mapSenderUnitId(
-      this.helper.safeString(oldRecord.DonVi),
-      transaction
-    )) || process.env.DEFAULT_RECEIVER_UNIT_ID;
-
     let drafterRaw = this.helper.safeString(oldRecord.NguoiSoanThaoText || oldRecord.CreatedBy);
     let drafter = (await this.helper.mapUserDrafter(
       drafterRaw,
       transaction
     )) || process.env.VANTHU_USER_ID || null;
 
-    // =========================================================================
-    // KHỐI HARDCODE ĐỂ TEST (BẬT LÊN KHI CẦN TEST MAPPING VĂN BẢN VÀO USER CỐ ĐỊNH)
-    // =========================================================================
-    // Hướng dẫn: 
-    // 1. Thay 'ID_USER_NEW_CẦN_TEST' bằng ID (GUID) của tài khoản mới bạn muốn gán.
-    // 2. Nếu muốn áp dụng cho TẤT CẢ các văn bản đồng bộ:
-    //    drafter = 'ID_USER_NEW_CẦN_TEST';
-    // 3. Nếu chỉ muốn áp dụng cho duy nhất 1 văn bản cụ thể (ví dụ ID cũ = 9999):
-    //    if (String(oldRecord.ID) === '9999') {
-    //        drafter = 'ID_USER_NEW_CẦN_TEST';
-    //    }
-    // =========================================================================
-     drafter = 'b23406e3-5c75-41d3-91e0-1654293ae6b2'; // Mẫu: ID tài khoản Văn Thư
-    // =========================================================================
+    // sender_unit của outgoing_document sẽ lấy mặc định là org của người tạo outgoing_document
+    const senderUnit = (await this.helper.mapSenderUnitFromCreatedByParent(
+      drafterRaw,
+      transaction
+    )) || process.env.DEFAULT_RECEIVER_UNIT_ID;
 
     const reportSigner = await this.helper.mapUserDrafter(
       this.helper.safeString(oldRecord.NguoiKyVanBanText),
@@ -73,8 +59,8 @@ class OutgoingMapper {
       { drafter, senderUnit, privateLevel }
     );
 
-    // Map receiving units
-    const units = this.helper.splitStringSplitBySemicolon(this.helper.safeString(oldRecord.NoiNhan));
+    // Map receiving units (using DonVi instead of NoiNhan as per requirements)
+    const units = this.helper.splitStringSplitBySemicolon(this.helper.safeString(oldRecord.DonVi));
     const internalReceivingDeptIds = [];
     const externalReceivingUnits = [];
     const allReceiverUserIds = new Set();
