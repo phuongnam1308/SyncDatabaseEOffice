@@ -445,8 +445,8 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
     } catch (err) {
       logger.warn(
         `[StreamUserMigrationModel][Avatar] [LỖI] Lỗi ném ra từ catch block khi tải/upload Avatar từ url ${imgUrl} cho user ${username}: ` +
-          err.message +
-          ` | Stack: ${err.stack}`,
+        err.message +
+        ` | Stack: ${err.stack}`,
       );
     }
     return '[]';
@@ -470,15 +470,17 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
     }
 
     let name = (oldRecord.FullName || email_user || 'Unknown').trim();
+
+    let nameForCode = name;
     const hyphenIndex = name.indexOf('-');
     if (hyphenIndex > -1) {
-      name = name.substring(0, hyphenIndex).trim();
+      nameForCode = nameForCode.substring(0, hyphenIndex).trim();
     }
 
     // Nếu code_nd trông không giống mã nhân viên (quá dài hoặc chứa tên đầy đủ),
     // sử dụng hàm buildAbbreviatedCode để tạo mã ndc chuẩn.
     if (!code_nd || code_nd.length > 100 || code_nd.includes(' ')) {
-      code_nd = this.migrationHelper.buildAbbreviatedCode(name);
+      code_nd = this.migrationHelper.buildAbbreviatedCode(nameForCode);
     }
 
     const position = this.safeString(oldRecord.Position);
@@ -689,15 +691,14 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
       const query = `
         IF EXISTS (SELECT 1 FROM ${stagingTableRef} WHERE ID = @ID)
         BEGIN
-          ${
-            nonIdColumns.length > 0
-              ? `
+          ${nonIdColumns.length > 0
+          ? `
           UPDATE ${stagingTableRef}
           SET ${updateClause}
           WHERE ID = @ID;`
-              : `
+          : `
           SELECT 1 AS noop;`
-          }
+        }
         END
         ELSE
         BEGIN
@@ -814,9 +815,9 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
 
     const sourceLastSyncTime = this.normalizeSyncTime(
       options.sourceLastSyncTime ||
-        options.lastSyncTime ||
-        jobState?.last_sync_time ||
-        DEFAULT_SYNC_TIME,
+      options.lastSyncTime ||
+      jobState?.last_sync_time ||
+      DEFAULT_SYNC_TIME,
     );
     const sourceLastSyncId = Number(
       options.sourceLastSyncId != null ? options.sourceLastSyncId : jobState?.last_sync_id || 0,
@@ -963,10 +964,10 @@ class StreamUserMigrationModel extends BaseIncrementalSyncInterface {
     const rowData = isRowDataInput
       ? rowDataOrBackupId
       : {
-          ID: rowDataOrBackupId,
-          AccountName: String(rowDataOrBackupId || ''),
-          FullName: String(fallbackNameOrTransaction || ''),
-        };
+        ID: rowDataOrBackupId,
+        AccountName: String(rowDataOrBackupId || ''),
+        FullName: String(fallbackNameOrTransaction || ''),
+      };
     const transaction = isRowDataInput ? fallbackNameOrTransaction : maybeTransaction;
 
     const mapped = await this.mapRecordForUpsert(rowData);

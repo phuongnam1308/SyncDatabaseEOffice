@@ -69,9 +69,14 @@ class SyncOutgoingModel extends BaseSyncModel {
   async runExtract() {
     logger.info(`[${this.modelName}] Starting extract phase...`);
     let totalExtracted = 0;
-    let lastSyncTime = '2999-12-31T23:59:59.999Z'; // Start from max time for DESC ordering
-    let lastSyncId = 0;
+    
+    // Get last sync cursor from staging table to support incremental resume (ASC)
+    const lastCursor = await this.extractor.getLastSyncCursor(this.instanceId);
+    let lastSyncTime = lastCursor.time || this.extractor.getInitialSyncTime();
+    let lastSyncId = lastCursor.id || 0;
     let hasMore = true;
+
+    logger.info(`[${this.modelName}] Resuming extraction from cursor: time=${lastSyncTime}, id=${lastSyncId}`);
 
     while (hasMore && !this.shouldStop) {
       const batch = await this.extractor.fetchBatchFromOldDb(

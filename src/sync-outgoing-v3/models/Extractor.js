@@ -17,6 +17,40 @@ class Extractor extends BaseExtractor {
   }
 
   /**
+   * Get the last successfully extracted record's cursor from the staging table.
+   * Finds the maximum __sync_time and __sync_id of records already in staging.
+   */
+  async getLastSyncCursor(instanceId) {
+    const stagingTable = this.getStagingTableName(instanceId);
+    try {
+      const query = `
+        SELECT TOP 1 __sync_time, __sync_id
+        FROM ${stagingTable}
+        WHERE __sync_time IS NOT NULL AND __sync_id IS NOT NULL
+        ORDER BY __sync_time DESC, __sync_id DESC
+      `;
+      const result = await this.newPool.request().query(query);
+      if (result.recordset?.length > 0) {
+        const row = result.recordset[0];
+        return {
+          time: row.__sync_time ? new Date(row.__sync_time).toISOString() : null,
+          id: Number(row.__sync_id || 0)
+        };
+      }
+    } catch (error) {
+      logger.warn(`[${this.modelName}] getLastSyncCursor failed or staging table does not exist: ${error.message}`);
+    }
+    return { time: null, id: 0 };
+  }
+
+  /**
+   * Get initial sync time (earliest time) for ASC sync
+   */
+  getInitialSyncTime() {
+    return process.env.SYNC_MIN_DATE || '1753-01-01T00:00:00.000Z';
+  }
+
+  /**
    * getSyncTimeExpression - Fallback nhiều kiểu dữ liệu, ưu tiên Modified, Created, NgayBanHanh
    */
   getSyncTimeExpression() {
