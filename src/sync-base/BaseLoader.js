@@ -187,7 +187,6 @@ class BaseLoader {
   async resetProcessingRecords(instanceId) {
     const stagingTable = this.getStagingTableName(instanceId);
     const query = `
-      SET LOCK_TIMEOUT 5000;
       UPDATE ${stagingTable} WITH (ROWLOCK)
       SET MigrateFlg = 0,
           MigrateErrFlg = 0,
@@ -198,13 +197,9 @@ class BaseLoader {
       WHERE MigrateFlg = 2
     `;
 
-    try {
-      const result = await this.newPool.request().query(query);
-      if (result.rowsAffected[0] > 0) {
-        logger.info(`[${this.modelName}] Reset ${result.rowsAffected[0]} processing records`);
-      }
-    } catch (error) {
-      logger.warn(`[${this.modelName}] resetProcessingRecords bị lỗi hoặc timeout (Bỏ qua để tiếp tục chạy): ${error.message}`);
+    const result = await this.newPool.request().query(query);
+    if (result.rowsAffected[0] > 0) {
+      logger.info(`[${this.modelName}] Reset ${result.rowsAffected[0]} processing records`);
     }
   }
 

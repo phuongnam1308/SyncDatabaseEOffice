@@ -745,7 +745,7 @@ class DraftDocumentUpsertHandler {
 
   async _insertAuditRowsBatch(auditRows, transaction) {
     if (!Array.isArray(auditRows) || auditRows.length === 0) {
-      return;
+      return [];
     }
 
     const queryParams = {};
@@ -798,14 +798,19 @@ class DraftDocumentUpsertHandler {
         [action], stage_status, created_at, updated_at,
         type_document, table_backups, [role], curStatusCode,
         from_node_id, to_node_id
-      ) VALUES ${valuesSql.join(',\n')}
+      )
+      OUTPUT inserted.id, inserted.document_id, inserted.[time], inserted.receiver, 
+             inserted.receiver_unit, inserted.created_by, inserted.roleProcess, 
+             inserted.stage_status, inserted.action_code
+      VALUES ${valuesSql.join(',\n')}
     `;
 
     const request = transaction.request();
     for (const [key, value] of Object.entries(queryParams)) {
       request.input(key, value);
     }
-    await request.query(query);
+    const result = await request.query(query);
+    return result.recordset || [];
   }
 
   /**
@@ -855,7 +860,11 @@ class DraftDocumentUpsertHandler {
             receiver, receiver_unit, group_, roleProcess,
             [action], stage_status, created_at, updated_at,
             type_document, table_backups
-          ) VALUES (
+          )
+          OUTPUT inserted.id, inserted.document_id, inserted.[time], inserted.receiver, 
+                 inserted.receiver_unit, inserted.created_by, inserted.roleProcess, 
+                 inserted.stage_status, inserted.action_code
+          VALUES (
             @document_id, @time, @user_id, @display_name,
             @action_code, @details, @origin_id, @created_by,
             @receiver, @receiver_unit, @group_, @roleProcess,
@@ -864,7 +873,7 @@ class DraftDocumentUpsertHandler {
           )
         `;
 
-        await this.queryNewDbTx(insertQuery, {
+        const createResult = await this.queryNewDbTx(insertQuery, {
           document_id: documentId,
           time: createdDate,
           user_id: creatorId,
@@ -884,6 +893,10 @@ class DraftDocumentUpsertHandler {
           type_document: typeDoc,
           table_backups: 'auto_create'
         }, transaction);
+
+        if (createResult && createResult.length > 0) {
+          await this._syncToAssignment(createResult[0], transaction);
+        }
 
         logger.info(`[DraftDocumentUpsertHandler][AutoCreateAudit] Created initial CREATE audit for documentId=${documentId} creator=${displayName}`);
       }
@@ -1102,7 +1115,10 @@ class DraftDocumentUpsertHandler {
           const rowsToInsert = pendingAuditRows.filter((row) => !existingOriginIds.has(String(row.origin_id).trim()));
 
           if (rowsToInsert.length > 0) {
-            await this._insertAuditRowsBatch(rowsToInsert, transaction);
+            const insertedRows = await this._insertAuditRowsBatch(rowsToInsert, transaction);
+            for (const row of insertedRows) {
+              await this._syncToAssignment(row, transaction);
+            }
           }
         }
 
@@ -1122,6 +1138,202 @@ class DraftDocumentUpsertHandler {
       }
     } catch (error) {
       logger.warn(`[DraftDocumentUpsertHandler][Audit] SLA steps sync failed: ${error.message}`);
+    }
+
+    // 3. Dong bo bang phu outgoing_current_state
+    try {
+      await this._refreshCurrentStateDirect(documentId, transaction);
+    } catch (stateErr) {
+      logger.warn(`[DraftDocumentUpsertHandler][Audit] _refreshCurrentStateDirect failed: ${stateErr.message}`);
+    }
+  }
+
+  /**
+   * Sync single audit record to outgoing_assignment table
+   */
+  async _syncToAssignment(auditRow, transaction) {
+    const {
+      id: auditId, document_id, time, receiver, receiver_unit, created_by,
+      roleProcess, stage_status, action_code
+    } = auditRow;
+
+    if (!document_id) return;
+
+    try {
+      if (!stage_status || !roleProcess) return;
+
+      const creatorActionCodes = new Set(['CREATE', 'TONG_HOP', 'SOAN_THAO']);
+      const isCreator = creatorActionCodes.has(action_code) ? 1 : 0;
+
+      const allReceivers = [
+        ...(receiver ? [{ rec: receiver || created_by, unit: receiver_unit || null }] : []),
+        ...(receiver_unit && receiver_unit !== receiver
+          ? [{ rec: receiver_unit, unit: receiver_unit }]
+          : [])
+      ];
+
+      if (allReceivers.length === 0) return;
+
+      const uniqueKeys = new Set();
+
+      for (const { rec, unit } of allReceivers) {
+        if (!rec) continue;
+
+        const key = `${rec}_${roleProcess}`;
+        if (uniqueKeys.has(key)) continue;
+        uniqueKeys.add(key);
+
+        const updateParams = {
+          document_id: String(document_id).trim().toUpperCase(),
+          receiver: String(rec).trim().substring(0, 100),
+          role_process: String(roleProcess).trim().substring(0, 50),
+          stage_status: String(stage_status).trim().substring(0, 50),
+          created_at: time || new Date(),
+          last_audit_id: auditId || null,
+          receiver_unit: unit ? String(unit).trim().substring(0, 100) : null,
+          is_creator: isCreator
+        };
+
+        const upsertQuery = `
+          IF EXISTS (SELECT 1 FROM dbo.outgoing_assignment WITH (UPDLOCK, HOLDLOCK) 
+                     WHERE document_id = @document_id AND receiver = @receiver AND role_process = @role_process)
+          BEGIN
+            UPDATE dbo.outgoing_assignment 
+            SET stage_status = @stage_status,
+                created_at = @created_at,
+                last_audit_id = @last_audit_id,
+                receiver_unit = @receiver_unit,
+                is_creator = @is_creator
+            WHERE document_id = @document_id AND receiver = @receiver AND role_process = @role_process
+          END
+          ELSE
+          BEGIN
+            INSERT INTO dbo.outgoing_assignment 
+            (document_id, receiver, role_process, stage_status, created_at, last_audit_id, receiver_unit, is_creator, table_backups)
+            VALUES (@document_id, @receiver, @role_process, @stage_status, @created_at, @last_audit_id, @receiver_unit, @is_creator, 'outgoing_assignment')
+          END
+        `;
+
+        await this.queryNewDbTx(upsertQuery, updateParams, transaction);
+      }
+
+    } catch (err) {
+      logger.error(`[DraftDocumentUpsertHandler] Sync assignment failed: doc=${document_id}`, err);
+      throw err;
+    }
+  }
+
+  /**
+   * Refresh current state for outgoing_current_state table
+   */
+  async _refreshCurrentStateDirect(documentId, transaction = null) {
+    if (!documentId) return;
+
+    try {
+      const query = `
+        SELECT id, [time], receiver, receiver_unit, created_by, roleProcess, stage_status, action_code
+        FROM ${this.newDbName}.dbo.audit
+        WHERE document_id = @documentId
+        ORDER BY [time] ASC, id ASC
+      `;
+
+      const audits = await this.queryNewDbTx(query, { documentId }, transaction);
+      if (!audits || audits.length === 0) return;
+
+      let hasBanHanh = 0;
+      let hasDaXuLy = 0;
+      let hasHtVbtt = 0;
+      let isCompleted = 0;
+      let lastDaXuLyAuditId = null;
+      let hasTraLaiAfterDaXuLy = 0;
+
+      const latestAudit = audits[audits.length - 1];
+      for (const audit of audits) {
+        const stageUp = String(audit.stage_status || '').toUpperCase();
+        if (stageUp === 'BAN_HANH' || stageUp === 'DA_BAN_HANH') {
+          hasBanHanh = 1;
+          isCompleted = 1;
+        }
+        if (stageUp === 'DA_XU_LY') {
+          hasDaXuLy = 1;
+          lastDaXuLyAuditId = audit.id;
+        }
+        if (stageUp === 'HT_VBTT' || stageUp === 'BAN_HANH_DU_THAO') {
+          hasHtVbtt = 1;
+        }
+        if (audit.action_code === 'TRA_LAI' && hasDaXuLy === 1) {
+          hasTraLaiAfterDaXuLy = 1;
+        }
+      }
+
+      const upsertQuery = `
+        IF EXISTS (
+          SELECT 1 FROM ${this.newDbName}.dbo.outgoing_current_state WITH (UPDLOCK, HOLDLOCK)
+          WHERE document_id = @document_id
+        )
+        BEGIN
+          UPDATE ${this.newDbName}.dbo.outgoing_current_state
+          SET
+            current_stage_status   = @stage_status,
+            current_action_code    = @action_code,
+            current_receiver       = @receiver,
+            current_role_process   = @role_process,
+            last_audit_id          = @last_audit_id,
+            last_audit_time        = @audit_time,
+            has_ban_hanh           = @has_ban_hanh,
+            has_da_xu_ly           = @has_da_xu_ly,
+            has_ht_vbtt            = @has_ht_vbtt,
+            is_completed_doc       = @is_completed,
+            last_da_xu_ly_audit_id = @last_da_xu_ly_audit_id,
+            has_tra_lai_after_da_xu_ly = @has_tra_lai_after_da_xu_ly,
+            updated_at             = @audit_time
+          WHERE document_id = @document_id;
+        END
+        ELSE
+        BEGIN
+          INSERT INTO ${this.newDbName}.dbo.outgoing_current_state (
+            document_id, current_stage_status, current_action_code,
+            current_receiver, current_role_process,
+            last_audit_id, last_audit_time,
+            has_ban_hanh, has_da_xu_ly, has_ht_vbtt,
+            is_completed_doc, last_da_xu_ly_audit_id, has_tra_lai_after_da_xu_ly,
+            has_open_workitem, is_transfer_to_room, updated_at, table_backups
+          )
+          VALUES (
+            @document_id, @stage_status, @action_code,
+            @receiver, @role_process,
+            @last_audit_id, @audit_time,
+            @has_ban_hanh, @has_da_xu_ly, @has_ht_vbtt,
+            @is_completed, @last_da_xu_ly_audit_id, @has_tra_lai_after_da_xu_ly,
+            0, 0, @audit_time, 'outgoing_current_state'
+          );
+        END
+      `;
+
+      const currentReceiver = latestAudit.receiver || latestAudit.receiver_unit || latestAudit.created_by;
+      await this.queryNewDbTx(
+        upsertQuery,
+        {
+          document_id: documentId,
+          stage_status: latestAudit.stage_status ? String(latestAudit.stage_status).substring(0, 100) : null,
+          action_code: latestAudit.action_code ? String(latestAudit.action_code).substring(0, 100) : null,
+          receiver: currentReceiver ? String(currentReceiver).substring(0, 100) : null,
+          role_process: latestAudit.roleProcess ? String(latestAudit.roleProcess).substring(0, 100) : null,
+          last_audit_id: latestAudit.id || null,
+          audit_time: latestAudit.time,
+          has_ban_hanh: hasBanHanh,
+          has_da_xu_ly: hasDaXuLy,
+          has_ht_vbtt: hasHtVbtt,
+          is_completed: isCompleted,
+          last_da_xu_ly_audit_id: lastDaXuLyAuditId,
+          has_tra_lai_after_da_xu_ly: hasTraLaiAfterDaXuLy
+        },
+        transaction
+      );
+      logger.info(`[DraftDocumentUpsertHandler] Sync current_state success: doc=${documentId}`);
+    } catch (err) {
+      logger.error(`[DraftDocumentUpsertHandler] _refreshCurrentStateDirect failed for doc=${documentId}: ${err.message}`);
+      throw err;
     }
   }
 

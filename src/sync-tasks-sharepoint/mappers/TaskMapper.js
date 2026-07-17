@@ -17,14 +17,27 @@ class TaskMapper {
   }
 
   /**
+   * Helper to normalize Vietnamese accented text to plain ASCII
+   */
+  removeVietnameseTones(str) {
+    if (!str) return '';
+    return str
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/đ/g, 'd')
+      .replace(/Đ/g, 'D')
+      .toLowerCase();
+  }
+
+  /**
    * Map SharePoint Status to System Process Status
    */
   mapProcessStatus(statusText) {
-    const status = String(statusText || '').toLowerCase();
-    if (status.includes('hoàn thành') || status.includes('completed')) return '4';
-    if (status.includes('đang thực hiện') || status.includes('in progress')) return '2';
-    if (status.includes('chưa bắt đầu') || status.includes('not started')) return '1';
-    if (status.includes('tạm dừng') || status.includes('waiting')) return '3';
+    const status = this.removeVietnameseTones(String(statusText || ''));
+    if (status.includes('hoan thanh') || status.includes('completed')) return '4';
+    if (status.includes('dang thuc hien') || status.includes('in progress') || status.includes('dang tien hanh')) return '2';
+    if (status.includes('chua bat dau') || status.includes('not started')) return '1';
+    if (status.includes('tam dung') || status.includes('waiting')) return '3';
     return '1'; // Default
   }
 

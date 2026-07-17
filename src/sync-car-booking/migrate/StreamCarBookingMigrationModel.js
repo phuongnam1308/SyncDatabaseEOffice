@@ -138,33 +138,10 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         { name: 'driver_notice_times', type: 'nvarchar(MAX)', nullable: 'NULL' },
         { name: 'leader_notice_times', type: 'nvarchar(MAX)', nullable: 'NULL' },
         { name: 'leader_escalated_at', type: 'datetime', nullable: 'NULL' },
-        { name: 'table_bak', type: 'int', nullable: 'NULL', optional: true },
-        { name: 'id_sp_bak', type: 'nvarchar(255)', nullable: 'NULL', optional: true },
-        { name: 'source_db', type: 'nvarchar(255)', nullable: 'NULL', optional: true }
+        { name: 'table_bak', type: 'int', nullable: 'NULL' },
+        { name: 'id_sp_bak', type: 'nvarchar(255)', nullable: 'NULL' },
+        { name: 'source_db', type: 'nvarchar(255)', nullable: 'NULL' }
       ];
-
-      const detailCols = [
-        { name: 'id', type: 'uniqueidentifier', nullable: 'DEFAULT newid() NOT NULL' },
-        { name: 'registration_id', type: 'uniqueidentifier', nullable: 'NOT NULL' },
-        { name: 'car_id', type: 'nvarchar(100)', nullable: 'NOT NULL' },
-        { name: 'driver_id', type: 'nvarchar(100)', nullable: 'NULL' },
-        { name: 'is_confirmed', type: 'bit', nullable: 'DEFAULT 0 NULL' },
-        { name: 'confirmed_at', type: 'datetime', nullable: 'NULL' },
-        { name: 'created_at', type: 'datetime', nullable: 'DEFAULT getdate() NULL' },
-        { name: 'table_bak', type: 'int', nullable: 'NULL', optional: true },
-        { name: 'id_sp_bak', type: 'nvarchar(255)', nullable: 'NULL', optional: true },
-        { name: 'source_db', type: 'nvarchar(255)', nullable: 'NULL', optional: true }
-      ];
-
-      const addMissingColumns = async (tableName, tableRef, expectedCols, existingCols) => {
-        const missingCols = expectedCols.filter(col => col.name !== 'id' && !existingCols.has(col.name.toLowerCase()));
-        for (const col of missingCols) {
-          const nullPart = col.nullable || 'NULL';
-          const addQuery = `ALTER TABLE ${tableRef} ADD [${col.name}] ${col.type} ${nullPart};`;
-          await this.queryNewDb(addQuery);
-          console.log(`[StreamCarBookingMigrationModel] [ensureTargetColumnsExist] Added missing column ${col.name} to ${tableName}.`);
-        }
-      };
 
       console.log(`[StreamCarBookingMigrationModel] Checking/Creating Master table: ${masterTable}`);
       const createMasterIfNotExists = `
@@ -174,21 +151,39 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
       END
       `;
       await this.queryNewDb(createMasterIfNotExists);
-      let existingMasterCols = await this.getExistingColumns(masterTable, schema);
-      await addMissingColumns(masterTable, masterRef, masterCols, existingMasterCols);
-      existingMasterCols = await this.getExistingColumns(masterTable, schema);
 
-      if (existingMasterCols.has('id_sp_bak') && existingMasterCols.has('source_db')) {
-        const dropMasterIdx = `IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${masterTable}_id_sp_bak' AND object_id = OBJECT_ID('${masterRef}')) DROP INDEX IX_${masterTable}_id_sp_bak ON ${masterRef};`;
-        await this.queryNewDb(dropMasterIdx);
-        await this.queryNewDb(`IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${masterTable}_sp_source' AND object_id = OBJECT_ID('${masterRef}')) CREATE UNIQUE INDEX IX_${masterTable}_sp_source ON ${masterRef}(id_sp_bak, source_db) WHERE id_sp_bak IS NOT NULL AND source_db IS NOT NULL;`);
-      } else {
-        console.warn(`[StreamCarBookingMigrationModel] [ensureTargetColumnsExist] Skipping index creation for ${masterTable} because id_sp_bak or source_db is missing.`);
+      for (const col of masterCols) {
+        if (col.name === 'id') continue;
+        const alterQuery = `
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${masterTable}' AND COLUMN_NAME = '${col.name}')
+        BEGIN
+            ALTER TABLE ${masterRef} ADD [${col.name}] ${col.type} ${col.nullable};
+        END
+        `;
+        await this.queryNewDb(alterQuery);
       }
+
+      // Index Master
+      const dropMasterIdx = `IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${masterTable}_id_sp_bak' AND object_id = OBJECT_ID('${masterRef}')) DROP INDEX IX_${masterTable}_id_sp_bak ON ${masterRef};`;
+      await this.queryNewDb(dropMasterIdx);
+      await this.queryNewDb(`IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${masterTable}_sp_source' AND object_id = OBJECT_ID('${masterRef}')) CREATE UNIQUE INDEX IX_${masterTable}_sp_source ON ${masterRef}(id_sp_bak, source_db) WHERE id_sp_bak IS NOT NULL AND source_db IS NOT NULL;`);
 
       // 2. Phân tích & Khởi tạo Bảng VEHICLE_REGISTRATION_ASSIGNMENTS (Detail)
       const detailTable = 'vehicle_registration_assignments';
       const detailRef = `[${db}].[${schema}].[${detailTable}]`;
+
+      const detailCols = [
+        { name: 'id', type: 'uniqueidentifier', nullable: 'DEFAULT newid() NOT NULL' },
+        { name: 'registration_id', type: 'uniqueidentifier', nullable: 'NOT NULL' },
+        { name: 'car_id', type: 'nvarchar(100)', nullable: 'NOT NULL' },
+        { name: 'driver_id', type: 'nvarchar(100)', nullable: 'NULL' },
+        { name: 'is_confirmed', type: 'bit', nullable: 'DEFAULT 0 NULL' },
+        { name: 'confirmed_at', type: 'datetime', nullable: 'NULL' },
+        { name: 'created_at', type: 'datetime', nullable: 'DEFAULT getdate() NULL' },
+        { name: 'table_bak', type: 'int', nullable: 'NULL' },
+        { name: 'id_sp_bak', type: 'nvarchar(255)', nullable: 'NULL' },
+        { name: 'source_db', type: 'nvarchar(255)', nullable: 'NULL' }
+      ];
 
       console.log(`[StreamCarBookingMigrationModel] Checking/Creating Detail table: ${detailTable}`);
       const createDetailIfNotExists = `
@@ -199,38 +194,37 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
       `;
       await this.queryNewDb(createDetailIfNotExists);
 
-      let existingDetailCols = await this.getExistingColumns(detailTable, schema);
-      await addMissingColumns(detailTable, detailRef, detailCols, existingDetailCols);
-      existingDetailCols = await this.getExistingColumns(detailTable, schema);
-
-      if (existingDetailCols.has('id_sp_bak') && existingDetailCols.has('source_db')) {
-        await this.queryNewDb(`IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${detailTable}_sp_source' AND object_id = OBJECT_ID('${detailRef}')) CREATE INDEX IX_${detailTable}_sp_source ON ${detailRef}(id_sp_bak, source_db);`);
-      } else {
-        console.warn(`[StreamCarBookingMigrationModel] [ensureTargetColumnsExist] Skipping index creation IX_${detailTable}_sp_source because id_sp_bak or source_db is missing.`);
-      }
-      if (existingDetailCols.has('car_id')) {
-        await this.queryNewDb(`IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_vra_car' AND object_id = OBJECT_ID('${detailRef}')) CREATE INDEX idx_vra_car ON ${detailRef}(car_id);`);
-      }
-      if (existingDetailCols.has('driver_id')) {
-        await this.queryNewDb(`IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_vra_driver' AND object_id = OBJECT_ID('${detailRef}')) CREATE INDEX idx_vra_driver ON ${detailRef}(driver_id);`);
-      }
-      if (existingDetailCols.has('registration_id')) {
-        await this.queryNewDb(`IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_vra_registration' AND object_id = OBJECT_ID('${detailRef}')) CREATE INDEX idx_vra_registration ON ${detailRef}(registration_id);`);
-      }
-
-      // 3. Khóa ngoại
-      if (existingDetailCols.has('registration_id') && existingMasterCols.has('id')) {
-        const fkQuery = `
-        IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = 'FK_vra_registration')
+      for (const col of detailCols) {
+        if (col.name === 'id') continue;
+        const alterQuery = `
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${detailTable}' AND COLUMN_NAME = '${col.name}')
         BEGIN
-            ALTER TABLE ${detailRef} ADD CONSTRAINT FK_vra_registration
-            FOREIGN KEY (registration_id) REFERENCES ${masterRef}(id);
+            ALTER TABLE ${detailRef} ADD [${col.name}] ${col.type} ${col.nullable};
         END
         `;
-        await this.queryNewDb(fkQuery);
-      } else {
-        console.warn(`[StreamCarBookingMigrationModel] [ensureTargetColumnsExist] Skipping FK_vra_registration because registration_id or master id column is missing.`);
+        await this.queryNewDb(alterQuery);
       }
+
+      // Index Detail
+      const dropDetailIdx = `IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${detailTable}_id_sp_bak' AND object_id = OBJECT_ID('${detailRef}')) DROP INDEX IX_${detailTable}_id_sp_bak ON ${detailRef};`;
+      await this.queryNewDb(dropDetailIdx);
+      // Note: Detail doesn't necessarily need unique on (id_sp_bak, source_db) if it's 1-to-many,
+      // but if SharePoint has 1 row per assignment (which it doesn't seem to, it's parsed from JSON),
+      // we'll at least index it for performance.
+      await this.queryNewDb(`IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_${detailTable}_sp_source' AND object_id = OBJECT_ID('${detailRef}')) CREATE INDEX IX_${detailTable}_sp_source ON ${detailRef}(id_sp_bak, source_db);`);
+      await this.queryNewDb(`IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_vra_car' AND object_id = OBJECT_ID('${detailRef}')) CREATE INDEX idx_vra_car ON ${detailRef}(car_id);`);
+      await this.queryNewDb(`IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_vra_driver' AND object_id = OBJECT_ID('${detailRef}')) CREATE INDEX idx_vra_driver ON ${detailRef}(driver_id);`);
+      await this.queryNewDb(`IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_vra_registration' AND object_id = OBJECT_ID('${detailRef}')) CREATE INDEX idx_vra_registration ON ${detailRef}(registration_id);`);
+
+      // 3. Khóa ngoại
+      const fkQuery = `
+      IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = 'FK_vra_registration')
+      BEGIN
+          ALTER TABLE ${detailRef} ADD CONSTRAINT FK_vra_registration
+          FOREIGN KEY (registration_id) REFERENCES ${masterRef}(id);
+      END
+      `;
+      await this.queryNewDb(fkQuery);
 
       // 🔥 AUTO-INIT AUDIT TABLE
       await this.ensureAuditTableExists();
@@ -1007,26 +1001,15 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         // 🔥 1. Resolve Thông tin Người dùng (Waterfall) - Đồng nhất ID cho Master & Audit
         let finalUserId = null;
 
-        const createdByFallback = [rowData.AuthorName, rowData.AuthorAccount, rowData.EditorName, rowData.EditorAccount]
-            .map(v => (v || '').toString().trim())
-            .find(v => v !== '');
-
-        if (createdByFallback) {
-            rowData.created_by = createdByFallback;
-            if (!rowData.AuthorAccount) {
-                rowData.AuthorAccount = createdByFallback; // keep existing mapping logic for user lookup/contact_person flow
-            }
-        }
-
-        // 1a. Tách tên thuần (Loại bỏ phòng ban phía sau dấu "-") từ nguồn ưu tiên
+        // 1a. Tách tên thuần (Loại bỏ phòng ban phía sau dấu "-")
+        // Ví dụ: "Hoàng Thị Lan Phương - TB ATPC" -> "Hoàng Thị Lan Phương"
         let pureName = null;
-        const nameSource = rowData.AuthorName || rowData.EditorName || rowData.AuthorAccount || rowData.EditorAccount;
-        if (nameSource) {
-            pureName = String(nameSource).split('-')[0].trim();
-            console.log(`[StreamCarBookingMigrationModel] Extracted pure name: "${pureName}" from "${nameSource}"`);
+        if (rowData.AuthorName) {
+            pureName = String(rowData.AuthorName).split('-')[0].trim();
+            console.log(`[StreamCarBookingMigrationModel] Extracted pure name: "${pureName}" from "${rowData.AuthorName}"`);
         }
 
-        // 1b. Dùng MigrationHelper để tự động dò tìm hoặc tạo User ID khi có tên
+        // 1b. Dùng MigrationHelper để tự động dò tìm hoặc tạo User ID
         if (pureName) {
             try {
                 if (this.helper && typeof this.helper.syncAndMapUser === 'function') {
@@ -1043,15 +1026,14 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
             }
         }
 
-        // 1c. Thử tìm ID theo Account (username) nếu Tên thất bại hoặc nếu source là account
-        const accountSource = rowData.AuthorAccount || rowData.EditorAccount;
-        if (!finalUserId && accountSource) {
+        // 1c. Thử tìm ID theo Account (username) nếu Tên thất bại hoặc Helper không tìm thấy
+        if (!finalUserId && rowData.AuthorAccount) {
             try {
                 const qAccount = `SELECT TOP 1 id FROM [${this.newDbName}].[dbo].[users] WHERE username = @account OR email LIKE @account + '@%'`;
-                const accRows = await this.queryNewDbTx(qAccount, { account: String(accountSource).trim() }, transaction);
+                const accRows = await this.queryNewDbTx(qAccount, { account: String(rowData.AuthorAccount).trim() }, transaction);
                 if (accRows && accRows.length > 0) {
                     finalUserId = accRows[0].id;
-                    console.log(`[StreamCarBookingMigrationModel] Mapped User by Account (${accountSource}) -> ${finalUserId}`);
+                    console.log(`[StreamCarBookingMigrationModel] Mapped User by Account (${rowData.AuthorAccount}) -> ${finalUserId}`);
                 }
             } catch (e) {
                 console.warn(`[StreamCarBookingMigrationModel] Lỗi tìm user bằng Account: ${e.message}`);
@@ -1061,7 +1043,7 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         // 1d. Fallback an toàn nếu vẫn không tìm thấy
         if (!finalUserId) {
             finalUserId = 'b23406e3-5c75-41d3-91e0-1654293ae6b2';
-            console.log(`[StreamCarBookingMigrationModel] User not found for ${createdByFallback || 'unknown source'}. Using fallback Admin ID: ${finalUserId}`);
+            console.log(`[StreamCarBookingMigrationModel] User not found for ${rowData.AuthorName || rowData.AuthorAccount}. Using fallback Admin ID: ${finalUserId}`);
         }
 
         rowData.AuthorAccount = finalUserId;
@@ -1128,19 +1110,19 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         rowData.department = '68afbefecb36081f0bbbef2e';
 
         // Thời gian gốc từ SharePoint
-        rowData.request_submitted_at = rowData.tp_Created || rowData.CreatedDate || now;
+        rowData.request_submitted_at = rowData.tp_Created || now;
 
+        // 🔥 1.8. Tính toán các trường bổ trợ (Thời lượng & Chuẩn hóa thời gian)
+        // Lấy thời gian đi từ tp_Created và thời gian về từ tp_Modified theo yêu cầu USER
         const parseDateFallback = (str) => {
             if (!str) return null;
             if (str instanceof Date) return isNaN(str.getTime()) ? null : str;
+            // Làm sạch khoảng trắng và thêm dấu cách trước AM/PM nếu thiếu (ví dụ: "6:36AM" -> "6:36 AM")
             let cleanStr = String(str).replace(/\s+/g, ' ').trim();
             cleanStr = cleanStr.replace(/([aApP][mM])$/, ' $1');
             const d = new Date(cleanStr);
             return isNaN(d.getTime()) ? null : d;
         };
-
-        rowData.created_at = rowData.created_at || parseDateFallback(rowData.CreatedDate || rowData.Created || rowData.tp_Created) || now;
-        rowData.updated_at = rowData.updated_at || parseDateFallback(rowData.ModifiedDate || rowData.Modified || rowData.tp_Modified) || rowData.created_at || now;
 
         const start = parseDateFallback(rowData.tp_Created || rowData.CreatedDate);
         const end = parseDateFallback(rowData.tp_Modified || rowData.ModifiedDate);
@@ -1159,33 +1141,15 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         // Safeguard: Chuẩn hóa cột JSON array/số - chuỗi rỗng hoặc null → NULL (không ghi '[]' hay 0 giả)
         const normalizeNullable = (v) => {
             if (v === null || v === undefined) return null;
-            if (Array.isArray(v) || (typeof v === 'object' && v !== null)) {
-                return JSON.stringify(v);
-            }
             const s = String(v).trim();
             return s === '' || s === 'null' || s === 'undefined' ? null : s;
         };
-
-        rowData.notes = rowData.notes || rowData.DocumentTitle || rowData.DocumentSubject || null;
         rowData.driver_ids               = normalizeNullable(rowData.driver_ids);
         rowData.car_ids                  = normalizeNullable(rowData.car_ids);
         rowData.coordination_information = normalizeNullable(rowData.coordination_information);
         rowData.confirmed_driver_ids     = normalizeNullable(rowData.confirmed_driver_ids);
         rowData.driver_notice_count      = (rowData.driver_notice_count === null || rowData.driver_notice_count === undefined || String(rowData.driver_notice_count).trim() === '') ? null : Number(rowData.driver_notice_count);
         rowData.leader_notice_times      = normalizeNullable(rowData.leader_notice_times);
-
-        // Nếu không có dữ liệu car/driver/coordination thì thêm fake cụ thể theo yêu cầu
-        const fakeCarId = 'LC-20260520042132-Q7C0L3IS';
-        const fakeDriverId = '33084655-3a53-4dfd-b841-b8de26a3f8b7';
-        if (!rowData.car_ids) {
-            rowData.car_ids = JSON.stringify([fakeCarId]);
-        }
-        if (!rowData.driver_ids) {
-            rowData.driver_ids = JSON.stringify([fakeDriverId]);
-        }
-        if (!rowData.coordination_information) {
-            rowData.coordination_information = JSON.stringify([{ carId: fakeCarId, driverId: fakeDriverId }]);
-        }
 
         logger.info(`[StreamCarBookingMigrationModel] Executing Upsert for MASTER table...`);
         const masterResult = await this.upsertDataToNewDB(rowData, this.oldConfig, 'id_sp_bak', recordId, transaction);
@@ -1238,13 +1202,12 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
                     finalDriverId = driverList[Math.floor(Math.random() * driverList.length)];
                 }
 
-                const confirmedAt = item.confirmedAt ? new Date(item.confirmedAt) : new Date();
                 const detailData = {
                     registration_id: masterId,
                     car_id: finalCarId || 'UNKNOWN_CAR',
                     driver_id: finalDriverId || 'UNKNOWN_DRIVER',
-                    is_confirmed: item.isConfirmed ? 0 : 1,
-                    confirmed_at: confirmedAt,
+                    is_confirmed: item.isConfirmed ? 1 : 0,
+                    confirmed_at: item.confirmedAt ? new Date(item.confirmedAt) : null,
                     id_sp_bak: recordId,
                     table_bak: 1,
                     source_db: rowData.source_db
@@ -1512,11 +1475,14 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
       { name: 'table_bak', type: 'int' }
     ];
 
-    const existingAuditCols = await this.getExistingColumns(table, schema);
     for (const col of auditCols) {
-      if (!existingAuditCols.has(col.name.toLowerCase())) {
-        console.warn(`[StreamCarBookingMigrationModel] [ensureAuditTableExists] Column missing in audit: ${col.name}. Not creating it automatically.`);
-      }
+      const query = `
+      IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${table}' AND COLUMN_NAME = '${col.name}')
+      BEGIN
+          ALTER TABLE ${tableRef} ADD [${col.name}] ${col.type} ${col.nullable || 'NULL'};
+      END
+      `;
+      await this.queryNewDb(query);
     }
   }
 
@@ -1592,57 +1558,32 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
       const tableRef = `[${db}].[${schema}].[${table}]`;
       const { v4: uuidv4 } = require('uuid');
 
-      const existingCols = await this.getExistingColumns(table, schema);
-      const hasSourceDb = existingCols.has('source_db');
-      const hasIdSpBak = existingCols.has('id_sp_bak');
-      const hasTableBak = existingCols.has('table_bak');
-
       const params = {
           id: uuidv4().toUpperCase(),
           registration_id: data.registration_id,
           car_id: data.car_id,
           driver_id: data.driver_id,
           is_confirmed: data.is_confirmed || 0,
-          confirmed_at: data.confirmed_at || null
+          confirmed_at: data.confirmed_at || null,
+          table_bak: 1, // Fixed: Missing in params but used in query
+          id_sp_bak: data.id_sp_bak,
+          source_db: data.source_db || null
       };
 
-      const insertCols = ['id', 'registration_id', 'car_id', 'driver_id', 'is_confirmed', 'confirmed_at'];
-      const insertVals = ['@id', '@registration_id', '@car_id', '@driver_id', '@is_confirmed', '@confirmed_at'];
-      const updateSet = ['is_confirmed = @is_confirmed', 'confirmed_at = @confirmed_at'];
-
-      if (hasTableBak) {
-          params.table_bak = 1;
-          insertCols.push('table_bak');
-          insertVals.push('@table_bak');
-          updateSet.push('table_bak = @table_bak');
-      }
-      if (hasIdSpBak) {
-          params.id_sp_bak = data.id_sp_bak || null;
-          insertCols.push('id_sp_bak');
-          insertVals.push('@id_sp_bak');
-          updateSet.push('id_sp_bak = @id_sp_bak');
-      }
-      if (hasSourceDb) {
-          params.source_db = data.source_db || null;
-          insertCols.push('source_db');
-          insertVals.push('@source_db');
-      }
-
-      const whereClause = hasSourceDb
-        ? 'registration_id = @registration_id AND car_id = @car_id AND driver_id = @driver_id AND source_db = @source_db'
-        : 'registration_id = @registration_id AND car_id = @car_id AND driver_id = @driver_id';
-
       const query = `
-      IF NOT EXISTS (SELECT 1 FROM ${tableRef} WHERE ${whereClause})
+      IF NOT EXISTS (SELECT 1 FROM ${tableRef} WHERE registration_id = @registration_id AND car_id = @car_id AND driver_id = @driver_id AND source_db = @source_db)
       BEGIN
-          INSERT INTO ${tableRef} (${insertCols.join(', ')})
-          VALUES (${insertVals.join(', ')})
+          INSERT INTO ${tableRef} (id, registration_id, car_id, driver_id, is_confirmed, confirmed_at, table_bak, id_sp_bak, source_db)
+          VALUES (@id, @registration_id, @car_id, @driver_id, @is_confirmed, @confirmed_at, @table_bak, @id_sp_bak, @source_db)
       END
       ELSE
       BEGIN
           UPDATE ${tableRef} SET
-            ${updateSet.join(', ')}
-          WHERE ${whereClause}
+            is_confirmed = @is_confirmed,
+            confirmed_at = @confirmed_at,
+            table_bak = @table_bak,
+            id_sp_bak = @id_sp_bak
+          WHERE registration_id = @registration_id AND car_id = @car_id AND driver_id = @driver_id AND source_db = @source_db
       END
       `;
       try {
@@ -1681,27 +1622,6 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
     const insertCols = [];
     const insertVals = [];
     const updateSet = [];
-    const insertColsSet = new Set();
-    const updateColsSet = new Set();
-    const seenNewFields = new Set();
-    const ignoredMappings = [];
-    const skippedDuplicates = [];
-
-    const addInsertColumn = (fieldName) => {
-      const lowerField = fieldName.toLowerCase();
-      if (!insertColsSet.has(lowerField)) {
-        insertCols.push(`[${fieldName}]`);
-        insertVals.push(`@${fieldName}`);
-        insertColsSet.add(lowerField);
-      }
-    };
-    const addUpdateColumn = (fieldName) => {
-      const lowerField = fieldName.toLowerCase();
-      if (!updateColsSet.has(lowerField)) {
-        updateSet.push(`[${fieldName}] = @${fieldName}`);
-        updateColsSet.add(lowerField);
-      }
-    };
 
     // Tự động sinh ID nếu bảng có cột 'id' (case-insensitive) nhưng mapping không có
     if (existingCols.has('id') && !params.hasOwnProperty('id')) {
@@ -1710,46 +1630,34 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         if (!hasIdInMapping) {
             const newId = uuidv4().toUpperCase();
             params['id'] = newId;
-            addInsertColumn('id');
+            insertCols.push('[id]');
+            insertVals.push('@id');
             // Thường không update ID
         }
     }
 
     for (const [oldField, newField] of Object.entries(fieldMapping)) {
-      const lowerNewField = newField.toLowerCase();
-      if (!existingCols.has(lowerNewField)) {
-        ignoredMappings.push(`${oldField}->${newField}`);
-        continue;
-      }
-      if (seenNewFields.has(lowerNewField)) {
-        skippedDuplicates.push(`${oldField}->${newField}`);
-        continue;
-      }
-
+      if (!existingCols.has(newField.toLowerCase())) continue;
       const value = rawData[oldField];
       if (value === undefined || value === null) continue;
-
-      seenNewFields.add(lowerNewField);
       params[newField] = value;
-      addInsertColumn(newField);
+      insertCols.push(`[${newField}]`);
+      insertVals.push(`@${newField}`);
 
       // 🔥 NEVER update ID or created_at
-      if (lowerNewField !== 'id' && lowerNewField !== 'created_at') {
-        addUpdateColumn(newField);
+      if (newField.toLowerCase() !== 'id' && newField.toLowerCase() !== 'created_at') {
+        updateSet.push(`[${newField}] = @${newField}`);
       }
     }
 
     // --- 2. Ánh xạ từ defaultValues (Ghi đè nếu vẫn chưa có trong params) ---
     for (const [newField, valueFn] of Object.entries(defaultValues || {})) {
       const lowerNewField = newField.toLowerCase();
-      if (!existingCols.has(lowerNewField)) {
-        ignoredMappings.push(`default:${newField}`);
-        continue;
-      }
+      if (!existingCols.has(lowerNewField)) continue;
 
-      const paramKey = Object.keys(params).find(k => k.toLowerCase() === lowerNewField);
-      const exists = paramKey !== undefined;
-      if (!exists || params[paramKey] === null) {
+      // Kiểm tra sự tồn tại (không phân biệt hoa thường)
+      const exists = Object.keys(params).some(k => k.toLowerCase() === lowerNewField);
+      if (!exists || params[Object.keys(params).find(k => k.toLowerCase() === lowerNewField)] === null) {
           const val = typeof valueFn === 'function' ? valueFn(rawData) : valueFn;
 
         // Fix: Never pass NULL or Invalid Date for created_at/updated_at to avoid "Invalid date" validation errors
@@ -1761,22 +1669,12 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
         }
 
         if (params[lowerNewField] !== undefined && params[lowerNewField] !== null) {
-            addInsertColumn(newField);
-            if (lowerNewField !== 'id' && lowerNewField !== 'created_at') addUpdateColumn(newField);
+            if (!insertCols.includes(`[${lowerNewField}]`)) {
+                insertCols.push(`[${lowerNewField}]`); insertVals.push(`@${lowerNewField}`);
+                if (lowerNewField !== 'id' && lowerNewField !== 'created_at') updateSet.push(`[${lowerNewField}] = @${lowerNewField}`);
+            }
         }
       }
-    }
-
-    if (ignoredMappings.length) {
-      console.warn(`[StreamCarBookingMigrationModel] [upsertDataToNewDB] ignored mappings because target column missing: ${ignoredMappings.join(', ')}`);
-    }
-    if (skippedDuplicates.length) {
-      console.warn(`[StreamCarBookingMigrationModel] [upsertDataToNewDB] skipped duplicate target columns: ${skippedDuplicates.join(', ')}`);
-    }
-
-    if (!insertCols.length) {
-      console.warn(`[StreamCarBookingMigrationModel] [upsertDataToNewDB] No valid columns to insert for ${newTable}. Skipping row.`);
-      return { id: null, action: 'skipped', affected: 0 };
     }
 
     // --- 3. Tự động điền dữ liệu dựa trên kiểu dữ liệu của cột ---
@@ -1792,8 +1690,8 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
 
         if (fallback !== null) {
           params[lowerCol] = fallback;
-          addInsertColumn(col);
-          if (lowerCol !== 'id' && lowerCol !== 'created_at') addUpdateColumn(col);
+          insertCols.push(`[${col}]`); insertVals.push(`@${lowerCol}`);
+          if (lowerCol !== 'id' && lowerCol !== 'created_at') updateSet.push(`[${col}] = @${lowerCol}`);
         }
     }
 
@@ -1826,30 +1724,17 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
     params._externalKeyValue = externalKeyValue;
     params._sourceDb = rawData.source_db || null;
 
-    const externalKeyExists = externalKeyField && existingCols.has(externalKeyField.toLowerCase());
-    const sourceDbExists = existingCols.has('source_db');
-    const whereClauses = [];
-    if (externalKeyExists) whereClauses.push(`[${externalKeyField}] = @_externalKeyValue`);
-    if (sourceDbExists) whereClauses.push(`source_db = @_sourceDb`);
-    const whereClause = whereClauses.length ? whereClauses.join(' AND ') : null;
-
-    if (!externalKeyExists) {
-      console.warn(`[StreamCarBookingMigrationModel] [upsertDataToNewDB] externalKeyField "${externalKeyField}" not found in ${newTable}. Falling back to INSERT only.`);
-    } else if (!sourceDbExists) {
-      console.warn(`[StreamCarBookingMigrationModel] [upsertDataToNewDB] source_db column missing in ${newTable}. Using only ${externalKeyField} for lookup.`);
-    }
-
     console.log(`[StreamCarBookingMigrationModel] upsertDataToNewDB params (Sanitized): ${JSON.stringify(params)}`);
     const tableRef = `[${this.newDbName}].[${newSchema}].[${newTable}]`;
-    const query = whereClause ? `
+    const query = `
       DECLARE @OutputTable TABLE (id NVARCHAR(255));
       DECLARE @affected INT;
 
-      IF EXISTS (SELECT 1 FROM ${tableRef} WHERE ${whereClause})
+      IF EXISTS (SELECT 1 FROM ${tableRef} WHERE [${externalKeyField}] = @_externalKeyValue AND source_db = @_sourceDb)
       BEGIN
           UPDATE ${tableRef} SET ${updateSet.length ? updateSet.join(', ') : `${externalKeyField} = ${externalKeyField}`}
           OUTPUT INSERTED.id INTO @OutputTable
-          WHERE ${whereClause};
+          WHERE [${externalKeyField}] = @_externalKeyValue AND source_db = @_sourceDb;
 
           SELECT @affected = @@ROWCOUNT;
           SELECT (SELECT TOP 1 id FROM @OutputTable) AS id, @affected AS affected, 'updated' AS action;
@@ -1863,16 +1748,6 @@ class StreamCarBookingMigrationModel extends BaseIncrementalSyncInterface {
           SELECT @affected = @@ROWCOUNT;
           SELECT (SELECT TOP 1 id FROM @OutputTable) AS id, @affected AS affected, 'inserted' AS action;
       END
-    ` : `
-      DECLARE @OutputTable TABLE (id NVARCHAR(255));
-      DECLARE @affected INT;
-
-      INSERT INTO ${tableRef} (${insertCols.join(', ')})
-      OUTPUT INSERTED.id INTO @OutputTable
-      VALUES (${insertVals.join(', ')});
-
-      SELECT @affected = @@ROWCOUNT;
-      SELECT (SELECT TOP 1 id FROM @OutputTable) AS id, @affected AS affected, 'inserted' AS action;
     `;
     try {
         console.log(`[StreamCarBookingMigrationModel] Executing SQL Query...`);

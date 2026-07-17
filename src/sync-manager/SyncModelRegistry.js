@@ -11,79 +11,65 @@ const StreamUserMigrationModel = require('../sync-user-copy/migrate/StreamUserMi
 const StreamTaskInIncrementalModel = require('../sync-tasks-van-ban-den/models/StreamTaskInIncrementalModel');
 const StreamTaskOutIncrementalModel = require('../sync-tasks-van-ban-di/models/StreamTaskOutIncrementalModel');
 const StreamMeetingMigrationModel = require('../sync-meeting/migrate/StreamMeetingMigrationModel');
-const IncomingDocumentModel = require('../sync-incoming-document/models/StreamIncomingIncrementalModel');
 const StreamDepartmentMigrationModel = require('../sync-department/migrate/StreamDepartmentMigrationModel');
 const StreamNewsAspxPageIncrementalModel = require('../sync-news-aspx-page/models/StreamNewsAspxPageIncrementalModel');
 const SyncTaskSharePointAdapter = require('./SyncTaskSharePointAdapter');
 
-// Bỏ require trực tiếp ở đây để tránh circular dependency
-// Sẽ require trực tiếp trong MODEL_DEFINITIONS bằng getter
+// 5 Specialized Sync Modules
+const StreamMeetingCopyMigrationModel = require('../sync-meeting copy/migrate/StreamMeetingMigrationModel');
 const StreamEventMigrationModel = require('../sync-event/migrate/StreamEventMigrationModel');
 const StreamTgdScheduleMigrationModel = require('../sync-tgd-schedule/migrate/StreamTgdScheduleMigrationModel');
 const StreamMissionMigrationModel = require('../sync-mission-schedule/migrate/StreamMissionMigrationModel');
 const StreamCarBookingMigrationModel = require('../sync-car-booking/migrate/StreamCarBookingMigrationModel');
+const StreamCarMigrationModel = require('../sync-car/StreamCarMigrationModel');
 const StreamPassportMigrationModel = require('../sync-passport/migrate/StreamPassportMigrationModel');
 
-let StreamMeetingCopyMigrationModel = null;
-try {
-  StreamMeetingCopyMigrationModel = require('../sync-meeting copy/migrate/StreamMeetingMigrationModel');
-} catch (e) {
-  logger.error(`[SyncModelRegistry] ⚠️ Không thể load StreamMeetingCopyMigrationModel: ${e.stack}`);
-}
-const StreamMeetingSync2Model = require('../meeting-sync2/models/StreamMeetingSync2Model');
-
 const MODEL_DEFINITIONS = [
-  // {
-  //   key: 'STREAM_OUTGOING_INCREMENTAL',
-  //   label: 'Đồng bộ văn bản đi',
-  //   section: 'realtime',
-  //   ModelClass: OutGoingDocumentModel
-  // },
   {
-    key: 'STREAM_OUTGOING_V2',
-    label: 'Đồng bộ văn bản đi v2',
+    key: 'STREAM_INCOMING_INCREMENTAL',
+    label: 'Đồng bộ văn bản đến',
     section: 'realtime',
-    ModelClass: SyncOutgoingAdapter
+    ModelClass: SyncIncomingAdapter,
   },
   {
     key: 'STREAM_OUTGOING_V3',
-    label: 'Đồng bộ văn bản đi v3 (Batch)',
+    label: 'Đồng bộ văn bản đi (VANBANBANHANH)',
     section: 'realtime',
     ModelClass: SyncOutgoingV3Adapter
   },
   {
     key: 'STREAM_DRAFT_DOCUMENT',
-    label: 'Đồng bộ văn bản dự thảo',
+    label: 'Đồng bộ văn bản dự thảo (CODEITEM)',
     section: 'realtime',
     ModelClass: SyncDraftDocumentAdapter
   },
+  // {
+  //   key: 'STREAM_DEPARTMENT_MIGRATION',
+  //   label: 'Đồng bộ phòng ban',
+  //   section: 'realtime',
+  //   ModelClass: StreamDepartmentMigrationModel,
+  // },
+  // {
+  //   key: 'STREAM_USER_COPY_MIGRATION',
+  //   label: 'Đồng bộ người dùng',
+  //   section: 'realtime',
+  //   ModelClass: StreamUserMigrationModel
+  // },
   {
-    key: 'STREAM_UNIT_DRAFT',
-    label: 'Đồng bộ văn bản đi đơn vị (SharePoint)',
+    key: 'STREAM_TASK_SHAREPOINT',
+    label: 'Đồng bộ công việc chung (SharePoint)',
     section: 'realtime',
-    ModelClass: SyncUnitDraftAdapter
-  },
-  {
-    key: 'STREAM_DEPARTMENT_MIGRATION',
-    label: 'Đồng bộ phòng ban',
-    section: 'realtime',
-    ModelClass: StreamDepartmentMigrationModel,
-  },
-  {
-    key: 'STREAM_USER_COPY_MIGRATION',
-    label: 'Đồng bộ người dùng',
-    section: 'realtime',
-    ModelClass: StreamUserMigrationModel
+    ModelClass: SyncTaskSharePointAdapter
   },
   {
     key: 'STREAM_TASK_INCOMING_INCREMENTAL',
-    label: 'Đồng bộ công việc đến',
+    label: 'Đồng bộ công việc đến (TASKVBDEN)',
     section: 'realtime',
     ModelClass: StreamTaskInIncrementalModel,
   },
   {
     key: 'STREAM_TASK_OUTGOING_INCREMENTAL',
-    label: 'Đồng bộ công việc đi',
+    label: 'Đồng bộ công việc đi (TASKVBDI)',
     section: 'realtime',
     ModelClass: StreamTaskOutIncrementalModel,
   },
@@ -94,22 +80,10 @@ const MODEL_DEFINITIONS = [
     ModelClass: StreamNewsAspxPageIncrementalModel
   },
   {
-    key: 'STREAM_INCOMING_INCREMENTAL',
-    label: 'Đồng bộ văn bản đến v2',
-    section: 'realtime',
-    ModelClass: SyncIncomingAdapter,
-  },
-  {
     key: 'STREAM_MEETING_COPY_MIGRATION',
     label: 'Đồng bộ lịch họp',
     section: 'realtime',
-    ModelClass: null // Sẽ require trực tiếp trong _initializeSingle
-  },
-  {
-    key: 'STREAM_MEETING_SYNC2_MIGRATION',
-    label: 'Đồng bộ lịch họp 2',
-    section: 'realtime',
-    ModelClass: StreamMeetingSync2Model,
+    ModelClass: StreamMeetingCopyMigrationModel,
   },
   {
     key: 'STREAM_EVENT_MIGRATION',
@@ -136,17 +110,18 @@ const MODEL_DEFINITIONS = [
     ModelClass: StreamCarBookingMigrationModel,
   },
   {
+    key: 'STREAM_CAR_MIGRATION',
+    label: 'Đồng bộ đặt xe',
+    section: 'realtime',
+    ModelClass: StreamCarMigrationModel,
+  },
+  {
     key: 'STREAM_PASSPORT_MIGRATION',
     label: 'Đồng bộ phiếu mượn hộ chiếu',
     section: 'realtime',
     ModelClass: StreamPassportMigrationModel,
   },
-  {
-    key: 'STREAM_TASK_SHAREPOINT',
-    label: 'Đồng bộ công việc (SharePoint API)',
-    section: 'realtime',
-    ModelClass: SyncTaskSharePointAdapter
-  },
+
 ];
 
 // ═══════════════════════════════════════════════════════════════════
@@ -307,7 +282,6 @@ class SyncModelRegistry {
 
     // Các module hỗ trợ chạy song song (đa instance)
     const parallelModules = [
-      'STREAM_INCOMING_INCREMENTAL',
       'STREAM_OUTGOING_INCREMENTAL',
       'STREAM_TASK_INCOMING_INCREMENTAL',
       'STREAM_TASK_OUTGOING_INCREMENTAL',
@@ -353,12 +327,6 @@ class SyncModelRegistry {
     // ── BƯỚC 2: Khởi tạo model và đăng ký handler ────────────────────────────
     try {
       logger.info(`[SyncModelRegistry] 🔄 Đang khởi tạo module: ${key} (${label})`);
-
-      if (!ModelClass || typeof ModelClass !== 'function') {
-        const typeOfModel = typeof ModelClass;
-        logger.error(`[SyncModelRegistry] ⚠️ DEBUG ${key}: typeof=${typeOfModel}, isArray=${Array.isArray(ModelClass)}`);
-        throw new Error(`ModelClass cho ${key} không hợp lệ hoặc chưa được load (kiểm tra thư mục/file nguồn)`);
-      }
 
       const instance = new ModelClass();
 

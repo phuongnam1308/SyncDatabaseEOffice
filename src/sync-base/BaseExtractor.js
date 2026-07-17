@@ -158,11 +158,6 @@ class BaseExtractor {
 
     logger.info(`[${this.modelName}] Fetching batch: lastSyncTime=${lastSyncTime}, lastSyncId=${lastSyncId}, limit=${batchSize}, offset=${offset}`);
 
-    if (!this.oldPool) {
-      logger.warn(`[${this.modelName}] fetchBatchFromOldDb: Database CŨ (Nguồn) chưa kết nối. Bỏ qua fetch.`);
-      return [];
-    }
-
     const results = await this.oldPool.request()
       .input('lastSyncTime', sql.DateTime2, lastSyncTime)
       .input('lastSyncId', sql.BigInt, lastSyncId)
@@ -225,7 +220,7 @@ class BaseExtractor {
     }
 
     const stagingTable = this.getStagingTableName(instanceId);
-    
+
     try {
       // 1. Get column types for OPENJSON WITH clause
       const typeMap = await this._getStagingColumnTypes(stagingTable);
@@ -262,7 +257,7 @@ class BaseExtractor {
       const srcExpr = (safeCol) => {
         const targetType = typeMap[safeCol] || 'NVARCHAR(MAX)';
         const baseType = targetType.split('(')[0].toUpperCase().trim();
-        
+
         // If it's already a string type, no conversion needed, but we MUST truncate
         // it to the column's max length to prevent "String or binary data would be truncated".
         if (['NVARCHAR', 'VARCHAR', 'CHAR', 'NCHAR', 'TEXT', 'NTEXT'].includes(baseType)) {
@@ -272,12 +267,12 @@ class BaseExtractor {
           }
           return `src.[${safeCol}]`;
         }
-        
+
         // For DATETIME-family, use style 127 for ISO 8601 parsing
         if (DATETIME_TYPES.has(baseType)) {
           return `TRY_CONVERT(${targetType}, src.[${safeCol}], 127)`;
         }
-        
+
         // For all other types (INT, UNIQUEIDENTIFIER, etc), use TRY_CONVERT 
         // to return NULL instead of crashing the batch on dirty data.
         return `TRY_CONVERT(${targetType}, src.[${safeCol}])`;
@@ -296,7 +291,6 @@ class BaseExtractor {
       }
 
       // 5. Create JSON string from rows
-      // Sanitize values: convert JS Date objects to ISO strings; null-ify undefined.
       const cleanRows = rows.map(row => {
         const cleanRow = {};
         columns.forEach(col => {

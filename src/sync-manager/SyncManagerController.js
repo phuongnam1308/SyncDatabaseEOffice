@@ -1,4 +1,4 @@
-const path = require('path');
+﻿const path = require('path');
 const fs = require('fs');
 const BaseController = require('../../controllers/BaseController');
 const SyncManagerService = require('./SyncManagerService');

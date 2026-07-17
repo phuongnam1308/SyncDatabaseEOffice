@@ -15,17 +15,9 @@
     "Location": "destination",
     "Description": "purpose",
     "Organizer": "contact_person",
-    "CreatedDate": "request_submitted_at",
-    "StartDate": "departure_time",
-    "EndDate": "return_time",
+    "AuthorAccount": "created_by",
     "departure_time": "departure_time",
     "return_time": "return_time",
-    "DocumentTitle": "notes",
-    "DocumentSubject": "notes",
-    "created_by": "created_by",
-    "driver_ids": "driver_ids",
-    "car_ids": "car_ids",
-    "coordination_information": "coordination_information",
     "trip_duration_minutes": "trip_duration_minutes"
   },
   "defaults": {

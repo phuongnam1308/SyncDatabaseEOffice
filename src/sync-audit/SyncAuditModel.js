@@ -1,4 +1,4 @@
-// Import các module cần thiết
+﻿// Import các module cần thiết
 const BaseModel = require("../../models/BaseModel");
 const logger = require("../../utils/logger");
 const MigrationHelper = require("../helpers/MigrationHelper");
@@ -591,7 +591,7 @@ class SyncAuditModel extends BaseModel {
    * @param {number} documentId - ID của văn bản trong CSDL mới.
    * @param {object} transaction - Đối tượng transaction của CSDL.
    */
-  async processSingleRecord(rawRecord, documentId, transaction = null, drafter = null) {
+  async processSingleRecord(rawRecord, documentId, transaction = null, drafter = null, typeDocument = 'OutgoingDocument') {
     if (!rawRecord || !documentId) return null;
 
     let inserted = 0;
@@ -604,7 +604,8 @@ class SyncAuditModel extends BaseModel {
         rawRecord,
         documentId,
         transaction,
-        drafter
+        drafter,
+        typeDocument
       );
 
       if (!mapped) {
@@ -1018,10 +1019,18 @@ class SyncAuditModel extends BaseModel {
       const rows = await this.queryNewDbTx(query, params, transaction);
       
       // Map generated IDs back to the original audits.
-      // SQL Server OUTPUT typically returns in the same order as VALUES
+      // SQL Server OUTPUT typically returns in the same order as VALUES.
+      // Normalize receiver/receiver_unit về string giống DB để downstream (assignment sync) dùng đúng.
       if (Array.isArray(rows) && rows.length === chunk.length) {
         chunk.forEach((data, index) => {
-          results.push({ audit: data, id: rows[index].id });
+          results.push({
+            audit: {
+              ...data,
+              receiver:      this._normalizeArrayField(data.receiver, 100),
+              receiver_unit: this._normalizeArrayField(data.receiver_unit, 100),
+            },
+            id: rows[index].id,
+          });
         });
       }
     }
@@ -1105,8 +1114,16 @@ class SyncAuditModel extends BaseModel {
       
       await this.queryNewDbTx(query, params, transaction);
       
+      // Normalize receiver/receiver_unit về string giống DB để downstream (assignment sync) dùng đúng.
       chunk.forEach(item => {
-        results.push({ audit: item.audit, id: item.id });
+        results.push({
+          audit: {
+            ...item.audit,
+            receiver:      this._normalizeArrayField(item.audit.receiver, 100),
+            receiver_unit: this._normalizeArrayField(item.audit.receiver_unit, 100),
+          },
+          id: item.id,
+        });
       });
     }
     
@@ -1127,7 +1144,7 @@ class SyncAuditModel extends BaseModel {
    * @returns {object|null} - Đối tượng dữ liệu đã được map hoặc null.
    * @private
    */
-  async _mapSingleRecord(record, documentId, transaction, drafter = null) {
+  async _mapSingleRecord(record, documentId, transaction, drafter = null, typeDocument= 'OutgoingDocument') {
     if (!record?.ID || !documentId)
       return null;
 
@@ -1184,7 +1201,7 @@ class SyncAuditModel extends BaseModel {
     });
 
     // --- XÁC ĐỊNH type_document dựa vào actionParsed và Category ---
-    let type_document = actionParsed?.type_document ?? null;
+    let type_document = typeDocument ?? actionParsed?.type_document ?? null;
 
     const categoryRaw = record?.Category ?? null;
     const category = this._normalizeTextField(categoryRaw);

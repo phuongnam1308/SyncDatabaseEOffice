@@ -10,26 +10,16 @@ const parseDate = (v) => {
   return isNaN(d.getTime()) ? null : d;
 };
 
-const formatTimeRange = (start, end, offsetHours = 7) => {
+const formatTimeRange = (start, end) => {
   const s = parseDate(start);
-  console.log(`[config.js][formatTimeRange] INPUT: start=${start} (type=${typeof start}), end=${end} (type=${typeof end}), offsetHours=${offsetHours}`);
-  console.log(`[config.js][formatTimeRange] parsed start=${s ? s.toISOString() : null}`);
   if (!s) return '00:00-00:00';
 
-  // Cộng thêm offset giờ để chuyển sang giờ VN
-  const sLocal = new Date(s.getTime() + offsetHours * 60 * 60 * 1000);
-  const startStr = sLocal.toISOString().substring(11, 16); // HH:mm
+  const startStr = s.toTimeString().substring(0, 5);
 
   const e = parseDate(end);
-  console.log(`[config.js][formatTimeRange] parsed end=${e ? e.toISOString() : null}`);
-  if (!e) {
-    console.log(`[config.js][formatTimeRange] OUTPUT (no end): ${startStr}-${startStr}`);
-    return `${startStr}-${startStr}`;
-  }
+  if (!e) return `${startStr}-${startStr}`;
 
-  const eLocal = new Date(e.getTime() + offsetHours * 60 * 60 * 1000);
-  const endStr = eLocal.toISOString().substring(11, 16); // HH:mm
-  console.log(`[config.js][formatTimeRange] OUTPUT: ${startStr}-${endStr}`);
+  const endStr = e.toTimeString().substring(0, 5);
   return `${startStr}-${endStr}`;
 };
 
@@ -127,7 +117,7 @@ const tableMappings = {
       },
 
       meeting_time: (r) =>
-        formatTimeRange(r?.BatDau || r?.StartDate, r?.KetThuc || r?.EndDate, 7),
+        formatTimeRange(r?.StartDate, r?.EndDate),
 
       meeting_mode: (r) => {
         if (!r?.Location) return mapping.defaults.MEETING_MODE || 'OFFLINE';

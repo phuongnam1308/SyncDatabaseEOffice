@@ -1,4 +1,4 @@
-/**
+﻿/**
  * SyncManagerService.js
  *
  * ════════════════════════════════════════════════════════════════
@@ -794,9 +794,11 @@ class SyncManagerService {
 
     this.getModelState(job.modelName).status = 'PAUSE_REQUESTED';
 
+    this._notifyAdapterPause(job.modelName);
+
     this.updateSyncLogFromJob(job);
     this.saveState();
-    this._dbUpdateJob(job); // thêm: cập nhật DB
+    this._dbUpdateJob(job);
     this._dbUpdateModel(job.modelName, this.getModelState(job.modelName));
 
     return job;
@@ -1422,6 +1424,18 @@ class SyncManagerService {
       logger.warn(`[SyncManagerService] DB findOneJobById(${jobId}) failed:`, err.message);
       return null;
     });
+  }
+
+  _notifyAdapterPause(modelName) {
+    try {
+      const entry = this._modelRegistry ? this._modelRegistry.get(modelName) : null;
+      const instance = entry && entry.instance;
+      if (instance && typeof instance.requestPause === 'function') {
+        instance.requestPause();
+      }
+    } catch (err) {
+      logger.warn(`[SyncManagerService] _notifyAdapterPause(${modelName}) error: ${err.message}`);
+    }
   }
 
   /**
