@@ -1029,27 +1029,32 @@ class MigrationHelper {
 
       if (!/[a-zA-ZÀ-ỹ]/.test(trimmed)) return userIdOrName;
 
-      // const displayName = this.extractDisplayName(trimmed); // Không cần bỏ hậu tố ở tên
-      const displayName = trimmed;
-      if (!displayName) return userIdOrName;
-
-      // ── MỚI: ƯU TIÊN 1 - Tìm tên ở Old DB -> Lấy Email -> So khớp email_user ở New DB ──
+      // ── BƯỚC 1: Tìm tên GỐC ĐẦY ĐỦ (chưa cắt hậu tố) trong Old DB trước ──
       if (this.queryOldDb) {
-        const oldRows = await this.queryOldDb(
+        let oldRows = await this.queryOldDb(
           `SELECT TOP 1 * FROM dbo.PersonalProfile WHERE FullName = @name OR AccountID = @name OR StaffID = @name`,
-          { name: displayName }
+          { name: trimmed }
         );
+
+        // ── BƯỚC 2: Nếu không thấy tên gốc, loại bỏ hậu tố/danh xưng để tìm GẦN ĐÚNG bằng LIKE trong Old DB ──
+        const cleanName = this.extractDisplayName(trimmed);
+        if ((!oldRows || oldRows.length === 0) && cleanName) {
+          oldRows = await this.queryOldDb(
+            `SELECT TOP 1 * FROM dbo.PersonalProfile WHERE FullName LIKE N'%' + @name + N'%' OR AccountID = @name OR StaffID = @name`,
+            { name: cleanName }
+          );
+        }
+
+        // ── BƯỚC 3: Nếu tìm thấy ở Old DB, lấy Email để so khớp tại New DB ──
         if (oldRows?.length > 0) {
           const oldEmail = oldRows[0].Email ? String(oldRows[0].Email).trim() : null;
           if (oldEmail && oldEmail.includes('@')) {
-            // Tìm theo email_user trong DB mới
             const emailQuery = `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users WHERE LTRIM(RTRIM(email_user)) = @email`;
             const emailRes = await this.queryNewDbTx(emailQuery, { email: oldEmail }, transaction);
             if (emailRes?.length) {
               return emailRes[0].id;
             }
           }
-          // Nếu có dòng trong Old DB nhưng chưa có trong New DB (hoặc không khớp email), tiến hành tự động sync/upsert
           const migrator = await this._getUserMigrator();
           if (migrator) {
             const syncRes = await migrator.upsertUserById(oldRows[0], transaction);
@@ -1058,9 +1063,18 @@ class MigrationHelper {
         }
       }
 
-      // ── MỚI: ƯU TIÊN 2 (FALLBACK) - Tìm trực tiếp theo Name/ID ở New DB ──
+      // ── BƯỚC 4: FALLBACK - Tìm trực tiếp theo Name/ID ở New DB ──
+      const cleanName = this.extractDisplayName(trimmed);
+      const targetName = cleanName || trimmed;
+
+      // 4.1: So khớp chính xác
       const selectQuery = `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users WHERE name = @name OR id = @name OR username = @name OR code_nd = @name`;
-      const existing = await this.queryNewDbTx(selectQuery, { name: displayName }, transaction);
+      let existing = await this.queryNewDbTx(selectQuery, { name: targetName }, transaction);
+      if (existing?.length) return existing[0].id;
+
+      // 4.2: So khớp gần đúng bằng LIKE ở New DB
+      const likeQuery = `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users WHERE name LIKE N'%' + @name + N'%' OR username LIKE N'%' + @name + N'%'`;
+      existing = await this.queryNewDbTx(likeQuery, { name: targetName }, transaction);
       if (existing?.length) return existing[0].id;
 
       logger.warn(`[mapUserName] User "${userIdOrName}" not found. Returning NULL.`);
@@ -1080,12 +1094,22 @@ class MigrationHelper {
       const trimmed = userIdOrName.trim();
       if (!trimmed) return userIdOrName;
 
-      // ── MỚI: ƯU TIÊN 1 - Tìm tên ở Old DB -> Lấy Email -> So khớp email_user ở New DB ──
+      // ── BƯỚC 1: Tìm tên GỐC ĐẦY ĐỦ (chưa cắt hậu tố) trong Old DB trước ──
       if (this.queryOldDb) {
-        const oldRows = await this.queryOldDb(
+        let oldRows = await this.queryOldDb(
           `SELECT TOP 1 * FROM dbo.PersonalProfile WHERE FullName = @val OR AccountID = @val OR StaffID = @val`,
           { val: trimmed }
         );
+
+        // ── BƯỚC 2: Nếu không thấy tên gốc, loại bỏ hậu tố/danh xưng để tìm GẦN ĐÚNG bằng LIKE trong Old DB ──
+        const cleanName = this.extractDisplayName(trimmed);
+        if ((!oldRows || oldRows.length === 0) && cleanName) {
+          oldRows = await this.queryOldDb(
+            `SELECT TOP 1 * FROM dbo.PersonalProfile WHERE FullName LIKE N'%' + @val + N'%' OR AccountID = @val OR StaffID = @val`,
+            { val: cleanName }
+          );
+        }
+
         if (oldRows?.length > 0) {
           const oldEmail = oldRows[0].Email ? String(oldRows[0].Email).trim() : null;
           if (oldEmail && oldEmail.includes('@')) {
@@ -1103,12 +1127,24 @@ class MigrationHelper {
         }
       }
 
-      // ── MỚI: ƯU TIÊN 2 (FALLBACK) - Tìm trong DB mới (theo ID, Username, hoặc Name) ──
+      // ── BƯỚC 3: FALLBACK - Tìm trong DB mới ──
+      const cleanName = this.extractDisplayName(trimmed);
+      const targetVal = cleanName || trimmed;
+
       const checkNewQuery = `
         SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users
         WHERE id = @val OR username = @val OR name = @val OR code_nd = @val OR id_user_bak = @val
       `;
-      const existedNew = await this.queryNewDbTx(checkNewQuery, { val: trimmed }, transaction);
+      let existedNew = await this.queryNewDbTx(checkNewQuery, { val: targetVal }, transaction);
+      if (existedNew?.length) {
+        return existedNew[0].id;
+      }
+
+      const likeNewQuery = `
+        SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users
+        WHERE name LIKE N'%' + @val + N'%' OR username LIKE N'%' + @val + N'%'
+      `;
+      existedNew = await this.queryNewDbTx(likeNewQuery, { val: targetVal }, transaction);
       if (existedNew?.length) {
         return existedNew[0].id;
       }
@@ -1680,15 +1716,25 @@ class MigrationHelper {
   async findUserIdByName(fullName, transaction = null) {
     try {
       if (!fullName) return null;
-      // const displayName = this.extractDisplayName(fullName);
-      // if (!displayName) return null;
+      const trimmed = String(fullName).trim();
+      if (!trimmed) return null;
 
-      // ── MỚI: ƯU TIÊN 1 - Tìm tên ở Old DB -> Lấy Email -> So khớp email_user ở New DB ──
+      // ── BƯỚC 1: Tìm tên GỐC ĐẦY ĐỦ trong Old DB ──
       if (this.queryOldDb) {
-        const oldRows = await this.queryOldDb(
+        let oldRows = await this.queryOldDb(
           `SELECT TOP 1 * FROM dbo.PersonalProfile WHERE FullName = @name OR AccountID = @name OR StaffID = @name`,
-          { name: fullName }
+          { name: trimmed }
         );
+
+        // ── BƯỚC 2: Nếu không thấy tên gốc, loại bỏ hậu tố để tìm GẦN ĐÚNG bằng LIKE trong Old DB ──
+        const cleanName = this.extractDisplayName(trimmed);
+        if ((!oldRows || oldRows.length === 0) && cleanName) {
+          oldRows = await this.queryOldDb(
+            `SELECT TOP 1 * FROM dbo.PersonalProfile WHERE FullName LIKE N'%' + @name + N'%' OR AccountID = @name OR StaffID = @name`,
+            { name: cleanName }
+          );
+        }
+
         if (oldRows?.length > 0) {
           const oldEmail = oldRows[0].Email ? String(oldRows[0].Email).trim() : null;
           if (oldEmail && oldEmail.includes('@')) {
@@ -1706,13 +1752,23 @@ class MigrationHelper {
         }
       }
 
-      // ── MỚI: ƯU TIÊN 2 (FALLBACK) - Search in New DB ──
+      // ── BƯỚC 3: FALLBACK - Search in New DB ──
+      const cleanName = this.extractDisplayName(trimmed);
+      const targetName = cleanName || trimmed;
+
       const result = await this.queryNewDbTx(
         `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users WHERE name = @name OR username = @name OR code_nd = @name`,
-        { name: fullName },
+        { name: targetName },
         transaction
       );
       if (result?.length) return result[0].id;
+
+      const likeResult = await this.queryNewDbTx(
+        `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users WHERE name LIKE N'%' + @name + N'%' OR username LIKE N'%' + @name + N'%'`,
+        { name: targetName },
+        transaction
+      );
+      if (likeResult?.length) return likeResult[0].id;
 
       return null;
     } catch (error) {

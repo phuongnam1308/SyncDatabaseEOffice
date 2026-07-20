@@ -249,6 +249,80 @@ class ReceiverParserService {
   }
 
   /**
+   * Bóc tách chi tiết người nhận theo từng vai trò cụ thể (processor, viewer, supporter)
+   * Phục vụ cho việc sửa lỗi và gán lại receiver chuẩn cho các bản ghi audit đã bị gán sai trước đây.
+   */
+  async determineReceiversDetailed(record, transaction = null) {
+    const hanhDong = (record.HanhDong || "").trim();
+    const hanhDongLower = hanhDong.toLowerCase();
+
+    const result = {
+      processor: [],
+      viewer: [],
+      supporter: [],
+      units: []
+    };
+
+    try {
+      // 1. "Để thực hiện" -> processor
+      const thucHienMatch = hanhDong.match(RE_DE_THUC_HIEN);
+      if (thucHienMatch && thucHienMatch[1]) {
+        const names = this._splitNames(thucHienMatch[1]);
+        for (const name of names) {
+          const users = await this._findUsersByName(name, transaction);
+          users.forEach(u => result.processor.push(String(u.id)));
+        }
+      }
+
+      // 2. "Để biết" -> viewer
+      const deBietMatch = hanhDong.match(RE_DE_BIET);
+      if (deBietMatch && deBietMatch[1]) {
+        const names = this._splitNames(deBietMatch[1]);
+        for (const name of names) {
+          const users = await this._findUsersByName(name, transaction);
+          users.forEach(u => result.viewer.push(String(u.id)));
+        }
+      }
+
+      // 3. "Để báo cáo" -> supporter
+      const baoCaoMatch = hanhDong.match(RE_DE_BAO_CAO);
+      if (baoCaoMatch && baoCaoMatch[1]) {
+        const names = this._splitNames(baoCaoMatch[1]);
+        for (const name of names) {
+          const users = await this._findUsersByName(name, transaction);
+          users.forEach(u => result.supporter.push(String(u.id)));
+        }
+      }
+
+      // 4. "Cá nhân: ..." -> processor
+      const caNhanMatch = hanhDong.match(RE_CA_NHAN);
+      if (caNhanMatch && caNhanMatch[1]) {
+        const names = this._splitNames(caNhanMatch[1]);
+        for (const name of names) {
+          const users = await this._findUsersByName(name, transaction);
+          users.forEach(u => result.processor.push(String(u.id)));
+        }
+      }
+
+      // 5. "Đơn vị: ..." -> units
+      const donViMatch = hanhDong.match(RE_DON_VI) || hanhDong.match(RE_DON_VI_PHAT_HANH);
+      if (donViMatch && donViMatch[1]) {
+        const units = this._splitNames(donViMatch[1]);
+        for (const unitName of units) {
+          if (this.helper) {
+            const unitId = await this.helper.mapSenderUnitId(unitName, transaction);
+            if (unitId) result.units.push(String(unitId));
+          }
+        }
+      }
+    } catch (err) {
+      logger.error(`[ReceiverParserService] Error in determineReceiversDetailed: ${err.message}`);
+    }
+
+    return result;
+  }
+
+  /**
    * Xác định role mục tiêu (receiver role) dựa trên từ khóa trong hành động.
    * @param {string} hanhDongLower - Nội dung hành động đã chuyển thường.
    * @returns {string|null} - Key của role (GIAM_DOC, VANTHU, ...)
