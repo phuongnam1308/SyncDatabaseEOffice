@@ -451,7 +451,7 @@ class SyncIncomingAdapter {
     try {
       // Spawn worker lần đầu (hoặc sau _resetWorkerState từ lần run trước)
       if (!this._childProcess && !this._workerDone) {
-        const startId = 140000|| Number(options.lastSyncId || options.sourceLastSyncId || 0);
+        const startId = Number(options.lastSyncId || options.sourceLastSyncId || 0);
         this._startBatchWorker(startId);
       }
 
