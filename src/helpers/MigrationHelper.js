@@ -1029,20 +1029,27 @@ class MigrationHelper {
 
       if (!/[a-zA-ZÀ-ỹ]/.test(trimmed)) return userIdOrName;
 
-      const displayName = this.extractDisplayName(trimmed);
+      // const displayName = this.extractDisplayName(trimmed); // Không cần bỏ hậu tố ở tên
+      const displayName = trimmed;
       if (!displayName) return userIdOrName;
 
-      const selectQuery = `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users WHERE name = @name OR id = @name`;
-      const existing = await this.queryNewDbTx(selectQuery, { name: displayName }, transaction);
-      if (existing?.length) return existing[0].id;
-
-      // [RESTORED] Tìm trong DB cũ nếu không thấy ở DB mới
+      // ── MỚI: ƯU TIÊN 1 - Tìm tên ở Old DB -> Lấy Email -> So khớp email_user ở New DB ──
       if (this.queryOldDb) {
         const oldRows = await this.queryOldDb(
           `SELECT TOP 1 * FROM dbo.PersonalProfile WHERE FullName = @name OR AccountID = @name OR StaffID = @name`,
           { name: displayName }
         );
         if (oldRows?.length > 0) {
+          const oldEmail = oldRows[0].Email ? String(oldRows[0].Email).trim() : null;
+          if (oldEmail && oldEmail.includes('@')) {
+            // Tìm theo email_user trong DB mới
+            const emailQuery = `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users WHERE LTRIM(RTRIM(email_user)) = @email`;
+            const emailRes = await this.queryNewDbTx(emailQuery, { email: oldEmail }, transaction);
+            if (emailRes?.length) {
+              return emailRes[0].id;
+            }
+          }
+          // Nếu có dòng trong Old DB nhưng chưa có trong New DB (hoặc không khớp email), tiến hành tự động sync/upsert
           const migrator = await this._getUserMigrator();
           if (migrator) {
             const syncRes = await migrator.upsertUserById(oldRows[0], transaction);
@@ -1050,6 +1057,11 @@ class MigrationHelper {
           }
         }
       }
+
+      // ── MỚI: ƯU TIÊN 2 (FALLBACK) - Tìm trực tiếp theo Name/ID ở New DB ──
+      const selectQuery = `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users WHERE name = @name OR id = @name OR username = @name OR code_nd = @name`;
+      const existing = await this.queryNewDbTx(selectQuery, { name: displayName }, transaction);
+      if (existing?.length) return existing[0].id;
 
       logger.warn(`[mapUserName] User "${userIdOrName}" not found. Returning NULL.`);
       return null;
@@ -1068,32 +1080,37 @@ class MigrationHelper {
       const trimmed = userIdOrName.trim();
       if (!trimmed) return userIdOrName;
 
-      // logger.info(`[syncAndMapUser] Searching for: "${trimmed}"`);
-
-      // 1. Tìm trong DB mới (theo ID, Username, hoặc Name)
-      const checkNewQuery = `
-        SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users
-        WHERE id = @val OR username = @val OR name = @val OR code_nd = @val OR id_user_bak = @val
-      `;
-      const existedNew = await this.queryNewDbTx(checkNewQuery, { val: trimmed }, transaction);
-      if (existedNew?.length) {
-        // logger.info(`[syncAndMapUser] Found in New DB: ${trimmed} -> ${existedNew[0].id}`);
-        return existedNew[0].id;
-      }
-
-      // [RESTORED] Tìm trong DB cũ nếu không thấy ở DB mới
+      // ── MỚI: ƯU TIÊN 1 - Tìm tên ở Old DB -> Lấy Email -> So khớp email_user ở New DB ──
       if (this.queryOldDb) {
         const oldRows = await this.queryOldDb(
           `SELECT TOP 1 * FROM dbo.PersonalProfile WHERE FullName = @val OR AccountID = @val OR StaffID = @val`,
           { val: trimmed }
         );
         if (oldRows?.length > 0) {
+          const oldEmail = oldRows[0].Email ? String(oldRows[0].Email).trim() : null;
+          if (oldEmail && oldEmail.includes('@')) {
+            const emailQuery = `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users WHERE LTRIM(RTRIM(email_user)) = @email`;
+            const emailRes = await this.queryNewDbTx(emailQuery, { email: oldEmail }, transaction);
+            if (emailRes?.length) {
+              return emailRes[0].id;
+            }
+          }
           const migrator = await this._getUserMigrator();
           if (migrator) {
             const syncRes = await migrator.upsertUserById(oldRows[0], transaction);
             if (syncRes?.id) return syncRes.id;
           }
         }
+      }
+
+      // ── MỚI: ƯU TIÊN 2 (FALLBACK) - Tìm trong DB mới (theo ID, Username, hoặc Name) ──
+      const checkNewQuery = `
+        SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users
+        WHERE id = @val OR username = @val OR name = @val OR code_nd = @val OR id_user_bak = @val
+      `;
+      const existedNew = await this.queryNewDbTx(checkNewQuery, { val: trimmed }, transaction);
+      if (existedNew?.length) {
+        return existedNew[0].id;
       }
 
       logger.warn(`[syncAndMapUser] User "${trimmed}" not found. Returning NULL.`);
@@ -1663,24 +1680,24 @@ class MigrationHelper {
   async findUserIdByName(fullName, transaction = null) {
     try {
       if (!fullName) return null;
-      const displayName = this.extractDisplayName(fullName);
-      if (!displayName) return null;
+      // const displayName = this.extractDisplayName(fullName);
+      // if (!displayName) return null;
 
-      // 1. Search in New DB
-      const result = await this.queryNewDbTx(
-        `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users WHERE name = @name OR username = @name OR code_nd = @name`,
-        { name: displayName },
-        transaction
-      );
-      if (result?.length) return result[0].id;
-
-      // 2. Search in Old DB to Auto-Sync (ONLY for this specific function)
+      // ── MỚI: ƯU TIÊN 1 - Tìm tên ở Old DB -> Lấy Email -> So khớp email_user ở New DB ──
       if (this.queryOldDb) {
         const oldRows = await this.queryOldDb(
           `SELECT TOP 1 * FROM dbo.PersonalProfile WHERE FullName = @name OR AccountID = @name OR StaffID = @name`,
-          { name: displayName }
+          { name: fullName }
         );
         if (oldRows?.length > 0) {
+          const oldEmail = oldRows[0].Email ? String(oldRows[0].Email).trim() : null;
+          if (oldEmail && oldEmail.includes('@')) {
+            const emailQuery = `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users WHERE LTRIM(RTRIM(email_user)) = @email`;
+            const emailRes = await this.queryNewDbTx(emailQuery, { email: oldEmail }, transaction);
+            if (emailRes?.length) {
+              return emailRes[0].id;
+            }
+          }
           const migrator = await this._getUserMigrator();
           if (migrator) {
             const syncRes = await migrator.upsertUserById(oldRows[0], transaction);
@@ -1688,6 +1705,14 @@ class MigrationHelper {
           }
         }
       }
+
+      // ── MỚI: ƯU TIÊN 2 (FALLBACK) - Search in New DB ──
+      const result = await this.queryNewDbTx(
+        `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users WHERE name = @name OR username = @name OR code_nd = @name`,
+        { name: fullName },
+        transaction
+      );
+      if (result?.length) return result[0].id;
 
       return null;
     } catch (error) {
@@ -1703,10 +1728,28 @@ class MigrationHelper {
   async findUserIdByNameOnly(fullName, options = {}, transaction = null) {
     try {
       if (!fullName) return null;
-      const displayName = this.extractDisplayName(fullName);
-      if (!displayName) return null;
+      // const displayName = this.extractDisplayName(fullName);
+      // if (!displayName) return null;
 
-      // 1. Search in New DB
+      // ── MỚI: ƯU TIÊN 1 - Tìm tên ở Old DB -> Lấy Email -> So khớp email_user ở New DB ──
+      if (this.queryOldDb) {
+        const oldRows = await this.queryOldDb(
+          `SELECT TOP 1 * FROM dbo.PersonalProfile WHERE FullName = @name OR AccountID = @name OR StaffID = @name`,
+          { name: fullName }
+        );
+        if (oldRows?.length > 0) {
+          const oldEmail = oldRows[0].Email ? String(oldRows[0].Email).trim() : null;
+          if (oldEmail && oldEmail.includes('@')) {
+            const emailQuery = `SELECT TOP 1 id FROM ${process.env.NEW_DB_NAME}.dbo.users WHERE LTRIM(RTRIM(email_user)) = @email`;
+            const emailRes = await this.queryNewDbTx(emailQuery, { email: oldEmail }, transaction);
+            if (emailRes?.length) {
+              return emailRes[0].id;
+            }
+          }
+        }
+      }
+
+      // ── MỚI: ƯU TIÊN 2 (FALLBACK) - Search in New DB ──
       const query = `
         SELECT TOP 1 id, name
         FROM ${process.env.NEW_DB_NAME}.dbo.users
@@ -1714,7 +1757,7 @@ class MigrationHelper {
            OR LTRIM(RTRIM(username)) = @name
            OR LTRIM(RTRIM(code_nd)) = @name
       `;
-      const result = await this.queryNewDbTx(query, { name: displayName }, transaction);
+      const result = await this.queryNewDbTx(query, { name: fullName }, transaction);
       if (result?.length) {
         return result[0].id;
       }
@@ -1722,7 +1765,7 @@ class MigrationHelper {
       // 2. Not found -> Log to job error and return default
       const defaultId = process.env.DEFAULT_USER_ID || 'b23406e3-5c75-41d3-91e0-1654293ae6b2';
 
-      const msg = `User lookup failed for "${displayName}". Using default ID.`;
+      const msg = `User lookup failed for "${fullName}". Using default ID.`;
       logger.warn(`[findUserIdByNameOnly] ${msg}`);
 
       if (options.syncJobId) {
