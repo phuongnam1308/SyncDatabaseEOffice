@@ -121,8 +121,10 @@ class ReceiverParserService {
       // ══════════════════════════════════════════════════════════════
       else if (RE_CHUYEN_VAN_THU.test(hanhDongLower)) {
         roleProcess = "VANTHU";
-        const users = await this._findUsersByPositionKeywords(KEYWORDS.VAN_THU, transaction);
-        users.forEach(u => receiverIds.add(String(u.id)));
+        if (nguoiXuLy) {
+          const users = await this._findUsersByName(nguoiXuLy, transaction);
+          users.forEach(u => receiverIds.add(String(u.id)));
+        }
       }
 
       // ══════════════════════════════════════════════════════════════
@@ -130,21 +132,17 @@ class ReceiverParserService {
       // ══════════════════════════════════════════════════════════════
       else if (RE_TRINH.test(hanhDongLower)) {
         roleProcess = "TRINH_KY";
-        // Trình cho lãnh đạo ⇒ tìm user có chức danh Giám đốc / Phó GĐ
-        const combinedKw = [...KEYWORDS.GIAM_DOC, ...KEYWORDS.PHO_GIAM_DOC];
-        const users = await this._findUsersByPositionKeywords(combinedKw, transaction);
-        users.forEach(u => receiverIds.add(String(u.id)));
+        if (nguoiXuLy) {
+          const users = await this._findUsersByName(nguoiXuLy, transaction);
+          users.forEach(u => receiverIds.add(String(u.id)));
+        }
       }
       else if (RE_CHO_Y_KIEN.test(hanhDongLower)) {
         roleProcess = "CHO_Y_KIEN";
-        // Lãnh đạo cho ý kiến ⇒ tìm Giám đốc, PGĐ, Trưởng phòng
-        const combinedKw = [
-          ...KEYWORDS.GIAM_DOC,
-          ...KEYWORDS.PHO_GIAM_DOC,
-          ...KEYWORDS.TRUONG_PHONG
-        ];
-        const users = await this._findUsersByPositionKeywords(combinedKw, transaction);
-        users.forEach(u => receiverIds.add(String(u.id)));
+        if (nguoiXuLy) {
+          const users = await this._findUsersByName(nguoiXuLy, transaction);
+          users.forEach(u => receiverIds.add(String(u.id)));
+        }
       }
       else if (RE_QUYET_DINH.test(hanhDongLower)) {
         roleProcess = "QUYET_DINH";

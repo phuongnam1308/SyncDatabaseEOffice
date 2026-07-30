@@ -97,9 +97,9 @@ async function run() {
                         topic = @topic,
                         authorId = @authorId,
                         nameThumbnail = @thumbnail,
-                        sizeSmall = @thumbnail,
-                        sizeMedium = @thumbnail,
-                        sizeBig = @thumbnail,
+                        sizeSmall = @thumbnailFileId,
+                        sizeMedium = @thumbnailFileId,
+                        sizeBig = @thumbnailFileId,
                         tags = @tags,
                         viewCount = @viewCount
                     WHERE slug = @slug;
@@ -108,7 +108,7 @@ async function run() {
                 ELSE
                 BEGIN
                     INSERT INTO dbo.news (title, slug, summary, content, authorName, publishedAt, status, createdAt, updatedAt, topic, authorId, isComment, isSpecial, isImportant, nameThumbnail, sizeSmall, sizeMedium, sizeBig, tags, viewCount)
-                    VALUES (@title, @slug, @summary, @content, @authorName, @publishedAt, @status, GETDATE(), GETDATE(), @topic, @authorId, 1, 0, 0, @thumbnail, @thumbnail, @thumbnail, @thumbnail, @tags, @viewCount);
+                    VALUES (@title, @slug, @summary, @content, @authorName, @publishedAt, @status, GETDATE(), GETDATE(), @topic, @authorId, 1, 0, 0, @thumbnail, @thumbnailFileId, @thumbnailFileId, @thumbnailFileId, @tags, @viewCount);
                     SELECT @NewsId = SCOPE_IDENTITY();
                 END
                 SELECT @NewsId AS NewsId;
@@ -120,6 +120,16 @@ async function run() {
             const topicId = await helper.getOrCreateTopic(row.newsType || 'Tin tức', topicMap);
             console.log(`[Topic Mapping] bài viết [${row.title}] -> Topic ID: ${topicId}`);
 
+            // Extract file ID from thumbnail URL for sizeSmall/sizeMedium/sizeBig
+            let thumbnailFileId = null;
+            const thumbUrl = row.nameThumbnail || row.thumbnail;
+            if (thumbUrl && thumbUrl.includes('/api/files/view/')) {
+                const match = thumbUrl.match(/\/api\/files\/view\/([a-f0-9-]+)/i);
+                if (match && match[1]) {
+                    thumbnailFileId = match[1];
+                }
+            }
+
             const newsRequest = pool.request();
             newsRequest.input('title', sql.NVarChar, row.title);
             newsRequest.input('slug', sql.NVarChar, row.slug);
@@ -130,7 +140,8 @@ async function run() {
             newsRequest.input('status', sql.Int, status);
             newsRequest.input('topic', sql.NVarChar, String(topicId));
             newsRequest.input('authorId', sql.NVarChar, adminId);
-            newsRequest.input('thumbnail', sql.NVarChar, row.thumbnail);
+            newsRequest.input('thumbnail', sql.NVarChar, thumbUrl);
+            newsRequest.input('thumbnailFileId', sql.NVarChar, thumbnailFileId);
             newsRequest.input('tags', sql.NVarChar, row.tags);
             newsRequest.input('viewCount', sql.Int, row.view_count || 0);
 

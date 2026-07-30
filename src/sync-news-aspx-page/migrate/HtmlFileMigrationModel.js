@@ -798,6 +798,12 @@ class HtmlFileMigrationModel extends BaseModel {
       contentContainer = docMainArea;
     }
 
+    // Nếu có khối ảnh ngoài .content (.tbimg-news, .general-image), gộp vào nội dung
+    const topImgTable = $('.tbimg-news, .general-image').first();
+    if (topImgTable.length && contentContainer.length && !contentContainer.has(topImgTable).length) {
+      contentContainer = $('<div>').append(topImgTable.clone()).append(contentContainer.clone());
+    }
+
     // Xóa rác nội dung (chỉ chạy 1 lần loop)
     contentContainer = contentContainer.clone();
     blocksToRemove.forEach((selector) => contentContainer.find(selector).remove());

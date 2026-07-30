@@ -2,13 +2,13 @@ const dbConnection = require('../../db/connection');
 const Extractor = require('./models/Extractor');
 const Loader = require('./models/Loader');
 
-// Ð?c c?u hình t? environment variables (du?c set t? .bat file)
+// ï¿½?c c?u hï¿½nh t? environment variables (du?c set t? .bat file)
 // Fallback: t? command line arguments
 // Default: hard-coded values
 const args = process.argv.slice(2);
 
 // let WORKER_COUNT = parseInt(process.env.WORKER_COUNT, 10) || 8;
-let WORKER_COUNT = 6;
+let WORKER_COUNT = 2;
 let maxRecordsPerWorker = 0; // 0 = unlimited
 let rangeSize = parseInt(process.env.RANGE_SIZE, 10) || null;
 let startId = parseInt(process.env.START_ID, 10) || 1;
@@ -104,7 +104,7 @@ async function main() {
           consecutiveEmpty++;
           workerStats[workerId].emptyFetchCount++;
 
-          if (consecutiveEmpty >= 3) {
+          if (consecutiveEmpty >= 20) {
             break;
           }
 
@@ -163,7 +163,7 @@ async function main() {
       await sleep(200);
     }
   }
-  // Kh?i ch?y dúng WORKER_COUNT workers song song
+  // Kh?i ch?y dï¿½ng WORKER_COUNT workers song song
   const workers = [];
   for (let i = 1; i <= WORKER_COUNT; i++) {
     workers.push(runWorker(i));

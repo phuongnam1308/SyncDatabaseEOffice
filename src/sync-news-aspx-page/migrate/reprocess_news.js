@@ -88,16 +88,24 @@ async function main() {
       log('🔍 Finding articles with issues in target database...');
       // Query for articles with unconverted links, missing thumbnails, or empty content
       const query = `
-        SELECT DISTINCT slug FROM dbo.news
-        WHERE content LIKE '%eoffice.saigonnewport.com.vn%'
-           OR content LIKE '%10.1.253.41%'
-           OR content LIKE '%/tintuc/Pictures%'
-           OR content LIKE '%/tintuc/Pages%'
-           OR nameThumbnail IS NULL
-           OR nameThumbnail = ''
-           OR nameThumbnail LIKE '%default%'
-           OR content IS NULL
-           OR DATALENGTH(content) < 100
+        SELECT DISTINCT n.slug FROM dbo.news n
+        WHERE n.content LIKE '%eoffice.saigonnewport.com.vn%'
+           OR n.content LIKE '%10.1.253.41%'
+           OR n.content LIKE '%/tintuc/Pictures%'
+           OR n.content LIKE '%/tintuc/Pages%'
+           OR n.content LIKE '%/tintuc/PagesDK%'
+           OR n.nameThumbnail IS NULL
+           OR n.nameThumbnail = ''
+           OR n.nameThumbnail NOT LIKE '%/api/files/view/%'
+           OR (
+             n.nameThumbnail LIKE '%/api/files/view/%'
+             AND NOT EXISTS (
+               SELECT 1 FROM dbo.files f 
+               WHERE n.nameThumbnail LIKE '%' + CAST(f.id AS VARCHAR(100)) + '%'
+             )
+           )
+           OR n.content IS NULL
+           OR DATALENGTH(n.content) < 100
       `;
       const result = await pool.request().query(query);
       slugs = result.recordset.map(row => row.slug);
@@ -111,6 +119,8 @@ async function main() {
 
     let successCount = 0;
     let failCount = 0;
+    const BATCH_SIZE = 20;
+    const PAUSE_DELAY_MS = 5000;
 
     for (let idx = 0; idx < slugs.length; idx++) {
       const currentSlug = slugs[idx];
@@ -128,6 +138,14 @@ async function main() {
       } catch (err) {
         log(`❌ Error processing slug "${currentSlug}": ${err.message}`);
         failCount++;
+      }
+
+      // Nghỉ 3s sau mỗi đợt 100 bài viết
+      if ((idx + 1) % BATCH_SIZE === 0 && idx + 1 < slugs.length) {
+        log(`\n======================================================`);
+        log(`⏳ Đã hoàn thành lô ${BATCH_SIZE} bài viết (${idx + 1}/${slugs.length}). Tạm dừng ${PAUSE_DELAY_MS / 1000}s trước khi tiếp tục...`);
+        log(`======================================================`);
+        await new Promise(resolve => setTimeout(resolve, PAUSE_DELAY_MS));
       }
     }
 
@@ -181,8 +199,13 @@ async function reprocessArticle(pool, slug) {
       const match = imgHtml.match(/src=['"]([^'"]+)['"]/i);
       if (match && match[1]) {
         spThumbnail = match[1];
+        if (!rawHtml.includes(spThumbnail)) {
+          rawHtml = `<div class="general-image">${imgHtml}</div>` + rawHtml;
+        }
       }
     }
+
+
 
     // Extract and clean summary (plain text only)
     let summarySource = spApiItem.PublishingImageCaption || spApiItem.SeoMetaDescription || '';
@@ -415,10 +438,15 @@ async function reprocessArticle(pool, slug) {
     }
   }
 
+  if (!finalThumbnail && !spThumbnail && currentThumb && !currentThumb.includes('default')) {
+    spThumbnail = currentThumb;
+    log(`  🖼️ Using current DB nameThumbnail as download target: "${spThumbnail}"`);
+  }
+
   if (!finalThumbnail && spThumbnail) {
     const oldServer = process.env.OLD_DB_SERVER || '10.1.253.41';
     const baseHost = (process.env.SHAREPOINT_DOMAIN || 'eoffice.saigonnewport.com.vn').replace(/https?:\/\//, '').split('/')[0];
-    const isInternal = !spThumbnail.startsWith('http') || spThumbnail.includes(oldServer) || spThumbnail.includes(baseHost) || spThumbnail.includes('saigonnewport.com.vn');
+    const isInternal = !spThumbnail.startsWith('http') || spThumbnail.includes(oldServer) || spThumbnail.includes(baseHost) || spThumbnail.includes('saigonnewport.com.vn') || spThumbnail.includes('/tintuc/');
 
     if (isInternal) {
       let downloadUrl = spThumbnail;
@@ -472,6 +500,15 @@ async function reprocessArticle(pool, slug) {
   // 6. DB Updates
   log('  💾 Updating database records...');
 
+  // Extract pure File ID (GUID) for sizeSmall, sizeMedium, sizeBig fields
+  let thumbnailFileId = null;
+  if (finalThumbnail && finalThumbnail.includes('/api/files/view/')) {
+    const thumbIdMatch = finalThumbnail.match(/\/api\/files\/view\/([a-f0-9-]+)/i);
+    if (thumbIdMatch && thumbIdMatch[1]) {
+      thumbnailFileId = thumbIdMatch[1];
+    }
+  }
+
   // A. Check if record exists in staging
   const stagingCheck = await pool.request()
     .input('slug', sql.NVarChar, slug)
@@ -510,9 +547,9 @@ async function reprocessArticle(pool, slug) {
           summary = @summary,
           content = @content,
           nameThumbnail = @thumbnail,
-          sizeSmall = @thumbnail,
-          sizeMedium = @thumbnail,
-          sizeBig = @thumbnail
+          sizeSmall = @thumbnailFileId,
+          sizeMedium = @thumbnailFileId,
+          sizeBig = @thumbnailFileId
       WHERE slug = @slug
     `;
     await pool.request()
@@ -520,6 +557,7 @@ async function reprocessArticle(pool, slug) {
       .input('summary', sql.NVarChar, spSummary)
       .input('content', sql.NVarChar, cleanedContent)
       .input('thumbnail', sql.NVarChar, finalThumbnail)
+      .input('thumbnailFileId', sql.NVarChar, thumbnailFileId)
       .input('slug', sql.NVarChar, slug)
       .query(updateMain);
     log('    - [MAIN NEWS] Record updated successfully.');
@@ -593,7 +631,14 @@ function extractContentFromPageHtml(html) {
     contentContainer = docMainArea;
   }
 
-  const cleanContainer = contentContainer.clone();
+  // Nếu có khối ảnh ngoài .content (.tbimg-news, .general-image), gộp vào nội dung
+  const topImgTable = $('.tbimg-news, .general-image').first();
+  let cleanContainer;
+  if (topImgTable.length && contentContainer.length && !contentContainer.has(topImgTable).length) {
+    cleanContainer = $('<div>').append(topImgTable.clone()).append(contentContainer.clone());
+  } else {
+    cleanContainer = contentContainer.clone();
+  }
 
   const blocksToRemove = [
     '#s4-ribbonrow', '#suiteBarDelta', '#s4-titlerow', '#sideNavBox', '#footer',

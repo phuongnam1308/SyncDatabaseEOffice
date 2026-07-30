@@ -73,32 +73,40 @@ class UpsertHandler {
 
   async _processSingleRecord(stagingRow, transaction) {
     const mapped = await this.mapper.mapRecord(stagingRow);
-    const backupId = mapped.id_task_bak;
 
-    // 1. Map Creator and Updater
-    const createdBy = await this.mapper.mapUser(mapped.author_name, transaction);
-    const updatedBy = await this.mapper.mapUser(mapped.editor_name, transaction);
+    // 1. Map Creator and Updater using Username matching
+    const createdBy = await this.mapper.mapUser(mapped.author_name, mapped.author_ad, transaction);
+    const updatedBy = await this.mapper.mapUser(mapped.editor_name, mapped.editor_ad, transaction);
 
     // 2. Upsert Task
     const taskId = await this._upsertTask({ ...mapped, createdBy, updatedBy }, transaction);
 
     // 3. Process Users (Assigned To)
     if (mapped.assigned_to_names) {
-      const userNames = this._parseRawUserIds(mapped.assigned_to_names);
-      for (const fullname of userNames) {
-        await this._upsertTaskUser(taskId, fullname, 'director', transaction, mapped.created_at, 2);
+      const users = this._parseRawUserIds(mapped.assigned_to_names);
+      for (const u of users) {
+        // Tương thích ngược: hỗ trợ cả kiểu Object cũ [{Title, Name}] và kiểu String ["Name"]
+        const title = typeof u === 'object' && u ? u.Title : u;
+        const name = typeof u === 'object' && u ? u.Name : null;
+        if (title) {
+          await this._upsertTaskUser(taskId, title, name, 'director', transaction, mapped.created_at, 2);
+        }
       }
     }
 
-    // 4. Process Followers
+    // 4. Process Followers (TheoDoiCongViec)
     if (mapped.followers_names) {
-      const followerNames = this._parseRawUserIds(mapped.followers_names);
-      for (const fullname of followerNames) {
-        await this._upsertTaskUser(taskId, fullname, 'viewer', transaction, mapped.created_at, 4);
+      const followers = this._parseRawUserIds(mapped.followers_names);
+      for (const f of followers) {
+        const title = typeof f === 'object' && f ? f.Title : f;
+        const name = typeof f === 'object' && f ? f.Name : null;
+        if (title) {
+          await this._upsertTaskUser(taskId, title, name, 'viewer', transaction, mapped.created_at, 4);
+        }
       }
     }
 
-    // 4. Create System Log
+    // 5. Create System Log
     await this._createSystemLog(taskId, mapped, transaction);
 
     return taskId;
@@ -121,7 +129,8 @@ class UpsertHandler {
           process_status = @process_status,
           priority = @priority,
           update_at = @update_at,
-          updated_by = @updatedBy
+          updated_by = @updatedBy,
+          created_by = ISNULL(created_by, @createdBy)
         WHERE id = @id
       `;
       await this.queryNewDbTx(query, {
@@ -134,7 +143,8 @@ class UpsertHandler {
         process_status: mapped.process_status,
         priority: mapped.priority,
         update_at: mapped.update_at,
-        updatedBy: mapped.updatedBy
+        updatedBy: mapped.updatedBy,
+        createdBy: mapped.createdBy
       }, transaction);
       return existing[0].id;
     } else {
@@ -170,17 +180,28 @@ class UpsertHandler {
     }
   }
 
-  async _upsertTaskUser(taskId, fullname, role, transaction, createdAt, typeValue) {
-    // Map old user Name to new user GUID
-    const userId = await this.mapper.mapUser(fullname, transaction);
+  async _upsertTaskUser(taskId, fullname, adName, role, transaction, createdAt, typeValue) {
+    // Tìm kiếm GUID của người dùng theo tài khoản AD/họ tên chuẩn hóa
+    const userId = await this.mapper.mapUser(fullname, adName, transaction);
     if (!userId) return;
 
     const idUserBak = require('crypto').randomUUID();
     const query = `
       IF NOT EXISTS (SELECT 1 FROM task_users WHERE task_id = @taskId AND process_id = @userId AND role = @role)
       BEGIN
+        -- Nếu chưa tồn tại bản ghi phân công/theo dõi nào, thêm mới
         INSERT INTO task_users (task_id, process_id, process_name, role, type, id_user_bak, created_at, update_at)
         VALUES (@taskId, @userId, @processName, @role, @typeValue, @idUserBak, @createdAt, @createdAt)
+      END
+      ELSE
+      BEGIN
+        -- Nếu đã có tên hiển thị nhưng process_id lệch (do lệch ID cũ), cập nhật lại
+        UPDATE task_users 
+        SET process_id = @userId, update_at = @createdAt
+        WHERE task_id = @taskId 
+          AND role = @role 
+          AND LTRIM(RTRIM(process_name)) = LTRIM(RTRIM(@processName))
+          AND process_id != @userId
       END
     `;
     await this.queryNewDbTx(query, {
@@ -204,6 +225,13 @@ class UpsertHandler {
       BEGIN
         INSERT INTO system_log_tasks (id, actions, details, user_info, timestamps, created_at, updated_at, task_id, note, id_log_bak)
         VALUES (@id, 'POST', @details, @userInfo, @timestamps, @createdAt, @createdAt, @taskId, @note, @idLogBak)
+      END
+      ELSE
+      BEGIN
+        -- Cập nhật thông tin tài khoản log nếu log cũ chưa liên kết đúng user_info mới
+        UPDATE system_log_tasks 
+        SET user_info = @userInfo, updated_at = @createdAt 
+        WHERE task_id = @taskId AND (user_info != @userInfo OR user_info IS NULL)
       END
     `;
     await this.queryNewDbTx(query, {
@@ -232,4 +260,5 @@ class UpsertHandler {
   }
 }
 
+// Cải tiến xuất Class thay vì instance trực tiếp để đảm bảo khởi tạo độc lập
 module.exports = UpsertHandler;

@@ -1,4 +1,4 @@
-﻿// Import các module cần thiết
+// Import các module cần thiết
 const BaseModel = require("../../models/BaseModel");
 const logger = require("../../utils/logger");
 const MigrationHelper = require("../helpers/MigrationHelper");
@@ -1161,11 +1161,8 @@ class SyncAuditModel extends BaseModel {
         transaction
       )) || process.env.VANTHU_USER_ID;
 
-    // Trích xuất tên hiển thị từ chuỗi người xử lý
-    const displayName =
-      this.helper.extractDisplayName(
-        record.NguoiXuLy
-      );
+    // Trích xuất tên hiển thị nguyên bản từ chuỗi người xử lý (bảo toàn đầy đủ hậu tố)
+    const displayName = record?.NguoiXuLy ? String(record.NguoiXuLy).trim() : null;
 
     // Phân tích chuỗi hành động (HanhDong) để lấy thông tin chi tiết (mã hành động, người nhận, ...)
     const actionParsed =
