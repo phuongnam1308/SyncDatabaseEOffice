@@ -1,20 +1,19 @@
 /**
- * SCRIPT CẬP NHẬT/SỬA LỖI TOÀN BỘ THÔNG TIN USER VÀ RECEIVER TRONG 3 BẢNG CỦA VĂN BẢN ĐI (OutgoingDocument):
- *   1. dbo.audit
+ * SCRIPT CẬP NHẬT/SỬA LỖI TOÀN BỘ THÔNG TIN USER VÀ RECEIVER TRONG 3 BẢNG VĂN BẢN ĐI (OutgoingDocument):
+ * HỖ TRỢ CẢ VĂN BẢN ĐI BAN HÀNH (LuanChuyenVanBan, audit) VÀ DỰ THẢO VĂN BẢN ĐI (CodeItem, SLAStepDetail_sync).
+ *   1. dbo.audit (type_document = 'OutgoingDocument')
  *   2. dbo.outgoing_assignment
  *   3. dbo.outgoing_current_state
- * TRONG BẢNG AUDIT CỦA VĂN BẢN ĐI (type_document = 'OutgoingDocument')
- * HỖ TRỢ LƯU TRẠNG THÁI (CURSOR - Keyset Pagination) VÀ CHẠY LẠI CÁC BẢN GHI LỖI QUA FILE STATE JSON.
- * CƠ CHẾ gracefully fallback: Nếu lỗi cả lô 100 dòng, chuyển sang cập nhật từng dòng để cứu 99 dòng tốt và chỉ lưu vết 1 dòng lỗi.
- * PHIÊN BẢN TỐI ƯU HÓA: IN-MEMORY CACHING, KEYSET PAGINATION THEO (CREATED_AT, ID), BENCHMARK, VÀ PARALLEL YEAR RUN.
+ * HỖ TRỢ CHẠY THEO NĂM (--year), FILE STATE CURSOR, IN-MEMORY CACHING CỰC NHANH VÀ SINGLE T-SQL BATCH UPDATE.
  */
 
 require('dotenv').config();
-const fs = require('fs');
-const path = require('path');
 const dbConnection = require('../db/connection');
 const MigrationHelper = require('../src/helpers/MigrationHelper');
 const ReceiverParserService = require('../src/sync-audit/ReceiverParserService');
+const fs = require('fs');
+const path = require('path');
+const { performance } = require('perf_hooks');
 
 // Xử lý tham số dòng lệnh --year
 const args = process.argv.slice(2);
@@ -30,23 +29,22 @@ const STATE_FILE = path.join(__dirname, stateFileName);
 
 // Khởi tạo trạng thái mặc định
 let state = {
-  lastYear: targetYear || 2013,
+  lastYear: targetYear || 2012,
   lastCreatedAt: null,
   lastId: 0,
   failedRecords: []
 };
 
-// Đọc trạng thái cũ từ file
+// Đọc trạng thái cũ từ file nếu có
 if (fs.existsSync(STATE_FILE)) {
   try {
     state = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-    console.log(`ℹ️ Đã nạp file trạng thái: Tiếp tục từ năm ${state.lastYear}, lastCreatedAt ${state.lastCreatedAt}, lastId ${state.lastId}. Số bản ghi lỗi tích lũy: ${state.failedRecords.length}`);
+    console.log(`ℹ️ Đã nạp file trạng thái: Tiếp tục từ năm ${state.lastYear}, lastCreatedAt ${state.lastCreatedAt}, lastId ${state.lastId}. Số bản ghi lỗi tích lũy: ${state.failedRecords?.length || 0}`);
   } catch (err) {
     console.warn('⚠️ Lỗi đọc file trạng thái, dùng cấu hình mặc định:', err.message);
   }
 }
 
-// Đảm bảo năm đồng bộ khớp với tham số dòng lệnh nếu được set cứng
 if (targetYear) {
   state.lastYear = targetYear;
 }
@@ -59,296 +57,9 @@ function saveState() {
   }
 }
 
-// Hàm phụ để bulk update một mảng các updates sử dụng bảng tạm #AuditUpdates
-async function executeBulkUpdates(newPool, updates, labelInfo) {
-  const chunkSize = 100;
-  let successCount = 0;
-
-  for (let chunkIdx = 0; chunkIdx < updates.length; chunkIdx += chunkSize) {
-    const chunk = updates.slice(chunkIdx, chunkIdx + chunkSize);
-    const transaction = newPool.transaction();
-    await transaction.begin();
-
-    try {
-      const req = transaction.request();
-      const valuesSql = [];
-
-      chunk.forEach((up, idx) => {
-        const itemYear = new Date(up.createdAt || new Date()).getFullYear();
-        const startD = `${itemYear}-01-01 00:00:00`;
-        const endD = `${itemYear + 1}-01-01 00:00:00`;
-        const isCreator = ['CREATE', 'TONG_HOP', 'SOAN_THAO'].includes(up.actionCode) ? 1 : 0;
-
-        req.input(`id_${idx}`, up.id);
-        req.input(`user_id_${idx}`, up.correctUserId);
-        req.input(`created_by_${idx}`, up.correctUserId);
-        req.input(`display_name_${idx}`, up.correctDisplayName);
-        req.input(`receiver_${idx}`, up.correctReceiver);
-        req.input(`receiver_unit_${idx}`, up.correctReceiverUnit);
-        req.input(`document_id_${idx}`, up.documentId || null);
-        req.input(`created_at_${idx}`, up.createdAt || new Date());
-        req.input(`stage_status_${idx}`, up.stageStatus || 'CHUA_XU_LY');
-        req.input(`role_process_${idx}`, up.roleProcess || 'VANTHU');
-        req.input(`action_code_${idx}`, up.actionCode || null);
-        req.input(`is_creator_${idx}`, isCreator);
-        req.input(`start_date_${idx}`, startD);
-        req.input(`end_date_${idx}`, endD);
-
-        valuesSql.push(`(
-          @id_${idx},
-          @user_id_${idx},
-          @created_by_${idx},
-          @display_name_${idx},
-          @receiver_${idx},
-          @receiver_unit_${idx},
-          @document_id_${idx},
-          @created_at_${idx},
-          @stage_status_${idx},
-          @role_process_${idx},
-          @action_code_${idx},
-          @is_creator_${idx},
-          @start_date_${idx},
-          @end_date_${idx}
-        )`);
-      });
-
-      const sqlBatch = `
-        CREATE TABLE #AuditUpdates (
-          id INT PRIMARY KEY,
-          user_id VARCHAR(100),
-          created_by VARCHAR(100),
-          display_name NVARCHAR(255),
-          receiver VARCHAR(100),
-          receiver_unit VARCHAR(100),
-          document_id VARCHAR(100),
-          created_at DATETIME2,
-          stage_status VARCHAR(50),
-          role_process VARCHAR(50),
-          action_code VARCHAR(100),
-          is_creator INT,
-          start_date DATETIME2,
-          end_date DATETIME2
-        );
-
-        INSERT INTO #AuditUpdates (
-          id, user_id, created_by, display_name, receiver, receiver_unit, document_id, created_at, stage_status, role_process, action_code, is_creator, start_date, end_date
-        ) VALUES ${valuesSql.join(',')};
-
-        -- 3. Bulk UPDATE dbo.audit (Lọc phân vùng động từ bảng tạm)
-        UPDATE a
-        SET a.user_id = u.user_id,
-            a.created_by = u.created_by,
-            a.display_name = u.display_name,
-            a.receiver = u.receiver,
-            a.receiver_unit = u.receiver_unit
-        FROM dbo.audit a
-        INNER JOIN #AuditUpdates u ON a.id = u.id
-        WHERE (a.created_at >= u.start_date AND a.created_at < u.end_date);
-
-        -- 3.5 Xóa các bản ghi phân công cũ để tránh trùng lặp khóa chính (PK)
-        -- Bao gồm: (1) Trùng với bản ghi đã có sẵn trong DB, hoặc (2) Trùng với bản ghi khác trong cùng lô cập nhật
-        DELETE target
-        FROM dbo.outgoing_assignment target
-        INNER JOIN #AuditUpdates src ON target.last_audit_id = src.id
-        WHERE EXISTS (
-          SELECT 1 
-          FROM dbo.outgoing_assignment dup
-          WHERE dup.document_id = target.document_id
-            AND dup.receiver = src.receiver
-            AND dup.role_process = src.role_process
-            AND dup.last_audit_id <> target.last_audit_id
-        ) OR EXISTS (
-          SELECT 1 
-          FROM #AuditUpdates newer
-          WHERE newer.document_id = target.document_id
-            AND newer.receiver = src.receiver
-            AND newer.role_process = src.role_process
-            AND newer.id > target.last_audit_id
-        );
-
-
-        -- 4. Bulk UPDATE dbo.outgoing_assignment (Lọc phân vùng động)
-        UPDATE target
-        SET target.receiver = src.receiver,
-            target.role_process = src.role_process,
-            target.stage_status = src.stage_status,
-            target.receiver_unit = src.receiver_unit,
-            target.is_creator = src.is_creator,
-            target.updated_at = SYSDATETIME()
-        FROM dbo.outgoing_assignment target
-        INNER JOIN #AuditUpdates src ON target.last_audit_id = src.id
-        WHERE (target.created_at >= src.start_date AND target.created_at < src.end_date);
-
-        -- 5. Bulk MERGE dbo.outgoing_assignment
-        WITH LatestUpdates AS (
-          SELECT 
-            document_id, 
-            receiver, 
-            role_process, 
-            stage_status, 
-            created_at, 
-            id AS last_audit_id,
-            receiver_unit,
-            is_creator
-          FROM (
-            SELECT 
-              document_id, receiver, role_process, stage_status, created_at, id, receiver_unit, is_creator,
-              ROW_NUMBER() OVER (
-                PARTITION BY document_id, receiver, role_process 
-                ORDER BY id DESC
-              ) as rn
-            FROM #AuditUpdates
-            WHERE document_id IS NOT NULL AND receiver IS NOT NULL
-          ) t
-          WHERE rn = 1
-        )
-        MERGE dbo.outgoing_assignment AS target
-        USING LatestUpdates AS src
-        ON target.document_id = src.document_id 
-           AND target.receiver = src.receiver 
-           AND target.role_process = src.role_process
-        WHEN MATCHED THEN
-          UPDATE SET target.stage_status = src.stage_status,
-                     target.last_audit_id = src.last_audit_id,
-                     target.receiver_unit = src.receiver_unit,
-                     target.is_creator = src.is_creator,
-                     target.updated_at = SYSDATETIME()
-        WHEN NOT MATCHED THEN
-          INSERT (document_id, receiver, role_process, stage_status, created_at, last_audit_id, receiver_unit, is_creator, table_backups)
-          VALUES (src.document_id, src.receiver, src.role_process, src.stage_status, src.created_at, src.last_audit_id, src.receiver_unit, src.is_creator, 'outgoing_assignment');
-
-        -- 6. Bulk UPDATE dbo.outgoing_current_state
-        UPDATE target
-        SET target.current_receiver = src.receiver,
-            target.current_role_process = src.role_process,
-            target.current_stage_status = src.stage_status,
-            target.current_action_code = src.action_code,
-            target.updated_at = SYSDATETIME()
-        FROM dbo.outgoing_current_state target
-        INNER JOIN #AuditUpdates src ON target.document_id = src.document_id AND target.last_audit_id = src.id;
-
-        DROP TABLE #AuditUpdates;
-      `;
-
-      await req.query(sqlBatch);
-      await transaction.commit();
-      successCount += chunk.length;
-    } catch (err) {
-      await transaction.rollback();
-      console.warn(`⚠️ Lô ${chunk.length} dòng tại ${labelInfo} bị lỗi: ${err.message}. Đang chuyển sang chế độ cập nhật từng dòng (Single Fallback)...`);
-
-      // CHẾ ĐỘ FALLBACK TỪNG DÒNG (Single fallback mode)
-      for (const up of chunk) {
-        const singleTx = newPool.transaction();
-        await singleTx.begin();
-
-        try {
-          const reqSingle = singleTx.request();
-          const itemYear = new Date(up.createdAt || new Date()).getFullYear();
-          const startD = `${itemYear}-01-01 00:00:00`;
-          const endD = `${itemYear + 1}-01-01 00:00:00`;
-          const isCreator = ['CREATE', 'TONG_HOP', 'SOAN_THAO'].includes(up.actionCode) ? 1 : 0;
-
-          reqSingle.input('id', up.id);
-          reqSingle.input('userId', up.correctUserId);
-          reqSingle.input('displayName', up.correctDisplayName);
-          reqSingle.input('receiver', up.correctReceiver);
-          reqSingle.input('receiverUnit', up.correctReceiverUnit);
-          reqSingle.input('documentId', up.documentId || null);
-          reqSingle.input('createdAt', up.createdAt || new Date());
-          reqSingle.input('stageStatus', up.stageStatus || 'CHUA_XU_LY');
-          reqSingle.input('roleProcess', up.roleProcess || 'VANTHU');
-          reqSingle.input('actionCode', up.actionCode || null);
-          reqSingle.input('isCreator', isCreator);
-          reqSingle.input('startDate', startD);
-          reqSingle.input('endDate', endD);
-
-          const singleSql = `
-            -- 1. Cập nhật dbo.audit
-            UPDATE dbo.audit
-            SET user_id = @userId,
-                created_by = @userId,
-                display_name = @displayName,
-                receiver = @receiver,
-                receiver_unit = @receiverUnit
-            WHERE id = @id AND (created_at >= @startDate AND created_at < @endDate);
-
-            -- 2. Cập nhật dbo.outgoing_assignment
-            UPDATE dbo.outgoing_assignment
-            SET receiver = @receiver,
-                role_process = @roleProcess,
-                stage_status = @stageStatus,
-                receiver_unit = @receiverUnit,
-                is_creator = @isCreator,
-                updated_at = SYSDATETIME()
-            WHERE last_audit_id = @id AND (created_at >= @startDate AND created_at < @endDate);
-
-            IF @@ROWCOUNT = 0 AND @documentId IS NOT NULL AND @receiver IS NOT NULL
-            BEGIN
-              MERGE dbo.outgoing_assignment AS target
-              USING (SELECT @documentId AS document_id, @receiver AS receiver, @roleProcess AS role_process) AS src
-              ON target.document_id = src.document_id 
-                 AND target.receiver = src.receiver 
-                 AND target.role_process = src.role_process
-              WHEN MATCHED THEN
-                UPDATE SET target.stage_status = @stageStatus,
-                           target.last_audit_id = @id,
-                           target.receiver_unit = @receiverUnit,
-                           target.is_creator = @isCreator,
-                           target.updated_at = SYSDATETIME()
-              WHEN NOT MATCHED THEN
-                INSERT (document_id, receiver, role_process, stage_status, created_at, last_audit_id, receiver_unit, is_creator, table_backups)
-                VALUES (src.document_id, src.receiver, src.role_process, @stageStatus, @createdAt, @id, @receiverUnit, @isCreator, 'outgoing_assignment');
-            END
-
-            -- 3. Cập nhật dbo.outgoing_current_state
-            IF @documentId IS NOT NULL
-            BEGIN
-              UPDATE dbo.outgoing_current_state
-              SET current_receiver = @receiver,
-                  current_role_process = @roleProcess,
-                  current_stage_status = @stageStatus,
-                  current_action_code = @actionCode,
-                  updated_at = SYSDATETIME()
-              WHERE document_id = @documentId AND last_audit_id = @id;
-            END
-          `;
-
-          await reqSingle.query(singleSql);
-          await singleTx.commit();
-          successCount++;
-        } catch (sErr) {
-          await singleTx.rollback();
-          
-          const isPkViolation = sErr.message.includes("Violation of PRIMARY KEY constraint") || 
-                              sErr.message.includes("Cannot insert duplicate key");
-
-          if (isPkViolation) {
-            console.warn(`⚠️ Bỏ qua lỗi khóa chính trùng lặp (PK) cho bản ghi ID ${up.id} (Tài liệu: ${up.documentId}, Receiver: ${up.correctReceiver})`);
-            successCount++;
-          } else {
-            console.error(`❌ Bản ghi ID ${up.id} lỗi thực tế:`, sErr.message);
-
-            // Chỉ lưu vết đúng bản ghi bị lỗi này
-            if (!state.failedRecords.some(f => f.id === up.id)) {
-              state.failedRecords.push({
-                ...up,
-                error: sErr.message,
-                failedAt: new Date().toISOString()
-              });
-            }
-            saveState();
-          }
-        }
-      }
-    }
-  }
-  return successCount;
-}
-
 async function main() {
   console.log('=================================================================');
-  console.log('=== KÍCH HOẠT SCRIPT BULK FIX OUTGOING AUDIT & ASSIGNMENT & STATE ===');
+  console.log('=== KÍCH HOẠT SCRIPT BULK FIX OUTGOING AUDIT (BAN HÀNH & DỰ THẢO CODEITEM) ===');
   if (targetYear) console.log(`=== CHẾ ĐỘ CHẠY PHÂN VÙNG SONG SONG NĂM: ${targetYear} ===`);
   console.log('=================================================================\n');
 
@@ -399,19 +110,43 @@ async function main() {
     helper
   );
 
-  // 1. Nạp bản đồ Email từ DB Cũ (dbo.PersonalProfile)
-  console.log('[1/4] Đang nạp bản đồ Email từ DB Cũ (dbo.PersonalProfile)...');
-  const oldProfilesRes = await oldPool.request().query(`
-    SELECT ID, AccountID, FullName, StaffID, Email
-    FROM dbo.PersonalProfile
-    WHERE Email IS NOT NULL AND LTRIM(RTRIM(Email)) <> ''
-  `);
+  const profilesCachePath = path.join(__dirname, 'profiles_cache.json');
+  const usersCachePath = path.join(__dirname, 'users_cache.json');
 
-  const profileToEmailMap = new Map();
-  const idToEmailMap = new Map();
+  // 1. Nạp bản đồ Email từ DB Cũ (dbo.PersonalProfile)
+  let profilesList = [];
+  if (fs.existsSync(profilesCachePath)) {
+    console.log(`[1/4] Đang nạp bản đồ Email từ file cache: ${profilesCachePath}...`);
+    try {
+      profilesList = JSON.parse(fs.readFileSync(profilesCachePath, 'utf8'));
+      console.log(`-> Đã nạp thành công ${profilesList.length} Profile từ cache.`);
+    } catch (err) {
+      console.error('❌ Lỗi khi đọc file cache profile, sẽ nạp từ database:', err);
+      profilesList = [];
+    }
+  }
+
+  if (profilesList.length === 0) {
+    console.log('[1/4] Đang nạp bản đồ Email từ DB Cũ (dbo.PersonalProfile)...');
+    const oldProfilesRes = await oldPool.request().query(`
+      SELECT ID, AccountID, FullName, StaffID, Email
+      FROM dbo.PersonalProfile
+      WHERE Email IS NOT NULL AND LTRIM(RTRIM(Email)) <> ''
+    `);
+    profilesList = oldProfilesRes.recordset;
+    try {
+      fs.writeFileSync(profilesCachePath, JSON.stringify(profilesList, null, 2), 'utf8');
+      console.log(`-> Đã lưu ${profilesList.length} Profile vào file cache.`);
+    } catch (err) {
+      console.error('❌ Không thể lưu file cache profile:', err);
+    }
+  }
+
+  const profileToEmailMap = new Map(); // key (lower) -> email (lower)
+  const idToEmailMap = new Map();       // ID/AccountID -> email (lower)
   let profileCount = 0;
 
-  for (const row of oldProfilesRes.recordset) {
+  for (const row of profilesList) {
     const email = String(row.Email).trim().toLowerCase();
     if (!email.includes('@')) continue;
 
@@ -420,8 +155,14 @@ async function main() {
       idToEmailMap.set(String(row.ID).trim(), email);
       profileToEmailMap.set(String(row.ID).trim().toLowerCase(), email);
     }
-    if (row.AccountID) profileToEmailMap.set(String(row.AccountID).trim().toLowerCase(), email);
-    if (row.StaffID) profileToEmailMap.set(String(row.StaffID).trim().toLowerCase(), email);
+    if (row.AccountID) {
+      idToEmailMap.set(String(row.AccountID).trim(), email);
+      profileToEmailMap.set(String(row.AccountID).trim().toLowerCase(), email);
+    }
+    if (row.StaffID) {
+      idToEmailMap.set(String(row.StaffID).trim(), email);
+      profileToEmailMap.set(String(row.StaffID).trim().toLowerCase(), email);
+    }
     if (row.FullName) {
       profileToEmailMap.set(String(row.FullName).trim().toLowerCase(), email);
       const cleanName = String(row.FullName).split(/\s*[-–—(]\s*/)[0].trim().toLowerCase();
@@ -430,24 +171,46 @@ async function main() {
       }
     }
   }
-  console.log(`-> Đã nạp thành công ${profileCount} Email từ DB Cũ vào bộ nhớ RAM.\n`);
+  console.log(`-> Đã nạp thành công ${profileCount} Email vào bộ nhớ RAM.\n`);
 
-  // 2. Nạp bản đồ Users từ DB Mới (dbo.users) với đầy đủ các cột để tra cứu RAM
-  console.log('[2/4] Đang nạp bản đồ User ID & Tên hiển thị từ DB Mới (dbo.users)...');
-  const newUsersRes = await newPool.request().query(`
-    SELECT id, email_user, name, username, FullName, position, Department, organization_name, id_user_bak FROM dbo.users
-  `);
+  // 2. Nạp bản đồ Users từ DB Mới (dbo.users)
+  let usersList = [];
+  if (fs.existsSync(usersCachePath)) {
+    console.log(`[2/4] Đang nạp bản đồ Users từ file cache: ${usersCachePath}...`);
+    try {
+      usersList = JSON.parse(fs.readFileSync(usersCachePath, 'utf8'));
+      console.log(`-> Đã nạp thành công ${usersList.length} User từ cache.`);
+    } catch (err) {
+      console.error('❌ Lỗi khi đọc file cache users, sẽ nạp từ database:', err);
+      usersList = [];
+    }
+  }
 
-  const emailToUserInfoMap = new Map();
-  const newUserIdMap = new Set();
-  const newUserIdBakMap = new Map();
-  const newUserNameMap = new Map();
+  if (usersList.length === 0) {
+    console.log('[2/4] Đang nạp bản đồ User ID & Tên hiển thị từ DB Mới (dbo.users) với status = 1...');
+    const newUsersRes = await newPool.request().query(`
+      SELECT id, email_user, name FROM dbo.users WHERE status = 1
+    `);
+    usersList = newUsersRes.recordset;
+    try {
+      fs.writeFileSync(usersCachePath, JSON.stringify(usersList, null, 2), 'utf8');
+      console.log(`-> Đã lưu ${usersList.length} User vào file cache.`);
+    } catch (err) {
+      console.error('❌ Không thể lưu file cache users:', err);
+    }
+  }
+
+  const emailToUserInfoMap = new Map(); // email (lower) -> { id, name }
+  const userIdToUserInfoMap = new Map(); // id (lower) -> { id, name }
+  const nameToUserMap = new Map();       // name (lower) -> { id, name }
   let newUserCount = 0;
 
-  for (const u of newUsersRes.recordset) {
-    newUserIdMap.add(u.id);
-    if (u.id_user_bak) {
-      newUserIdBakMap.set(String(u.id_user_bak).trim(), u.id);
+  for (const u of usersList) {
+    if (u.id) {
+      userIdToUserInfoMap.set(String(u.id).toLowerCase(), u);
+    }
+    if (u.name) {
+      nameToUserMap.set(String(u.name).trim().toLowerCase(), u);
     }
     if (u.email_user) {
       const email = String(u.email_user).trim().toLowerCase();
@@ -456,198 +219,172 @@ async function main() {
         newUserCount++;
       }
     }
-    if (u.name) newUserNameMap.set(u.name.trim().toLowerCase(), u.id);
-    if (u.FullName) newUserNameMap.set(u.FullName.trim().toLowerCase(), u.id);
-    if (u.username) newUserNameMap.set(u.username.trim().toLowerCase(), u.id);
   }
-  console.log(`-> Đã nạp thành công ${newUserCount} User Info từ DB Mới vào bộ nhớ RAM.\n`);
+  console.log(`-> Đã nạp thành công ${newUserCount} User Info vào bộ nhớ RAM.\n`);
 
-  // 2.5 Nạp bản đồ Org Units từ DB mới và Departments từ DB cũ để cache RAM cho mapSenderUnitId
-  console.log('[2.5/4] Đang nạp bản đồ Org Units & Departments...');
-  const orgUnitsRes = await newPool.request().query(`
-    SELECT id, name, normalized_name, Id_backups FROM dbo.organization_units
-  `);
-  const orgUnitMap = new Map();
-  const orgUnitBakMap = new Map();
-  for (const ou of orgUnitsRes.recordset) {
-    if (ou.name) orgUnitMap.set(ou.name.trim().toLowerCase(), ou.id);
-    if (ou.normalized_name) orgUnitMap.set(ou.normalized_name.trim().toLowerCase(), ou.id);
-    if (ou.Id_backups) orgUnitBakMap.set(String(ou.Id_backups).trim(), ou.id);
+  const userIdSet = new Set();
+  for (const u of usersList) {
+    if (u.id) userIdSet.add(String(u.id).toLowerCase());
   }
 
-  const oldDeptMap = new Map();
-  try {
-    const oldDeptsRes = await oldPool.request().query(`
-      SELECT ID, Title FROM dbo.Department
-    `);
-    for (const d of oldDeptsRes.recordset) {
-      if (d.Title) oldDeptMap.set(d.Title.trim().toLowerCase(), d.ID);
-    }
-  } catch (e) {
-    console.warn('⚠️ Không thể tải danh sách Department từ DB cũ:', e.message);
+  const userNameToIdCache = new Map(); // keyLower -> resolved userId
+  const unitNameToIdCache = new Map(); // keyLower -> resolved unitId
+
+  const RE_DE_THUC_HIEN = /để thực hiện\s*:\s*(.*?)(?:<br\s*\/?>|$)/i;
+  const RE_DE_BIET = /để biết\s*:\s*(.*?)(?:<br\s*\/?>|$)/i;
+  const RE_DE_BAO_CAO = /để báo cáo\s*:\s*(.*?)(?:<br\s*\/?>|$)/i;
+  const RE_DON_VI = /đơn vị\s*(?:xử lý)?\s*:\s*(.*?)(?:<br\s*\/?>|$)/i;
+  const RE_CA_NHAN = /cá nhân\s*:\s*(.*?)(?:<br\s*\/?>|$)/i;
+  const RE_DON_VI_PHAT_HANH = /đơn vị\s*:\s*(.*?)(?:<br\s*\/?>|$)/i;
+
+  function splitNamesRaw(raw) {
+    if (!raw || typeof raw !== 'string') return [];
+    return raw
+      .replace(/<[^>]*>/g, '')
+      .split(/[;,]/)
+      .map(n => {
+        let cleaned = n.trim();
+        cleaned = cleaned.replace(/^\d+[.)]\s*/, '');
+        cleaned = cleaned.replace(/[)"'}\]]+$/g, '').trim();
+        return cleaned;
+      })
+      .filter(n => n && n.length >= 2 && !/^(eoffice\s*it|e-office\s*sp|sp[-_]?setup|system|admin$|sharepoint)/i.test(n.trim()));
   }
 
-  // ===========================================================================
-  // GHI ĐÈ CÁC PHƯƠNG THỨC TRUY VẤN DB CỦA HELPER VÀ PARSER BẰNG TRA CỨU TRONG RAM (O(1))
-  // ===========================================================================
-  helper.mapUserName = async (userIdOrName) => {
-    if (!userIdOrName || typeof userIdOrName !== 'string') return userIdOrName;
-    const trimmed = userIdOrName.trim();
-    if (!trimmed) return trimmed;
-    if (trimmed === 'migservice') return 'b23406e3-5c75-41d3-91e0-1654293ae6b2';
+  function parseHanhDongNames(hanhDong) {
+    const result = { processor: [], viewer: [], supporter: [], units: [] };
+    if (!hanhDong || typeof hanhDong !== 'string') return result;
 
-    const isIdFormat = /^\d+$/.test(trimmed) || /^[0-9a-f-]{32,}$/i.test(trimmed);
-    if (isIdFormat) {
-      const email = idToEmailMap.get(trimmed) || profileToEmailMap.get(trimmed.toLowerCase());
-      if (email) {
-        const userInfo = emailToUserInfoMap.get(email);
-        if (userInfo) return userInfo.id;
-      }
-      if (newUserIdMap.has(trimmed)) return trimmed;
-      if (newUserIdBakMap.has(trimmed)) return newUserIdBakMap.get(trimmed);
-      return trimmed;
-    }
-
-    if (!/[a-zA-ZÀ-ỹ]/.test(trimmed)) return trimmed;
-
-    // 1. Thử tìm bằng tên nguyên bản gốc (có chứa hậu tố nếu có)
-    let email = profileToEmailMap.get(trimmed.toLowerCase());
-    if (email) {
-      const userInfo = emailToUserInfoMap.get(email);
-      if (userInfo) return userInfo.id;
-    }
-    const rawLower = trimmed.toLowerCase();
-    if (newUserNameMap.has(rawLower)) return newUserNameMap.get(rawLower);
-
-    // 2. Thử làm sạch tên (bỏ tiền tố danh xưng và hậu tố phòng ban) để tìm
-    const cleanKey = trimmed.split(/\s*[-–—(]\s*/)[0].trim().replace(/^(Đ\/c\.|Đ\/c|Ông|Bà|Anh|Chị|Đồng chí|Đại tá|Thượng tá)\s+/i, '').trim().toLowerCase();
-    email = profileToEmailMap.get(cleanKey);
-    if (email) {
-      const userInfo = emailToUserInfoMap.get(email);
-      if (userInfo) return userInfo.id;
-    }
-
-    if (cleanKey && cleanKey.length >= 2) {
-      if (newUserNameMap.has(cleanKey)) return newUserNameMap.get(cleanKey);
-    }
-    return null;
-  };
-
-  helper.mapSenderUnitId = async (value) => {
-    try {
-      const originalName = helper.processSenderUnit(value);
-      if (!originalName) return null;
-
-      const normalizedKey = helper.normalizeUnitName(originalName);
-
-      if (orgUnitMap.has(normalizedKey)) return orgUnitMap.get(normalizedKey);
-      if (orgUnitMap.has(originalName.toLowerCase())) return orgUnitMap.get(originalName.toLowerCase());
-
-      const oldDeptId = oldDeptMap.get(originalName.toLowerCase());
-      if (oldDeptId) {
-        const foundNewId = orgUnitBakMap.get(String(oldDeptId));
-        if (foundNewId) {
-          orgUnitMap.set(normalizedKey, foundNewId);
-          return foundNewId;
+    let text = hanhDong.trim();
+    if (text.startsWith('{') && text.endsWith('}')) {
+      try {
+        const parsedObj = JSON.parse(text);
+        if (parsedObj && parsedObj.note) {
+          text = String(parsedObj.note).trim();
+        } else if (parsedObj && parsedObj.HanhDong) {
+          text = String(parsedObj.HanhDong).trim();
         }
-      }
-      return null;
-    } catch (e) {
-      return null;
-    }
-  };
-
-  receiverParser._findUsersByName = async (nameValue) => {
-    if (!nameValue || typeof nameValue !== 'string') return [];
-    const rawName = nameValue.trim();
-    if (!rawName) return [];
-    if (receiverParser._isSystemAccount(rawName)) return [];
-
-    const rawLower = rawName.toLowerCase();
-
-    // 1. Thử tìm kiếm trực tiếp bằng tên gốc đầy đủ (bao gồm cả hậu tố nếu có)
-    let userId = await helper.mapUserName(rawName);
-    if (userId) {
-      return [{ id: userId }];
-    }
-    if (newUserNameMap.has(rawLower)) {
-      return [{ id: newUserNameMap.get(rawLower) }];
+      } catch (e) {}
     }
 
-    // 2. Nếu không tìm thấy, làm sạch tên bằng cách bỏ hậu tố và tìm lại
-    let cleanName = rawName;
-    const dashIdx = cleanName.indexOf(" - ");
-    if (dashIdx > 0) cleanName = cleanName.substring(0, dashIdx).trim();
-
-    if (cleanName !== rawName) {
-      userId = await helper.mapUserName(cleanName);
-      if (userId) {
-        return [{ id: userId }];
-      }
-
-      const lowerName = cleanName.toLowerCase();
-      if (newUserNameMap.has(lowerName)) {
-        return [{ id: newUserNameMap.get(lowerName) }];
-      }
+    const thucHienMatch = text.match(RE_DE_THUC_HIEN);
+    if (thucHienMatch && thucHienMatch[1]) {
+      result.processor.push(...splitNamesRaw(thucHienMatch[1]));
     }
 
-    // 3. Fallback tìm gần đúng (in memory)
-    const searchLower = cleanName.toLowerCase();
-    for (const [uName, uId] of newUserNameMap.entries()) {
-      if (uName.includes(searchLower) || searchLower.includes(uName)) {
-        return [{ id: uId }];
-      }
+    const deBietMatch = text.match(RE_DE_BIET);
+    if (deBietMatch && deBietMatch[1]) {
+      result.viewer.push(...splitNamesRaw(deBietMatch[1]));
     }
-    return [];
-  };
 
-  receiverParser._findUsersByPositionKeywords = async (keywordsArr) => {
-    if (!Array.isArray(keywordsArr) || keywordsArr.length === 0) return [];
-    const results = [];
-    for (const u of newUsersRes.recordset) {
-      if (!u.position) continue;
-      const posLower = u.position.toLowerCase();
-      const matches = keywordsArr.some(kw => posLower.includes(String(kw).toLowerCase()));
-      if (matches) {
-        results.push({ id: u.id });
-      }
+    const baoCaoMatch = text.match(RE_DE_BAO_CAO);
+    if (baoCaoMatch && baoCaoMatch[1]) {
+      result.supporter.push(...splitNamesRaw(baoCaoMatch[1]));
     }
-    return results;
-  };
 
-  receiverParser._findUsersInDepartment = async (orgName) => {
-    if (!orgName || typeof orgName !== 'string') return [];
-    const cleanOrg = orgName.trim().toLowerCase();
-    if (!cleanOrg) return [];
-
-    const results = [];
-    for (const u of newUsersRes.recordset) {
-      const deptLower = (u.Department || '').toLowerCase();
-      const orgLower = (u.organization_name || '').toLowerCase();
-      if (deptLower.includes(cleanOrg) || orgLower.includes(cleanOrg)) {
-        results.push({ id: u.id });
-      }
+    const caNhanMatch = text.match(RE_CA_NHAN);
+    if (caNhanMatch && caNhanMatch[1]) {
+      result.processor.push(...splitNamesRaw(caNhanMatch[1]));
     }
-    return results;
-  };
 
-  // --- PHASE 1: CHẠY LẠI CÁC BẢN GHI LỖI TỪ LẦN CHẠY TRƯỚC (NẾU CÓ) ---
-  if (state.failedRecords && state.failedRecords.length > 0) {
-    console.log(`\n🔄 [Phase 1] Đang xử lý lại ${state.failedRecords.length} bản ghi lỗi từ lần chạy trước...`);
-    const retryList = [...state.failedRecords];
-    state.failedRecords = []; // Reset để ghi nhận lại nếu vẫn tiếp tục lỗi
-    saveState();
+    const donViMatch = text.match(RE_DON_VI) || text.match(RE_DON_VI_PHAT_HANH);
+    if (donViMatch && donViMatch[1]) {
+      result.units.push(...splitNamesRaw(donViMatch[1]));
+    }
 
-    const okCount = await executeBulkUpdates(newPool, retryList, 'Phase 1 - Retry Outgoing');
-    console.log(`-> Đã sửa thành công: ${okCount}/${retryList.length} bản ghi lỗi cũ. Còn lại ${retryList.length - okCount} bản ghi tiếp tục lỗi.\n`);
+    return result;
   }
 
-  // --- PHASE 2: QUÉT TIẾP TỤC THEO CON TRỎ NĂM VÀ KEYSET PAGINATION (CREATED_AT, ID) ---
-  console.log('[3/4] Bắt đầu rà soát tiến trình chính theo phân vùng năm (2013 -> 2030)...');
+  async function resolveUserNameToId(rawKey) {
+    if (!rawKey) return null;
+    let strVal = String(rawKey).trim();
+    if (strVal.startsWith('[') && strVal.endsWith(']')) {
+      try {
+        const arr = JSON.parse(strVal);
+        if (arr && arr.length > 0) strVal = String(arr[0]).trim();
+      } catch (e) {}
+    }
+    if (!strVal) return null;
 
-  const START_YEAR = targetYear || 2013;
+    const strLower = strVal.toLowerCase();
+    if (userNameToIdCache.has(strLower)) {
+      return userNameToIdCache.get(strLower);
+    }
+
+    if (userIdSet.has(strLower)) {
+      userNameToIdCache.set(strLower, strVal);
+      return strVal;
+    }
+
+    // 1. Direct O(1) email lookup from idToEmailMap / profileToEmailMap
+    let targetEmail = idToEmailMap.get(strVal) || profileToEmailMap.get(strLower);
+
+    // 2. Clean key email lookup from profileToEmailMap
+    if (!targetEmail) {
+      const cleanKey = strVal.split(/\s*[-–—(]\s*/)[0].trim().replace(/^(Đ\/c\.|Đ\/c|Ông|Bà|Anh|Chị|Đồng chí|Đại tá|Thượng tá)\s+/i, '').trim().toLowerCase();
+      targetEmail = profileToEmailMap.get(cleanKey);
+    }
+
+    let matchedUser = null;
+    if (targetEmail) {
+      matchedUser = emailToUserInfoMap.get(targetEmail);
+    }
+
+    // 3. Direct/Clean O(1) name lookup from nameToUserMap
+    if (!matchedUser) {
+      matchedUser = nameToUserMap.get(strLower);
+      if (!matchedUser) {
+        const cleanKey = strVal.split(/\s*[-–—(]\s*/)[0].trim().toLowerCase();
+        matchedUser = nameToUserMap.get(cleanKey);
+      }
+    }
+
+    let resId = matchedUser?.id || null;
+
+    // 4. Fallback DB lookup if not in RAM
+    if (!resId && helper && typeof helper.mapUserName === 'function') {
+      try {
+        resId = await helper.mapUserName(strVal);
+      } catch (e) {}
+    }
+
+    userNameToIdCache.set(strLower, resId);
+    return resId;
+  }
+
+  async function resolveUnitNameToId(unitName) {
+    if (!unitName) return null;
+    let strVal = String(unitName).trim();
+    if (strVal.startsWith('[') && strVal.endsWith(']')) {
+      try {
+        const arr = JSON.parse(strVal);
+        if (arr && arr.length > 0) strVal = String(arr[0]).trim();
+      } catch (e) {}
+    }
+    if (!strVal) return null;
+
+    const strLower = strVal.toLowerCase();
+    if (unitNameToIdCache.has(strLower)) {
+      return unitNameToIdCache.get(strLower);
+    }
+
+    let unitId = null;
+    if (helper && typeof helper.mapSenderUnitId === 'function') {
+      try {
+        unitId = await helper.mapSenderUnitId(strVal);
+      } catch (e) {}
+    }
+
+    unitNameToIdCache.set(strLower, unitId);
+    return unitId;
+  }
+
+  // 3. Quét từng Partition năm (2012 -> 2030) trong dbo.audit cho type_document = 'OutgoingDocument'
+  console.log('[3/4] Bắt đầu rà soát và cập nhật audit, outgoing_assignment & outgoing_current_state theo Partition từng năm (2012 -> 2030)...');
+
+  const START_YEAR = targetYear || state.lastYear || 2012;
   const END_YEAR = targetYear || 2030;
-  const BATCH_SIZE = 2000;
+  const BATCH_SIZE = 500;
 
   let grandTotalProcessed = 0;
   let grandTotalUpdated = 0;
@@ -655,12 +392,6 @@ async function main() {
   let grandTotalNotFound = 0;
 
   for (let year = START_YEAR; year <= END_YEAR; year++) {
-    // Nếu không chạy song song, kiểm tra năm hoàn thành
-    if (!targetYear && year < state.lastYear) {
-      console.log(`⏭️ Bỏ qua năm ${year} (Đã xử lý xong ở lần chạy trước)`);
-      continue;
-    }
-
     const startDate = `${year}-01-01 00:00:00`;
     const endDate = `${year + 1}-01-01 00:00:00`;
 
@@ -672,92 +403,100 @@ async function main() {
       FROM dbo.audit 
       WHERE (created_at >= @startDate AND created_at < @endDate)
         AND type_document = 'OutgoingDocument'
-        AND (table_backups LIKE 'LuanChuyenVanBan%' OR table_backups LIKE 'audit%')
+        AND (
+          table_backups LIKE 'LuanChuyenVanBan%' 
+          OR table_backups LIKE 'audit%' 
+          OR table_backups = 'CodeItem' 
+          OR table_backups = 'SLAStepDetail_sync'
+        )
     `);
 
     const yearTotal = countRes.recordset[0].total;
     if (yearTotal === 0) {
-      if (year === state.lastYear) {
+      if (!targetYear) {
+        state.lastYear = year + 1;
         state.lastCreatedAt = null;
         state.lastId = 0;
-        state.lastYear = year + 1;
         saveState();
       }
       continue;
     }
 
-    console.log(`\n📅 --- NĂM ${year}: Phát hiện ${yearTotal} bản ghi audit [OutgoingDocument] ---`);
-
-    // Phục hồi con trỏ nếu bị gián đoạn ở năm hiện tại
-    let lastCreatedAt = null;
-    let lastId = 0;
-    if (year === state.lastYear) {
-      lastCreatedAt = state.lastCreatedAt;
-      lastId = state.lastId || 0;
-      if (lastCreatedAt) {
-        console.log(`⏭️ Tiếp tục từ thời điểm ${lastCreatedAt}, lastId ${lastId}...`);
-      }
-    }
+    console.log(`\n📅 --- NĂM ${year}: Phát hiện ${yearTotal} bản ghi audit [OutgoingDocument (Ban hành & Dự thảo)] ---`);
 
     let yearUpdated = 0;
     let yearSkipped = 0;
     let yearNotFound = 0;
-    let pageCount = 0;
+    let processedInYear = 0;
+
+    let lastCreatedAt = (year === state.lastYear) ? state.lastCreatedAt : null;
+    let lastId = (year === state.lastYear) ? (state.lastId || 0) : 0;
 
     while (true) {
-      const pageTStart = Date.now();
+      const batchStartTime = performance.now();
 
+      // 1. Fetch SQL Audit
+      const t1 = performance.now();
       const pageReq = newPool.request();
       pageReq.input('startDate', startDate);
       pageReq.input('endDate', endDate);
+      pageReq.input('lastCreatedAt', lastCreatedAt);
+      pageReq.input('lastId', lastId);
+      pageReq.input('batchSize', BATCH_SIZE);
 
-      let pageRes;
-      if (lastCreatedAt) {
-        pageReq.input('lastCreatedAt', new Date(lastCreatedAt));
-        pageReq.input('lastId', lastId);
-        pageRes = await pageReq.query(`
-          SELECT TOP (${BATCH_SIZE}) id, origin_id, table_backups, display_name, user_id, created_by, receiver, receiver_unit, roleProcess, action_code, action, document_id, created_at, stage_status
-          FROM dbo.audit
-          WHERE (created_at >= @startDate AND created_at < @endDate)
-            AND type_document = 'OutgoingDocument'
-            AND (table_backups LIKE 'LuanChuyenVanBan%' OR table_backups LIKE 'audit%')
-            AND (
-              (created_at > @lastCreatedAt)
-              OR (created_at = @lastCreatedAt AND id > @lastId)
-            )
-          ORDER BY created_at ASC, id ASC
-        `);
-      } else {
-        pageRes = await pageReq.query(`
-          SELECT TOP (${BATCH_SIZE}) id, origin_id, table_backups, display_name, user_id, created_by, receiver, receiver_unit, roleProcess, action_code, action, document_id, created_at, stage_status
-          FROM dbo.audit
-          WHERE (created_at >= @startDate AND created_at < @endDate)
-            AND type_document = 'OutgoingDocument'
-            AND (table_backups LIKE 'LuanChuyenVanBan%' OR table_backups LIKE 'audit%')
-          ORDER BY created_at ASC, id ASC
-        `);
-      }
+      const pageRes = await pageReq.query(`
+        SELECT TOP (@batchSize) id, origin_id, table_backups, display_name, user_id, created_by, receiver, receiver_unit, roleProcess, action_code, action, document_id, created_at, stage_status
+        FROM dbo.audit
+        WHERE (created_at >= @startDate AND created_at < @endDate)
+          AND (
+            @lastCreatedAt IS NULL 
+            OR (created_at > @lastCreatedAt) 
+            OR (created_at = @lastCreatedAt AND id > @lastId)
+          )
+          AND type_document = 'OutgoingDocument'
+          AND (
+            table_backups LIKE 'LuanChuyenVanBan%' 
+            OR table_backups LIKE 'audit%' 
+            OR table_backups = 'CodeItem' 
+            OR table_backups = 'SLAStepDetail_sync'
+          )
+        ORDER BY created_at ASC, id ASC
+      `);
 
       const rows = pageRes.recordset;
       if (!rows || rows.length === 0) break;
+      const fetchAuditMs = (performance.now() - t1).toFixed(1);
 
-      const loadDur = Date.now() - pageTStart;
+      lastCreatedAt = rows[rows.length - 1].created_at;
+      lastId = rows[rows.length - 1].id;
 
-      // Gom nhóm origin_id để query Batch
-      const mapTStart = Date.now();
+      // 2. Query Old DB theo từng nhóm bảng nguồn (Luân chuyển, CodeItem, SLAStepDetail)
+      const t2 = performance.now();
       const tableToOriginIdsMap = new Map();
+      const codeItemOriginIds = new Set();
+      const slaStepItemIds = new Set();
+
       for (const r of rows) {
-        if (r.table_backups && r.origin_id) {
-          const tName = String(r.table_backups).trim();
-          if (!tableToOriginIdsMap.has(tName)) {
-            tableToOriginIdsMap.set(tName, new Set());
+        if (!r.origin_id) continue;
+        const tb = String(r.table_backups || '').trim();
+
+        if (tb === 'CodeItem') {
+          codeItemOriginIds.add(String(r.origin_id).trim());
+        } else if (tb === 'SLAStepDetail_sync') {
+          const match = String(r.origin_id).match(/^sla_step_(\d+)_(\d+)_/);
+          if (match) {
+            slaStepItemIds.add(match[1]);
           }
-          tableToOriginIdsMap.get(tName).add(String(r.origin_id).trim());
+        } else if (tb) {
+          if (!tableToOriginIdsMap.has(tb)) {
+            tableToOriginIdsMap.set(tb, new Set());
+          }
+          tableToOriginIdsMap.get(tb).add(String(r.origin_id).trim());
         }
       }
 
+      // 2a. Query Bảng Luân chuyển văn bản cũ
       const batchOldRecordMap = new Map();
-
       for (const [tName, originSet] of tableToOriginIdsMap.entries()) {
         const originArray = Array.from(originSet);
         if (originArray.length === 0) continue;
@@ -782,184 +521,408 @@ async function main() {
             for (const item of batchRes.recordset) {
               batchOldRecordMap.set(`${tName}_${String(item.ID).trim()}`, item);
             }
-          } catch (err) {
-            // Bỏ qua lỗi thiếu bảng
-          }
+          } catch (err) {}
         }
       }
 
+      // 2b. Query Bảng Dự thảo [SNP].[CodeItem] từ DB Cũ
+      const batchCodeItemMap = new Map();
+      if (codeItemOriginIds.size > 0) {
+        const arr = Array.from(codeItemOriginIds);
+        const chunkSize = 1000;
+        for (let i = 0; i < arr.length; i += chunkSize) {
+          const chunk = arr.slice(i, i + chunkSize);
+          try {
+            const reqCI = oldPool.request();
+            const inClause = chunk.map((idVal, idx) => {
+              reqCI.input(`ci_${idx}`, parseInt(idVal, 10));
+              return `@ci_${idx}`;
+            }).join(',');
+
+            const resCI = await reqCI.query(`
+              SELECT ID, CreatedBy, CBNV, Approver 
+              FROM [SNP].[CodeItem] 
+              WHERE ID IN (${inClause})
+            `);
+
+            for (const item of resCI.recordset) {
+              batchCodeItemMap.set(String(item.ID), item);
+            }
+          } catch (e) {}
+        }
+      }
+
+      // 2c. Query Bảng [SNP].[SLAStepDetail] và [SNP].[SLAStepDetail_History] từ DB Cũ
+      const batchSlaStepsMap = new Map();
+      if (slaStepItemIds.size > 0) {
+        const arr = Array.from(slaStepItemIds);
+        const chunkSize = 500;
+        for (let i = 0; i < arr.length; i += chunkSize) {
+          const chunk = arr.slice(i, i + chunkSize);
+          try {
+            const reqSLA = oldPool.request();
+            const inClause = chunk.map((idVal, idx) => {
+              reqSLA.input('itemId_' + idx, parseInt(idVal, 10));
+              return '@itemId_' + idx;
+            }).join(',');
+
+            const resSLA = await reqSLA.query(`
+              SELECT ItemID, Step, UserID, CreatedBy, ModifiedBy
+              FROM (
+                SELECT ItemID, Step, UserID, CreatedBy, ModifiedBy FROM [SNP].[SLAStepDetail] WHERE ItemID IN (${inClause})
+                UNION ALL
+                SELECT ItemID, Step, UserID, CreatedBy, ModifiedBy FROM [SNP].[SLAStepDetail_History] WHERE ItemID IN (${inClause})
+              ) s
+            `);
+
+            for (const item of resSLA.recordset) {
+              const key = `${item.ItemID}_${item.Step}`;
+              batchSlaStepsMap.set(key, item);
+            }
+          } catch (e) {}
+        }
+      }
+      const queryOldDbMs = (performance.now() - t2).toFixed(1);
+
+      // 3. Pre-resolve Batch Cache RAM
+      const t3 = performance.now();
+      const batchNamesSet = new Set();
+      const batchUnitsSet = new Set();
+      const parsedHanhDongMap = new Map();
+
+      for (const a of rows) {
+        const tb = String(a.table_backups || '').trim();
+
+        if (tb === 'CodeItem') {
+          const oldCI = batchCodeItemMap.get(String(a.origin_id).trim());
+          if (oldCI) {
+            const rawCreator = oldCI.CreatedBy || oldCI.CBNV || '';
+            if (rawCreator) batchNamesSet.add(String(rawCreator).trim());
+          }
+          if (a.display_name) batchNamesSet.add(a.display_name);
+        } else if (tb === 'SLAStepDetail_sync') {
+          const match = String(a.origin_id).match(/^sla_step_(\d+)_(\d+)_(.+)$/i);
+          if (match) {
+            const recordId = match[1];
+            const stepVal = match[2];
+            const oldCreatedBy = match[3];
+
+            const key = `${recordId}_${stepVal}`;
+            const stepRec = batchSlaStepsMap.get(key);
+            const oldActorId = stepRec?.UserID || stepRec?.CreatedBy || oldCreatedBy;
+            if (oldActorId) batchNamesSet.add(String(oldActorId).trim());
+          }
+          if (a.display_name) batchNamesSet.add(a.display_name);
+        } else {
+          const key = `${tb}_${String(a.origin_id).trim()}`;
+          const oldRecord = batchOldRecordMap.get(key);
+          const rawNguoiXuLyFromOldDb = oldRecord?.NguoiXuLy ? String(oldRecord.NguoiXuLy).trim() : null;
+          const searchKey = rawNguoiXuLyFromOldDb || a.display_name || '';
+
+          if (searchKey) batchNamesSet.add(searchKey);
+
+          if (oldRecord && oldRecord.HanhDong) {
+            const parsed = parseHanhDongNames(oldRecord.HanhDong);
+            parsedHanhDongMap.set(key, parsed);
+            parsed.processor.forEach(n => batchNamesSet.add(n));
+            parsed.viewer.forEach(n => batchNamesSet.add(n));
+            parsed.supporter.forEach(n => batchNamesSet.add(n));
+            parsed.units.forEach(u => batchUnitsSet.add(u));
+          }
+        }
+
+        if (a.receiver) batchNamesSet.add(a.receiver);
+        if (a.receiver_unit) batchUnitsSet.add(a.receiver_unit);
+      }
+
+      await Promise.all([
+        ...Array.from(batchNamesSet).map(n => resolveUserNameToId(n)),
+        ...Array.from(batchUnitsSet).map(u => resolveUnitNameToId(u))
+      ]);
+      const preResolveMs = (performance.now() - t3).toFixed(1);
+
+      // 4. In-Memory Record Mapping
+      const t4 = performance.now();
       const updates = [];
 
       for (const a of rows) {
-        const key = `${String(a.table_backups).trim()}_${String(a.origin_id).trim()}`;
-        const oldRecord = batchOldRecordMap.get(key);
-        const rawNguoiXuLyFromOldDb = oldRecord?.NguoiXuLy ? String(oldRecord.NguoiXuLy).trim() : null;
-        const searchKey = rawNguoiXuLyFromOldDb || a.display_name || '';
+        const tb = String(a.table_backups || '').trim();
+        let searchKey = '';
+
+        if (tb === 'CodeItem') {
+          const oldCI = batchCodeItemMap.get(String(a.origin_id).trim());
+          searchKey = oldCI?.CreatedBy || oldCI?.CBNV || a.display_name || '';
+        } else if (tb === 'SLAStepDetail_sync') {
+          const match = String(a.origin_id).match(/^sla_step_(\d+)_(\d+)_(.+)$/i);
+          if (match) {
+            const recordId = match[1];
+            const stepVal = match[2];
+            const oldCreatedBy = match[3];
+
+            const key = `${recordId}_${stepVal}`;
+            const stepRec = batchSlaStepsMap.get(key);
+            searchKey = stepRec?.UserID || stepRec?.CreatedBy || oldCreatedBy || a.display_name || '';
+          } else {
+            searchKey = a.display_name || '';
+          }
+        } else {
+          const key = `${tb}_${String(a.origin_id).trim()}`;
+          const oldRecord = batchOldRecordMap.get(key);
+          const rawNguoiXuLyFromOldDb = oldRecord?.NguoiXuLy ? String(oldRecord.NguoiXuLy).trim() : null;
+          searchKey = rawNguoiXuLyFromOldDb || a.display_name || '';
+        }
 
         if (!searchKey) {
           yearNotFound++;
           continue;
         }
 
-        // BƯỚC 1: Tra cứu Email theo tên đầy đủ
-        let targetEmail = profileToEmailMap.get(searchKey.trim().toLowerCase());
+        const correctUserId = await resolveUserNameToId(searchKey);
 
-        // BƯỚC 2: Loại bỏ hậu tố/danh xưng
-        if (!targetEmail) {
-          const cleanKey = searchKey.split(/\s*[-–—(]\s*/)[0].trim().replace(/^(Đ\/c\.|Đ\/c|Ông|Bà|Anh|Chị|Đồng chí|Đại tá|Thượng tá)\s+/i, '').trim().toLowerCase();
-          targetEmail = profileToEmailMap.get(cleanKey);
-
-          if (!targetEmail && cleanKey && cleanKey.length >= 3) {
-            for (const [keyStr, emailVal] of profileToEmailMap.entries()) {
-              if (keyStr.includes(cleanKey) || cleanKey.includes(keyStr)) {
-                targetEmail = emailVal;
-                break;
-              }
-            }
-          }
-        }
-
-        let matchedUserInfo = null;
-        if (targetEmail) {
-          matchedUserInfo = emailToUserInfoMap.get(targetEmail);
-        }
-
-        // FALLBACK TRONG RAM
-        if (!matchedUserInfo) {
-          const cleanKey = searchKey.split(/\s*[-–—(]\s*/)[0].trim().toLowerCase();
-          if (cleanKey && cleanKey.length >= 2) {
-            if (newUserNameMap.has(cleanKey)) {
-              matchedUserInfo = { id: newUserNameMap.get(cleanKey), name: searchKey.split(/\s*[-–—(]\s*/)[0].trim() };
-            } else {
-              for (const u of newUsersRes.recordset) {
-                if (u.name && (u.name.toLowerCase().includes(cleanKey) || cleanKey.includes(u.name.toLowerCase()))) {
-                  matchedUserInfo = { id: u.id, name: u.name };
-                  break;
-                }
-              }
-            }
-          }
-        }
-
-        if (matchedUserInfo && matchedUserInfo.id) {
-          const correctUserId = matchedUserInfo.id;
-          const correctDisplayName = matchedUserInfo.name || searchKey.split(/\s*[-–—(]\s*/)[0].trim();
+        if (correctUserId) {
+          const targetEmail = idToEmailMap.get(String(searchKey).trim()) || profileToEmailMap.get(searchKey.trim().toLowerCase());
+          const matchedUser = (targetEmail ? emailToUserInfoMap.get(targetEmail) : null) || userIdToUserInfoMap.get(String(correctUserId).toLowerCase());
+          const correctDisplayName = matchedUser?.name || a.display_name || searchKey.split(/\s*[-–—(]\s*/)[0].trim();
 
           let correctReceiver = null;
           let correctReceiverUnit = null;
 
-          if (oldRecord && oldRecord.HanhDong) {
-            try {
-              const detailedReceivers = await receiverParser.determineReceiversDetailed(oldRecord);
-
-              if (a.roleProcess === 'viewer' || (a.action && a.action.includes('Để biết'))) {
-                if (detailedReceivers.viewer.length > 0) {
-                  correctReceiver = detailedReceivers.viewer[0];
-                }
-              } else if (a.roleProcess === 'supporter' || (a.action && a.action.includes('Phối hợp'))) {
-                if (detailedReceivers.supporter.length > 0) {
-                  correctReceiver = detailedReceivers.supporter[0];
-                }
-              } else if (a.roleProcess === 'processor' || (a.action && (a.action.includes('Thực hiện') || a.action.includes('Xử lý')))) {
-                if (detailedReceivers.processor.length > 0) {
-                  correctReceiver = detailedReceivers.processor[0];
-                }
+          const key = `${tb}_${String(a.origin_id).trim()}`;
+          const detailedReceivers = parsedHanhDongMap.get(key);
+          if (detailedReceivers) {
+            if (a.roleProcess === 'viewer' || (a.action && a.action.includes('Để biết'))) {
+              if (detailedReceivers.viewer.length > 0) {
+                correctReceiver = await resolveUserNameToId(detailedReceivers.viewer[0]);
               }
-
-              if (detailedReceivers.units.length > 0) {
-                correctReceiverUnit = detailedReceivers.units[0];
+            } else if (a.roleProcess === 'supporter' || (a.action && a.action.includes('Phối hợp'))) {
+              if (detailedReceivers.supporter.length > 0) {
+                correctReceiver = await resolveUserNameToId(detailedReceivers.supporter[0]);
               }
-            } catch (pErr) {
-              // Bỏ qua lỗi parse
+            } else if (a.roleProcess === 'processor' || (a.action && (a.action.includes('Thực hiện') || a.action.includes('Xử lý')))) {
+              if (detailedReceivers.processor.length > 0) {
+                correctReceiver = await resolveUserNameToId(detailedReceivers.processor[0]);
+              }
+            }
+
+            if (detailedReceivers.units.length > 0) {
+              correctReceiverUnit = await resolveUnitNameToId(detailedReceivers.units[0]);
             }
           }
 
+          // Fallback 1: Tra cứu từ a.receiver cũ
           if (!correctReceiver && a.receiver) {
-            let recVal = String(a.receiver).trim();
-            if (recVal.startsWith('[') && recVal.endsWith(']')) {
-              try {
-                const arr = JSON.parse(recVal);
-                if (arr && arr.length > 0) recVal = String(arr[0]).trim();
-              } catch (e) {}
-            }
-            if (recVal) {
-              correctReceiver = await helper.mapUserName(recVal);
-            }
+            correctReceiver = await resolveUserNameToId(a.receiver);
           }
 
+          // Fallback 2: Nếu receiver vẫn NULL -> gán bằng chính correctUserId của sender
           if (!correctReceiver) {
             correctReceiver = correctUserId;
           }
 
+          // Chuẩn hóa receiver_unit
           if (!correctReceiverUnit && a.receiver_unit) {
-            let unitVal = String(a.receiver_unit).trim();
-            if (unitVal.startsWith('[') && unitVal.endsWith(']')) {
-              try {
-                const arr = JSON.parse(unitVal);
-                if (arr && arr.length > 0) unitVal = String(arr[0]).trim();
-              } catch (e) {}
-            }
-            correctReceiverUnit = unitVal || null;
+            correctReceiverUnit = await resolveUnitNameToId(a.receiver_unit);
           }
 
-          if (
+          const isDifferent = (
             a.user_id !== correctUserId ||
             a.created_by !== correctUserId ||
             a.display_name !== correctDisplayName ||
             a.receiver !== correctReceiver ||
             a.receiver_unit !== correctReceiverUnit
-          ) {
-            updates.push({
-              id: a.id,
-              documentId: a.document_id,
-              createdAt: a.created_at,
-              stageStatus: a.stage_status,
-              roleProcess: a.roleProcess,
-              actionCode: a.action_code,
-              correctUserId,
-              correctDisplayName,
-              correctReceiver,
-              correctReceiverUnit
-            });
-          } else {
+          );
+
+          if (!isDifferent) {
             yearSkipped++;
+            continue;
           }
+
+          updates.push({
+            id: a.id,
+            documentId: a.document_id,
+            createdAt: a.created_at,
+            stageStatus: a.stage_status,
+            roleProcess: a.roleProcess,
+            actionCode: a.action_code,
+            correctUserId,
+            correctDisplayName,
+            correctReceiver,
+            correctReceiverUnit
+          });
         } else {
           yearNotFound++;
         }
       }
+      const inMemoryMappingMs = (performance.now() - t4).toFixed(1);
 
-      const mapDur = Date.now() - mapTStart;
-
-      // THỰC HIỆN BATCH UPDATE
-      const updTStart = Date.now();
+      // 5. Single T-SQL Bulk Update
+      const t5 = performance.now();
       if (updates.length > 0) {
-        const okCount = await executeBulkUpdates(newPool, updates, `Năm ${year} ID > ${lastId}`);
-        yearUpdated += okCount;
+        const transaction = newPool.transaction();
+        await transaction.begin();
+
+        try {
+          const req = transaction.request();
+          req.input('startDate', startDate);
+          req.input('endDate', endDate);
+
+          const latestKeyMap = new Map();
+          updates.forEach(up => {
+            if (up.documentId && up.correctReceiver) {
+              const key = `${String(up.documentId).toLowerCase()}_${String(up.correctReceiver).toLowerCase()}_${String(up.roleProcess || 'VANTHU').toLowerCase()}`;
+              latestKeyMap.set(key, up.id);
+            }
+          });
+
+          function escStr(val) {
+            if (val == null) return 'NULL';
+            return "N'" + String(val).replace(/'/g, "''") + "'";
+          }
+          function escId(val) {
+            if (val == null) return 'NULL';
+            return "'" + String(val).replace(/'/g, "''") + "'";
+          }
+
+          const valuesSql = updates.map(up => {
+            const key = `${String(up.documentId).toLowerCase()}_${String(up.correctReceiver).toLowerCase()}_${String(up.roleProcess || 'VANTHU').toLowerCase()}`;
+            const isAssignmentUpdate = (latestKeyMap.get(key) === up.id) ? 1 : 0;
+            const isCreator = ['CREATE', 'TONG_HOP', 'SOAN_THAO'].includes(String(up.actionCode || '').toUpperCase()) ? 1 : 0;
+            const createdAtStr = up.createdAt ? (up.createdAt.toISOString ? up.createdAt.toISOString() : String(up.createdAt)) : null;
+
+            return `(${up.id}, ${escId(up.correctUserId)}, ${escId(up.correctUserId)}, ${escStr(up.correctDisplayName)}, ${escId(up.correctReceiver)}, ${escId(up.correctReceiverUnit)}, ${escId(up.documentId)}, ${escStr(createdAtStr)}, ${escId(up.stageStatus || 'CHUA_XU_LY')}, ${escId(up.roleProcess || 'VANTHU')}, ${escId(up.actionCode)}, ${isCreator}, ${isAssignmentUpdate})`;
+          });
+
+          const sqlBatch = `
+            CREATE TABLE #AuditUpdates (
+              id INT PRIMARY KEY,
+              user_id VARCHAR(100),
+              created_by VARCHAR(100),
+              display_name NVARCHAR(255),
+              receiver VARCHAR(100),
+              receiver_unit VARCHAR(100),
+              document_id VARCHAR(100),
+              created_at DATETIME2,
+              stage_status VARCHAR(50),
+              role_process VARCHAR(50),
+              action_code VARCHAR(100),
+              is_creator INT,
+              is_assignment_update INT
+            );
+
+            CREATE INDEX IX_AuditUpdates_Assign ON #AuditUpdates(is_assignment_update, document_id, receiver, role_process);
+
+            INSERT INTO #AuditUpdates (
+              id, user_id, created_by, display_name, receiver, receiver_unit, document_id, created_at, stage_status, role_process, action_code, is_creator, is_assignment_update
+            ) VALUES ${valuesSql.join(',')};
+
+            UPDATE a
+            SET a.user_id = u.user_id,
+                a.created_by = u.created_by,
+                a.display_name = u.display_name,
+                a.receiver = u.receiver,
+                a.receiver_unit = u.receiver_unit,
+                a.type_document = 'OutgoingDocument'
+            FROM dbo.audit a
+            INNER JOIN #AuditUpdates u ON a.id = u.id
+            WHERE (a.created_at >= @startDate AND a.created_at < @endDate);
+
+            -- Xóa các bản ghi phân công cũ bằng INNER JOIN từ #AuditUpdates
+            DELETE target
+            FROM dbo.outgoing_assignment target
+            INNER JOIN #AuditUpdates src ON src.is_assignment_update = 1
+              AND target.document_id = src.document_id
+              AND target.receiver = src.receiver
+              AND target.role_process = src.role_process
+            WHERE target.last_audit_id <> src.id;
+
+            -- Xóa các bản ghi phân công liên kết với last_audit_id đang được cập nhật
+            DELETE target
+            FROM dbo.outgoing_assignment target
+            INNER JOIN #AuditUpdates src ON src.is_assignment_update = 1
+              AND target.last_audit_id = src.id
+            WHERE (target.created_at >= @startDate AND target.created_at < @endDate);
+
+            WITH LatestUpdates AS (
+              SELECT 
+                document_id, receiver, role_process, stage_status, created_at, id AS last_audit_id, receiver_unit, is_creator
+              FROM (
+                SELECT 
+                  document_id, receiver, role_process, stage_status, created_at, id, receiver_unit, is_creator,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY document_id, receiver, role_process 
+                    ORDER BY id DESC
+                  ) as rn
+                FROM #AuditUpdates
+                WHERE is_assignment_update = 1
+                  AND document_id IS NOT NULL 
+                  AND receiver IS NOT NULL
+              ) t
+              WHERE rn = 1
+            )
+            MERGE dbo.outgoing_assignment AS target
+            USING LatestUpdates AS src
+            ON target.document_id = src.document_id 
+               AND target.receiver = src.receiver 
+               AND target.role_process = src.role_process
+            WHEN MATCHED THEN
+              UPDATE SET target.stage_status = src.stage_status,
+                         target.last_audit_id = src.last_audit_id,
+                         target.receiver_unit = src.receiver_unit,
+                         target.is_creator = src.is_creator,
+                         target.updated_at = SYSDATETIME()
+            WHEN NOT MATCHED THEN
+              INSERT (document_id, receiver, role_process, stage_status, created_at, last_audit_id, receiver_unit, is_creator, table_backups)
+              VALUES (src.document_id, src.receiver, src.role_process, src.stage_status, src.created_at, src.last_audit_id, src.receiver_unit, src.is_creator, 'outgoing_assignment');
+
+            UPDATE target
+            SET target.current_receiver = src.receiver,
+                target.current_role_process = src.role_process,
+                target.current_stage_status = src.stage_status,
+                target.current_action_code = src.action_code,
+                target.updated_at = SYSDATETIME()
+            FROM dbo.outgoing_current_state target
+            INNER JOIN #AuditUpdates src ON target.document_id = src.document_id AND target.last_audit_id = src.id
+            WHERE src.is_assignment_update = 1;
+
+            DROP TABLE #AuditUpdates;
+          `;
+
+          await req.query(sqlBatch);
+          await transaction.commit();
+          yearUpdated += updates.length;
+        } catch (err) {
+          console.error(`❌ Lỗi thực tế xảy ra khi bulk update batch năm ${year}:`, err);
+          try {
+            await transaction.rollback();
+          } catch (rollbackErr) {}
+        }
       }
-      const updDur = Date.now() - updTStart;
+      const bulkUpdateMs = (performance.now() - t5).toFixed(1);
 
-      batchOldRecordMap.clear();
-      tableToOriginIdsMap.clear();
+      const batchDurationMs = (performance.now() - batchStartTime).toFixed(1);
+      processedInYear += rows.length;
 
-      const lastRow = rows[rows.length - 1];
-      lastCreatedAt = lastRow.created_at.toISOString();
-      lastId = lastRow.id;
-      pageCount++;
-
+      // Cập nhật state cursor
       state.lastYear = year;
-      state.lastCreatedAt = lastCreatedAt;
+      state.lastCreatedAt = lastCreatedAt ? (lastCreatedAt.toISOString ? lastCreatedAt.toISOString() : String(lastCreatedAt)) : null;
       state.lastId = lastId;
       saveState();
 
-      const totalDur = Date.now() - pageTStart;
-      console.log(` -> Trang ${pageCount}: load=${loadDur}ms, map=${mapDur}ms, update=${updDur}ms (Tổng ${totalDur}ms) | Năm ${year} Thời điểm hiện tại: ${lastCreatedAt}, lastId: ${lastId} (Đã cập nhật mới: ${yearUpdated}, Đã chuẩn sẵn: ${yearSkipped})`);
+      batchOldRecordMap.clear();
+      codeItemOriginIds.clear();
+      slaStepItemIds.clear();
+      tableToOriginIdsMap.clear();
+
+      console.log(` ⏱️ [Batch ${rows.length} dòng] Tổng: ${batchDurationMs}ms (1.Fetch Audit: ${fetchAuditMs}ms | 2.Query OldDB: ${queryOldDbMs}ms | 3.PreResolve: ${preResolveMs}ms | 4.Mapping: ${inMemoryMappingMs}ms | 5.Bulk Update: ${bulkUpdateMs}ms)`);
+      console.log(` -> Năm ${year}: Đã rà soát ${processedInYear}/${yearTotal} dòng (Đã cập nhật mới: ${yearUpdated}, Đã chuẩn sẵn: ${yearSkipped})`);
     }
 
-    state.lastYear = year + 1;
-    state.lastCreatedAt = null;
-    state.lastId = 0;
-    saveState();
+    if (!targetYear) {
+      state.lastYear = year + 1;
+      state.lastCreatedAt = null;
+      state.lastId = 0;
+      saveState();
+    }
 
     grandTotalProcessed += yearTotal;
     grandTotalUpdated += yearUpdated;
@@ -968,18 +931,17 @@ async function main() {
   }
 
   console.log('\n=================================================================');
-  console.log('=== HOÀN TẤT TRUY NGƯỢC VÀ CẬP NHẬT TẤT CẢ PARTITION VĂN BẢN ĐI (2013 - 2030) ===');
+  console.log('=== HOÀN TẤT TRUY NGƯỢC VÀ CẬP NHẬT TẤT CẢ PARTITION VĂN BẢN ĐI (2012 - 2030) ===');
   console.log(`- Tổng số bản ghi rà soát [OutgoingDocument]: ${grandTotalProcessed}`);
-  console.log(`- Số bản ghi đã cập nhật thành công: ${grandTotalUpdated}`);
+  console.log(`- Số bản ghi đã cập nhật toàn bộ (audit, outgoing_assignment, outgoing_current_state): ${grandTotalUpdated}`);
   console.log(`- Số bản ghi đã chuẩn sẵn từ trước: ${grandTotalSkipped}`);
   console.log(`- Số bản ghi không tra cứu được Email/Name: ${grandTotalNotFound}`);
-  console.log(`- Số bản ghi lỗi hiện tại (xem file ${stateFileName}): ${state.failedRecords.length}`);
   console.log('=================================================================\n');
 
   process.exit(0);
 }
 
 main().catch(err => {
-  console.error('❌ Lỗi khi chạy script fix audit:', err);
+  console.error('❌ Lỗi khi chạy script fix outgoing audit:', err);
   process.exit(1);
 });
