@@ -54,6 +54,53 @@ class HtmlFileMigrationModel extends BaseModel {
     return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
+  // Helper to resolve original image URL from SharePoint thumbnail URL
+  _getOriginalImageUrl(url) {
+    if (!url) return url;
+    let original = url.replace(/\/_w\//i, '/').replace(/\/_t\//i, '/');
+    const parts = original.split('/');
+    const filename = parts[parts.length - 1];
+    const match = filename.match(/(.+)_([a-zA-Z0-9]+)\.([a-zA-Z0-9]+)$/);
+    if (match) {
+      const baseName = match[1];
+      const origExt = match[2];
+      const currentExt = match[3];
+      if (origExt.toLowerCase() === currentExt.toLowerCase()) {
+        parts[parts.length - 1] = `${baseName}.${origExt}`;
+        original = parts.join('/');
+      }
+    }
+    return original;
+  }
+
+  async _tryDownloadBuffer(fullUrl) {
+    // Ưu tiên dùng SharePointAuthService để tải ảnh/tài liệu (Giải quyết lỗi 401 NTLM Auth)
+    try {
+      const { downloadFile } = require('../../sync-file-copy/SharePointAuthService');
+      if (typeof downloadFile === 'function') {
+        const spBuffer = await downloadFile(fullUrl);
+        if (spBuffer && spBuffer.length > 0) {
+          logger.info(
+            `    [Resource] Tải thành công qua SharePointAuthService: ${fullUrl} (${spBuffer.length} bytes)`,
+          );
+          return spBuffer;
+        }
+      }
+    } catch (authErr) {
+      logger.debug(`    [Resource] Thử tải qua Auth thất bại, dùng phương án dự phòng axios...`);
+    }
+
+    // Phương án dự phòng: Dùng axios thường
+    const response = await axios({
+      url: fullUrl,
+      method: 'GET',
+      responseType: 'arraybuffer',
+      timeout: 5000,
+    });
+    logger.info(`    [Resource] Tải thành công: ${fullUrl} (${response.data.length} bytes)`);
+    return Buffer.from(response.data);
+  }
+
   async _downloadToBuffer(imgUrl, slug, index) {
     try {
       if (slug && index !== undefined) {
@@ -76,31 +123,30 @@ class HtmlFileMigrationModel extends BaseModel {
         fullUrl = this.baseSourceUrl + '/' + fullUrl;
       }
 
-      // Ưu tiên dùng SharePointAuthService để tải ảnh/tài liệu (Giải quyết lỗi 401 NTLM Auth)
+      // Proper URI encoding for Unicode characters and spaces
       try {
-        const { downloadFile } = require('../../sync-file-copy/SharePointAuthService');
-        if (typeof downloadFile === 'function') {
-          const spBuffer = await downloadFile(fullUrl);
-          if (spBuffer && spBuffer.length > 0) {
-            logger.info(
-              `    [Resource] Tải thành công qua SharePointAuthService: ${fullUrl} (${spBuffer.length} bytes)`,
-            );
-            return spBuffer;
-          }
-        }
-      } catch (authErr) {
-        logger.debug(`    [Resource] Thử tải qua Auth thất bại, dùng phương án dự phòng axios...`);
+        fullUrl = encodeURI(decodeURIComponent(fullUrl));
+      } catch (_) {
+        fullUrl = encodeURI(fullUrl);
       }
 
-      // Phương án dự phòng: Dùng axios thường
-      const response = await axios({
-        url: fullUrl,
-        method: 'GET',
-        responseType: 'arraybuffer',
-        timeout: 5000,
-      });
-      logger.info(`    [Resource] Tải thành công: ${fullUrl} (${response.data.length} bytes)`);
-      return Buffer.from(response.data);
+      try {
+        return await this._tryDownloadBuffer(fullUrl);
+      } catch (err) {
+        // Fallback: If thumbnail download failed, try to download the original image
+        if (fullUrl.includes('/_w/') || fullUrl.includes('/_t/')) {
+          const originalUrl = this._getOriginalImageUrl(fullUrl);
+          if (originalUrl !== fullUrl) {
+            logger.info(`    [Download Fallback] Thumbnail failed. Trying original image: ${originalUrl}`);
+            try {
+              return await this._tryDownloadBuffer(originalUrl);
+            } catch (_) {
+              // Fail through
+            }
+          }
+        }
+        throw err;
+      }
     } catch (error) {
       logger.warn(`    [Resource] Thất bại khi tải: ${imgUrl} | Lỗi: ${error.message}`);
       return null;
@@ -578,7 +624,17 @@ class HtmlFileMigrationModel extends BaseModel {
     const title = article.Title || '';
 
     // 2. Nội dung (lấy từ cột PublishingPageContent hoặc dự phòng)
-    const content = article.PublishingPageContent || article.Body || article.CanvasContent1 || '';
+    let content = article.PublishingPageContent || article.Body || article.CanvasContent1 || '';
+
+    // Prepend description to content if available
+    const descriptionText = article.Description || article.Comments || article.PublishingImageCaption || article.SeoMetaDescription || '';
+    if (descriptionText && descriptionText.length > 5) {
+      const cleanDesc = descriptionText.replace(/\s+/g, ' ').trim();
+      const plainContent = cheerio.load(content).text();
+      if (!plainContent.includes(cleanDesc)) {
+        content = `<div class="des">${descriptionText}</div>` + content;
+      }
+    }
 
     // 3. Tóm tắt (Plain text)
     let summary = article.PublishingImageCaption || article.SeoMetaDescription || '';
@@ -771,7 +827,6 @@ class HtmlFileMigrationModel extends BaseModel {
       '.feedback',
       '.Title',
       '.subtitle',
-      '.des',
       '.linkadmin',
       '.link-banner',
       '.menu-cover',
@@ -798,14 +853,23 @@ class HtmlFileMigrationModel extends BaseModel {
       contentContainer = docMainArea;
     }
 
-    // Nếu có khối ảnh ngoài .content (.tbimg-news, .general-image), gộp vào nội dung
-    const topImgTable = $('.tbimg-news, .general-image').first();
-    if (topImgTable.length && contentContainer.length && !contentContainer.has(topImgTable).length) {
-      contentContainer = $('<div>').append(topImgTable.clone()).append(contentContainer.clone());
+    // Gộp mô tả (.des) và ảnh đại diện ngoài (.tbimg-news, .general-image) vào nội dung
+    let cleanContainer = $('<div>');
+    
+    const desBlock = $('.des').first();
+    if (desBlock.length && contentContainer.length && !contentContainer.has(desBlock).length) {
+      cleanContainer.append(desBlock.clone());
     }
 
+    const topImgTable = $('.tbimg-news, .general-image').first();
+    if (topImgTable.length && contentContainer.length && !contentContainer.has(topImgTable).length) {
+      cleanContainer.append(topImgTable.clone());
+    }
+
+    cleanContainer.append(contentContainer.clone());
+
     // Xóa rác nội dung (chỉ chạy 1 lần loop)
-    contentContainer = contentContainer.clone();
+    contentContainer = cleanContainer;
     blocksToRemove.forEach((selector) => contentContainer.find(selector).remove());
 
     // 4. SUMMARY (Chỉ lấy nội dung text từ thẻ .des)

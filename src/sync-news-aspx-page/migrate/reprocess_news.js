@@ -205,6 +205,16 @@ async function reprocessArticle(pool, slug) {
       }
     }
 
+    // Prepend description to content body if available
+    const descriptionText = spApiItem.Description || spApiItem.Comments || spApiItem.PublishingImageCaption || spApiItem.SeoMetaDescription || '';
+    if (descriptionText && descriptionText.length > 5) {
+      const cleanDesc = descriptionText.replace(/\s+/g, ' ').trim();
+      const plainContent = cheerio.load(rawHtml).text();
+      if (!plainContent.includes(cleanDesc)) {
+        rawHtml = `<div class="des">${descriptionText}</div>` + rawHtml;
+      }
+    }
+
 
 
     // Extract and clean summary (plain text only)
@@ -631,21 +641,27 @@ function extractContentFromPageHtml(html) {
     contentContainer = docMainArea;
   }
 
-  // Nếu có khối ảnh ngoài .content (.tbimg-news, .general-image), gộp vào nội dung
-  const topImgTable = $('.tbimg-news, .general-image').first();
-  let cleanContainer;
-  if (topImgTable.length && contentContainer.length && !contentContainer.has(topImgTable).length) {
-    cleanContainer = $('<div>').append(topImgTable.clone()).append(contentContainer.clone());
-  } else {
-    cleanContainer = contentContainer.clone();
+  // Gộp mô tả (.des) và ảnh đại diện ngoài (.tbimg-news, .general-image) vào nội dung
+  let cleanContainer = $('<div>');
+  
+  const desBlock = $('.des').first();
+  if (desBlock.length && contentContainer.length && !contentContainer.has(desBlock).length) {
+    cleanContainer.append(desBlock.clone());
   }
+
+  const topImgTable = $('.tbimg-news, .general-image').first();
+  if (topImgTable.length && contentContainer.length && !contentContainer.has(topImgTable).length) {
+    cleanContainer.append(topImgTable.clone());
+  }
+
+  cleanContainer.append(contentContainer.clone());
 
   const blocksToRemove = [
     '#s4-ribbonrow', '#suiteBarDelta', '#s4-titlerow', '#sideNavBox', '#footer',
     '.ms-breadcrumb', '.ms-core-listMenu-verticalBox', '.ms-pub-breadcrumb',
     '.ms-belltown-sideNav', '#DeltaPlaceHolderLeftNavBar', '#DeltaPlaceHolderPageTitleInTitleArea',
     'script', 'style', 'link', 'iframe', 'object', 'embed', '.other-news',
-    '.feedbackSend', '.feedback', '.Title', '.subtitle', '.des', '.linkadmin',
+    '.feedbackSend', '.feedback', '.Title', '.subtitle', '.linkadmin',
     '.link-banner', '.menu-cover'
   ];
   blocksToRemove.forEach(sel => cleanContainer.find(sel).remove());
@@ -787,6 +803,25 @@ async function verifyFileExistsInDb(pool, fileId) {
   }
 }
 
+// Helper to resolve original image URL from SharePoint thumbnail URL
+function getOriginalSharePointImageUrl(url) {
+  if (!url) return url;
+  let original = url.replace(/\/_w\//i, '/').replace(/\/_t\//i, '/');
+  const parts = original.split('/');
+  const filename = parts[parts.length - 1];
+  const match = filename.match(/(.+)_([a-zA-Z0-9]+)\.([a-zA-Z0-9]+)$/);
+  if (match) {
+    const baseName = match[1];
+    const origExt = match[2];
+    const currentExt = match[3];
+    if (origExt.toLowerCase() === currentExt.toLowerCase()) {
+      parts[parts.length - 1] = `${baseName}.${origExt}`;
+      original = parts.join('/');
+    }
+  }
+  return original;
+}
+
 // Download asset from SharePoint (handle cookie auth)
 async function downloadSharePointAsset(assetUrl, pool) {
   let urlToDownload = assetUrl;
@@ -796,8 +831,33 @@ async function downloadSharePointAsset(assetUrl, pool) {
     urlToDownload = urlToDownload.replace('http://', 'https://');
   }
 
+  // Proper URI encoding for Unicode characters and spaces
   try {
-    const buffer = await downloadFile(urlToDownload, pool);
+    urlToDownload = encodeURI(decodeURIComponent(urlToDownload));
+  } catch (_) {
+    urlToDownload = encodeURI(urlToDownload);
+  }
+
+  let buffer = await _tryDownloadAsset(urlToDownload, pool);
+  if (buffer) return buffer;
+
+  // Fallback: If thumbnail download failed, try to download the original image
+  if (urlToDownload.includes('/_w/') || urlToDownload.includes('/_t/')) {
+    const originalUrl = getOriginalSharePointImageUrl(urlToDownload);
+    if (originalUrl !== urlToDownload) {
+      log(`    [Download Fallback] Thumbnail failed (404). Trying original image: ${originalUrl}`);
+      buffer = await _tryDownloadAsset(originalUrl, pool);
+      if (buffer) return buffer;
+    }
+  }
+
+  log(`    [Download Warning] Failed downloading ${urlToDownload}`);
+  return null;
+}
+
+async function _tryDownloadAsset(url, pool) {
+  try {
+    const buffer = await downloadFile(url, pool);
     if (buffer && buffer.length > 0) return buffer;
   } catch (err) {
     // Fallback to axios
@@ -810,7 +870,7 @@ async function downloadSharePointAsset(assetUrl, pool) {
       cookie = fs.readFileSync(cookiePath, 'utf8').trim();
     }
     const httpsAgent = new https.Agent({ rejectUnauthorized: false });
-    const response = await axios.get(urlToDownload, {
+    const response = await axios.get(url, {
       httpsAgent,
       headers: { 'Cookie': cookie },
       responseType: 'arraybuffer',
@@ -819,7 +879,7 @@ async function downloadSharePointAsset(assetUrl, pool) {
       return Buffer.from(response.data);
     }
   } catch (err) {
-    log(`    [Download Warning] Failed downloading ${urlToDownload} | Reason: ${err.message}`);
+    // Silent fail for single try
   }
   return null;
 }
